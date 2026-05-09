@@ -21,17 +21,22 @@ form.addEventListener('submit', async (e) => {
   addLog("Phase 1 : Login...");
 
   try {
-    const loginData = await authService.login(u, p);
+    // Correction TS6133 : On appelle la fonction sans stocker le résultat inutilisé
+    await authService.login(u, p);
     addLog("✓ Login réussi", "success");
 
     addLog("Phase 2 : Vérification Session...");
     const user = await userService.fetchProfile();
     
-    addLog(`✓ Session validée : Bonjour ${user.username}`, "success");
+    // Correction TS18047 : On vérifie que 'user' n'est pas null avant d'accéder à ses propriétés
+    if (user && user.username) {
+      addLog(`✓ Session validée : Bonjour ${user.username}`, "success");
+    } else {
+      throw new Error("Le profil utilisateur est incomplet ou introuvable.");
+    }
 
   } catch (err: any) {
     addLog(`ERREUR : ${err.message}`, "error");
-    // Aide au diagnostic
     if (err.message.includes('aucun cookie')) {
       addLog("ASTUCE : Vérifiez que les cookies tiers sont autorisés.", "info");
     }
