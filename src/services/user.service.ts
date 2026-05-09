@@ -3,12 +3,14 @@ import { sessionStore } from '../state/session';
 
 export const userService = {
   async fetchProfile() {
-    const res = await fetch('/api/user/get');
+    const res = await fetch('/api/user/get', {
+      credentials: 'include' // Force l'envoi des cookies 
+    });
+    
     const data = await res.json();
 
     if (!res.ok) {
-      // Affiche l'erreur technique précise (ex: Session absente)
-      throw new Error(data.error || data.message || "Erreur profil");
+      throw new Error(data.error || "Session non reconnue par le serveur");
     }
     
     sessionStore.setUser(data);

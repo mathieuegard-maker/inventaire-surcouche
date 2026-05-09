@@ -13,7 +13,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'InventaireMobileOverlay/1.6 (mathieu.egard@gmail.com)' // Requis [cite: 1]
+        'User-Agent': 'InventaireMobileOverlay/1.7 (mathieu.egard@gmail.com)'
       },
       body: JSON.stringify({ username, password }),
     });
@@ -21,13 +21,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const data = await response.json();
     if (!response.ok) return res.status(response.status).json(data);
 
+    // Récupération du cookie d'origine
     const setCookie = response.headers.get('set-cookie');
+    
     if (setCookie) {
-      // Sécurité : On retire les attributs 'Domain' et 'Secure' qui peuvent bloquer sur Vercel
+      // On neutralise le domaine et les contraintes de sécurité d'origine
+      // pour que le navigateur accepte de lier le cookie à VOTRE domaine Vercel.
       const cleanCookie = setCookie
-        .split(';')
-        .filter(part => !part.trim().toLowerCase().startsWith('domain='))
-        .join(';');
+        .replace(/Domain=[^;]+;?/i, '')
+        .replace(/Secure;?/i, '');
       
       res.setHeader('Set-Cookie', cleanCookie);
     }
