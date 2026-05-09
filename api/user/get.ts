@@ -1,24 +1,26 @@
 // api/user/get.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { INVENTAIRE_API_BASE, getDefaultHeaders } from '../lib/inventaire-api';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const cookie = req.headers.cookie;
-  if (!cookie) return res.status(401).json({ error: 'Cookie manquant' });
+  if (!cookie) return res.status(401).json({ error: 'Session absente (no cookie)' });
 
   try {
-    const response = await fetch(`${INVENTAIRE_API_BASE}/user`, {
+    const response = await fetch('https://inventaire.io/api/user', {
       method: 'GET',
-      headers: getDefaultHeaders(cookie),
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'InventaireMobileOverlay/1.5 (mathieu.egard@gmail.com)',
+        'Cookie': cookie
+      },
     });
-    
-    const data = await response.json();
-    
-    // Log serveur pour voir ce qui passe dans le tunnel
-    console.log('>>> PROXY USER DATA:', JSON.stringify(data).substring(0, 100) + '...');
-    
+
+    const responseText = await response.text();
+    let data;
+    try { data = JSON.parse(responseText); } catch (e) { data = { error: responseText }; }
+
     return res.status(response.status).json(data);
-  } catch (e) {
-    return res.status(500).json({ error: 'Erreur tunnel profil' });
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Proxy User Crash', details: err.message });
   }
 }
