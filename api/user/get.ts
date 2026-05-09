@@ -2,11 +2,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // On récupère le cookie que le navigateur DOIT envoyer
-  const cookie = req.headers.cookie;
+  const browserCookie = req.headers.cookie;
   
-  if (!cookie) {
-    return res.status(401).json({ error: 'unauthorized: No session cookie found in headers' });
+  // LOG CRUCIAL : Est-ce que le navigateur a envoyé un cookie ?
+  console.log('[USER] Cookies reçus du navigateur :', browserCookie ? 'OUI' : 'NON (VIDE)');
+
+  if (!browserCookie) {
+    return res.status(401).json({ 
+      error: 'Session absente', 
+      debug: 'Le navigateur n’a envoyé aucun cookie au proxy.' 
+    });
   }
 
   try {
@@ -14,23 +19,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'InventaireMobileOverlay/1.7 (mathieu.egard@gmail.com)',
-        'Cookie': cookie // Transmission cruciale ici 
+        'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)',
+        'Cookie': browserCookie
       },
     });
 
-    const data = await response.json();
-    
-    if (!response.ok) {
-      // Si Inventaire répond "unauthorized", on renvoie l'erreur détaillée
-      return res.status(response.status).json({
-        error: "Inventaire API rejected the session",
-        details: data
+    const responseText = await response.text();
+    console.log(`[USER] Réponse Inventaire (Status ${response.status})`);
+
+    try {
+      const data = JSON.parse(responseText);
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: 'Inventaire a rejeté la session',
+          server_msg: data
+        });
+      }
+      return res.status(200).json(data);
+    } catch (e) {
+      return res.status(response.status).json({ 
+        error: 'Réponse non-JSON', 
+        raw: responseText.substring(0, 100) 
       });
     }
-
-    return res.status(200).json(data);
   } catch (err: any) {
-    return res.status(500).json({ error: 'Proxy User Crash', details: err.message });
+    console.error('[USER] Crash Proxy :', err.message);
+    return res.status(500).json({ error: 'Crash Proxy User', details: err.message });
   }
 }

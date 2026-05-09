@@ -3,14 +3,15 @@ import { sessionStore } from '../state/session';
 
 export const userService = {
   async fetchProfile() {
-    const res = await fetch('/api/user/get', {
-      credentials: 'include' // Force l'envoi des cookies 
-    });
-    
+    console.log('[FRONT] Appel /api/user/get...');
+    const res = await fetch('/api/user/get');
     const data = await res.json();
 
     if (!res.ok) {
-      throw new Error(data.error || "Session non reconnue par le serveur");
+      console.error('[FRONT] Erreur Profil Detaillee :', data);
+      // On affiche le message de debug s'il existe
+      const errorMsg = data.debug || data.error || "Erreur session";
+      throw new Error(errorMsg);
     }
     
     sessionStore.setUser(data);
