@@ -27,12 +27,9 @@ form.addEventListener('submit', async (e) => {
     addLog("Phase 2 : Récupération Profil...");
     const user = await userService.fetchProfile();
     
-    // Si on arrive ici, sessionStore.setUser a été appelé
     if (!user || !user.uri) {
-      console.error("Échec identification. Regardez les clés [DEBUG] au dessus.");
-      throw new Error("L'identifiant (URI/ID) est introuvable dans la réponse.");
+      throw new Error("Identifiant URI manquant dans le profil.");
     }
-
     addLog(`✓ Phase 2 OK : Bonjour ${user.username}`, "success");
 
     addLog("Phase 3 : Chargement Livres...");
@@ -41,6 +38,6 @@ form.addEventListener('submit', async (e) => {
 
   } catch (err: any) {
     addLog(`ERREUR : ${err.message}`, "error");
-    console.error('[CRASH]', err);
+    console.error('[Workflow Error]', err);
   }
 });

@@ -13,19 +13,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
-        'User-Agent': 'InventaireMobileOverlay/1.5 (mathieu.egard@gmail.com)'
+        'User-Agent': 'InventaireMobileOverlay/1.6 (mathieu.egard@gmail.com)' // Requis [cite: 1]
       },
       body: JSON.stringify({ username, password }),
     });
 
-    const responseText = await response.text();
-    let data;
-    try { data = JSON.parse(responseText); } catch (e) { data = { error: responseText }; }
-
+    const data = await response.json();
     if (!response.ok) return res.status(response.status).json(data);
 
     const setCookie = response.headers.get('set-cookie');
-    if (setCookie) res.setHeader('Set-Cookie', setCookie);
+    if (setCookie) {
+      // Sécurité : On retire les attributs 'Domain' et 'Secure' qui peuvent bloquer sur Vercel
+      const cleanCookie = setCookie
+        .split(';')
+        .filter(part => !part.trim().toLowerCase().startsWith('domain='))
+        .join(';');
+      
+      res.setHeader('Set-Cookie', cleanCookie);
+    }
 
     return res.status(200).json(data);
   } catch (err: any) {
