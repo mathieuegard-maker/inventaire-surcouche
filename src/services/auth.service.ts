@@ -1,13 +1,22 @@
 // src/services/auth.service.ts
+import { sessionStore } from '../state/session';
+
 export const authService = {
   async login(username: string, password: string) {
-    console.log('[AuthService] Appel login...');
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    if (!res.ok) throw new Error("Identifiants incorrects");
-    return await res.json();
+    
+    const data = await res.json();
+    
+    if (!res.ok) {
+      // On utilise le message d'erreur spécifique renvoyé par le proxy
+      throw new Error(data.error || 'Identifiants incorrects');
+    }
+    
+    sessionStore.setUser(data);
+    return data;
   }
 };
