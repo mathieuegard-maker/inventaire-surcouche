@@ -9,12 +9,17 @@ export const authService = {
       body: JSON.stringify({ username, password }),
     });
 
+    // On vérifie si la réponse est bien du JSON
+    const contentType = res.headers.get("content-type");
+    if (!contentType || !contentType.includes("application/json")) {
+      const text = await res.text();
+      throw new Error(`Le serveur a renvoyé du HTML au lieu de JSON. Début : ${text.substring(0, 20)}`);
+    }
+
     const data = await res.json();
 
     if (!res.ok) {
-      // Si on a l'erreur "raw", on l'affiche, sinon le message standard
-      const errorMsg = data.raw ? `Erreur Serveur : ${data.raw}` : (data.message || data.error || 'Erreur inconnue');
-      throw new Error(errorMsg);
+      throw new Error(data.error || data.message || 'Échec de connexion');
     }
 
     sessionStore.setUser(data);

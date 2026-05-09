@@ -1,31 +1,44 @@
 // api/auth/login.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { INVENTAIRE_API_BASE, getDefaultHeaders } from '../lib/inventaire-api';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') return res.status(405).end();
+  // 1. Sécurité Méthode
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Méthode non autorisée' });
+  }
 
   try {
+    // 2. Sécurité Body (Vercel peut envoyer un string ou un objet)
     const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    
+    if (!body || !body.username || !body.password) {
+      return res.status(400).json({ error: 'Identifiants manquants dans la requête' });
+    }
+
     const { username, password } = body;
 
-    const response = await fetch(`${INVENTAIRE_API_BASE}/auth/login`, {
+    // 3. Appel à Inventaire.io [cite: 54-57]
+    const response = await fetch('https://inventaire.io/api/auth/login', {
       method: 'POST',
-      headers: getDefaultHeaders(),
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'InventaireMobileOverlay/1.4 (mathieu.egard@gmail.com)' // [cite: 1]
+      },
       body: JSON.stringify({ username, password }),
     });
 
-    // On récupère d'abord le texte brut pour éviter le crash du JSON.parse
+    // 4. Gestion de la réponse (Texte d'abord pour éviter le crash JSON)
     const responseText = await response.text();
     let data;
-    
+
     try {
       data = JSON.parse(responseText);
     } catch (e) {
-      console.error('>>> Proxy Login : La réponse n’est pas du JSON', responseText);
+      // Si Inventaire renvoie du HTML (erreur 500 ou blocage), on ne crash pas
       return res.status(response.status).json({ 
-        error: "Le serveur Inventaire a renvoyé une réponse non-JSON",
-        raw: responseText.substring(0, 100) 
+        error: "Inventaire a renvoyé une réponse non-JSON",
+        details: responseText.substring(0, 100) 
       });
     }
 
@@ -33,14 +46,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(response.status).json(data);
     }
 
+    // 5. Transfert du Cookie de Session [cite: 2]
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) {
       res.setHeader('Set-Cookie', setCookie);
     }
 
     return res.status(200).json(data);
+
   } catch (error: any) {
-    console.error('>>> Proxy Login : Erreur fatale', error.message);
+    console.error('[PROXY CRASH]', error.message);
     return res.status(500).json({ error: 'Erreur interne du proxy', details: error.message });
   }
 }
