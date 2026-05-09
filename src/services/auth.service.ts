@@ -8,14 +8,15 @@ export const authService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
-    
+
     const data = await res.json();
-    
+
     if (!res.ok) {
-      // On utilise le message d'erreur spécifique renvoyé par le proxy
-      throw new Error(data.error || 'Identifiants incorrects');
+      // Si on a l'erreur "raw", on l'affiche, sinon le message standard
+      const errorMsg = data.raw ? `Erreur Serveur : ${data.raw}` : (data.message || data.error || 'Erreur inconnue');
+      throw new Error(errorMsg);
     }
-    
+
     sessionStore.setUser(data);
     return data;
   }
