@@ -2,17 +2,19 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const { username } = req.query;
+  const { uri } = req.query;
+  const cookie = req.headers.cookie;
 
-  if (!username) return res.status(400).json({ error: 'Username manquant' });
+  if (!uri) return res.status(400).json({ error: 'URI utilisateur manquante' });
 
   try {
-    // L'API d'Inventaire pour récupérer les URIs de la bibliothèque d'un utilisateur
-    const response = await fetch(`https://inventaire.io/api/users/${username}/entities?action=inventory`, {
+    const url = `https://inventaire.io/api/items/by-users?users=${encodeURIComponent(uri as string)}&limit=1000`;
+    const response = await fetch(url, {
       method: 'GET',
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'InventaireMobileOverlay/1.0 (mathieu.egard@gmail.com)'
+        'User-Agent': 'InventaireMobileOverlay/1.9 (mathieu.egard@gmail.com)',
+        ...(cookie ? { 'Cookie': cookie } : {})
       },
     });
 

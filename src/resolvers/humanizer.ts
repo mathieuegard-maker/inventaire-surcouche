@@ -5,7 +5,6 @@ export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
     const idsToTranslate = new Set<string>();
     
-    // Collecte des URIs
     rawBook.authorIds.forEach(id => idsToTranslate.add(id));
     rawBook.illustratorIds.forEach(id => idsToTranslate.add(id));
     rawBook.scriptwriterIds.forEach(id => idsToTranslate.add(id));
@@ -16,30 +15,35 @@ export const entityHumanizer = {
 
     let entities: any = {};
     if (idsToTranslate.size > 0) {
-      // CORRECTION CRUCIALE : On utilise '|' et on encode l'URL
       const urisParam = encodeURIComponent(Array.from(idsToTranslate).join('|'));
-      
       const res = await fetch(`/api/entities/by-uris?uris=${urisParam}`);
       const data = await res.json();
-      
-      // LOG POUR DEBUG : On vérifie que l'API renvoie bien les noms
-      console.log("[DEBUG Humanizer] Dictionnaire de traduction API :", data);
-      
       entities = data.entities || data;
     }
 
     const getName = (id?: string) => {
       if (!id || !entities[id]) return undefined;
       const entity = entities[id];
-      // On cherche d'abord dans claims (parfois utilisé pour les redirections Wikidata), puis labels
       return entity.label || entity.labels?.fr || entity.labels?.en || id;
     };
 
+    // 1. Traduction individuelle stricte
+    const translatedAuthors = rawBook.authorIds.map(id => getName(id) || id);
+    const translatedIllustrators = rawBook.illustratorIds.map(id => getName(id) || id);
+    const translatedScriptwriters = rawBook.scriptwriterIds.map(id => getName(id) || id);
+
+    // 2. RÈGLE MÉTIER BD (Fusion propre au sein de l'objet)
+    let finalAuthors = translatedAuthors;
+    if (finalAuthors.length === 0) {
+      // S'il n'y a pas d'Auteur principal (P50), on fusionne les rôles techniques sans doublons
+      finalAuthors = Array.from(new Set([...translatedScriptwriters, ...translatedIllustrators]));
+    }
+
     return {
       ...rawBook,
-      authors: rawBook.authorIds.map(id => getName(id) || id),
-      illustrators: rawBook.illustratorIds.map(id => getName(id) || id),
-      scriptwriters: rawBook.scriptwriterIds.map(id => getName(id) || id),
+      authors: finalAuthors, // Contient maintenant Denis Bajram !
+      illustrators: translatedIllustrators,
+      scriptwriters: translatedScriptwriters,
       genres: rawBook.genreIds.map(id => getName(id) || id),
       publisher: getName(rawBook.publisherId),
       series: getName(rawBook.seriesId),

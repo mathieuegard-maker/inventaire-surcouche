@@ -26,7 +26,7 @@ export const entityMapper = {
       format: raw.format,
 
       // IDs (on garde ce qu'on trouve)
-      authorIds: claims['wdt:P50'] || raw.authors || [],
+      authorIds: claims['wdt:P50'] || claims['wdt:P170'] || raw.authors || [],
       illustratorIds: claims['wdt:P110'] || [],
       scriptwriterIds: claims['wdt:P58'] || [],
       publisherId: (claims['wdt:P123'] && claims['wdt:P123'][0]) || raw.publisher,
