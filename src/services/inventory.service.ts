@@ -37,5 +37,22 @@ export const inventoryService = {
     return this.ownedUris.has(uri);
   },
 
-  
+  async addToLibrary(uri: string): Promise<boolean> {
+    const res = await fetch('/api/inventory/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uri })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.error || data.message || "Erreur lors de l'ajout à l'inventaire");
+    }
+
+    // CRUCIAL : On met à jour la mémoire locale immédiatement
+    this.ownedUris.add(uri);
+    
+    return true;
+  }
 };

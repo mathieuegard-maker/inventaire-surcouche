@@ -5,6 +5,7 @@ import { entityResolver } from './resolvers/entity.resolver';
 import { entityHumanizer } from './resolvers/humanizer';
 import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './services/inventory.service';
+import { seriesResolver } from './resolvers/series.resolver';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;
@@ -31,11 +32,11 @@ function initApp() {
     console.group(`================ ACQUISITION : ${isbn} ================`);
 
     try {
-      // --- ÉTAPE 1 : RÉCUPÉRATION BRUTE (1 SEUL APPEL RÉSEAU) ---
+      // --- ÉTAPE 1 : RÉCUPÉRATION DES MÉTADONNÉES ---
       console.log("--- ÉTAPE 1 : RÉCUPÉRATION DES MÉTADONNÉES ---");
       const rawData = await entityResolver.fromIsbn(isbn);
       
-      // --- ÉTAPE 2 : VÉRIFICATION INVENTAIRE (Mémoire locale, ultra-rapide) ---
+      // --- ÉTAPE 2 : VÉRIFICATION INVENTAIRE ---
       console.log("--- ÉTAPE 2 : VÉRIFICATION INVENTAIRE ---");
       const isOwned = inventoryService.isUriOwned(rawData.uri);
       
@@ -45,7 +46,7 @@ function initApp() {
         addLog(`✅ Nouveau livre ! On peut l'ajouter.`, "success");
       }
 
-      // --- ÉTAPE 3 : HUMANISATION ---
+      // --- ÉTAPE 3 : TRADUCTION DES IDENTIFIANTS ---
       console.log("--- ÉTAPE 3 : TRADUCTION DES IDENTIFIANTS ---");
       addLog("Traduction des identifiants...");
       const book = await entityHumanizer.humanize(rawData);
@@ -54,15 +55,63 @@ function initApp() {
       // --- ÉTAPE 4 : AFFICHAGE LOGS ---
       addLog(`✓ Succès : ${book.title}`, "success");
       
-      const creators = book.authors.length > 0 ? book.authors : book.illustrators;
-      if (creators.length > 0) {
-        addLog(`Par : ${creators.join(', ')}`);
+      if (book.authors.length > 0) {
+        addLog(`Par : ${book.authors.join(', ')}`);
       } else {
         addLog(`Auteur(s) : Non trouvés dans les claims`, "error");
       }
 
       if (book.series) {
         addLog(`Série : ${book.series} (Tome ${book.seriesNumber || '?'})`);
+
+        // --- TEST ÉTAPE 2 : RÉCUPÉRATION DE LA SÉRIE COMPLÈTE ---
+        console.log("--- ÉTAPE TEST : RÉCUPÉRATION DE LA SÉRIE COMPLÈTE ---");
+        addLog(`⏳ Recherche des autres tomes de la saga...`);
+        
+        const tomesComplets = await seriesResolver.getFullSeries(book.seriesId!);
+        
+        console.log(`[TEST SERIE] ${tomesComplets.length} tomes récupérés et triés :`, tomesComplets);
+        addLog(`📚 ${tomesComplets.length} tomes trouvés pour cette série.`, "info");
+      }
+
+      // --- ÉTAPE 5 : GESTION DE L'UI (Bouton Ajout) ---
+      const oldBtn = document.getElementById('add-book-btn');
+      if (oldBtn) oldBtn.remove();
+
+      if (!isOwned) {
+        const btn = document.createElement('button');
+        btn.id = 'add-book-btn';
+        btn.textContent = `➕ Ajouter "${book.title}" à ma collection`;
+        btn.style.marginTop = '15px';
+        btn.style.backgroundColor = '#5bc31b';
+        btn.style.color = 'white';
+        btn.style.padding = '10px';
+        btn.style.border = 'none';
+        btn.style.borderRadius = '5px';
+        btn.style.cursor = 'pointer';
+        btn.style.width = '100%';
+
+        btn.onclick = async () => {
+          try {
+            btn.disabled = true;
+            btn.textContent = "⏳ Ajout en cours...";
+            btn.style.backgroundColor = '#f39c12';
+            
+            await inventoryService.addToLibrary(book.uri);
+            
+            addLog(`🎉 Succès : Le livre a été ajouté à ton inventaire !`, "success");
+            btn.textContent = "✓ Dans la collection";
+            btn.style.backgroundColor = '#7f8c8d';
+            btn.style.cursor = 'default';
+          } catch (err: any) {
+            addLog(`ERREUR d'ajout : ${err.message}`, "error");
+            btn.disabled = false;
+            btn.textContent = `❌ Réessayer l'ajout`;
+            btn.style.backgroundColor = '#e74c3c';
+          }
+        };
+
+        acquisitionZone.appendChild(btn);
       }
 
     } catch (err: any) {

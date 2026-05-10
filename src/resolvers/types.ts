@@ -46,6 +46,7 @@ export interface HumanizedBook extends BaseBook {
   scriptwriters: string[];
   publisher?: string;
   series?: string;
+  seriesId?: string;
   seriesNumber?: string;
   genres: string[];
   collection?: string;
