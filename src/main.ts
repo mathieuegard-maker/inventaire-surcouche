@@ -1,6 +1,7 @@
 // src/main.ts
 import { authService } from './services/auth.service';
 import { userService } from './services/user.service';
+import { itemService } from './services/item.service';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;
@@ -21,18 +22,25 @@ form.addEventListener('submit', async (e) => {
   addLog("Phase 1 : Login...");
 
   try {
-    // Correction TS6133 : On appelle la fonction sans stocker le résultat inutilisé
     await authService.login(u, p);
     addLog("✓ Login réussi", "success");
 
     addLog("Phase 2 : Vérification Session...");
     const user = await userService.fetchProfile();
     
-    // Correction TS18047 : On vérifie que 'user' n'est pas null avant d'accéder à ses propriétés
-    if (user && user.username) {
+    // On vérifie que l'utilisateur ET son URI sont bien présents
+    if (user && user.username && user.uri) {
       addLog(`✓ Session validée : Bonjour ${user.username}`, "success");
+      
+      // Phase 3 réactivée !
+      addLog("Phase 3 : Chargement de l'inventaire...");
+      const items = await itemService.getItems(user.uri);
+      
+      addLog(`✓ Succès : ${items.length} livres récupérés !`, "success");
+      console.log('[DEBUG] Tes livres :', items);
+
     } else {
-      throw new Error("Le profil utilisateur est incomplet ou introuvable.");
+      throw new Error("L'identifiant URI est introuvable dans le profil.");
     }
 
   } catch (err: any) {
