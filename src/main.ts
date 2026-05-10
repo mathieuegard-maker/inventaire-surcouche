@@ -32,12 +32,7 @@ function initApp() {
     console.group(`================ ACQUISITION : ${isbn} ================`);
 
     try {
-      // --- ÉTAPE 1 : RÉCUPÉRATION DES MÉTADONNÉES ---
-      console.log("--- ÉTAPE 1 : RÉCUPÉRATION DES MÉTADONNÉES ---");
       const rawData = await entityResolver.fromIsbn(isbn);
-      
-      // --- ÉTAPE 2 : VÉRIFICATION INVENTAIRE ---
-      console.log("--- ÉTAPE 2 : VÉRIFICATION INVENTAIRE ---");
       const isOwned = inventoryService.isUriOwned(rawData.uri);
       
       if (isOwned) {
@@ -46,35 +41,70 @@ function initApp() {
         addLog(`✅ Nouveau livre ! On peut l'ajouter.`, "success");
       }
 
-      // --- ÉTAPE 3 : TRADUCTION DES IDENTIFIANTS ---
-      console.log("--- ÉTAPE 3 : TRADUCTION DES IDENTIFIANTS ---");
       addLog("Traduction des identifiants...");
       const book = await entityHumanizer.humanize(rawData);
-      console.log("Objet FINAL :", book);
-
-      // --- ÉTAPE 4 : AFFICHAGE LOGS ---
+      
       addLog(`✓ Succès : ${book.title}`, "success");
       
       if (book.authors.length > 0) {
         addLog(`Par : ${book.authors.join(', ')}`);
-      } else {
-        addLog(`Auteur(s) : Non trouvés dans les claims`, "error");
       }
 
       if (book.series) {
         addLog(`Série : ${book.series} (Tome ${book.seriesNumber || '?'})`);
-
-        // --- TEST ÉTAPE 2 : RÉCUPÉRATION DE LA SÉRIE COMPLÈTE ---
-        console.log("--- ÉTAPE TEST : RÉCUPÉRATION DE LA SÉRIE COMPLÈTE ---");
         addLog(`⏳ Recherche des autres tomes de la saga...`);
         
         const tomesComplets = await seriesResolver.getFullSeries(book.seriesId!);
-        
-        console.log(`[TEST SERIE] ${tomesComplets.length} tomes récupérés et triés :`, tomesComplets);
         addLog(`📚 ${tomesComplets.length} tomes trouvés pour cette série.`, "info");
+
+        // GESTION DU BOUTON BULK
+        const oldBulkBtn = document.getElementById('bulk-add-btn');
+        if (oldBulkBtn) oldBulkBtn.remove();
+
+        const bulkBtn = document.createElement('button');
+        bulkBtn.id = 'bulk-add-btn';
+        bulkBtn.textContent = `📦 Tout ajouter (${tomesComplets.length} tomes)`;
+        bulkBtn.style.marginTop = '10px';
+        bulkBtn.style.backgroundColor = '#2980b9';
+        bulkBtn.style.color = 'white';
+        bulkBtn.style.padding = '10px';
+        bulkBtn.style.border = 'none';
+        bulkBtn.style.borderRadius = '4px';
+        bulkBtn.style.cursor = 'pointer';
+        bulkBtn.style.width = '100%';
+
+        bulkBtn.onclick = async () => {
+          try {
+            bulkBtn.disabled = true;
+            bulkBtn.textContent = "⏳ Résolution des éditions...";
+
+            const worksToAdd = tomesComplets
+              .map(t => t.uri)
+              .filter(uri => !inventoryService.isUriOwned(uri));
+
+            if (worksToAdd.length === 0) {
+              addLog("Info : Tu possèdes déjà toute la série !", "warning");
+              return;
+            }
+
+            // Appel à l'unité atomique du resolver
+            const editionsToAdd = await entityResolver.resolveBestEditions(worksToAdd);
+
+            bulkBtn.textContent = "⏳ Enregistrement...";
+            await inventoryService.addBulkToLibrary(editionsToAdd);
+            
+            addLog(`🎉 Succès : ${editionsToAdd.length} tomes ajoutés !`, "success");
+            bulkBtn.textContent = "✓ Série ajoutée";
+          } catch (err: any) {
+            addLog(`ERREUR BULK : ${err.message}`, "error");
+            bulkBtn.disabled = false;
+            bulkBtn.textContent = "❌ Réessayer l'ajout global";
+          }
+        };
+        acquisitionZone.appendChild(bulkBtn);
       }
 
-      // --- ÉTAPE 5 : GESTION DE L'UI (Bouton Ajout) ---
+      // GESTION DU BOUTON AJOUT UNITAIRE
       const oldBtn = document.getElementById('add-book-btn');
       if (oldBtn) oldBtn.remove();
 
@@ -87,36 +117,28 @@ function initApp() {
         btn.style.color = 'white';
         btn.style.padding = '10px';
         btn.style.border = 'none';
-        btn.style.borderRadius = '5px';
+        btn.style.borderRadius = '4px';
         btn.style.cursor = 'pointer';
         btn.style.width = '100%';
 
         btn.onclick = async () => {
           try {
             btn.disabled = true;
-            btn.textContent = "⏳ Ajout en cours...";
-            btn.style.backgroundColor = '#f39c12';
-            
+            btn.textContent = "⏳ Ajout...";
             await inventoryService.addToLibrary(book.uri);
-            
-            addLog(`🎉 Succès : Le livre a été ajouté à ton inventaire !`, "success");
+            addLog(`🎉 Succès : Ajouté !`, "success");
             btn.textContent = "✓ Dans la collection";
             btn.style.backgroundColor = '#7f8c8d';
-            btn.style.cursor = 'default';
           } catch (err: any) {
             addLog(`ERREUR d'ajout : ${err.message}`, "error");
             btn.disabled = false;
-            btn.textContent = `❌ Réessayer l'ajout`;
-            btn.style.backgroundColor = '#e74c3c';
           }
         };
-
         acquisitionZone.appendChild(btn);
       }
 
     } catch (err: any) {
       addLog(`ERREUR : ${err.message}`, "error");
-      console.error(err);
     } finally {
       console.groupEnd();
     }
@@ -127,28 +149,17 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const u = (document.getElementById('username') as HTMLInputElement).value;
   const p = (document.getElementById('password') as HTMLInputElement).value;
-
   addLog("Tentative de connexion...");
-
   try {
     await authService.login(u, p);
     addLog("✓ Authentification réussie", "success");
-
     const user = await userService.fetchProfile();
-    
-    if (user && user.username && user.uri) {
-      addLog(`✓ Session active pour ${user.username}`, "success");
-      
-      addLog("Chargement de la bibliothèque en mémoire...");
-      const totalBooks = await inventoryService.loadLibrary(user.uri);
-      addLog(`📚 ${totalBooks} livres chargés dans ta collection.`, "success");
-
+    if (user && user.uri) {
+      addLog("Chargement de la bibliothèque...");
+      await inventoryService.loadLibrary(user.uri);
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
-      
       initApp();
-    } else {
-      throw new Error("Impossible de trouver l'URI de l'utilisateur dans le profil.");
     }
   } catch (err: any) {
     addLog(`ÉCHEC : ${err.message}`, "error");

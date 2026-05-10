@@ -53,3 +53,6 @@ yarn-error.log*
 # Fichiers système
 .DS_Store
 Thumbs.db
+
+export_project.py
+full_project_code.txt

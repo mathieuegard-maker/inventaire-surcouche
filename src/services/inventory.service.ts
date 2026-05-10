@@ -54,5 +54,25 @@ export const inventoryService = {
     this.ownedUris.add(uri);
     
     return true;
+  },
+
+  async addBulkToLibrary(uris: string[]): Promise<boolean> {
+    const res = await fetch('/api/inventory/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uris })
+    });
+    
+    const data = await res.json();
+    
+    if (!res.ok) {
+      // On affiche l'erreur brute envoyée par Inventaire dans F12
+      console.error("[DEBUG BULK ERROR]", data);
+      // On lance l'erreur avec le texte précis d'Inventaire (status_verbose)
+      throw new Error(data.status_verbose || data.error || "Erreur inconnue du serveur");
+    }
+
+    uris.forEach(uri => this.ownedUris.add(uri));
+    return true;
   }
 };
