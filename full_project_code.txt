@@ -9712,6 +9712,39 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 
 ################################################################################
+### FICHIER : api/inventory/list.ts
+################################################################################
+
+// api/inventory/list.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const { username } = req.query;
+
+  if (!username) return res.status(400).json({ error: 'Username manquant' });
+
+  try {
+    // L'API d'Inventaire pour récupérer les URIs de la bibliothèque d'un utilisateur
+    const response = await fetch(`https://inventaire.io/api/users/${username}/entities?action=inventory`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'InventaireMobileOverlay/1.0 (mathieu.egard@gmail.com)'
+      },
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) return res.status(response.status).json(data);
+
+    return res.status(200).json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Proxy Inventory Crash', details: err.message });
+  }
+}
+
+
+################################################################################
 ### FICHIER : api/lib/inventaire-api.ts
 ################################################################################
 
@@ -9795,6 +9828,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 
 ################################################################################
+### FICHIER : api/entities/by-uris.ts
+################################################################################
+
+// api/entities/by-uris.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const { uris } = req.query;
+
+  if (!uris) return res.status(400).json({ error: 'URIs manquantes' });
+
+  try {
+    const response = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${uris}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'InventaireMobileOverlay/1.0 (mathieu.egard@gmail.com)'
+      },
+    });
+
+    const data = await response.json();
+    return res.status(200).json(data);
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Proxy Humanizer Crash', details: err.message });
+  }
+}
+
+
+################################################################################
 ### FICHIER : src/counter.ts
 ################################################################################
 
@@ -9814,66 +9876,102 @@ export function setupCounter(element: HTMLButtonElement) {
 ### FICHIER : src/main.ts
 ################################################################################
 
-// src/main.ts
 import { authService } from './services/auth.service';
 import { userService } from './services/user.service';
 import { entityResolver } from './resolvers/entity.resolver';
+import { entityHumanizer } from './resolvers/humanizer.ts';
 import { manualIsbnProvider } from './providers/manual-isbn.provider';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;
+const acquisitionZone = document.getElementById('acquisition-zone')!;
 
+/**
+ * Utilitaire de log pour l'interface
+ */
 function addLog(msg: string, type = 'info') {
   const div = document.createElement('div');
   div.className = `log-entry ${type}`;
+  div.style.padding = '5px 0';
+  div.style.borderBottom = '1px solid #333';
+  if (type === 'success') div.style.color = '#0f0';
+  if (type === 'error') div.style.color = '#f00';
+  
   div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logs.prepend(div);
 }
 
-// Initialisation de la zone d'acquisition une fois connecté
-function initAcquisitionModules() {
-  addLog("Modules d'acquisition prêts.", "success");
-  
-  // On configure le provider manuel
-  // Il va envoyer l'ISBN au Resolver quand on clique sur le bouton
+/**
+ * Initialisation de la logique métier après connexion
+ */
+function initApp() {
+  addLog("Application prête. Module d'acquisition chargé.", "success");
+
   manualIsbnProvider.setup('acquisition-zone', async (isbn) => {
-    addLog(`Recherche de l'ISBN : ${isbn}...`);
-    
+    addLog(`Action : Recherche de l'ISBN ${isbn}...`);
+
     try {
-      const bookData = await entityResolver.fromIsbn(isbn);
+      // --- ÉTAPE 1 : RÉCUPÉRATION BRUTE ---
+      const rawData = await entityResolver.fromIsbn(isbn);
       
-      // Visualisation en console et en dur dans les logs
-      console.table(bookData);
-      addLog(`✓ Trouvé : ${bookData.title} (${bookData.authors.join(', ')})`, "success");
+      console.group(`[DEBUG] Acquisition ISBN: ${isbn}`);
+      console.log("1. Objet RAW (Sortie du Mapper) :", rawData);
+
+      // --- ÉTAPE 2 : HUMANISATION ---
+      addLog("Traduction des identifiants...");
+      const book = await entityHumanizer.humanize(rawData);
       
+      console.log("2. Objet FINAL (Sortie de l'Humanizer) :", book);
+      console.groupEnd();
+
+      // --- ÉTAPE 3 : AFFICHAGE LOGS ---
+      addLog(`✓ Succès : ${book.title}`, "success");
+      
+      // On affiche les auteurs OU les dessinateurs si les auteurs sont vides
+      const creators = book.authors.length > 0 ? book.authors : book.illustrators;
+      
+      if (creators.length > 0) {
+        addLog(`Par : ${creators.join(', ')}`);
+      } else {
+        addLog(`Auteur(s) : Non trouvés dans les claims`, "error");
+      }
+
     } catch (err: any) {
       addLog(`ERREUR : ${err.message}`, "error");
+      console.error(err);
     }
   });
 }
 
+/**
+ * Gestion du formulaire de connexion
+ */
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const u = (document.getElementById('username') as HTMLInputElement).value;
   const p = (document.getElementById('password') as HTMLInputElement).value;
 
-  addLog("Phase 1 : Login...");
-  try {
-    await authService.login(u, p);
-    addLog("✓ Login réussi", "success");
+  addLog("Tentative de connexion...");
 
-    addLog("Phase 2 : Profil...");
+  try {
+    // Étape 1 : Authentification
+    await authService.login(u, p);
+    addLog("✓ Authentification réussie", "success");
+
+    // Étape 2 : Récupération du profil
     const user = await userService.fetchProfile();
     
     if (user && user.username) {
-      addLog(`✓ Bienvenue ${user.username}`, "success");
+      addLog(`✓ Session active pour ${user.username}`, "success");
       
-      // On cache le formulaire de login et on affiche la zone d'acquisition
+      // Interface : On bascule du login vers l'app
       form.style.display = 'none';
-      initAcquisitionModules();
+      acquisitionZone.style.display = 'block';
+      
+      initApp();
     }
   } catch (err: any) {
-    addLog(`ERREUR : ${err.message}`, "error");
+    addLog(`ÉCHEC : ${err.message}`, "error");
   }
 });
 
@@ -10250,65 +10348,219 @@ export const sessionStore = {
 
 
 ################################################################################
+### FICHIER : src/resolvers/humanizer.ts
+################################################################################
+
+// src/resolvers/humanizer.ts
+import type { RawBook, HumanizedBook } from './types';
+
+export const entityHumanizer = {
+  async humanize(rawBook: RawBook): Promise<HumanizedBook> {
+    const idsToTranslate = new Set<string>();
+    
+    // Collecte des URIs
+    rawBook.authorIds.forEach(id => idsToTranslate.add(id));
+    rawBook.illustratorIds.forEach(id => idsToTranslate.add(id));
+    rawBook.scriptwriterIds.forEach(id => idsToTranslate.add(id));
+    rawBook.genreIds.forEach(id => idsToTranslate.add(id));
+    if (rawBook.publisherId) idsToTranslate.add(rawBook.publisherId);
+    if (rawBook.seriesId) idsToTranslate.add(rawBook.seriesId);
+    if (rawBook.collectionId) idsToTranslate.add(rawBook.collectionId);
+
+    let entities: any = {};
+    if (idsToTranslate.size > 0) {
+      // CORRECTION CRUCIALE : On utilise '|' et on encode l'URL
+      const urisParam = encodeURIComponent(Array.from(idsToTranslate).join('|'));
+      
+      const res = await fetch(`/api/entities/by-uris?uris=${urisParam}`);
+      const data = await res.json();
+      
+      // LOG POUR DEBUG : On vérifie que l'API renvoie bien les noms
+      console.log("[DEBUG Humanizer] Dictionnaire de traduction API :", data);
+      
+      entities = data.entities || data;
+    }
+
+    const getName = (id?: string) => {
+      if (!id || !entities[id]) return undefined;
+      const entity = entities[id];
+      // On cherche d'abord dans claims (parfois utilisé pour les redirections Wikidata), puis labels
+      return entity.label || entity.labels?.fr || entity.labels?.en || id;
+    };
+
+    return {
+      ...rawBook,
+      authors: rawBook.authorIds.map(id => getName(id) || id),
+      illustrators: rawBook.illustratorIds.map(id => getName(id) || id),
+      scriptwriters: rawBook.scriptwriterIds.map(id => getName(id) || id),
+      genres: rawBook.genreIds.map(id => getName(id) || id),
+      publisher: getName(rawBook.publisherId),
+      series: getName(rawBook.seriesId),
+      collection: getName(rawBook.collectionId)
+    };
+  }
+};
+
+
+################################################################################
+### FICHIER : src/resolvers/types.ts
+################################################################################
+
+// src/resolvers/types.ts
+
+/**
+ * Informations de base communes à tous les états du livre
+ */
+export interface BaseBook {
+  uri: string; // inv:xxx ou wd:Qxxx
+  isbn13?: string;
+  isbn10?: string;
+  type: 'edition' | 'work' | 'unknown';
+  
+  // Contenu
+  title: string;
+  subtitle?: string;
+  originalTitle?: string; // Pour les Mangas/Comics
+  description?: string;
+  image?: string;
+  language?: string;
+  
+  // Physique
+  pageCount?: number;
+  publishDate?: string;
+  format?: string; // Relié, Broché, Deluxe
+}
+
+/**
+ * Données brutes (Codes URIs) extraites après le Mapping
+ */
+export interface RawBook extends BaseBook {
+  authorIds: string[];
+  illustratorIds: string[];
+  scriptwriterIds: string[];
+  publisherId?: string;
+  seriesId?: string;
+  seriesNumber?: string;
+  genreIds: string[]; // Pour classer par "Science-fiction", "Western", etc.
+  collectionId?: string; // Ex: "La Pléiade" ou "Bibliothèque verte"
+}
+
+/**
+ * Données lisibles par l'humain après passage dans l'Humanizer
+ */
+export interface HumanizedBook extends BaseBook {
+  authors: string[];
+  illustrators: string[];
+  scriptwriters: string[];
+  publisher?: string;
+  series?: string;
+  seriesNumber?: string;
+  genres: string[];
+  collection?: string;
+}
+
+/**
+ * REPRÉSENTATION DE TON EXEMPLAIRE PHYSIQUE (Pour le module Inventaire/Prêts)
+ * C'est ici qu'on gérera si le livre est à toi, sa note, et s'il est prêté.
+ */
+export interface InventoryItem {
+  id: string; // L'ID de l'item dans TON inventaire
+  entityUri: string; // Lien vers le HumanizedBook
+  status: 'owned' | 'wishlist' | 'loaned' | 'sold';
+  state?: 'new' | 'good' | 'damaged'; // État physique
+  loanTo?: string; // Nom de l'ami (ton fameux fichier JSON)
+  dateAdded: string;
+  personalNote?: string;
+}
+
+
+################################################################################
 ### FICHIER : src/resolvers/entity.resolver.ts
 ################################################################################
 
 // src/resolvers/entity.resolver.ts
-
-export interface SimplifiedEntity {
-  uri: string;
-  title: string;
-  authors: string[];
-  image?: string;
-  isbn: string;
-}
+import { entityMapper } from './mapper';
+import type { RawBook } from './types';
 
 export const entityResolver = {
-  async fromIsbn(isbn: string): Promise<SimplifiedEntity> {
+  async fromIsbn(isbn: string): Promise<RawBook> {
     const res = await fetch(`/api/data/isbn?isbn=${isbn}`);
     const data = await res.json();
-
-    // On récupère l'entité dans 'entities' ou à la racine
     const entities = data.entities || data;
     const uri = Object.keys(entities)[0];
-    const raw = entities[uri];
+    const rawEdition = entities[uri];
 
-    if (!raw || raw.missing) {
-      throw new Error("Livre inconnu dans la base.");
+    if (!rawEdition || rawEdition.missing) throw new Error("Livre introuvable");
+
+    let mappedBook = entityMapper.mapResponse(uri, rawEdition);
+
+    // INTELLIGENCE : Si pas d'auteur ou de série, on cherche le lien vers l'Œuvre (Work)
+    // Dans Inventaire, le lien vers l'œuvre est souvent dans claims['wdt:P629'] (edition of)
+    const workUri = rawEdition.claims?.['wdt:P629']?.[0] || rawEdition.work;
+
+    if (workUri && (mappedBook.authorIds.length === 0 || !mappedBook.seriesId)) {
+      console.log(`[Resolver] Edition incomplète. Récupération de l'œuvre : ${workUri}`);
+      const workRes = await fetch(`/api/entities/by-uris?uris=${workUri}`);
+      const workData = await workRes.json();
+      const rawWork = (workData.entities || workData)[workUri];
+
+      if (rawWork) {
+        const mappedWork = entityMapper.mapResponse(workUri, rawWork);
+        // On fusionne : on garde les infos de l'édition mais on complète avec l'œuvre
+        mappedBook.authorIds = mappedBook.authorIds.length > 0 ? mappedBook.authorIds : mappedWork.authorIds;
+        mappedBook.seriesId = mappedBook.seriesId || mappedWork.seriesId;
+        mappedBook.seriesNumber = mappedBook.seriesNumber || mappedWork.seriesNumber;
+        mappedBook.illustratorIds = mappedBook.illustratorIds.length > 0 ? mappedBook.illustratorIds : mappedWork.illustratorIds;
+        mappedBook.genreIds = mappedBook.genreIds.length > 0 ? mappedBook.genreIds : mappedWork.genreIds;
+      }
     }
 
-    // 1. Extraction du Titre
-    let title = "Titre inconnu";
-    if (raw.label) title = raw.label;
-    else if (raw.labels) {
-      title = raw.labels.fr || raw.labels.en || Object.values(raw.labels)[0] as string || title;
-    }
+    return mappedBook;
+  }
+};
 
-    // 2. Extraction des Auteurs (Multi-sources)
-    let authors: string[] = [];
-    if (Array.isArray(raw.authors) && raw.authors.length > 0) {
-      authors = raw.authors;
-    } else if (raw.claims && raw.claims['wdt:P50']) {
-      // Sur Wikidata, P50 est la propriété pour l'auteur
-      authors = raw.claims['wdt:P50'];
-    }
 
-    // 3. Extraction de l'Image
-    const image = raw.image || (raw.images && raw.images[0]);
+################################################################################
+### FICHIER : src/resolvers/mapper.ts
+################################################################################
 
-    const result: SimplifiedEntity = {
+// src/resolvers/mapper.ts
+import type { RawBook } from './types';
+
+export const entityMapper = {
+  mapResponse(uri: string, raw: any): RawBook {
+    const claims = raw.claims || {};
+    
+    // FALLBACK TITRE : Si label est vide, on prend originalTitle (P1476)
+    const rawTitle = raw.label || raw.labels?.fr || raw.labels?.en;
+    const originalTitle = (claims['wdt:P1476'] && claims['wdt:P1476'][0]);
+    const title = rawTitle || originalTitle || "Titre inconnu";
+
+    return {
       uri: uri,
+      isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
+      isbn10: raw.isbn10,
+      type: (raw.type as any) || 'unknown',
       title: title,
-      authors: authors.length > 0 ? authors : ["Auteur inconnu"],
-      image: image,
-      isbn: isbn
+      subtitle: raw.subtitle,
+      originalTitle: originalTitle,
+      description: raw.description || raw.descriptions?.fr,
+      image: raw.image || (raw.images && raw.images[0]),
+      language: raw.language,
+      pageCount: claims['wdt:P1104'] ? parseInt(claims['wdt:P1104'][0]) : undefined,
+      publishDate: claims['wdt:P577'] ? claims['wdt:P577'][0] : undefined,
+      format: raw.format,
+
+      // IDs (on garde ce qu'on trouve)
+      authorIds: claims['wdt:P50'] || raw.authors || [],
+      illustratorIds: claims['wdt:P110'] || [],
+      scriptwriterIds: claims['wdt:P58'] || [],
+      publisherId: (claims['wdt:P123'] && claims['wdt:P123'][0]) || raw.publisher,
+      seriesId: (claims['wdt:P179'] && claims['wdt:P179'][0]),
+      seriesNumber: (claims['wdt:P1545'] && claims['wdt:P1545'][0]),
+      genreIds: claims['wdt:P136'] || [],
+      collectionId: (claims['wdt:P195'] && claims['wdt:P195'][0])
     };
-
-    // On force l'affichage pour le debug
-    console.log("[Resolver] Objet final généré :");
-    console.table(result);
-
-    return result;
   }
 };
 
@@ -10334,6 +10586,60 @@ export const entityResolver = {
 
 <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="32" height="32" viewBox="0 0 256 256"><path fill="#007ACC" d="M0 128v128h256V0H0z"/><path fill="#FFF" d="m56.612 128.85l-.081 10.483h33.32v94.68h23.568v-94.68h33.321v-10.28c0-5.69-.122-10.444-.284-10.566c-.122-.162-20.4-.244-44.983-.203l-44.74.122l-.121 10.443Zm149.955-10.742c6.501 1.625 11.459 4.51 16.01 9.224c2.357 2.52 5.851 7.111 6.136 8.208c.08.325-11.053 7.802-17.798 11.988c-.244.162-1.22-.894-2.317-2.52c-3.291-4.795-6.745-6.867-12.028-7.233c-7.76-.528-12.759 3.535-12.718 10.321c0 1.992.284 3.17 1.097 4.795c1.707 3.536 4.876 5.649 14.832 9.956c18.326 7.883 26.168 13.084 31.045 20.48c5.445 8.249 6.664 21.415 2.966 31.208c-4.063 10.646-14.14 17.879-28.323 20.276c-4.388.772-14.79.65-19.504-.203c-10.28-1.828-20.033-6.908-26.047-13.572c-2.357-2.6-6.949-9.387-6.664-9.874c.122-.163 1.178-.813 2.356-1.504c1.138-.65 5.446-3.129 9.509-5.485l7.355-4.267l1.544 2.276c2.154 3.29 6.867 7.801 9.712 9.305c8.167 4.307 19.383 3.698 24.909-1.26c2.357-2.153 3.332-4.388 3.332-7.68c0-2.966-.366-4.266-1.91-6.501c-1.99-2.845-6.054-5.242-17.595-10.24c-13.206-5.69-18.895-9.224-24.096-14.832c-3.007-3.25-5.852-8.452-7.03-12.8c-.975-3.617-1.22-12.678-.447-16.335c2.723-12.76 12.353-21.659 26.25-24.3c4.51-.853 14.994-.528 19.424.569Z"/></svg>
 
+
+
+################################################################################
+### FICHIER : src/services/inventory.service.ts
+################################################################################
+
+// src/services/inventory.service.ts
+import { entityResolver } from '../resolvers/entity.resolver';
+
+export const inventoryService = {
+  // On stocke tes livres ici (Un "Set" est ultra-rapide pour vérifier si un élément existe)
+  ownedUris: new Set<string>(),
+
+  /**
+   * 1. Charge toute la bibliothèque en mémoire
+   * À appeler juste après que l'utilisateur se soit connecté.
+   */
+  async loadLibrary(username: string): Promise<number> {
+    const res = await fetch(`/api/inventory/list?username=${username}`);
+    const data = await res.json();
+
+    if (!res.ok) throw new Error(data.error || "Impossible de charger l'inventaire");
+
+    // L'API renvoie souvent un objet où les clés sont les URIs des livres
+    const uris = Object.keys(data.entities || data);
+    
+    // On met à jour notre Set en mémoire
+    this.ownedUris.clear();
+    uris.forEach(uri => this.ownedUris.add(uri));
+
+    return this.ownedUris.size; // Retourne le nombre de livres possédés
+  },
+
+  /**
+   * 2. Vérifie instantanément si une URI est possédée
+   */
+  isUriOwned(uri: string): boolean {
+    return this.ownedUris.has(uri);
+  },
+
+  /**
+   * 3. La fonction "Magique" que tu as demandée : ISBN -> Propriété
+   */
+  async checkOwnershipByIsbn(isbn: string): Promise<{ isOwned: boolean; uri: string; title: string }> {
+    // On utilise notre brique existante pour trouver l'URI !
+    const rawBook = await entityResolver.fromIsbn(isbn);
+    
+    return {
+      isOwned: this.isUriOwned(rawBook.uri),
+      uri: rawBook.uri,
+      title: rawBook.title
+    };
+  }
+};
 
 
 ################################################################################
