@@ -1,5 +1,4 @@
 // src/services/inventory.service.ts
-import { entityResolver } from '../resolvers/entity.resolver';
 
 export const inventoryService = {
   ownedUris: new Set<string>(),
