@@ -9,7 +9,13 @@ def export_project_to_txt(source_folder, output_file):
         '__pycache__', 
         '.DS_Store', 
         '.env.local', 
-        'export_project.py'
+        'export_project.py',
+        'package-lock.json',
+        '.svg',
+        '.jpg',
+        '.png',
+        '.ico', 
+        'jpeg'
     }
     
     # On convertit source_folder en chemin absolu pour des calculs propres

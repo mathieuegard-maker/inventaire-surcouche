@@ -3,6 +3,7 @@ import type { RawBook } from './types';
 
 export const entityMapper = {
   mapResponse(uri: string, raw: any): RawBook {
+    console.log(`[MAPPER] Entrée brute pour ${uri}:`, raw);
     const claims = raw.claims || {};
     
     // FALLBACK TITRE : Si label est vide, on prend originalTitle (P1476)
@@ -10,7 +11,25 @@ export const entityMapper = {
     const originalTitle = (claims['wdt:P1476'] && claims['wdt:P1476'][0]);
     const title = rawTitle || originalTitle || "Titre inconnu";
 
-    return {
+    // EXTRACTION INTELLIGENTE DE LA SÉRIE (P179) ET DU NUMÉRO DE TOME (P1545)
+    let extractedSeriesId;
+    let extractedSeriesNumber;
+    const seriesClaim = claims['wdt:P179']?.[0];
+
+    if (seriesClaim) {
+      if (typeof seriesClaim === 'string') {
+        extractedSeriesId = seriesClaim;
+      } else {
+        // C'est un objet : on récupère la valeur texte ET le numéro de tome dans les qualificateurs
+        extractedSeriesId = seriesClaim.value;
+        extractedSeriesNumber = seriesClaim.qualifiers?.['wdt:P1545']?.[0];
+      }
+    }
+    
+    // Fallback au cas où le numéro de série serait à la racine (rare mais possible)
+    extractedSeriesNumber = extractedSeriesNumber || (claims['wdt:P1545'] && claims['wdt:P1545'][0]);
+
+    const mappedBook: RawBook = {
       uri: uri,
       isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
       isbn10: raw.isbn10,
@@ -26,14 +45,20 @@ export const entityMapper = {
       format: raw.format,
 
       // IDs (on garde ce qu'on trouve)
-      authorIds: claims['wdt:P50'] || claims['wdt:P170'] || raw.authors || [],
+      authorIds: claims['wdt:P50'] || raw.authors || [],
       illustratorIds: claims['wdt:P110'] || [],
       scriptwriterIds: claims['wdt:P58'] || [],
       publisherId: (claims['wdt:P123'] && claims['wdt:P123'][0]) || raw.publisher,
-      seriesId: (claims['wdt:P179'] && claims['wdt:P179'][0]),
-      seriesNumber: (claims['wdt:P1545'] && claims['wdt:P1545'][0]),
+      
+      // Les données corrigées
+      seriesId: extractedSeriesId,
+      seriesNumber: extractedSeriesNumber,
+      
       genreIds: claims['wdt:P136'] || [],
       collectionId: (claims['wdt:P195'] && claims['wdt:P195'][0])
     };
+
+    console.log(`[MAPPER] Sortie RawBook structurée (seriesId: ${mappedBook.seriesId}):`, mappedBook);
+    return mappedBook;
   }
 };

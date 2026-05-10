@@ -4,52 +4,48 @@ import type { RawBook } from './types';
 
 export const entityResolver = {
   async fromIsbn(isbn: string): Promise<RawBook> {
+    console.log(`[RESOLVER] Début résolution ISBN: ${isbn}`);
     const res = await fetch(`/api/data/isbn?isbn=${isbn}`);
     const data = await res.json();
+    console.log(`[RESOLVER] Données ISBN brutes API:`, data);
+    
     const entities = data.entities || data;
     const uri = Object.keys(entities)[0];
     const rawEdition = entities[uri];
 
-    if (!rawEdition || rawEdition.missing) throw new Error("Livre introuvable");
+    if (!rawEdition || rawEdition.missing) {
+      console.error(`[RESOLVER] Erreur : L'édition est manquante ou introuvable pour ${isbn}`);
+      throw new Error("Livre introuvable");
+    }
 
     let mappedBook = entityMapper.mapResponse(uri, rawEdition);
 
-    // INTELLIGENCE NIVEAU 1 : Si pas d'auteur ou de série, on cherche le lien vers l'Œuvre (Work)
+    // INTELLIGENCE : Si pas d'auteur ou de série, on cherche le lien vers l'Œuvre (Work)
     const workUri = rawEdition.claims?.['wdt:P629']?.[0] || rawEdition.work;
 
     if (workUri && (mappedBook.authorIds.length === 0 || !mappedBook.seriesId)) {
-      console.log(`[Resolver] Édition incomplète. Récupération de l'œuvre : ${workUri}`);
+      console.log(`[RESOLVER] Édition incomplète détectée. Fallback vers l'œuvre : ${workUri}`);
       const workRes = await fetch(`/api/entities/by-uris?uris=${workUri}`);
       const workData = await workRes.json();
       const rawWork = (workData.entities || workData)[workUri];
 
       if (rawWork) {
+        console.log(`[RESOLVER] Données de l'œuvre reçues :`, rawWork);
         const mappedWork = entityMapper.mapResponse(workUri, rawWork);
+
+        // Fusion en préservant l'existant
         mappedBook.authorIds = mappedBook.authorIds.length > 0 ? mappedBook.authorIds : mappedWork.authorIds;
-        mappedBook.illustratorIds = mappedBook.illustratorIds.length > 0 ? mappedBook.illustratorIds : mappedWork.illustratorIds;
-        mappedBook.scriptwriterIds = mappedBook.scriptwriterIds.length > 0 ? mappedBook.scriptwriterIds : mappedWork.scriptwriterIds;
         mappedBook.seriesId = mappedBook.seriesId || mappedWork.seriesId;
         mappedBook.seriesNumber = mappedBook.seriesNumber || mappedWork.seriesNumber;
+        mappedBook.illustratorIds = mappedBook.illustratorIds.length > 0 ? mappedBook.illustratorIds : mappedWork.illustratorIds;
+        mappedBook.scriptwriterIds = mappedBook.scriptwriterIds.length > 0 ? mappedBook.scriptwriterIds : mappedWork.scriptwriterIds;
         mappedBook.genreIds = mappedBook.genreIds.length > 0 ? mappedBook.genreIds : mappedWork.genreIds;
+        
+        console.log(`[RESOLVER] Résultat de la fusion (seriesId final : ${mappedBook.seriesId})`);
       }
     }
 
-    // INTELLIGENCE NIVEAU 2 : Si TOUJOURS pas d'auteur, on remonte jusqu'à la Série
-    if (mappedBook.seriesId && mappedBook.authorIds.length === 0 && mappedBook.illustratorIds.length === 0) {
-      console.log(`[Resolver] Œuvre sans auteur. Récupération de la série parente : ${mappedBook.seriesId}`);
-      const seriesRes = await fetch(`/api/entities/by-uris?uris=${mappedBook.seriesId}`);
-      const seriesData = await seriesRes.json();
-      const rawSeries = (seriesData.entities || seriesData)[mappedBook.seriesId];
-
-      if (rawSeries) {
-         const mappedSeries = entityMapper.mapResponse(mappedBook.seriesId, rawSeries);
-         mappedBook.authorIds = mappedSeries.authorIds;
-         mappedBook.illustratorIds = mappedSeries.illustratorIds;
-         mappedBook.scriptwriterIds = mappedSeries.scriptwriterIds;
-         mappedBook.genreIds = mappedBook.genreIds.length > 0 ? mappedBook.genreIds : mappedSeries.genreIds;
-      }
-    }
-
+    console.log(`[RESOLVER] Objet final renvoyé par fromIsbn :`, mappedBook);
     return mappedBook;
   }
 };
