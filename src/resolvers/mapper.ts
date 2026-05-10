@@ -10,6 +10,7 @@ export const entityMapper = {
     const rawTitle = raw.label || raw.labels?.fr || raw.labels?.en;
     const originalTitle = (claims['wdt:P1476'] && claims['wdt:P1476'][0]);
     const title = rawTitle || originalTitle || "Titre inconnu";
+    const workUri = claims['wdt:P629'] ? claims['wdt:P629'][0] : (raw.type === 'work' ? uri : undefined);
 
     // EXTRACTION INTELLIGENTE DE LA SÉRIE (P179) ET DU NUMÉRO DE TOME (P1545)
     let extractedSeriesId;
@@ -31,6 +32,7 @@ export const entityMapper = {
 
     const mappedBook: RawBook = {
       uri: uri,
+      workUri: workUri, // On l'injecte ici
       isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
       isbn10: raw.isbn10,
       type: (raw.type as any) || 'unknown',

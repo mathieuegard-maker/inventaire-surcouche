@@ -5,6 +5,7 @@ import { entityResolver } from './resolvers/entity.resolver';
 import { entityHumanizer } from './resolvers/humanizer';
 import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './services/inventory.service';
+import { wishlistService } from './services/wishlist.service';
 import { seriesResolver } from './resolvers/series.resolver';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
@@ -19,129 +20,120 @@ function addLog(msg: string, type = 'info') {
   if (type === 'success') div.style.color = '#0f0';
   if (type === 'error') div.style.color = '#f00';
   if (type === 'warning') div.style.color = '#ffa500';
-  
   div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logs.prepend(div);
 }
 
 function initApp() {
-  addLog("Application prête. Module d'acquisition chargé.", "success");
+  addLog("Module d'acquisition prêt.", "success");
 
   manualIsbnProvider.setup('acquisition-zone', async (isbn) => {
-    addLog(`Action : Recherche de l'ISBN ${isbn}...`);
+    addLog(`Recherche ISBN : ${isbn}...`);
     console.group(`================ ACQUISITION : ${isbn} ================`);
 
     try {
       const rawData = await entityResolver.fromIsbn(isbn);
       const isOwned = inventoryService.isUriOwned(rawData.uri);
-      
-      if (isOwned) {
-        addLog(`⚠️ Ce livre (${rawData.title}) est DÉJÀ dans ta collection !`, "warning");
-      } else {
-        addLog(`✅ Nouveau livre ! On peut l'ajouter.`, "success");
-      }
-
-      addLog("Traduction des identifiants...");
       const book = await entityHumanizer.humanize(rawData);
       
-      addLog(`✓ Succès : ${book.title}`, "success");
-      
-      if (book.authors.length > 0) {
-        addLog(`Par : ${book.authors.join(', ')}`);
-      }
+      addLog(`✓ Livre : ${book.title}`, "success");
 
       if (book.series) {
-        addLog(`Série : ${book.series} (Tome ${book.seriesNumber || '?'})`);
-        addLog(`⏳ Recherche des autres tomes de la saga...`);
-        
+        addLog(`Série : ${book.series}`);
         const tomesComplets = await seriesResolver.getFullSeries(book.seriesId!);
-        addLog(`📚 ${tomesComplets.length} tomes trouvés pour cette série.`, "info");
+        addLog(`📚 ${tomesComplets.length} tomes trouvés.`, "info");
 
-        // GESTION DU BOUTON BULK
-        const oldBulkBtn = document.getElementById('bulk-add-btn');
-        if (oldBulkBtn) oldBulkBtn.remove();
-
+        // --- BOUTON 1 : TOUT AJOUTER À LA COLLECTION (BULK) ---
         const bulkBtn = document.createElement('button');
-        bulkBtn.id = 'bulk-add-btn';
-        bulkBtn.textContent = `📦 Tout ajouter (${tomesComplets.length} tomes)`;
-        bulkBtn.style.marginTop = '10px';
-        bulkBtn.style.backgroundColor = '#2980b9';
-        bulkBtn.style.color = 'white';
-        bulkBtn.style.padding = '10px';
-        bulkBtn.style.border = 'none';
-        bulkBtn.style.borderRadius = '4px';
-        bulkBtn.style.cursor = 'pointer';
-        bulkBtn.style.width = '100%';
+        bulkBtn.textContent = `📦 Ajouter toute la série (${tomesComplets.length} tomes)`;
+        Object.assign(bulkBtn.style, {
+          marginTop: '10px', backgroundColor: '#2980b9', color: 'white',
+          padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer'
+        });
 
         bulkBtn.onclick = async () => {
           try {
             bulkBtn.disabled = true;
-            bulkBtn.textContent = "⏳ Résolution des éditions...";
-
-            const worksToAdd = tomesComplets
-              .map(t => t.uri)
-              .filter(uri => !inventoryService.isUriOwned(uri));
-
-            if (worksToAdd.length === 0) {
-              addLog("Info : Tu possèdes déjà toute la série !", "warning");
-              return;
-            }
-
-            // Appel à l'unité atomique du resolver
+            bulkBtn.textContent = "⏳ Résolution...";
+            const worksToAdd = tomesComplets.map(t => t.uri).filter(uri => !inventoryService.isUriOwned(uri));
+            if (worksToAdd.length === 0) return addLog("Série déjà possédée.", "warning");
+            
+            // Pour l'INVENTAIRE, on a besoin des EDITIONS
             const editionsToAdd = await entityResolver.resolveBestEditions(worksToAdd);
-
-            bulkBtn.textContent = "⏳ Enregistrement...";
             await inventoryService.addBulkToLibrary(editionsToAdd);
             
-            addLog(`🎉 Succès : ${editionsToAdd.length} tomes ajoutés !`, "success");
+            // On nettoie la wishlist des oeuvres qu'on vient d'ajouter
+            await wishlistService.removeFromWishlist([...worksToAdd, ...editionsToAdd]);
+            addLog(`🎉 ${editionsToAdd.length} tomes ajoutés à l'inventaire !`, "success");
             bulkBtn.textContent = "✓ Série ajoutée";
-          } catch (err: any) {
-            addLog(`ERREUR BULK : ${err.message}`, "error");
-            bulkBtn.disabled = false;
-            bulkBtn.textContent = "❌ Réessayer l'ajout global";
-          }
+          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); bulkBtn.disabled = false; }
         };
         acquisitionZone.appendChild(bulkBtn);
-      }
 
-      // GESTION DU BOUTON AJOUT UNITAIRE
-      const oldBtn = document.getElementById('add-book-btn');
-      if (oldBtn) oldBtn.remove();
+        // --- BOUTON 2 : TOUT METTRE EN WISHLIST (BULK) ---
+        const bulkWishBtn = document.createElement('button');
+        bulkWishBtn.textContent = `⭐ Toute la série en Wishlist`;
+        Object.assign(bulkWishBtn.style, {
+          marginTop: '5px', backgroundColor: '#f39c12', color: 'white',
+          padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer'
+        });
 
-      if (!isOwned) {
-        const btn = document.createElement('button');
-        btn.id = 'add-book-btn';
-        btn.textContent = `➕ Ajouter "${book.title}" à ma collection`;
-        btn.style.marginTop = '15px';
-        btn.style.backgroundColor = '#5bc31b';
-        btn.style.color = 'white';
-        btn.style.padding = '10px';
-        btn.style.border = 'none';
-        btn.style.borderRadius = '4px';
-        btn.style.cursor = 'pointer';
-        btn.style.width = '100%';
-
-        btn.onclick = async () => {
+        bulkWishBtn.onclick = async () => {
           try {
-            btn.disabled = true;
-            btn.textContent = "⏳ Ajout...";
-            await inventoryService.addToLibrary(book.uri);
-            addLog(`🎉 Succès : Ajouté !`, "success");
-            btn.textContent = "✓ Dans la collection";
-            btn.style.backgroundColor = '#7f8c8d';
-          } catch (err: any) {
-            addLog(`ERREUR d'ajout : ${err.message}`, "error");
-            btn.disabled = false;
-          }
+            bulkWishBtn.disabled = true;
+            bulkWishBtn.textContent = "⏳ Ajout...";
+            
+            // On ne prend que ce qui n'est ni possédé, ni déjà souhaité (Ce sont des OEUVRES wd:)
+            const worksToWish = tomesComplets.map(t => t.uri).filter(uri => 
+              !inventoryService.isUriOwned(uri) && !wishlistService.isUriWished(uri)
+            );
+
+            if (worksToWish.length === 0) return addLog("Rien à ajouter à la Wishlist.", "warning");
+
+            // Pour la WISHLIST, on envoie directement les OEUVRES (plus de résolution d'édition !)
+            await wishlistService.addBulkToWishlist(worksToWish);
+            
+            addLog(`⭐ ${worksToWish.length} tomes mis en Wishlist !`, "success");
+            bulkWishBtn.textContent = "✓ Wishlist mise à jour";
+          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); bulkWishBtn.disabled = false; }
         };
-        acquisitionZone.appendChild(btn);
+        acquisitionZone.appendChild(bulkWishBtn);
       }
 
-    } catch (err: any) {
-      addLog(`ERREUR : ${err.message}`, "error");
-    } finally {
-      console.groupEnd();
-    }
+      // --- BOUTONS UNITAIRES ---
+      if (!isOwned) {
+        const btnAdd = document.createElement('button');
+        btnAdd.textContent = `➕ Ajouter à ma collection`;
+        Object.assign(btnAdd.style, { marginTop: '15px', backgroundColor: '#5bc31b', color: 'white', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+        btnAdd.onclick = async () => {
+          try {
+            btnAdd.disabled = true;
+            await inventoryService.addToLibrary(book.uri);
+            const toRemove = [book.uri]; if (book.workUri) toRemove.push(book.workUri);
+            await wishlistService.removeFromWishlist(toRemove);
+            addLog(`🎉 Ajouté !`, "success");
+            btnAdd.textContent = "✓ Dans la collection";
+            btnAdd.style.backgroundColor = '#7f8c8d';
+          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); btnAdd.disabled = false; }
+        };
+        acquisitionZone.appendChild(btnAdd);
+
+        const btnWish = document.createElement('button');
+        btnWish.textContent = `⭐ Mettre dans la Wishlist`;
+        Object.assign(btnWish.style, { marginTop: '10px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+        btnWish.onclick = async () => {
+          try {
+            btnWish.disabled = true;
+            // On ajoute l'Oeuvre (et pas l'Edition) à la wishlist
+            const targetUri = book.workUri || book.uri;
+            await wishlistService.addToWishlist(targetUri);
+            addLog("✓ En Wishlist.", "success");
+            btnWish.textContent = "✓ Dans la Wishlist";
+          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); btnWish.disabled = false; }
+        };
+        acquisitionZone.appendChild(btnWish);
+      }
+    } catch (err: any) { addLog(`ERREUR : ${err.message}`, "error"); } finally { console.groupEnd(); }
   });
 }
 
@@ -149,19 +141,20 @@ form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const u = (document.getElementById('username') as HTMLInputElement).value;
   const p = (document.getElementById('password') as HTMLInputElement).value;
-  addLog("Tentative de connexion...");
+  addLog("Connexion...");
   try {
     await authService.login(u, p);
-    addLog("✓ Authentification réussie", "success");
     const user = await userService.fetchProfile();
     if (user && user.uri) {
-      addLog("Chargement de la bibliothèque...");
-      await inventoryService.loadLibrary(user.uri);
+      addLog("Synchronisation...");
+      await Promise.all([
+        inventoryService.loadLibrary(user.uri),
+        wishlistService.loadWishlist(user.uri)
+      ]);
+      addLog(`Prêt !`, "success");
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
       initApp();
     }
-  } catch (err: any) {
-    addLog(`ÉCHEC : ${err.message}`, "error");
-  }
+  } catch (err: any) { addLog(`ÉCHEC : ${err.message}`, "error"); }
 });

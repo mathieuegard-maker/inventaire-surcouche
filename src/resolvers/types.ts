@@ -5,6 +5,7 @@
  */
 export interface BaseBook {
   uri: string; // inv:xxx ou wd:Qxxx
+  workUri?: string; // NOUVEAU : Lien vers l'œuvre parente
   isbn13?: string;
   isbn10?: string;
   type: 'edition' | 'work' | 'unknown';
