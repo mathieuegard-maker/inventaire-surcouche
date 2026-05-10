@@ -21,24 +21,38 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const data = await response.json();
     if (!response.ok) return res.status(response.status).json(data);
 
-    const setCookie = response.headers.get('set-cookie');
-    
-    if (setCookie) {
-      // Transformation agressive du cookie pour Vercel
-      // On retire Domain et Secure, on force Path=/ et SameSite=Lax
-      const cleanCookie = setCookie
+    // CORRECTION MAJEURE : getSetCookie() récupère un tableau propre, évitant 
+    // la fusion destructrice des cookies multiples par des virgules.
+    const setCookies = response.headers.getSetCookie ? response.headers.getSetCookie() : [];
+    const rawCookie = response.headers.get('set-cookie');
+
+    console.log('[DEBUG VERCEL] Cookies bruts reçus d\'Inventaire :', setCookies.length > 0 ? setCookies : rawCookie);
+
+    if (setCookies.length > 0) {
+      const cleanCookies = setCookies.map(cookie => {
+        return cookie
+          .split(';')
+          .map(part => part.trim())
+          .filter(part => {
+            const p = part.toLowerCase();
+            return !p.startsWith('domain=') && !p.startsWith('samesite=') && !p.startsWith('secure');
+          })
+          .join('; ') + '; Path=/; SameSite=Lax; HttpOnly';
+      });
+      
+      console.log('[DEBUG VERCEL] Cookies nettoyés et envoyés au navigateur :', cleanCookies);
+      res.setHeader('Set-Cookie', cleanCookies);
+    } else if (rawCookie) {
+      const cleanCookie = rawCookie
         .split(';')
         .map(part => part.trim())
         .filter(part => {
           const p = part.toLowerCase();
           return !p.startsWith('domain=') && !p.startsWith('samesite=') && !p.startsWith('secure');
         })
-        .join('; ');
-      
-      // On ajoute explicitement les attributs de compatibilité moderne
-      const finalCookie = `${cleanCookie}; Path=/; SameSite=Lax; HttpOnly`;
-      
-      res.setHeader('Set-Cookie', finalCookie);
+        .join('; ') + '; Path=/; SameSite=Lax; HttpOnly';
+        
+      res.setHeader('Set-Cookie', cleanCookie);
     }
 
     return res.status(200).json(data);

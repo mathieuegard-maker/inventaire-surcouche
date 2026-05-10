@@ -2,6 +2,9 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // LOG EXHAUSTIF : On affiche tout ce que le navigateur a envoyé à Vercel
+  console.log('[DEBUG VERCEL] Headers complets envoyés par ton navigateur :', JSON.stringify(req.headers, null, 2));
+
   const cookie = req.headers.cookie;
   
   if (!cookie) {
@@ -23,8 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const data = await response.json();
     
+    // LOG EXHAUSTIF : On affiche la réponse brute d'Inventaire
+    console.log(`[DEBUG VERCEL] Réponse d'Inventaire (Status: ${response.status}) :`, JSON.stringify(data, null, 2));
+
     if (!response.ok) {
-      // Si Inventaire rejette, on renvoie l'erreur brute pour analyse
       return res.status(response.status).json({
         error: 'Session rejetée par Inventaire',
         api_response: data
