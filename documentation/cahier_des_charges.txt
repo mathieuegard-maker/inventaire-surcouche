@@ -1,0 +1,51 @@
+# Cahier des Charges - Surcouche Mobile Inventaire.io
+
+## 1. Accès et Authentification (Porte d'entrée)
+* [cite_start]**Connexion obligatoire** : Authentification via les identifiants Inventaire.io (Nom d'utilisateur et mot de passe) [cite: 54-57].
+* [cite_start]**Gestion de session** : Utilisation persistante du cookie de session pour toutes les requêtes authentifiées[cite: 1, 2].
+* [cite_start]**Identification API** : Envoi systématique d'un `User-Agent` unique permettant l'identification du développeur par les administrateurs du serveur[cite: 1].
+
+## 2. Module d'Acquisition (Entrées)
+L'objectif est de permettre l'ajout rapide de nouveaux items dans l'inventaire personnel.
+
+### A. Méthodes de recherche
+* [cite_start]**Scan de code-barres** : Capture et décodage de l'ISBN via la caméra du mobile [cite: 82-84].
+* [cite_start]**Recherche manuelle** : Saisie textuelle d'un code ISBN ou recherche sémantique par titre d'œuvre et nom d'auteur [cite: 83, 528-531].
+
+### B. Fonctionnalité "Saisie-Série" (Innovation majeure)
+* [cite_start]**Détection de Saga** : Identification automatique de l'appartenance d'un item à une série (via les métadonnées de l'œuvre ou l'endpoint des parties de série)[cite: 132, 136].
+* **Interface de déploiement** : Affichage de l'intégralité des tomes constituant la série détectée.
+* **Sélection multiple** : Possibilité pour l'utilisateur de cocher plusieurs items dans la liste affichée.
+* [cite_start]**Enregistrement groupé** : Ajout en masse des items sélectionnés dans la base de données de l'utilisateur (Mode `bulk`) [cite: 418-421].
+
+## 3. Module de Consultation (Gestion de Collection)
+Permettre une visualisation ergonomique et intelligente de la bibliothèque.
+
+### A. Modes d'affichage
+* [cite_start]**Vue Individuelle** : Liste globale des ouvrages possédés [cite: 353-356].
+* **Vue par Série** : Regroupement automatique des items par saga.
+* **Indicateur de complétion** : Visualisation au sein d'une série des tomes possédés versus les tomes manquants.
+
+### B. Actions contextuelles
+* **Mise à jour d'inventaire** : Passer un tome manquant au statut "Acquis" directement depuis la vue série.
+* [cite_start]**Gestion de Wishlist** : Possibilité d'envoyer des items non possédés vers une liste d'envies (Concept de "Listes") [cite: 432-436].
+* **Action de prêt** : Sélection d'un item pour le marquer comme "sorti" de la collection physique.
+
+## 4. Module de Contrôle (Anti-Doublon)
+Outil d'aide à la décision en temps réel (achat/brocante).
+
+* **Scan Flash** : Scan rapide d'un code-barres pour une vérification immédiate.
+* [cite_start]**Vérification de présence** : Interrogation de la base de données pour savoir si l'item est déjà présent dans la collection de l'utilisateur [cite: 367-372].
+* **Verdict visuel** : Affichage clair de l'état (Possédé / Absent) et localisation (Étagère actuelle).
+
+## 5. Suivi Spécifique (Souhaits & Prêts)
+Gestion des flux de livres hors du cadre de l'inventaire statique.
+
+### A. Wishlist (Curation)
+* [cite_start]Visualisation et gestion de la liste des œuvres désirées [cite: 443-446].
+* Interface de transfert rapide de la Wishlist vers l'Inventaire lors d'une acquisition.
+
+### B. Registre des Prêts (Système Hybride)
+* [cite_start]**Marquage Physique** : Déplacement de l'item vers une étagère dédiée aux prêts ("Shelves") [cite: 569-577].
+* **Suivi Nominatif (Registre Fantôme)** : Liaison locale ou externe (via registre JSON) entre un ID d'item et le nom d'un emprunteur tiers (hors plateforme).
+* **Gestion des retours** : Interface pour valider la restitution d'un livre et son retour sur les étagères principales.
