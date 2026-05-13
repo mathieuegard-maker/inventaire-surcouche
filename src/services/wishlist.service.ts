@@ -2,19 +2,13 @@
 
 export const wishlistService = {
   wishlistId: null as string | null,
-  wishedUris: new Set<string>(),
+  wishedUris: new Set<string>(), // Ton code actuel en RAM
 
-  /**
-   * Charge ou crée la liste "Wishlist" au démarrage.
-   * @param userUri L'URI complète de l'utilisateur (ex: "inv:bc897...")
-   */
   async loadWishlist(userUri: string): Promise<number> {
-    // 1. Extraire l'ID court pour l'API (on enlève le "inv:")
     const userId = userUri.includes(':') ? userUri.split(':')[1] : userUri;
     console.group(`[WISHLIST] Initialisation pour l'utilisateur ${userId}`);
     
     try {
-      // 2. Récupérer toutes les listes de l'utilisateur
       const res = await fetch(`/api/lists/by-creator?userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
       
@@ -23,65 +17,71 @@ export const wishlistService = {
       const listsData = data.lists || {};
       const listsArray = Array.isArray(listsData) ? listsData : Object.values(listsData);
       
-      // 3. Chercher la liste par son nom
       let targetList: any = listsArray.find((l: any) => 
         l.name.toLowerCase() === 'wishlist' || l.name.toLowerCase() === 'envies'
       );
 
-      // 4. Si inexistante, on la crée
+      this.wishedUris.clear();
+
       if (!targetList) {
-        console.log("Aucune wishlist trouvée. Création d'une nouvelle liste...");
+        console.log("Aucune liste Wishlist trouvée, création en cours...");
         const createRes = await fetch('/api/lists/create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'Wishlist' })
+          body: JSON.stringify({
+            name: "Wishlist",
+            description: "Liste de souhaits automatique générée par l'application",
+            type: "work",
+            visibility: "public"
+          })
         });
         
-        const createdData = await createRes.json();
-        console.log("[DEBUG] Réponse serveur création:", createdData);
-
-        if (!createRes.ok) {
-          throw new Error(createdData.status_verbose || createdData.error || "Erreur lors de la création de la liste");
-        }
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(createData.error || "Échec de la création");
         
-        // L'API renvoie l'objet créé soit directement, soit dans une propriété 'list'
-        targetList = createdData.list || createdData;
+        const listObj = createData.list || createData;
+        targetList = { _id: listObj._id };
+        console.log("Liste créée avec succès :", targetList._id);
+        
+      } else {
+        console.log("Liste trouvée :", targetList._id);
+        
+        // --- NOUVEAU : Récupération du contenu ---
+        const listRes = await fetch(`/api/lists/get?id=${targetList._id}`);
+        const listData = await listRes.json();
+        
+        if (!listRes.ok) throw new Error(listData.error || "Impossible de lire le contenu");
+        
+        const elementsList = listData.list?.elements || listData.elements || [];
+        
+        const uris = elementsList.map((item: any) => {
+          if (typeof item === 'string') return item;
+          if (item.element) return item.element;
+          if (item.uri) return item.uri;
+          if (item.entity) return item.entity; 
+          return null;
+        }).filter(Boolean);
+
+        uris.forEach((uri: string) => this.wishedUris.add(uri));
+        console.log(`Contenu téléchargé : ${this.wishedUris.size} éléments.`);
       }
 
-      // 5. Capture de l'ID (gère _id ou id)
-      this.wishlistId = targetList._id || targetList.id;
-
-      if (!this.wishlistId) {
-        console.error("[DEBUG] Objet liste reçu incomplet:", targetList);
-        throw new Error("ID de liste introuvable après création/lecture");
-      }
-
-      console.log(`ID de la Wishlist validé : ${this.wishlistId}`);
-
-      // 6. Synchronisation de la mémoire locale (Set)
-      this.wishedUris.clear();
-      const elements = targetList.elements || [];
-      elements.forEach((uri: string) => this.wishedUris.add(uri));
+      this.wishlistId = targetList._id;
       
       console.groupEnd();
       return this.wishedUris.size;
-    } catch (err: any) {
-      console.error("[WISHLIST ERROR]", err);
+      
+    } catch (error) {
+      console.error("[WISHLIST] Erreur fatale :", error);
       console.groupEnd();
-      throw err;
+      throw error;
     }
   },
 
-  /**
-   * Vérifie si une URI est déjà dans la wishlist locale
-   */
-  isUriWished(uri: string): boolean {
+  async isUriWished(uri: string): Promise<boolean> {
     return this.wishedUris.has(uri);
   },
 
-  /**
-   * Ajout unitaire à la liste
-   */
   async addToWishlist(editionUri: string): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
 
@@ -101,9 +101,6 @@ export const wishlistService = {
     return true;
   },
 
-  /**
-   * Ajout groupé à la liste (Bulk)
-   */
   async addBulkToWishlist(editionUris: string[]): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
 
@@ -123,9 +120,6 @@ export const wishlistService = {
     return true;
   },
 
-  /**
-   * Retrait de la liste
-   */
   async removeFromWishlist(uris: string[]): Promise<boolean> {
     if (!this.wishlistId) return false;
 
