@@ -2,25 +2,45 @@
 import { entityMapper } from './mapper';
 import type { RawBook } from './types';
 
+const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
+
 export const entityResolver = {
   /**
-   * Recherche un livre par son ISBN
+   * Recherche un livre par son ISBN et récupère systématiquement l'œuvre liée
    */
   async fromIsbn(isbn: string): Promise<RawBook | null> {
     try {
-      const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=isbn:${isbn}`, {
-        headers: { 
-          'Accept': 'application/json', 
-          'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)' 
-        }
+      const searchUri = `isbn:${isbn}`;
+      const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${searchUri}`, {
+        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
+      
+      // CORRECTION : L'API indexe par l'URI réelle (inv:...) et non par "isbn:..."
+      // On récupère donc la première clé disponible dans l'objet entities
       const entityId = Object.keys(data.entities || {})[0];
+      const entityData = data.entities?.[entityId];
 
-      if (!entityId) return null;
+      if (!entityData) {
+        console.warn(`[RESOLVER] Aucun résultat pour l'ISBN : ${isbn}`);
+        return null;
+      }
 
-      const entityData = data.entities[entityId];
-      return entityMapper.mapResponse(`isbn:${isbn}`, entityData);
+      // Récupération systématique de l'œuvre (P629) si elle existe
+      const workUri = entityData.claims?.['wdt:P629']?.[0];
+      let workData = null;
+
+      if (workUri) {
+        console.log(`[RESOLVER] Édition trouvée (${entityId}). Rebond sur l'œuvre : ${workUri}`);
+        const resWork = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}`, {
+          headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+        });
+        const dataWork = await resWork.json();
+        workData = dataWork.entities?.[workUri];
+      }
+
+      // On passe l'ID réel (entityId) au mapper plutôt que la chaîne de recherche
+      return entityMapper.mapResponse(entityId, entityData, workData);
     } catch (error) {
       console.error("[ENTITY RESOLVER] Erreur ISBN:", error);
       return null;
@@ -28,22 +48,36 @@ export const entityResolver = {
   },
 
   /**
-   * Recherche un livre par son URI (ex: wd:Q123) - Essentiel pour l'hydratation
+   * Recherche par URI (ex: wd:Q123) avec enrichissement par l'œuvre
    */
   async fromUri(uri: string): Promise<RawBook | null> {
     try {
       const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}`, {
-        headers: { 
-          'Accept': 'application/json', 
-          'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)' 
-        }
+        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
       
+      // Ici l'URI est déjà la bonne clé (wd: ou inv:)
       const entityData = data.entities?.[uri];
+      
       if (!entityData) return null;
 
-      return entityMapper.mapResponse(uri, entityData);
+      if (entityData.type === 'work') {
+        return entityMapper.mapResponse(uri, entityData);
+      }
+
+      const workUri = entityData.claims?.['wdt:P629']?.[0];
+      let workData = null;
+
+      if (workUri) {
+        const resWork = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}`, {
+          headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+        });
+        const dataWork = await resWork.json();
+        workData = dataWork.entities?.[workUri];
+      }
+
+      return entityMapper.mapResponse(uri, entityData, workData);
     } catch (error) {
       console.error(`[ENTITY RESOLVER] Erreur URI (${uri}):`, error);
       return null;
@@ -51,26 +85,21 @@ export const entityResolver = {
   },
 
   /**
-   * Résout un identifiant brut (ex: wd:Q42) en nom lisible (Auteurs, Éditeurs, Séries...)
+   * Résout un identifiant brut (ex: wd:Q42) en nom lisible
    */
   async resolveName(uri: string): Promise<string | undefined> {
     if (!uri) return undefined;
     
     try {
       const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}`, {
-        headers: { 
-          'Accept': 'application/json', 
-          'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)' 
-        }
+        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
-      
       const entity = data.entities?.[uri];
       if (!entity) return undefined;
 
       const label = entity.labels?.fr || entity.labels?.en || entity.label;
       return label || undefined;
-      
     } catch (error) {
       console.error(`[ENTITY RESOLVER] Impossible de résoudre le nom pour ${uri}:`, error);
       return undefined;
@@ -83,10 +112,7 @@ export const entityResolver = {
   async getBestEdition(workUri: string): Promise<string | null> {
     try {
       const res = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=P629&value=${workUri}`, {
-        headers: { 
-          'Accept': 'application/json', 
-          'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)' 
-        }
+        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
       const uris = data.uris || [];

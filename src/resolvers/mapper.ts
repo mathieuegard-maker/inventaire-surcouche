@@ -2,37 +2,48 @@
 import type { RawBook } from './types';
 
 export const entityMapper = {
-  mapResponse(uri: string, raw: any): RawBook {
-    console.log(`[MAPPER] Entrée brute pour ${uri}:`, raw);
-    const claims = raw.claims || {};
+  /**
+   * Transforme les données brutes d'Inventaire.io en objet RawBook structuré.
+   * Fusionne systématiquement les données de l'édition et de l'œuvre (si fournie).
+   */
+  mapResponse(uri: string, raw: any, workRaw?: any): RawBook {
+    console.log(`[MAPPER] Mapping pour ${uri} (Enrichissement œuvre : ${!!workRaw})`);
     
-    // FALLBACK TITRE : Si label est vide, on prend originalTitle (P1476)
-    const rawTitle = raw.label || raw.labels?.fr || raw.labels?.en;
-    const originalTitle = (claims['wdt:P1476'] && claims['wdt:P1476'][0]);
-    const title = rawTitle || originalTitle || "Titre inconnu";
-    const workUri = claims['wdt:P629'] ? claims['wdt:P629'][0] : (raw.type === 'work' ? uri : undefined);
+    const editionClaims = raw.claims || {};
+    const workClaims = workRaw?.claims || {};
 
-    // EXTRACTION INTELLIGENTE DE LA SÉRIE (P179) ET DU NUMÉRO DE TOME (P1545)
-    let extractedSeriesId;
-    let extractedSeriesNumber;
-    const seriesClaim = claims['wdt:P179']?.[0];
+    // 1. TITRE : Priorité à l'édition, repli sur l'œuvre ou le titre original
+    const rawTitle = raw.label || raw.labels?.fr || raw.labels?.en;
+    const workTitle = workRaw?.label || workRaw?.labels?.fr || workRaw?.labels?.en;
+    const originalTitle = workClaims['wdt:P1476']?.[0] || editionClaims['wdt:P1476']?.[0];
+    
+    const title = rawTitle || workTitle || originalTitle || "Titre inconnu";
+
+    // 2. WORK URI : On le récupère de l'édition (P629) ou on utilise l'URI si c'est déjà un work
+    const workUri = editionClaims['wdt:P629']?.[0] || (raw.type === 'work' ? uri : undefined);
+
+    // 3. SÉRIE ET NUMÉRO (P179 & P1545) : On cherche sur l'édition, puis sur l'œuvre
+    let seriesId;
+    let seriesNumber;
+
+    // On vérifie d'abord l'œuvre (source de vérité pour la série), puis l'édition
+    const seriesClaim = workClaims['wdt:P179']?.[0] || editionClaims['wdt:P179']?.[0];
 
     if (seriesClaim) {
       if (typeof seriesClaim === 'string') {
-        extractedSeriesId = seriesClaim;
+        seriesId = seriesClaim;
       } else {
-        extractedSeriesId = seriesClaim.value;
-        extractedSeriesNumber = seriesClaim.qualifiers?.['wdt:P1545']?.[0];
+        seriesId = seriesClaim.value;
+        seriesNumber = seriesClaim.qualifiers?.['wdt:P1545']?.[0];
       }
     }
     
-    extractedSeriesNumber = extractedSeriesNumber || (claims['wdt:P1545'] && claims['wdt:P1545'][0]);
+    seriesNumber = seriesNumber || workClaims['wdt:P1545']?.[0] || editionClaims['wdt:P1545']?.[0];
 
-    // GESTION ROBUSTE DE L'IMAGE -> coverUrl
-    const rawImageUrl = raw.image || (raw.images && raw.images[0]) || (claims['wdt:P18'] && claims['wdt:P18'][0]);
+    // 4. IMAGE : Gestion robuste (Édition > Œuvre)
+    const rawImageUrl = raw.image || (raw.images && raw.images[0]) || editionClaims['wdt:P18']?.[0] || workClaims['wdt:P18']?.[0];
     let finalCoverUrl = undefined;
     
-    // CORRECTION DU CRASH: On s'assure que l'on manipule bien une chaîne de caractères
     const imageUrlStr = typeof rawImageUrl === 'string' ? rawImageUrl : (rawImageUrl?.value || undefined);
     
     if (typeof imageUrlStr === 'string') {
@@ -41,6 +52,13 @@ export const entityMapper = {
         : `https://inventaire.io/img/entities/${encodeURIComponent(imageUrlStr)}`;
     }
 
+    // 5. LISTES (Auteurs, Genres, etc.) : Fusion systématique pour ne rien rater
+    const mergeIds = (prop: string, localProp?: string): string[] => {
+      const fromEdition = editionClaims[prop] || (localProp ? raw[localProp] : []) || [];
+      const fromWork = workClaims[prop] || [];
+      return Array.from(new Set([...fromEdition, ...fromWork]));
+    };
+
     const mappedBook: RawBook = {
       uri: uri,
       workUri: workUri,
@@ -48,28 +66,28 @@ export const entityMapper = {
       isbn10: raw.isbn10,
       type: (raw.type as any) || 'unknown',
       title: title,
-      subtitle: raw.subtitle,
+      subtitle: raw.subtitle || workRaw?.subtitle,
       originalTitle: originalTitle,
-      description: raw.description || raw.descriptions?.fr,
+      description: raw.description || raw.descriptions?.fr || workRaw?.description || workRaw?.descriptions?.fr,
       coverUrl: finalCoverUrl,
-      language: raw.language,
-      pageCount: claims['wdt:P1104'] ? parseInt(claims['wdt:P1104'][0]) : undefined,
-      publishDate: claims['wdt:P577'] ? claims['wdt:P577'][0] : undefined,
+      language: raw.language || workRaw?.language,
+      pageCount: editionClaims['wdt:P1104'] ? parseInt(editionClaims['wdt:P1104'][0]) : undefined,
+      publishDate: editionClaims['wdt:P577'] ? editionClaims['wdt:P577'][0] : undefined,
       format: raw.format,
 
-      authorIds: claims['wdt:P50'] || raw.authors || [],
-      illustratorIds: claims['wdt:P110'] || [],
-      scriptwriterIds: claims['wdt:P58'] || [],
-      publisherId: (claims['wdt:P123'] && claims['wdt:P123'][0]) || raw.publisher,
+      // IDs pour les résolutions futures
+      authorIds: mergeIds('wdt:P50', 'authors'),
+      illustratorIds: mergeIds('wdt:P110'),
+      scriptwriterIds: mergeIds('wdt:P58'),
+      publisherId: editionClaims['wdt:P123']?.[0] || raw.publisher,
       
-      seriesId: extractedSeriesId,
-      seriesNumber: extractedSeriesNumber,
+      seriesId: seriesId,
+      seriesNumber: seriesNumber,
       
-      genreIds: claims['wdt:P136'] || [],
-      collectionId: (claims['wdt:P195'] && claims['wdt:P195'][0])
+      genreIds: mergeIds('wdt:P136'),
+      collectionId: editionClaims['wdt:P195']?.[0] || workClaims['wdt:P195']?.[0]
     };
 
-    console.log(`[MAPPER] Sortie RawBook structurée (seriesId: ${mappedBook.seriesId}):`, mappedBook);
     return mappedBook;
   }
 };

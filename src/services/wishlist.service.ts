@@ -78,9 +78,17 @@ export const wishlistService = {
     }
   },
 
-  async isUriWished(uri: string): Promise<boolean> {
-    // Interrogation de la base locale
-    return await databaseService.isUriInRegistry('wishlist', uri);
+  /**
+   * Vérification intelligente pour la Wishlist
+   */
+  async isUriWished(uri: string, workUri?: string): Promise<boolean> {
+    // 1. Check direct de l'URI
+    const directMatch = await databaseService.isUriInRegistry('wishlist', uri);
+    if (directMatch) return true;
+
+    // 2. Check par l'œuvre
+    const targetWork = workUri || uri;
+    return await databaseService.isUriInRegistry('wishlist', targetWork);
   },
 
   async addToWishlist(editionUri: string): Promise<boolean> {

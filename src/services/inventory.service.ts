@@ -42,9 +42,22 @@ export const inventoryService = {
     }
   },
 
-  async isUriOwned(uri: string): Promise<boolean> {
-    // Interrogation de la base de données (Double Check)
-    return await databaseService.isUriInRegistry('inventory', uri);
+  /**
+   * Vérification intelligente : possède-t-on cette URI OU une édition de cette œuvre ?
+   */
+  async isUriOwned(uri: string, workUri?: string): Promise<boolean> {
+    // 1. Check direct de l'URI (Edition)
+    const directMatch = await databaseService.isUriInRegistry('inventory', uri);
+    if (directMatch) return true;
+
+    // 2. Check par l'œuvre (Work)
+    const targetWork = workUri || uri;
+    if (targetWork.startsWith('wd:') || targetWork.startsWith('inv:')) {
+      const other = await databaseService.getOtherOwnedEdition(targetWork, uri);
+      return !!other;
+    }
+
+    return false;
   },
 
   async addToLibrary(uri: string): Promise<boolean> {

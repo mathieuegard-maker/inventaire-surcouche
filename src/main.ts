@@ -1,18 +1,19 @@
 // src/main.ts
 import { authService } from './services/auth.service';
-import { entityResolver } from './resolvers/entity.resolver';
-import { entityHumanizer } from './resolvers/humanizer';
+import { connectionService } from './services/connection.service';
 import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './services/inventory.service';
 import { wishlistService } from './services/wishlist.service';
-import { databaseService } from './services/database.service';
-import { connectionService } from './services/connection.service';
-import { seriesResolver } from './resolvers/series.resolver';
+import { searchService } from './services/search.service';
+import type { SearchResponse, HumanizedBook } from './resolvers/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;
 const acquisitionZone = document.getElementById('acquisition-zone')!;
 
+/**
+ * Console de debug visuelle
+ */
 function addLog(msg: string, type = 'info') {
   const div = document.createElement('div');
   div.className = `log-entry ${type}`;
@@ -26,198 +27,189 @@ function addLog(msg: string, type = 'info') {
 }
 
 /**
- * Initialisation du module de scan une fois connecté
+ * Rendu technique : Tableau du livre principal
+ */
+function renderMainBookDebugTable(book: HumanizedBook, source: string) {
+  const container = document.createElement('div');
+  container.style.marginTop = '15px';
+  container.innerHTML = `<h3 style="color: #3498db; font-size: 13px; margin-bottom: 5px;">📖 Livre Actuel (${source.toUpperCase()})</h3>`;
+
+  const table = document.createElement('table');
+  Object.assign(table.style, {
+    width: '100%', borderCollapse: 'collapse', fontSize: '11px', color: '#ccc', border: '1px solid #444'
+  });
+
+  const imgSrc = book.localCover || book.coverUrl || '';
+  
+  table.innerHTML = `
+    <tr style="border-bottom: 1px solid #333;">
+      <td rowspan="4" style="width: 60px; padding: 5px; text-align: center;">
+        ${imgSrc ? `<img src="${imgSrc}" style="width: 50px; border-radius: 2px;">` : 'N/A'}
+      </td>
+      <td style="padding: 5px; color: #fff; font-weight: bold;">${book.title}</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 5px;">Auteurs : ${book.authors.join(', ') || 'Inconnu'}</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 5px;">Série : ${book.series || 'Aucune'} (Tome ${book.seriesNumber || '?'})</td>
+    </tr>
+    <tr>
+      <td style="padding: 5px; font-size: 9px; color: #777;">URI : ${book.uri} | Work : ${book.workUri || 'N/A'}</td>
+    </tr>
+  `;
+
+  container.appendChild(table);
+  acquisitionZone.appendChild(container);
+}
+
+/**
+ * Rendu technique : Tableau de debug des séries (à la demande)
+ */
+function renderSeriesDebugTable(tomes: HumanizedBook[]) {
+  const container = document.createElement('div');
+  container.style.marginTop = '15px';
+  container.innerHTML = `<h3 style="color: #5bc31b; font-size: 13px; margin-bottom: 5px;">🛠 Debug Série (Composition)</h3>`;
+
+  const table = document.createElement('table');
+  Object.assign(table.style, {
+    width: '100%', borderCollapse: 'collapse', fontSize: '10px', color: '#ccc', border: '1px solid #444'
+  });
+
+  table.innerHTML = `
+    <thead>
+      <tr style="background: #222; text-align: left;">
+        <th style="padding: 3px; border: 1px solid #444;">Tome</th>
+        <th style="padding: 3px; border: 1px solid #444;">Titre</th>
+        <th style="padding: 3px; border: 1px solid #444;">Statut</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+
+  const tbody = table.querySelector('tbody')!;
+  tomes.forEach(t => {
+    const tr = document.createElement('tr');
+    const statusColor = t.ownershipStatus === 'owned' ? '#0f0' : (t.ownershipStatus === 'wish' ? '#ffa500' : '#888');
+    tr.innerHTML = `
+      <td style="padding: 3px; border: 1px solid #444; text-align: center;">${t.seriesNumber || '?'}</td>
+      <td style="padding: 3px; border: 1px solid #444;">${t.title}</td>
+      <td style="padding: 3px; border: 1px solid #444; color: ${statusColor};">${t.ownershipStatus.toUpperCase()}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  container.appendChild(table);
+  acquisitionZone.appendChild(container);
+}
+
+/**
+ * Initialisation du module de scan
  */
 function initApp() {
   addLog("Module d'acquisition prêt.", "success");
 
   manualIsbnProvider.setup('acquisition-zone', async (isbn) => {
+    // Nettoyage de la zone
+    const existing = acquisitionZone.querySelectorAll('div, button, table');
+    existing.forEach(el => el.remove());
+
     addLog(`Recherche ISBN : ${isbn}...`);
-    console.group(`================ ACQUISITION : ${isbn} ================`);
-
+    
     try {
-      // --- TUNNEL LOCAL-FIRST ---
-      let book = await databaseService.getBookByIsbn(isbn);
+      // APPEL À L'ORCHESTRATEUR
+      const res: SearchResponse | null = await searchService.searchByIsbn(isbn);
       
-      if (book) {
-        addLog(`✓ Trouvé instantanément en cache local !`, "success");
-      } else {
-        addLog(`Absent du cache, interrogation de l'API...`, "warning");
-        const rawData = await entityResolver.fromIsbn(isbn);
-        if (!rawData) throw new Error("Livre introuvable sur l'API");
-        
-        book = await entityHumanizer.humanize(rawData);
-        await databaseService.saveBookToCache(book);
-        addLog(`✓ Fiche téléchargée, image compressée et mise en cache.`, "success");
+      if (!res) {
+        throw new Error("Aucun résultat trouvé.");
       }
 
-      // --- DOUBLE CHECK (Asynchrone car interroge IndexedDB) ---
-      const isOwned = await inventoryService.isUriOwned(book.uri);
-      const isWished = await wishlistService.isUriWished(book.uri);
+      addLog(`✓ Récupéré via : ${res.source.toUpperCase()}`, "success");
       
-      let otherEdition;
-      if (!isOwned && book.workUri) {
-         otherEdition = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
+      // 1. Affichage du tableau principal
+      renderMainBookDebugTable(res.mainBook, res.source);
+
+      // 2. Gestion du Double Check (Alertes de doublon d'œuvre)
+      if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
+        addLog(`⚠️ DOUBLON D'ŒUVRE : Vous possédez déjà "${res.ownership.duplicateEdition.title}"`, "warning");
       }
 
-      addLog(`✓ Livre : ${book.title}`, "success");
-
-      if (otherEdition) {
-         addLog(`⚠️ ATTENTION : Vous possédez déjà cette œuvre ! (Édition : ${otherEdition.title})`, "warning");
-      }
-
-      if (book.series) {
-        addLog(`Série : ${book.series}`);
-        const tomesComplets = await seriesResolver.getFullSeries(book.seriesId!);
-        addLog(`📚 ${tomesComplets.length} tomes trouvés.`, "info");
-
-        // --- BOUTON 1 : TOUT AJOUTER À LA COLLECTION (BULK) ---
-        const bulkBtn = document.createElement('button');
-        bulkBtn.textContent = `📦 Ajouter toute la série (${tomesComplets.length} tomes)`;
-        Object.assign(bulkBtn.style, {
-          marginTop: '10px', backgroundColor: '#2980b9', color: 'white',
-          padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer'
-        });
-
-        bulkBtn.onclick = async () => {
-          try {
-            bulkBtn.disabled = true;
-            bulkBtn.textContent = "⏳ Résolution...";
-            
-            const worksToAdd = [];
-            for (const t of tomesComplets) {
-               const owned = await inventoryService.isUriOwned(t.uri);
-               if (!owned) worksToAdd.push(t.uri);
-            }
-            
-            if (worksToAdd.length === 0) return addLog("Série déjà possédée.", "warning");
-            
-            const editionsToAdd = await entityResolver.resolveBestEditions(worksToAdd);
-            await inventoryService.addBulkToLibrary(editionsToAdd);
-            
-            await wishlistService.removeFromWishlist([...worksToAdd, ...editionsToAdd]);
-            addLog(`🎉 ${editionsToAdd.length} tomes ajoutés à l'inventaire !`, "success");
-            bulkBtn.textContent = "✓ Série ajoutée";
-          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); bulkBtn.disabled = false; }
-        };
-        acquisitionZone.appendChild(bulkBtn);
-
-        // --- BOUTON 2 : TOUT METTRE EN WISHLIST (BULK) ---
-        const bulkWishBtn = document.createElement('button');
-        bulkWishBtn.textContent = `⭐ Toute la série en Wishlist`;
-        Object.assign(bulkWishBtn.style, {
-          marginTop: '5px', backgroundColor: '#f39c12', color: 'white',
-          padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer'
-        });
-
-        bulkWishBtn.onclick = async () => {
-          try {
-            bulkWishBtn.disabled = true;
-            bulkWishBtn.textContent = "⏳ Ajout...";
-            
-            const worksToWish = [];
-            for (const t of tomesComplets) {
-               const owned = await inventoryService.isUriOwned(t.uri);
-               const wished = await wishlistService.isUriWished(t.uri);
-               if (!owned && !wished) worksToWish.push(t.uri);
-            }
-
-            if (worksToWish.length === 0) return addLog("Rien à ajouter à la Wishlist.", "warning");
-
-            await wishlistService.addBulkToWishlist(worksToWish);
-            addLog(`⭐ ${worksToWish.length} tomes mis en Wishlist !`, "success");
-            bulkWishBtn.textContent = "✓ Wishlist mise à jour";
-          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); bulkWishBtn.disabled = false; }
-        };
-        acquisitionZone.appendChild(bulkWishBtn);
-      }
-
-      // --- BOUTONS UNITAIRES ---
-      if (!isOwned) {
+      // 3. Boutons d'actions unitaires
+      if (res.ui.showAddButton) {
         const btnAdd = document.createElement('button');
-        btnAdd.textContent = `➕ Ajouter à ma collection`;
-        Object.assign(btnAdd.style, { marginTop: '15px', backgroundColor: '#5bc31b', color: 'white', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+        btnAdd.textContent = `➕ Ajouter à la collection`;
+        Object.assign(btnAdd.style, { marginTop: '10px', backgroundColor: '#5bc31b', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
         btnAdd.onclick = async () => {
-          try {
-            btnAdd.disabled = true;
-            await inventoryService.addToLibrary(book.uri);
-            const toRemove = [book.uri]; if (book.workUri) toRemove.push(book.workUri);
-            await wishlistService.removeFromWishlist(toRemove);
-            addLog(`🎉 Ajouté !`, "success");
-            btnAdd.textContent = "✓ Dans la collection";
-            btnAdd.style.backgroundColor = '#7f8c8d';
-          } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); btnAdd.disabled = false; }
+          await inventoryService.addToLibrary(res.mainBook.uri);
+          addLog("🎉 Ajouté à l'inventaire !", "success");
+          btnAdd.disabled = true; btnAdd.textContent = "✓ Possédé";
         };
         acquisitionZone.appendChild(btnAdd);
-
-        if (isWished) {
-          const wishBadge = document.createElement('div');
-          wishBadge.textContent = "⭐ Déjà dans la Wishlist";
-          Object.assign(wishBadge.style, { 
-            marginTop: '10px', backgroundColor: '#f39c12', color: 'white', padding: '10px', borderRadius: '4px', textAlign: 'center', fontWeight: 'bold' 
-          });
-          acquisitionZone.appendChild(wishBadge);
-        } else {
-          const btnWish = document.createElement('button');
-          btnWish.textContent = `⭐ Mettre dans la Wishlist`;
-          Object.assign(btnWish.style, { marginTop: '10px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
-          btnWish.onclick = async () => {
-            try {
-              btnWish.disabled = true;
-              const targetUri = book.workUri || book.uri;
-              await wishlistService.addToWishlist(targetUri);
-              addLog("✓ En Wishlist.", "success");
-              btnWish.textContent = "✓ Dans la Wishlist";
-            } catch (err: any) { addLog(`Erreur : ${err.message}`, "error"); btnWish.disabled = false; }
-          };
-          acquisitionZone.appendChild(btnWish);
-        }
       }
-    } catch (err: any) { addLog(`ERREUR : ${err.message}`, "error"); } finally { console.groupEnd(); }
+
+      if (res.ui.showWishButton) {
+        const btnWish = document.createElement('button');
+        btnWish.textContent = `⭐ Mettre en Wishlist`;
+        Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
+        btnWish.onclick = async () => {
+          await wishlistService.addToWishlist(res.mainBook.workUri || res.mainBook.uri);
+          addLog("⭐ Ajouté à la Wishlist.", "success");
+          btnWish.disabled = true; btnWish.textContent = "✓ En Wishlist";
+        };
+        acquisitionZone.appendChild(btnWish);
+      }
+
+      // 4. Bouton d'affichage de la série (à la demande)
+      if (res.series) {
+        const btnShowSeries = document.createElement('button');
+        btnShowSeries.textContent = `📚 Voir la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
+        Object.assign(btnShowSeries.style, { marginTop: '5px', backgroundColor: '#34495e', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+        btnShowSeries.onclick = () => {
+          btnShowSeries.remove();
+          renderSeriesDebugTable(res.series!.tomes);
+        };
+        acquisitionZone.appendChild(btnShowSeries);
+      }
+
+    } catch (err: any) {
+      addLog(`ERREUR : ${err.message}`, "error");
+    }
   });
 }
 
 /**
- * Action 1 : Auto-Login (Vérification automatique au chargement)
+ * Auto-Login au chargement
  */
 async function autoInit() {
-  addLog("Vérification de la session en cours...");
+  addLog("Vérification de la session...");
   try {
     const isConnected = await connectionService.initializeApp();
     if (isConnected) {
-      addLog(`Session restaurée. Bienvenue !`, "success");
+      addLog(`Session restaurée.`, "success");
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
       initApp();
     } else {
-      addLog("Aucune session active. Veuillez vous connecter.");
+      addLog("Aucune session. Veuillez vous connecter.");
     }
   } catch (err) {
-    // Échec silencieux de l'auto-init
     console.warn("[AUTO-INIT] Non connecté.");
   }
 }
 
-// Écouteur pour la connexion manuelle via le formulaire
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
   const u = (document.getElementById('username') as HTMLInputElement).value;
   const p = (document.getElementById('password') as HTMLInputElement).value;
-  
-  addLog("Connexion et initialisation...");
+  addLog("Connexion...");
   try {
     await authService.login(u, p);
-    const isConnected = await connectionService.initializeApp();
-    if (isConnected) {
-      addLog(`Prêt !`, "success");
+    if (await connectionService.initializeApp()) {
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
       initApp();
-    } else {
-      addLog("Échec de l'initialisation du profil.", "error");
     }
   } catch (err: any) { addLog(`ÉCHEC : ${err.message}`, "error"); }
 });
 
-// LANCEMENT AUTOMATIQUE AU DÉMARRAGE
 autoInit();
