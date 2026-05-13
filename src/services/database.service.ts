@@ -35,12 +35,33 @@ export const databaseService = {
       .first();
   },
 
+  /**
+   * RECTIFICATION : Ne se fie plus au champ 'ownershipStatus' du cache (statique)
+   * mais vérifie la présence réelle de l'URI dans le registre inventory.
+   */
   async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
     if (!workUri) return undefined;
-    return await db.cache_books
+    
+    // On récupère toutes les éditions de cette œuvre présentes en cache
+    const candidates = await db.cache_books
       .where('workUri').equals(workUri)
-      .filter(book => book.ownershipStatus === 'owned' && book.uri !== currentEditionUri)
-      .first();
+      .toArray();
+
+    // On cherche la première qui est réellement marquée comme possédée dans le registre
+    for (const book of candidates) {
+      if (book.uri !== currentEditionUri) {
+        const isOwned = await this.isUriInRegistry('inventory', book.uri);
+        if (isOwned) return book;
+      }
+    }
+    return undefined;
+  },
+
+  /**
+   * AJOUT : Permet de retrouver une édition mise en cache à partir de son œuvre
+   */
+  async getEditionByWorkFromCache(workUri: string): Promise<HumanizedBook | undefined> {
+    return await db.cache_books.where('workUri').equals(workUri).first();
   },
 
   // --- GESTION DU CACHE (Fiches complètes) ---

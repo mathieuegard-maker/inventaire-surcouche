@@ -12,7 +12,7 @@ export const seriesResolver = {
   async getFullSeries(seriesId: string): Promise<HumanizedBook[]> {
     console.group(`[SERIES RESOLVER] Récupération de la série: ${seriesId}`);
     
-    // 1. Liste des IDs via notre proxy (Nécessaire pour connaître la structure actuelle de la série)
+    // 1. Liste des IDs via notre proxy
     const resList = await fetch(`/api/series/list?seriesId=${encodeURIComponent(seriesId)}`);
     const { tomes: tomeUris } = await resList.json();
     
@@ -24,13 +24,19 @@ export const seriesResolver = {
     const fullTomes: HumanizedBook[] = [];
     const missingUris: string[] = [];
 
-    // 2. TUNNEL LOCAL-FIRST : On sépare ce qui est déjà en cache de ce qu'il faut télécharger
+    // 2. TUNNEL LOCAL-FIRST INTELLIGENT
     for (const uri of tomeUris) {
-      const cachedBook = await databaseService.getBookFromCache(uri);
+      let cachedBook = await databaseService.getBookFromCache(uri);
+      
+      // AJOUT : Si la série donne une Œuvre (wd:) mais qu'on a l'Édition (inv:) en cache
+      if (!cachedBook && uri.startsWith('wd:')) {
+        cachedBook = await databaseService.getEditionByWorkFromCache(uri);
+      }
+
       if (cachedBook) {
-        // Correction : Utilisation du nom correct 'isUriOwned' et passage du 'workUri'
-        const isOwned = await inventoryService.isUriOwned(uri, cachedBook.workUri);
-        const isWished = await wishlistService.isUriWished(uri, cachedBook.workUri);
+        // Utilisation de la vérification intelligente
+        const isOwned = await inventoryService.isUriOwned(cachedBook.uri, cachedBook.workUri);
+        const isWished = await wishlistService.isUriWished(cachedBook.uri, cachedBook.workUri);
         cachedBook.ownershipStatus = isOwned ? 'owned' : (isWished ? 'wish' : 'none');
         
         fullTomes.push(cachedBook);
@@ -47,7 +53,6 @@ export const seriesResolver = {
       const data = await resData.json();
       const entities = data.entities || data;
 
-      // MEGA-BATCH : Collecte de tous les IDs à traduire pour les nouveaux tomes
       const idsToTranslate = new Set<string>();
       const rawBooks = missingUris.map((uri: string) => {
         const raw = entityMapper.mapResponse(uri, entities[uri]);
@@ -60,7 +65,6 @@ export const seriesResolver = {
         return raw;
       });
 
-      // Traduction unique pour tout le lot
       const resTrans = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(Array.from(idsToTranslate).join('|'))}`);
       const transData = await resTrans.json();
       const transEntities = transData.entities || transData;
@@ -70,13 +74,11 @@ export const seriesResolver = {
         return e ? (e.label || e.labels?.fr || id) : id;
       };
 
-      // Assemblage et mise en cache des nouveaux tomes
       for (const raw of rawBooks) {
         const translatedAuthors = raw.authorIds.map(id => getName(id)!);
         const translatedIllustrators = raw.illustratorIds.map(id => getName(id)!);
         const translatedScriptwriters = raw.scriptwriterIds.map(id => getName(id)!);
 
-        // Correction : Utilisation du nom correct 'isUriOwned' et passage du 'workUri'
         const isOwned = await inventoryService.isUriOwned(raw.uri, raw.workUri);
         const isWished = await wishlistService.isUriWished(raw.uri, raw.workUri);
 
@@ -92,7 +94,6 @@ export const seriesResolver = {
           ownershipStatus: isOwned ? 'owned' : (isWished ? 'wish' : 'none')
         };
 
-        // On enregistre dans le cache pour les futures recherches
         await databaseService.saveBookToCache(humanized);
         fullTomes.push(humanized);
       }
@@ -100,7 +101,6 @@ export const seriesResolver = {
 
     console.groupEnd();
     
-    // Tri final par numéro de tome
     return fullTomes.sort((a, b) => {
       const numA = parseInt(a.seriesNumber || '999');
       const numB = parseInt(b.seriesNumber || '999');
