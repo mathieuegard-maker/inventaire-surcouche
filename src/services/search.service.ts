@@ -21,7 +21,6 @@ export const searchService = {
 
     if (!book) {
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
       const raw = await entityResolver.fromIsbn(isbn);
       
       if (!raw) {
@@ -30,10 +29,7 @@ export const searchService = {
         return null;
       }
       
-      // Humanisation (Traductions + Compression d'image)
       book = await entityHumanizer.humanize(raw);
-      
-      // Sauvegarde immédiate dans le cache books
       await databaseService.saveBookToCache(book);
       source = 'network';
     } else {
@@ -41,12 +37,10 @@ export const searchService = {
     }
 
     // 2. PHASE ANALYSE DE POSSESSION (Double Check)
-    const isEditionOwned = await inventoryService.isUriOwned(book.uri);
-    const isWished = await wishlistService.isUriWished(book.uri);
+    // CORRECTION : On passe systématiquement le workUri pour la conscience de l'œuvre
+    const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
+    const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
     
-    // Mise à jour du statut temps réel (car les registres changent plus vite que le cache)
-    book.ownershipStatus = isEditionOwned ? 'owned' : (isWished ? 'wish' : 'none');
-
     let isWorkOwned = isEditionOwned;
     let duplicateEdition: HumanizedBook | undefined = undefined;
 
@@ -58,6 +52,9 @@ export const searchService = {
         duplicateEdition = other;
       }
     }
+
+    // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
+    book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
 
     // 3. PHASE EXPANSION : Contexte de Série
     let seriesContext = undefined;
@@ -77,8 +74,8 @@ export const searchService = {
 
     // 4. PHASE UI : Calcul des indicateurs pour le Frontend
     const ui = {
-      showAddButton: !isEditionOwned,
-      showWishButton: !isEditionOwned && !isWished,
+      showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
+      showWishButton: !isWorkOwned && !isWished,
       alertDuplicate: !isEditionOwned && isWorkOwned,
       hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none')
     };
@@ -86,7 +83,6 @@ export const searchService = {
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
 
-    // 5. RÉSULTAT : Le "Paquet" final prêt à l'emploi
     return {
       mainBook: book,
       ownership: {

@@ -12,7 +12,7 @@ const logs = document.getElementById('logs')!;
 const acquisitionZone = document.getElementById('acquisition-zone')!;
 
 /**
- * Console de debug visuelle
+ * Console de debug visuelle (Identique à l'originale)
  */
 function addLog(msg: string, type = 'info') {
   const div = document.createElement('div');
@@ -27,7 +27,7 @@ function addLog(msg: string, type = 'info') {
 }
 
 /**
- * Rendu technique : Tableau du livre principal
+ * Rendu technique : Tableau du livre principal avec STATUT
  */
 function renderMainBookDebugTable(book: HumanizedBook, source: string) {
   const container = document.createElement('div');
@@ -41,9 +41,15 @@ function renderMainBookDebugTable(book: HumanizedBook, source: string) {
 
   const imgSrc = book.localCover || book.coverUrl || '';
   
+  // Calcul du texte et de la couleur du statut
+  let statusText = "INCONNU";
+  let statusColor = "#888";
+  if (book.ownershipStatus === 'owned') { statusText = "POSSÉDÉ"; statusColor = "#0f0"; }
+  else if (book.ownershipStatus === 'wish') { statusText = "EN WISHLIST"; statusColor = "#ffa500"; }
+
   table.innerHTML = `
     <tr style="border-bottom: 1px solid #333;">
-      <td rowspan="4" style="width: 60px; padding: 5px; text-align: center;">
+      <td rowspan="5" style="width: 60px; padding: 5px; text-align: center; vertical-align: top;">
         ${imgSrc ? `<img src="${imgSrc}" style="width: 50px; border-radius: 2px;">` : 'N/A'}
       </td>
       <td style="padding: 5px; color: #fff; font-weight: bold;">${book.title}</td>
@@ -53,6 +59,9 @@ function renderMainBookDebugTable(book: HumanizedBook, source: string) {
     </tr>
     <tr style="border-bottom: 1px solid #333;">
       <td style="padding: 5px;">Série : ${book.series || 'Aucune'} (Tome ${book.seriesNumber || '?'})</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 5px;">Statut : <span style="color: ${statusColor}; font-weight: bold;">${statusText}</span></td>
     </tr>
     <tr>
       <td style="padding: 5px; font-size: 9px; color: #777;">URI : ${book.uri} | Work : ${book.workUri || 'N/A'}</td>
@@ -64,7 +73,7 @@ function renderMainBookDebugTable(book: HumanizedBook, source: string) {
 }
 
 /**
- * Rendu technique : Tableau de debug des séries (à la demande)
+ * Rendu technique : Tableau de debug des séries
  */
 function renderSeriesDebugTable(tomes: HumanizedBook[]) {
   const container = document.createElement('div');
@@ -117,7 +126,7 @@ function initApp() {
     addLog(`Recherche ISBN : ${isbn}...`);
     
     try {
-      // APPEL À L'ORCHESTRATEUR
+      // UTILISATION DE L'ORCHESTRATEUR
       const res: SearchResponse | null = await searchService.searchByIsbn(isbn);
       
       if (!res) {
@@ -126,40 +135,47 @@ function initApp() {
 
       addLog(`✓ Récupéré via : ${res.source.toUpperCase()}`, "success");
       
-      // 1. Affichage du tableau principal
+      // 1. Affichage du tableau principal (avec le statut intégré)
       renderMainBookDebugTable(res.mainBook, res.source);
 
-      // 2. Gestion du Double Check (Alertes de doublon d'œuvre)
+      // 2. Alerte Double Check (Doublon d'œuvre)
       if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
         addLog(`⚠️ DOUBLON D'ŒUVRE : Vous possédez déjà "${res.ownership.duplicateEdition.title}"`, "warning");
       }
 
-      // 3. Boutons d'actions unitaires
+      // 3. Bouton Ajouter à la collection (si pas déjà possédé)
       if (res.ui.showAddButton) {
         const btnAdd = document.createElement('button');
-        btnAdd.textContent = `➕ Ajouter à la collection`;
-        Object.assign(btnAdd.style, { marginTop: '10px', backgroundColor: '#5bc31b', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+        btnAdd.textContent = `➕ Ajouter à ma collection`;
+        Object.assign(btnAdd.style, { marginTop: '10px', backgroundColor: '#5bc31b', color: 'white', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
         btnAdd.onclick = async () => {
-          await inventoryService.addToLibrary(res.mainBook.uri);
-          addLog("🎉 Ajouté à l'inventaire !", "success");
-          btnAdd.disabled = true; btnAdd.textContent = "✓ Possédé";
+          try {
+            btnAdd.disabled = true;
+            await inventoryService.addToLibrary(res.mainBook.uri);
+            addLog(`🎉 "${res.mainBook.title}" ajouté à l'inventaire !`, "success");
+            btnAdd.textContent = "✓ Ajouté";
+          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnAdd.disabled = false; }
         };
         acquisitionZone.appendChild(btnAdd);
       }
 
+      // 4. Bouton Ajouter à la Wishlist (si pas possédé et pas déjà en wish)
       if (res.ui.showWishButton) {
         const btnWish = document.createElement('button');
         btnWish.textContent = `⭐ Mettre en Wishlist`;
-        Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
+        Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
         btnWish.onclick = async () => {
-          await wishlistService.addToWishlist(res.mainBook.workUri || res.mainBook.uri);
-          addLog("⭐ Ajouté à la Wishlist.", "success");
-          btnWish.disabled = true; btnWish.textContent = "✓ En Wishlist";
+          try {
+            btnWish.disabled = true;
+            await wishlistService.addToWishlist(res.mainBook.workUri || res.mainBook.uri);
+            addLog(`⭐ "${res.mainBook.title}" ajouté à la Wishlist.`, "success");
+            btnWish.textContent = "✓ Souhaité";
+          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnWish.disabled = false; }
         };
         acquisitionZone.appendChild(btnWish);
       }
 
-      // 4. Bouton d'affichage de la série (à la demande)
+      // 5. Bouton d'affichage de la série
       if (res.series) {
         const btnShowSeries = document.createElement('button');
         btnShowSeries.textContent = `📚 Voir la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
@@ -171,14 +187,14 @@ function initApp() {
         acquisitionZone.appendChild(btnShowSeries);
       }
 
-    } catch (err: any) {
-      addLog(`ERREUR : ${err.message}`, "error");
+    } catch (err: any) { 
+      addLog(`ERREUR : ${err.message}`, "error"); 
     }
   });
 }
 
 /**
- * Auto-Login au chargement
+ * Auto-Login au chargement (Identique à l'original)
  */
 async function autoInit() {
   addLog("Vérification de la session...");
