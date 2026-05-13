@@ -12,5 +12,8 @@
     "@vercel/node": "^5.7.16",
     "typescript": "~6.0.2",
     "vite": "^8.0.10"
+  },
+  "dependencies": {
+    "dexie": "^4.4.2"
   }
 }

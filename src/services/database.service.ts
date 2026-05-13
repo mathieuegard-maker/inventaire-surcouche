@@ -97,12 +97,12 @@ export const databaseService = {
 
   async getAllRegistryUris(tableName: 'inventory' | 'wishlist'): Promise<string[]> {
     const entries = await db[tableName].toArray();
-    return entries.map(entry => entry.uri);
+    return entries.map((entry: RegistryEntry) => entry.uri);
   },
 
   async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
     await db[tableName].clear();
-    const entries: RegistryEntry[] = uris.map(uri => ({ uri, addedAt: Date.now() }));
+    const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
     await db[tableName].bulkPut(entries);
   }
 };
