@@ -1,14 +1,16 @@
 // src/services/wishlist.service.ts
+import { databaseService } from './database.service';
 
 export const wishlistService = {
   wishlistId: null as string | null,
-  wishedUris: new Set<string>(), // Ton code actuel en RAM
 
   async loadWishlist(userUri: string): Promise<number> {
+    // Restauration de l'extraction de ton ancien code pour éviter l'erreur 400
     const userId = userUri.includes(':') ? userUri.split(':')[1] : userUri;
     console.group(`[WISHLIST] Initialisation pour l'utilisateur ${userId}`);
     
     try {
+      // 1. Récupération de l'ID de la liste via ton proxy
       const res = await fetch(`/api/lists/by-creator?userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
       
@@ -20,8 +22,6 @@ export const wishlistService = {
       let targetList: any = listsArray.find((l: any) => 
         l.name.toLowerCase() === 'wishlist' || l.name.toLowerCase() === 'envies'
       );
-
-      this.wishedUris.clear();
 
       if (!targetList) {
         console.log("Aucune liste Wishlist trouvée, création en cours...");
@@ -42,34 +42,34 @@ export const wishlistService = {
         const listObj = createData.list || createData;
         targetList = { _id: listObj._id };
         console.log("Liste créée avec succès :", targetList._id);
-        
       } else {
         console.log("Liste trouvée :", targetList._id);
-        
-        // --- NOUVEAU : Récupération du contenu ---
-        const listRes = await fetch(`/api/lists/get?id=${targetList._id}`);
-        const listData = await listRes.json();
-        
-        if (!listRes.ok) throw new Error(listData.error || "Impossible de lire le contenu");
-        
-        const elementsList = listData.list?.elements || listData.elements || [];
-        
-        const uris = elementsList.map((item: any) => {
-          if (typeof item === 'string') return item;
-          if (item.element) return item.element;
-          if (item.uri) return item.uri;
-          if (item.entity) return item.entity; 
-          return null;
-        }).filter(Boolean);
-
-        uris.forEach((uri: string) => this.wishedUris.add(uri));
-        console.log(`Contenu téléchargé : ${this.wishedUris.size} éléments.`);
       }
 
       this.wishlistId = targetList._id;
       
+      // 2. NOUVEAU (Restauration) : Récupération du contenu de la liste
+      const listRes = await fetch(`/api/lists/get?id=${this.wishlistId}`);
+      const listData = await listRes.json();
+      
+      if (!listRes.ok) throw new Error(listData.error || "Impossible de lire le contenu");
+      
+      const elementsList = listData.list?.elements || listData.elements || [];
+      
+      const urisToSync = elementsList.map((item: any) => {
+        if (typeof item === 'string') return item;
+        if (item.element) return item.element;
+        if (item.uri) return item.uri;
+        if (item.entity) return item.entity; 
+        return null;
+      }).filter(Boolean);
+
+      // CRUCIAL : On sauvegarde dans IndexedDB au lieu du Set local
+      await databaseService.syncRegistry('wishlist', urisToSync);
+      console.log(`Contenu téléchargé et synchronisé : ${urisToSync.length} éléments.`);
+
       console.groupEnd();
-      return this.wishedUris.size;
+      return urisToSync.length;
       
     } catch (error) {
       console.error("[WISHLIST] Erreur fatale :", error);
@@ -79,7 +79,8 @@ export const wishlistService = {
   },
 
   async isUriWished(uri: string): Promise<boolean> {
-    return this.wishedUris.has(uri);
+    // Interrogation de la base locale
+    return await databaseService.isUriInRegistry('wishlist', uri);
   },
 
   async addToWishlist(editionUri: string): Promise<boolean> {
@@ -97,7 +98,8 @@ export const wishlistService = {
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
 
-    this.wishedUris.add(editionUri);
+    // Mise à jour de la base locale
+    await databaseService.addRegistryEntry('wishlist', editionUri);
     return true;
   },
 
@@ -116,25 +118,27 @@ export const wishlistService = {
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
 
-    editionUris.forEach(uri => this.wishedUris.add(uri));
+    for (const uri of editionUris) {
+      await databaseService.addRegistryEntry('wishlist', uri);
+    }
     return true;
   },
 
   async removeFromWishlist(uris: string[]): Promise<boolean> {
     if (!this.wishlistId) return false;
-
-    const toRemove = uris.filter(uri => this.wishedUris.has(uri));
-    if (toRemove.length === 0) return true;
+    if (uris.length === 0) return true;
 
     const res = await fetch('/api/lists/remove-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: toRemove })
+      body: JSON.stringify({ id: this.wishlistId, uris: uris })
     });
 
     const data = await res.json();
     if (res.ok) {
-      toRemove.forEach(uri => this.wishedUris.delete(uri));
+      for (const uri of uris) {
+         await databaseService.removeRegistryEntry('wishlist', uri);
+      }
       return true;
     } else {
       console.error("[WISHLIST REMOVE ERROR]", data);

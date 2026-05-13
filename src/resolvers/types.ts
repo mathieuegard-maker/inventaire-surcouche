@@ -1,32 +1,23 @@
 // src/resolvers/types.ts
 
-/**
- * Informations de base communes à tous les états du livre
- */
 export interface BaseBook {
-  uri: string; // inv:xxx ou wd:Qxxx
-  workUri?: string; // NOUVEAU : Lien vers l'œuvre parente
+  uri: string;
+  workUri?: string;
   isbn13?: string;
   isbn10?: string;
   type: 'edition' | 'work' | 'unknown';
-  
-  // Contenu
   title: string;
   subtitle?: string;
-  originalTitle?: string; // Pour les Mangas/Comics
+  originalTitle?: string;
   description?: string;
-  image?: string;
+  coverUrl?: string; // Remplacement de 'image' par 'coverUrl'
+  localCover?: string; // Ajout : Stockage Base64 pour le hors-ligne
   language?: string;
-  
-  // Physique
   pageCount?: number;
   publishDate?: string;
-  format?: string; // Relié, Broché, Deluxe
+  format?: string;
 }
 
-/**
- * Données brutes (Codes URIs) extraites après le Mapping
- */
 export interface RawBook extends BaseBook {
   authorIds: string[];
   illustratorIds: string[];
@@ -34,13 +25,10 @@ export interface RawBook extends BaseBook {
   publisherId?: string;
   seriesId?: string;
   seriesNumber?: string;
-  genreIds: string[]; // Pour classer par "Science-fiction", "Western", etc.
-  collectionId?: string; // Ex: "La Pléiade" ou "Bibliothèque verte"
+  genreIds: string[];
+  collectionId?: string;
 }
 
-/**
- * Données lisibles par l'humain après passage dans l'Humanizer
- */
 export interface HumanizedBook extends BaseBook {
   authors: string[];
   illustrators: string[];
@@ -51,18 +39,17 @@ export interface HumanizedBook extends BaseBook {
   seriesNumber?: string;
   genres: string[];
   collection?: string;
+
+  // Ajout : Statut de possession centralisé pour le Double Check
+  ownershipStatus: 'owned' | 'wish' | 'none';
 }
 
-/**
- * REPRÉSENTATION DE TON EXEMPLAIRE PHYSIQUE (Pour le module Inventaire/Prêts)
- * C'est ici qu'on gérera si le livre est à toi, sa note, et s'il est prêté.
- */
 export interface InventoryItem {
-  id: string; // L'ID de l'item dans TON inventaire
-  entityUri: string; // Lien vers le HumanizedBook
+  _id?: string;
+  entity: string; // Utilisation de la vraie clé API de l'Inventaire
   status: 'owned' | 'wishlist' | 'loaned' | 'sold';
-  state?: 'new' | 'good' | 'damaged'; // État physique
-  loanTo?: string; // Nom de l'ami (ton fameux fichier JSON)
+  state?: 'new' | 'good' | 'damaged';
+  loanTo?: string;
   dateAdded: string;
   personalNote?: string;
 }

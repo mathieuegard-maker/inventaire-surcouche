@@ -1,40 +1,50 @@
 // src/services/inventory.service.ts
+import { databaseService } from './database.service';
 
 export const inventoryService = {
-  ownedUris: new Set<string>(),
-
   async loadLibrary(uri: string): Promise<number> {
     console.group(`[INVENTORY] Chargement de la bibliothèque pour ${uri}`);
-    console.log("Appel API en cours...");
+    console.log("Appel API (via proxy) en cours...");
     
-    const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(uri)}`);
-    const data = await res.json();
+    try {
+      // Retour à ton appel proxy qui gère correctement l'authentification
+      const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(uri)}`);
+      const data = await res.json();
 
-    if (!res.ok) {
-      console.error("Échec de l'API :", data);
-      console.groupEnd();
-      throw new Error(data.error || "Impossible de charger l'inventaire");
-    }
-
-    this.ownedUris.clear();
-    const items = data.items || [];
-    const itemList = Array.isArray(items) ? items : Object.values(items);
-    
-    itemList.forEach((item: any) => {
-      if (item.entity) {
-        this.ownedUris.add(item.entity);
+      if (!res.ok) {
+        console.error("Échec de l'API :", data);
+        console.groupEnd();
+        throw new Error(data.error || "Impossible de charger l'inventaire");
       }
-    });
 
-    console.log(`Données brutes reçues : ${itemList.length} items physiques.`);
-    console.log(`URIs uniques extraites et stockées dans le Set :`, Array.from(this.ownedUris));
-    console.groupEnd();
+      const items = data.items || [];
+      const itemList = Array.isArray(items) ? items : Object.values(items);
+      
+      const urisToSync: string[] = [];
+      itemList.forEach((item: any) => {
+        if (item.entity) {
+          urisToSync.push(item.entity);
+        }
+      });
 
-    return this.ownedUris.size;
+      console.log(`Données brutes reçues : ${itemList.length} items physiques.`);
+      
+      // CRUCIAL : On synchronise la base de données locale au lieu du Set en RAM
+      await databaseService.syncRegistry('inventory', urisToSync);
+      console.log(`[INVENTORY] Registre synchronisé avec succès : ${urisToSync.length} éléments.`);
+      
+      console.groupEnd();
+      return urisToSync.length;
+    } catch (error) {
+      console.error("[INVENTORY] Erreur fatale :", error);
+      console.groupEnd();
+      throw error;
+    }
   },
 
-  isUriOwned(uri: string): boolean {
-    return this.ownedUris.has(uri);
+  async isUriOwned(uri: string): Promise<boolean> {
+    // Interrogation de la base de données (Double Check)
+    return await databaseService.isUriInRegistry('inventory', uri);
   },
 
   async addToLibrary(uri: string): Promise<boolean> {
@@ -50,8 +60,8 @@ export const inventoryService = {
       throw new Error(data.error || data.message || "Erreur lors de l'ajout à l'inventaire");
     }
 
-    // CRUCIAL : On met à jour la mémoire locale immédiatement
-    this.ownedUris.add(uri);
+    // On met à jour la base locale immédiatement
+    await databaseService.addRegistryEntry('inventory', uri);
     
     return true;
   },
@@ -66,13 +76,14 @@ export const inventoryService = {
     const data = await res.json();
     
     if (!res.ok) {
-      // On affiche l'erreur brute envoyée par Inventaire dans F12
       console.error("[DEBUG BULK ERROR]", data);
-      // On lance l'erreur avec le texte précis d'Inventaire (status_verbose)
       throw new Error(data.status_verbose || data.error || "Erreur inconnue du serveur");
     }
 
-    uris.forEach(uri => this.ownedUris.add(uri));
+    // Ajout massif dans le cache local
+    for (const uri of uris) {
+      await databaseService.addRegistryEntry('inventory', uri);
+    }
     return true;
   }
 };

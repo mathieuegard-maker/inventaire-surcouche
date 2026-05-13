@@ -21,18 +21,29 @@ export const entityMapper = {
       if (typeof seriesClaim === 'string') {
         extractedSeriesId = seriesClaim;
       } else {
-        // C'est un objet : on récupère la valeur texte ET le numéro de tome dans les qualificateurs
         extractedSeriesId = seriesClaim.value;
         extractedSeriesNumber = seriesClaim.qualifiers?.['wdt:P1545']?.[0];
       }
     }
     
-    // Fallback au cas où le numéro de série serait à la racine (rare mais possible)
     extractedSeriesNumber = extractedSeriesNumber || (claims['wdt:P1545'] && claims['wdt:P1545'][0]);
+
+    // GESTION ROBUSTE DE L'IMAGE -> coverUrl
+    const rawImageUrl = raw.image || (raw.images && raw.images[0]) || (claims['wdt:P18'] && claims['wdt:P18'][0]);
+    let finalCoverUrl = undefined;
+    
+    // CORRECTION DU CRASH: On s'assure que l'on manipule bien une chaîne de caractères
+    const imageUrlStr = typeof rawImageUrl === 'string' ? rawImageUrl : (rawImageUrl?.value || undefined);
+    
+    if (typeof imageUrlStr === 'string') {
+      finalCoverUrl = imageUrlStr.startsWith('http') 
+        ? imageUrlStr 
+        : `https://inventaire.io/img/entities/${encodeURIComponent(imageUrlStr)}`;
+    }
 
     const mappedBook: RawBook = {
       uri: uri,
-      workUri: workUri, // On l'injecte ici
+      workUri: workUri,
       isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
       isbn10: raw.isbn10,
       type: (raw.type as any) || 'unknown',
@@ -40,19 +51,17 @@ export const entityMapper = {
       subtitle: raw.subtitle,
       originalTitle: originalTitle,
       description: raw.description || raw.descriptions?.fr,
-      image: raw.image || (raw.images && raw.images[0]),
+      coverUrl: finalCoverUrl,
       language: raw.language,
       pageCount: claims['wdt:P1104'] ? parseInt(claims['wdt:P1104'][0]) : undefined,
       publishDate: claims['wdt:P577'] ? claims['wdt:P577'][0] : undefined,
       format: raw.format,
 
-      // IDs (on garde ce qu'on trouve)
       authorIds: claims['wdt:P50'] || raw.authors || [],
       illustratorIds: claims['wdt:P110'] || [],
       scriptwriterIds: claims['wdt:P58'] || [],
       publisherId: (claims['wdt:P123'] && claims['wdt:P123'][0]) || raw.publisher,
       
-      // Les données corrigées
       seriesId: extractedSeriesId,
       seriesNumber: extractedSeriesNumber,
       
