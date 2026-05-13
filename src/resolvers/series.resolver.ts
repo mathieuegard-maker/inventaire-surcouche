@@ -3,7 +3,7 @@ import { entityMapper } from './mapper';
 import { databaseService } from '../services/database.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import type { HumanizedBook, RawBook } from './types';
+import type { HumanizedBook } from './types';
 
 export const seriesResolver = {
   /**

@@ -11,13 +11,14 @@ export const entityResolver = {
   async fromIsbn(isbn: string): Promise<RawBook | null> {
     try {
       const searchUri = `isbn:${isbn}`;
-      const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${searchUri}`, {
+      // On demande explicitement l'image et les claims pour ne rien rater
+      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(searchUri)}&attributes=info|labels|descriptions|claims|image`;
+      
+      const res = await fetch(url, {
         headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
       
-      // CORRECTION : L'API indexe par l'URI réelle (inv:...) et non par "isbn:..."
-      // On récupère donc la première clé disponible dans l'objet entities
       const entityId = Object.keys(data.entities || {})[0];
       const entityData = data.entities?.[entityId];
 
@@ -26,20 +27,31 @@ export const entityResolver = {
         return null;
       }
 
-      // Récupération systématique de l'œuvre (P629) si elle existe
-      const workUri = entityData.claims?.['wdt:P629']?.[0];
+      // SONDE DEBUG : RAW DATA API
+      console.log(`[DEBUG-RESOLVER] Données brutes de l'édition (${entityId}) :`, entityData);
+      console.log(`[DEBUG-RESOLVER] Champ image présent sur édition ? :`, !!entityData.image);
+
+      // Extraction robuste de l'identifiant de l'œuvre (P629)
+      const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+      const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+      
       let workData = null;
 
       if (workUri) {
         console.log(`[RESOLVER] Édition trouvée (${entityId}). Rebond sur l'œuvre : ${workUri}`);
-        const resWork = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}`, {
+        const workUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`;
+        
+        const resWork = await fetch(workUrl, {
           headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
         });
         const dataWork = await resWork.json();
         workData = dataWork.entities?.[workUri];
+
+        // SONDE DEBUG : RAW DATA OEUVRE
+        console.log(`[DEBUG-RESOLVER] Données brutes de l'œuvre (${workUri}) :`, workData);
+        console.log(`[DEBUG-RESOLVER] Champ image présent sur œuvre ? :`, !!workData?.image);
       }
 
-      // On passe l'ID réel (entityId) au mapper plutôt que la chaîne de recherche
       return entityMapper.mapResponse(entityId, entityData, workData);
     } catch (error) {
       console.error("[ENTITY RESOLVER] Erreur ISBN:", error);
@@ -52,12 +64,12 @@ export const entityResolver = {
    */
   async fromUri(uri: string): Promise<RawBook | null> {
     try {
-      const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}`, {
+      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}&attributes=info|labels|descriptions|claims|image`;
+      const res = await fetch(url, {
         headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
       
-      // Ici l'URI est déjà la bonne clé (wd: ou inv:)
       const entityData = data.entities?.[uri];
       
       if (!entityData) return null;
@@ -66,11 +78,13 @@ export const entityResolver = {
         return entityMapper.mapResponse(uri, entityData);
       }
 
-      const workUri = entityData.claims?.['wdt:P629']?.[0];
+      const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+      const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       let workData = null;
 
       if (workUri) {
-        const resWork = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}`, {
+        const workUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`;
+        const resWork = await fetch(workUrl, {
           headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
         });
         const dataWork = await resWork.json();

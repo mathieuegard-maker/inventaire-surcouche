@@ -1,6 +1,5 @@
 // src/services/search.service.ts
 import { databaseService } from './database.service';
-import { inventoryService } from './inventory.service';
 import { wishlistService } from './wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
@@ -21,6 +20,7 @@ export const searchService = {
 
     if (!book) {
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
+      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
       const raw = await entityResolver.fromIsbn(isbn);
       
       if (!raw) {
@@ -29,7 +29,13 @@ export const searchService = {
         return null;
       }
       
+      // Humanisation (Traductions + Compression d'image)
       book = await entityHumanizer.humanize(raw);
+      
+      // SONDE DEBUG : AVANT SAUVEGARDE CACHE
+      console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
+
+      // Sauvegarde immédiate dans le cache books
       await databaseService.saveBookToCache(book);
       source = 'network';
     } else {
@@ -80,9 +86,13 @@ export const searchService = {
       hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none')
     };
 
+    // SONDE DEBUG : OBJET FINAL
+    console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
+
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
 
+    // 5. RÉSULTAT : Le "Paquet" final prêt à l'emploi
     return {
       mainBook: book,
       ownership: {

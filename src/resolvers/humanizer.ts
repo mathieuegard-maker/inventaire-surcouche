@@ -25,6 +25,9 @@ export const entityHumanizer = {
       rawBook.collectionId ? entityResolver.resolveName(rawBook.collectionId) : Promise.resolve(undefined)
     ]);
 
+    // SONDE DEBUG : URL REÇUE DANS LE HUMANIZER
+    console.log(`[DEBUG-HUMANIZER] URL avant compression pour ${rawBook.uri} :`, rawBook.coverUrl);
+
     // Tolérance si le mapper utilise encore l'ancien format 'image'
     const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
     
@@ -33,6 +36,9 @@ export const entityHumanizer = {
     if (targetImageUrl) {
       console.log(`[HUMANIZER] Compression de la couverture pour ${rawBook.uri}...`);
       localCover = await imageService.compressAndEncode(targetImageUrl) || undefined;
+      
+      // SONDE DEBUG : RÉSULTAT COMPRESSION
+      console.log(`[DEBUG-HUMANIZER] Résultat compression (localCover) :`, localCover ? "OK (Base64)" : "ÉCHEC (Null)");
     }
 
     const humanized: HumanizedBook = {

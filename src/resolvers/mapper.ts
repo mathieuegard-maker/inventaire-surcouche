@@ -12,50 +12,70 @@ export const entityMapper = {
     const editionClaims = raw.claims || {};
     const workClaims = workRaw?.claims || {};
 
+    // Helper pour extraire une valeur de claim (gère les formats string et objet)
+    const getClaimValue = (claims: any, prop: string) => {
+      const val = claims[prop]?.[0] || claims[`wdt:${prop}`]?.[0];
+      if (!val) return undefined;
+      // Correction : gère .value ou .url
+      return typeof val === 'string' ? val : (val.value || val.url);
+    };
+
     // 1. TITRE : Priorité à l'édition, repli sur l'œuvre ou le titre original
     const rawTitle = raw.label || raw.labels?.fr || raw.labels?.en;
     const workTitle = workRaw?.label || workRaw?.labels?.fr || workRaw?.labels?.en;
-    const originalTitle = workClaims['wdt:P1476']?.[0] || editionClaims['wdt:P1476']?.[0];
+    const originalTitle = getClaimValue(workClaims, 'P1476') || getClaimValue(editionClaims, 'P1476');
     
     const title = rawTitle || workTitle || originalTitle || "Titre inconnu";
 
     // 2. WORK URI : On le récupère de l'édition (P629) ou on utilise l'URI si c'est déjà un work
-    const workUri = editionClaims['wdt:P629']?.[0] || (raw.type === 'work' ? uri : undefined);
+    const workUri = getClaimValue(editionClaims, 'P629') || (raw.type === 'work' ? uri : undefined);
 
-    // 3. SÉRIE ET NUMÉRO (P179 & P1545) : On cherche sur l'édition, puis sur l'œuvre
-    let seriesId;
-    let seriesNumber;
+    // 3. SÉRIE ET NUMÉRO (P179 & P1545)
+    let seriesId = getClaimValue(workClaims, 'P179') || getClaimValue(editionClaims, 'P179');
+    let seriesNumber = getClaimValue(workClaims, 'P1545') || getClaimValue(editionClaims, 'P1545');
 
-    // On vérifie d'abord l'œuvre (source de vérité pour la série), puis l'édition
-    const seriesClaim = workClaims['wdt:P179']?.[0] || editionClaims['wdt:P179']?.[0];
+    // 4. IMAGE : Reconstruction dynamique selon ton format 300x300
+    const rawImageSource = raw.image || 
+                          (raw.images && raw.images[0]) || 
+                          getClaimValue(editionClaims, 'P18') ||
+                          workRaw?.image || 
+                          (workRaw?.images && workRaw?.images[0]) || 
+                          getClaimValue(workClaims, 'P18');
 
-    if (seriesClaim) {
-      if (typeof seriesClaim === 'string') {
-        seriesId = seriesClaim;
-      } else {
-        seriesId = seriesClaim.value;
-        seriesNumber = seriesClaim.qualifiers?.['wdt:P1545']?.[0];
-      }
-    }
-    
-    seriesNumber = seriesNumber || workClaims['wdt:P1545']?.[0] || editionClaims['wdt:P1545']?.[0];
+    // SONDE DEBUG : SOURCE IMAGE DÉTECTÉE
+    console.log(`[DEBUG-MAPPER] Source brute d'image trouvée pour ${uri} :`, rawImageSource);
 
-    // 4. IMAGE : Gestion robuste (Édition > Œuvre)
-    const rawImageUrl = raw.image || (raw.images && raw.images[0]) || editionClaims['wdt:P18']?.[0] || workClaims['wdt:P18']?.[0];
     let finalCoverUrl = undefined;
     
-    const imageUrlStr = typeof rawImageUrl === 'string' ? rawImageUrl : (rawImageUrl?.value || undefined);
-    
-    if (typeof imageUrlStr === 'string') {
-      finalCoverUrl = imageUrlStr.startsWith('http') 
-        ? imageUrlStr 
-        : `https://inventaire.io/img/entities/${encodeURIComponent(imageUrlStr)}`;
+    if (rawImageSource) {
+      // CORRECTION : On extrait le chemin (qu'il soit dans .url, .value ou direct)
+      const imgPath = typeof rawImageSource === 'string' ? rawImageSource : (rawImageSource.url || rawImageSource.value);
+      
+      if (typeof imgPath === 'string') {
+        // CORRECTION : On récupère uniquement le hash final (le dernier segment du chemin)
+        const imgHash = imgPath.split('/').pop();
+        
+        if (imgHash) {
+          // RECONSTRUCTION : Si c'est un hash, on utilise le format 300x300, sinon on garde l'URL absolue
+          finalCoverUrl = imgHash.startsWith('http') 
+            ? imgHash 
+            : `https://inventaire.io/img/entities/300x300/${imgHash}`;
+        }
+      }
     }
 
-    // 5. LISTES (Auteurs, Genres, etc.) : Fusion systématique pour ne rien rater
+    // SONDE DEBUG : URL FINALE
+    console.log(`[DEBUG-MAPPER] URL reconstruite :`, finalCoverUrl);
+
+    // 5. LISTES (Auteurs, Genres, etc.) : Fusion systématique
     const mergeIds = (prop: string, localProp?: string): string[] => {
-      const fromEdition = editionClaims[prop] || (localProp ? raw[localProp] : []) || [];
-      const fromWork = workClaims[prop] || [];
+      const extract = (data: any, p: string) => {
+        const vals = data[p] || data[`wdt:${p}`] || [];
+        return vals.map((v: any) => typeof v === 'string' ? v : (v.value || v.url)).filter(Boolean);
+      };
+      // On combine les IDs de l'édition (claims + root) et de l'œuvre
+      const fromEdition = [...extract(editionClaims, prop), ...(localProp && raw[localProp] ? [raw[localProp]] : [])].flat();
+      const fromWork = extract(workClaims, prop);
       return Array.from(new Set([...fromEdition, ...fromWork]));
     };
 
@@ -71,21 +91,21 @@ export const entityMapper = {
       description: raw.description || raw.descriptions?.fr || workRaw?.description || workRaw?.descriptions?.fr,
       coverUrl: finalCoverUrl,
       language: raw.language || workRaw?.language,
-      pageCount: editionClaims['wdt:P1104'] ? parseInt(editionClaims['wdt:P1104'][0]) : undefined,
-      publishDate: editionClaims['wdt:P577'] ? editionClaims['wdt:P577'][0] : undefined,
+      pageCount: parseInt(getClaimValue(editionClaims, 'P1104')) || undefined,
+      publishDate: getClaimValue(editionClaims, 'P577'),
       format: raw.format,
 
       // IDs pour les résolutions futures
-      authorIds: mergeIds('wdt:P50', 'authors'),
-      illustratorIds: mergeIds('wdt:P110'),
-      scriptwriterIds: mergeIds('wdt:P58'),
-      publisherId: editionClaims['wdt:P123']?.[0] || raw.publisher,
+      authorIds: mergeIds('P50', 'authors'),
+      illustratorIds: mergeIds('P110'),
+      scriptwriterIds: mergeIds('P58'),
+      publisherId: getClaimValue(editionClaims, 'P123') || raw.publisher,
       
       seriesId: seriesId,
       seriesNumber: seriesNumber,
       
-      genreIds: mergeIds('wdt:P136'),
-      collectionId: editionClaims['wdt:P195']?.[0] || workClaims['wdt:P195']?.[0]
+      genreIds: mergeIds('P136'),
+      collectionId: getClaimValue(editionClaims, 'P195') || getClaimValue(workClaims, 'P195')
     };
 
     return mappedBook;

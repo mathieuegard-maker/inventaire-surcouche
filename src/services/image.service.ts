@@ -8,14 +8,21 @@ export const imageService = {
    * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
    */
   async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
+    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
     try {
       const response = await fetch(imageUrl);
-      if (!response.ok) throw new Error(`Erreur réseau: ${response.status}`);
+      
+      if (!response.ok) {
+        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
+        throw new Error(`Erreur réseau: ${response.status}`);
+      }
       
       const blob = await response.blob();
+      console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
       
       // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
       const img = await createImageBitmap(blob);
+      console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
       
       let width = img.width;
       let height = img.height;
@@ -33,13 +40,18 @@ export const imageService = {
       canvas.height = height;
       
       const ctx = canvas.getContext('2d');
-      if (!ctx) return null;
+      if (!ctx) {
+        console.error("[DEBUG-IMAGE-SERVICE] Impossible de créer le contexte 2D du Canvas");
+        return null;
+      }
       
       // Dessin de l'image redimensionnée
       ctx.drawImage(img, 0, 0, width, height);
       
       // Exportation en WebP (format très léger idéal pour IndexedDB)
-      return canvas.toDataURL('image/webp', quality);
+      const finalData = canvas.toDataURL('image/webp', quality);
+      console.log("[DEBUG-IMAGE-SERVICE] DataURL généré avec succès.");
+      return finalData;
 
     } catch (error) {
       console.warn(`[IMAGE SERVICE] Échec du traitement pour ${imageUrl}:`, error);

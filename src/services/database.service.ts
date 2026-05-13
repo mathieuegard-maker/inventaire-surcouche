@@ -67,6 +67,8 @@ export const databaseService = {
   // --- GESTION DU CACHE (Fiches complètes) ---
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
+    // SONDE DEBUG : ÉCRITURE CACHE
+    console.log(`[DEBUG-DB] Tentative d'écriture de ${book.uri} dans le cache. coverUrl:`, book.coverUrl, "localCover:", !!book.localCover);
     await db.cache_books.put(book);
   },
 

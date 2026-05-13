@@ -27,9 +27,10 @@ function addLog(msg: string, type = 'info') {
 }
 
 /**
- * Rendu technique : Tableau du livre principal avec STATUT
+ * Rendu technique : Tableau du livre principal avec STATUT DÉTAILLÉ et ALERTE DOUBLON
  */
-function renderMainBookDebugTable(book: HumanizedBook, source: string) {
+function renderMainBookDebugTable(res: SearchResponse) {
+  const { mainBook: book, source, ownership } = res;
   const container = document.createElement('div');
   container.style.marginTop = '15px';
   container.innerHTML = `<h3 style="color: #3498db; font-size: 13px; margin-bottom: 5px;">📖 Livre Actuel (${source.toUpperCase()})</h3>`;
@@ -41,13 +42,33 @@ function renderMainBookDebugTable(book: HumanizedBook, source: string) {
 
   const imgSrc = book.localCover || book.coverUrl || '';
   
-  // Calcul du texte et de la couleur du statut
+  // LOGIQUE DE STATUT DÉTAILLÉE
   let statusText = "INCONNU";
   let statusColor = "#888";
-  if (book.ownershipStatus === 'owned') { statusText = "POSSÉDÉ"; statusColor = "#0f0"; }
-  else if (book.ownershipStatus === 'wish') { statusText = "EN WISHLIST"; statusColor = "#ffa500"; }
+  
+  if (ownership.isEditionOwned) {
+    statusText = "POSSÉDÉ (CETTE ÉDITION)";
+    statusColor = "#0f0";
+  } else if (ownership.isWorkOwned) {
+    statusText = "POSSÉDÉ (AUTRE ÉDITION)";
+    statusColor = "#ffa500"; // Orange pour signaler le doublon d'œuvre
+  } else if (ownership.isWished) {
+    statusText = "EN WISHLIST";
+    statusColor = "#3498db";
+  }
+
+  // PRÉPARATION DE L'ALERTE VISUELLE (Double Check)
+  const alertRow = (ownership.isWorkOwned && !ownership.isEditionOwned && ownership.duplicateEdition) 
+    ? `<tr style="background: rgba(255, 165, 0, 0.2);">
+         <td colspan="2" style="padding: 8px; color: #ffa500; border: 1px solid #ffa500; font-weight: bold; text-align: center;">
+           ⚠️ ATTENTION : Vous possédez déjà cette œuvre !<br/>
+           <span style="font-size: 9px; font-weight: normal;">Édition possédée : ${ownership.duplicateEdition.title}</span>
+         </td>
+       </tr>`
+    : '';
 
   table.innerHTML = `
+    ${alertRow}
     <tr style="border-bottom: 1px solid #333;">
       <td rowspan="5" style="width: 60px; padding: 5px; text-align: center; vertical-align: top;">
         ${imgSrc ? `<img src="${imgSrc}" style="width: 50px; border-radius: 2px;">` : 'N/A'}
@@ -73,7 +94,7 @@ function renderMainBookDebugTable(book: HumanizedBook, source: string) {
 }
 
 /**
- * Rendu technique : Tableau de debug des séries
+ * Rendu technique : Tableau de debug des séries (Identique)
  */
 function renderSeriesDebugTable(tomes: HumanizedBook[]) {
   const container = document.createElement('div');
@@ -135,15 +156,15 @@ function initApp() {
 
       addLog(`✓ Récupéré via : ${res.source.toUpperCase()}`, "success");
       
-      // 1. Affichage du tableau principal (avec le statut intégré)
-      renderMainBookDebugTable(res.mainBook, res.source);
+      // 1. Affichage du tableau principal (avec détection intelligente de doublon)
+      renderMainBookDebugTable(res);
 
-      // 2. Alerte Double Check (Doublon d'œuvre)
+      // 2. Alerte Double Check (Logs console)
       if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
         addLog(`⚠️ DOUBLON D'ŒUVRE : Vous possédez déjà "${res.ownership.duplicateEdition.title}"`, "warning");
       }
 
-      // 3. Bouton Ajouter à la collection (si pas déjà possédé)
+      // 3. Bouton Ajouter à la collection (si pas déjà possédé sous CETTE édition)
       if (res.ui.showAddButton) {
         const btnAdd = document.createElement('button');
         btnAdd.textContent = `➕ Ajouter à ma collection`;
@@ -194,7 +215,7 @@ function initApp() {
 }
 
 /**
- * Auto-Login au chargement (Identique à l'original)
+ * Auto-Login au chargement
  */
 async function autoInit() {
   addLog("Vérification de la session...");
