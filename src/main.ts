@@ -5,6 +5,7 @@ import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './services/inventory.service';
 import { wishlistService } from './services/wishlist.service';
 import { searchService } from './services/search.service';
+import { loanService } from './services/loan.service';
 import type { SearchResponse, HumanizedBook } from './resolvers/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
@@ -12,7 +13,7 @@ const logs = document.getElementById('logs')!;
 const acquisitionZone = document.getElementById('acquisition-zone')!;
 
 /**
- * Console de debug visuelle (Identique à l'originale)
+ * Console de debug visuelle
  */
 function addLog(msg: string, type = 'info') {
   const div = document.createElement('div');
@@ -27,106 +28,274 @@ function addLog(msg: string, type = 'info') {
 }
 
 /**
- * Rendu technique : Tableau du livre principal avec STATUT DÉTAILLÉ et ALERTE DOUBLON
+ * Rendu technique : Tableau du livre principal avec STATUT DÉTAILLÉ, PRÊT et ALERTE DOUBLON
  */
 function renderMainBookDebugTable(res: SearchResponse) {
-  const { mainBook: book, source, ownership } = res;
+  const existing = document.getElementById('debug-table-container');
+  if (existing) existing.remove();
+
   const container = document.createElement('div');
-  container.style.marginTop = '15px';
-  container.innerHTML = `<h3 style="color: #3498db; font-size: 13px; margin-bottom: 5px;">📖 Livre Actuel (${source.toUpperCase()})</h3>`;
+  container.id = 'debug-table-container';
+  container.style.marginTop = '20px';
 
   const table = document.createElement('table');
-  Object.assign(table.style, {
-    width: '100%', borderCollapse: 'collapse', fontSize: '11px', color: '#ccc', border: '1px solid #444'
-  });
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
+  table.style.fontSize = '14px';
 
-  const imgSrc = book.localCover || book.coverUrl || '';
-  
-  // LOGIQUE DE STATUT DÉTAILLÉE
-  let statusText = "INCONNU";
-  let statusColor = "#888";
-  
-  if (ownership.isEditionOwned) {
-    statusText = "POSSÉDÉ (CETTE ÉDITION)";
-    statusColor = "#0f0";
-  } else if (ownership.isWorkOwned) {
-    statusText = "POSSÉDÉ (AUTRE ÉDITION)";
-    statusColor = "#ffa500"; // Orange pour signaler le doublon d'œuvre
-  } else if (ownership.isWished) {
-    statusText = "EN WISHLIST";
-    statusColor = "#3498db";
+  // Calcul du texte de statut de possession
+  let statusHtml = '';
+  if (res.ownership.isEditionOwned) {
+    statusHtml = `<span style="color: green; font-weight: bold;">Possédé (Cette édition)</span>`;
+  } else if (res.ownership.isWorkOwned) {
+    statusHtml = `<span style="color: #27ae60; font-weight: bold;">Possédé (Autre édition)</span>`;
+  } else if (res.ownership.isWished) {
+    statusHtml = `<span style="color: #2980b9; font-weight: bold;">Dans la Wishlist</span>`;
+  } else {
+    statusHtml = `<span style="color: #c0392b;">Non possédé</span>`;
   }
 
-  // PRÉPARATION DE L'ALERTE VISUELLE (Double Check)
-  const alertRow = (ownership.isWorkOwned && !ownership.isEditionOwned && ownership.duplicateEdition) 
-    ? `<tr style="background: rgba(255, 165, 0, 0.2);">
-         <td colspan="2" style="padding: 8px; color: #ffa500; border: 1px solid #ffa500; font-weight: bold; text-align: center;">
-           ⚠️ ATTENTION : Vous possédez déjà cette œuvre !<br/>
-           <span style="font-size: 9px; font-weight: normal;">Édition possédée : ${ownership.duplicateEdition.title}</span>
-         </td>
-       </tr>`
-    : '';
+  // Affichage du statut de prêt
+  if (res.loan.isLent && res.loan.details) {
+    const dateStr = new Date(res.loan.details.loanDate).toLocaleDateString();
+    statusHtml += `<br><span style="color: #e67e22; font-weight: bold; font-size: 0.9em;">⚠️ Prêté à ${res.loan.details.friendName} (le ${dateStr})</span>`;
+  }
 
-  table.innerHTML = `
-    ${alertRow}
-    <tr style="border-bottom: 1px solid #333;">
-      <td rowspan="5" style="width: 60px; padding: 5px; text-align: center; vertical-align: top;">
-        ${imgSrc ? `<img src="${imgSrc}" style="width: 50px; border-radius: 2px;">` : 'N/A'}
-      </td>
-      <td style="padding: 5px; color: #fff; font-weight: bold;">${book.title}</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Auteurs : ${book.authors.join(', ') || 'Inconnu'}</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Série : ${book.series || 'Aucune'} (Tome ${book.seriesNumber || '?'})</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Statut : <span style="color: ${statusColor}; font-weight: bold;">${statusText}</span></td>
-    </tr>
-    <tr>
-      <td style="padding: 5px; font-size: 9px; color: #777;">URI : ${book.uri} | Work : ${book.workUri || 'N/A'}</td>
+  let duplicateAlertHtml = '';
+  if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
+    duplicateAlertHtml = `
+      <div style="margin-top:10px; padding:10px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba; border-radius:4px;">
+        <strong>⚠️ Attention :</strong> Vous possédez déjà une autre édition de cette œuvre.<br>
+        <em>Édition possédée : ${res.ownership.duplicateEdition.title} (${res.ownership.duplicateEdition.isbn13 || 'Sans ISBN'})</em>
+      </div>
+    `;
+  }
+
+  const thead = `
+    <tr style="background-color: #eee; text-align: left;">
+      <th style="padding: 8px; border: 1px solid #ccc;">Couverture</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Informations (Main Book)</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Statut Inventaire</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Actions Rapides</th>
     </tr>
   `;
+
+  table.innerHTML = thead;
+  const tr = document.createElement('tr');
+
+  // Cellule 1 : Couverture
+  const coverCell = document.createElement('td');
+  coverCell.style.padding = '8px';
+  coverCell.style.border = '1px solid #ccc';
+  coverCell.style.width = '100px';
+  coverCell.style.textAlign = 'center';
+  
+  const coverImg = document.createElement('img');
+  coverImg.style.maxWidth = '80px';
+  coverImg.style.maxHeight = '120px';
+  coverImg.style.objectFit = 'contain';
+  coverImg.src = res.mainBook.localCover || res.mainBook.coverUrl || 'https://via.placeholder.com/80x120?text=No+Cover';
+  coverCell.appendChild(coverImg);
+
+  // Cellule 2 : Infos
+  const infoCell = document.createElement('td');
+  infoCell.style.padding = '8px';
+  infoCell.style.border = '1px solid #ccc';
+  infoCell.innerHTML = `
+    <strong>${res.mainBook.title}</strong><br>
+    <span style="color: #666; font-size: 12px;">${res.mainBook.authors.join(', ')}</span><br>
+    <span style="color: #888; font-size: 11px;">ISBN: ${res.mainBook.isbn13 || res.mainBook.isbn10 || 'N/A'}</span>
+    ${duplicateAlertHtml}
+  `;
+
+  // Cellule 3 : Statut
+  const statusCell = document.createElement('td');
+  statusCell.style.padding = '8px';
+  statusCell.style.border = '1px solid #ccc';
+  statusCell.innerHTML = statusHtml;
+
+  // Cellule 4 : Actions
+  const actionCell = document.createElement('td');
+  actionCell.style.padding = '8px';
+  actionCell.style.border = '1px solid #ccc';
+
+  // Utilitaire pour récupérer l'ISBN actuel depuis le champ de recherche pour les rafraîchissements
+  const getCurrentSearchIsbn = () => {
+    const input = document.getElementById('isbn-input') as HTMLInputElement;
+    return input ? input.value.trim() : '';
+  };
+
+  // Bouton Ajouter Inventaire
+  if (res.ui.showAddButton) {
+    const btnAdd = document.createElement('button');
+    btnAdd.textContent = "Ajouter (Inventaire)";
+    Object.assign(btnAdd.style, { backgroundColor: '#27ae60', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnAdd.onclick = async () => {
+      btnAdd.disabled = true;
+      btnAdd.textContent = "Ajout...";
+      try {
+        await inventoryService.addToLibrary(res.mainBook.uri);
+        addLog(`Ajouté à l'inventaire : ${res.mainBook.title}`, 'success');
+        const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+        if (freshRes) renderMainBookDebugTable(freshRes);
+      } catch (e: any) {
+        addLog(`Erreur: ${e.message}`, 'error');
+        btnAdd.disabled = false;
+        btnAdd.textContent = "Ajouter (Inventaire)";
+      }
+    };
+    actionCell.appendChild(btnAdd);
+  }
+
+  // Bouton Ajouter Wishlist
+  if (res.ui.showWishButton) {
+    const btnWish = document.createElement('button');
+    btnWish.textContent = "Ajouter (Wishlist)";
+    Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#2980b9', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnWish.onclick = async () => {
+      btnWish.disabled = true;
+      btnWish.textContent = "Ajout...";
+      try {
+        await wishlistService.addToWishlist(res.mainBook.uri);
+        addLog(`Ajouté à la wishlist : ${res.mainBook.title}`, 'success');
+        const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+        if (freshRes) renderMainBookDebugTable(freshRes);
+      } catch (e: any) {
+        addLog(`Erreur: ${e.message}`, 'error');
+        btnWish.disabled = false;
+        btnWish.textContent = "Ajouter (Wishlist)";
+      }
+    };
+    actionCell.appendChild(btnWish);
+  }
+
+  // Bouton Prêter
+  if (res.ui.showLoanButton) {
+    const btnLoan = document.createElement('button');
+    btnLoan.textContent = "Prêter l'exemplaire";
+    Object.assign(btnLoan.style, { marginTop: '5px', backgroundColor: '#e67e22', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnLoan.onclick = async () => {
+      const friendName = prompt("À qui prêtez-vous ce livre ?");
+      if (friendName && friendName.trim() !== '') {
+        btnLoan.disabled = true;
+        btnLoan.textContent = "Enregistrement...";
+        const success = await loanService.lend(res.mainBook.uri, friendName.trim());
+        if (success) {
+          addLog(`Livre prêté à ${friendName}`, 'success');
+          const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+          if (freshRes) renderMainBookDebugTable(freshRes);
+        } else {
+          addLog(`Erreur lors du prêt`, 'error');
+          btnLoan.disabled = false;
+          btnLoan.textContent = "Prêter l'exemplaire";
+        }
+      }
+    };
+    actionCell.appendChild(btnLoan);
+  }
+
+  // Bouton Retour
+  if (res.ui.showReturnButton) {
+    const btnReturn = document.createElement('button');
+    btnReturn.textContent = "Marquer comme Rendu";
+    Object.assign(btnReturn.style, { marginTop: '5px', backgroundColor: '#8e44ad', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnReturn.onclick = async () => {
+      if (confirm("Confirmer le retour de ce livre ?")) {
+        btnReturn.disabled = true;
+        btnReturn.textContent = "Enregistrement...";
+        const success = await loanService.returnBook(res.mainBook.uri);
+        if (success) {
+          addLog(`Livre marqué comme rendu`, 'success');
+          const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+          if (freshRes) renderMainBookDebugTable(freshRes);
+        } else {
+          addLog(`Erreur lors du retour`, 'error');
+          btnReturn.disabled = false;
+          btnReturn.textContent = "Marquer comme Rendu";
+        }
+      }
+    };
+    actionCell.appendChild(btnReturn);
+  }
+
+  tr.appendChild(coverCell);
+  tr.appendChild(infoCell);
+  tr.appendChild(statusCell);
+  tr.appendChild(actionCell);
+  table.appendChild(tr);
 
   container.appendChild(table);
   acquisitionZone.appendChild(container);
 }
 
 /**
- * Rendu technique : Tableau de debug des séries (Identique)
+ * Rendu technique : Tableau de la Série
  */
 function renderSeriesDebugTable(tomes: HumanizedBook[]) {
+  const existing = document.getElementById('series-table-container');
+  if (existing) existing.remove();
+
   const container = document.createElement('div');
-  container.style.marginTop = '15px';
-  container.innerHTML = `<h3 style="color: #5bc31b; font-size: 13px; margin-bottom: 5px;">🛠 Debug Série (Composition)</h3>`;
+  container.id = 'series-table-container';
+  container.style.marginTop = '20px';
+  container.style.borderTop = '2px solid #ccc';
+  container.style.paddingTop = '10px';
+
+  const title = document.createElement('h3');
+  title.textContent = "📚 Contexte de la Série";
+  title.style.marginTop = '0';
+  container.appendChild(title);
 
   const table = document.createElement('table');
-  Object.assign(table.style, {
-    width: '100%', borderCollapse: 'collapse', fontSize: '10px', color: '#ccc', border: '1px solid #444'
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
+  table.style.fontSize = '12px';
+
+  const thead = `
+    <tr style="background-color: #eee; text-align: left;">
+      <th style="padding: 5px; border: 1px solid #ccc;">N°</th>
+      <th style="padding: 5px; border: 1px solid #ccc;">Titre du tome</th>
+      <th style="padding: 5px; border: 1px solid #ccc;">Statut</th>
+    </tr>
+  `;
+  table.innerHTML = thead;
+
+  // Tri des tomes par numéro
+  const sortedTomes = [...tomes].sort((a, b) => {
+    const numA = parseInt(a.seriesNumber || '0');
+    const numB = parseInt(b.seriesNumber || '0');
+    return numA - numB;
   });
 
-  table.innerHTML = `
-    <thead>
-      <tr style="background: #222; text-align: left;">
-        <th style="padding: 3px; border: 1px solid #444;">Tome</th>
-        <th style="padding: 3px; border: 1px solid #444;">Titre</th>
-        <th style="padding: 3px; border: 1px solid #444;">Statut</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-
-  const tbody = table.querySelector('tbody')!;
-  tomes.forEach(t => {
+  sortedTomes.forEach(tome => {
     const tr = document.createElement('tr');
-    const statusColor = t.ownershipStatus === 'owned' ? '#0f0' : (t.ownershipStatus === 'wish' ? '#ffa500' : '#888');
-    tr.innerHTML = `
-      <td style="padding: 3px; border: 1px solid #444; text-align: center;">${t.seriesNumber || '?'}</td>
-      <td style="padding: 3px; border: 1px solid #444;">${t.title}</td>
-      <td style="padding: 3px; border: 1px solid #444; color: ${statusColor};">${t.ownershipStatus.toUpperCase()}</td>
-    `;
-    tbody.appendChild(tr);
+    
+    const tdNum = document.createElement('td');
+    tdNum.style.padding = '5px';
+    tdNum.style.border = '1px solid #ccc';
+    tdNum.textContent = tome.seriesNumber || '-';
+
+    const tdTitle = document.createElement('td');
+    tdTitle.style.padding = '5px';
+    tdTitle.style.border = '1px solid #ccc';
+    tdTitle.textContent = tome.title;
+
+    const tdStatus = document.createElement('td');
+    tdStatus.style.padding = '5px';
+    tdStatus.style.border = '1px solid #ccc';
+    
+    if (tome.ownershipStatus === 'owned') {
+      tdStatus.innerHTML = '<span style="color: green; font-weight: bold;">✓ Possédé</span>';
+    } else if (tome.ownershipStatus === 'wish') {
+      tdStatus.innerHTML = '<span style="color: #2980b9;">⭐ Wishlist</span>';
+    } else {
+      tdStatus.innerHTML = '<span style="color: #c0392b;">❌ Manquant</span>';
+    }
+
+    tr.appendChild(tdNum);
+    tr.appendChild(tdTitle);
+    tr.appendChild(tdStatus);
+    table.appendChild(tr);
   });
 
   container.appendChild(table);
@@ -134,72 +303,47 @@ function renderSeriesDebugTable(tomes: HumanizedBook[]) {
 }
 
 /**
- * Initialisation du module de scan
+ * Initialisation de l'interface après connexion
  */
 function initApp() {
-  addLog("Module d'acquisition prêt.", "success");
+  const section = document.createElement('div');
+  section.innerHTML = `
+    <h2>Test Orchestrateur & UI Flags</h2>
+    <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+      <input type="text" id="isbn-input" placeholder="Scanner ou taper un ISBN..." style="flex-grow: 1;">
+      <button id="btn-search" style="width: auto; background-color: #3498db;">Rechercher</button>
+    </div>
+  `;
+  acquisitionZone.appendChild(section);
 
-  manualIsbnProvider.setup('acquisition-zone', async (isbn) => {
-    // Nettoyage de la zone
-    const existing = acquisitionZone.querySelectorAll('div, button, table');
-    existing.forEach(el => el.remove());
+  const input = document.getElementById('isbn-input') as HTMLInputElement;
+  const btn = document.getElementById('btn-search') as HTMLButtonElement;
 
-    addLog(`Recherche ISBN : ${isbn}...`);
+  btn.addEventListener('click', async () => {
+    const isbn = input.value.trim();
+    if (!isbn) return;
     
+    addLog(`Lancement orchestration pour : ${isbn}...`);
     try {
-      // UTILISATION DE L'ORCHESTRATEUR
-      const res: SearchResponse | null = await searchService.searchByIsbn(isbn);
+      const res = await searchService.searchByIsbn(isbn);
       
       if (!res) {
-        throw new Error("Aucun résultat trouvé.");
+        addLog(`Livre introuvable.`, "error");
+        return;
       }
 
-      addLog(`✓ Récupéré via : ${res.source.toUpperCase()}`, "success");
+      addLog(`Orchestration terminée (Source: ${res.source}). Rendu de l'UI en cours...`, "success");
       
-      // 1. Affichage du tableau principal (avec détection intelligente de doublon)
+      // Rendu du composant "Livre Principal"
       renderMainBookDebugTable(res);
 
-      // 2. Alerte Double Check (Logs console)
-      if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
-        addLog(`⚠️ DOUBLON D'ŒUVRE : Vous possédez déjà "${res.ownership.duplicateEdition.title}"`, "warning");
-      }
-
-      // 3. Bouton Ajouter à la collection (si pas déjà possédé sous CETTE édition)
-      if (res.ui.showAddButton) {
-        const btnAdd = document.createElement('button');
-        btnAdd.textContent = `➕ Ajouter à ma collection`;
-        Object.assign(btnAdd.style, { marginTop: '10px', backgroundColor: '#5bc31b', color: 'white', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
-        btnAdd.onclick = async () => {
-          try {
-            btnAdd.disabled = true;
-            await inventoryService.addToLibrary(res.mainBook.uri);
-            addLog(`🎉 "${res.mainBook.title}" ajouté à l'inventaire !`, "success");
-            btnAdd.textContent = "✓ Ajouté";
-          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnAdd.disabled = false; }
-        };
-        acquisitionZone.appendChild(btnAdd);
-      }
-
-      // 4. Bouton Ajouter à la Wishlist (si pas possédé et pas déjà en wish)
-      if (res.ui.showWishButton) {
-        const btnWish = document.createElement('button');
-        btnWish.textContent = `⭐ Mettre en Wishlist`;
-        Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
-        btnWish.onclick = async () => {
-          try {
-            btnWish.disabled = true;
-            await wishlistService.addToWishlist(res.mainBook.workUri || res.mainBook.uri);
-            addLog(`⭐ "${res.mainBook.title}" ajouté à la Wishlist.`, "success");
-            btnWish.textContent = "✓ Souhaité";
-          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnWish.disabled = false; }
-        };
-        acquisitionZone.appendChild(btnWish);
-      }
-
-      // 5. Bouton d'affichage de la série
+      // Si le contexte de série est présent, on propose d'afficher les détails
+      const existingSeriesTable = document.getElementById('series-table-container');
+      if (existingSeriesTable) existingSeriesTable.remove();
+      
       if (res.series) {
         const btnShowSeries = document.createElement('button');
-        btnShowSeries.textContent = `📚 Voir la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
+        btnShowSeries.textContent = `Afficher la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
         Object.assign(btnShowSeries.style, { marginTop: '5px', backgroundColor: '#34495e', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
         btnShowSeries.onclick = () => {
           btnShowSeries.remove();
@@ -244,9 +388,12 @@ form.addEventListener('submit', async (e) => {
     if (await connectionService.initializeApp()) {
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
+      addLog("Connecté !", "success");
       initApp();
     }
-  } catch (err: any) { addLog(`ÉCHEC : ${err.message}`, "error"); }
+  } catch (err: any) {
+    addLog("Erreur: " + err.message, "error");
+  }
 });
 
 autoInit();

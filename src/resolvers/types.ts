@@ -1,5 +1,10 @@
 // src/resolvers/types.ts
 
+export interface RegistryEntry {
+  uri: string;
+  addedAt: number;
+}
+
 export interface BaseBook {
   uri: string;
   workUri?: string;
@@ -10,8 +15,8 @@ export interface BaseBook {
   subtitle?: string;
   originalTitle?: string;
   description?: string;
-  coverUrl?: string; // Remplacement de 'image' par 'coverUrl'
-  localCover?: string; // Ajout : Stockage Base64 pour le hors-ligne
+  coverUrl?: string;
+  localCover?: string;
   language?: string;
   pageCount?: number;
   publishDate?: string;
@@ -39,60 +44,62 @@ export interface HumanizedBook extends BaseBook {
   seriesNumber?: string;
   genres: string[];
   collection?: string;
-
-  // Ajout : Statut de possession centralisé pour le Double Check
   ownershipStatus: 'owned' | 'wish' | 'none';
+}
+
+/**
+ * Structure pour le carnet de prêt local
+ */
+export interface LoanRecord {
+  uri: string;
+  friendName: string;
+  loanDate: number;
+  itemId?: string; // AJOUT : Sauvegarde de l'ID physique pour fiabiliser la synchro
 }
 
 export interface InventoryItem {
   _id?: string;
-  entity: string; // Utilisation de la vraie clé API de l'Inventaire
+  entity: string;
   status: 'owned' | 'wishlist' | 'loaned' | 'sold';
-  state?: 'new' | 'good' | 'damaged';
-  loanTo?: string;
+  state?: 'new' | 'good' | 'worn' | 'damaged';
+  available?: boolean;
+  lentTo?: string;
   dateAdded: string;
   personalNote?: string;
 }
 
-/**
- * Analyse détaillée de la possession (Double Check)
- */
 export interface OwnershipAnalysis {
-  isEditionOwned: boolean;    // Possède-t-on cet ISBN précis ?
-  isWorkOwned: boolean;       // Possède-t-on l'œuvre (peu importe l'édition) ?
-  isWished: boolean;          // Est-ce déjà en Wishlist ?
-  duplicateEdition?: HumanizedBook; // Si on a déjà l'œuvre, quelle est l'édition possédée ?
+  isEditionOwned: boolean;
+  isWorkOwned: boolean;
+  isWished: boolean;
+  duplicateEdition?: HumanizedBook;
 }
 
-/**
- * Contexte complet de la série
- */
 export interface SeriesContext {
   id?: string;
   name?: string;
-  tomes: HumanizedBook[];     // Liste de tous les tomes avec leurs statuts
-  isComplete: boolean;        // Possède-t-on déjà tous les tomes ?
-  ownedCount: number;         // Nombre de tomes possédés
+  tomes: HumanizedBook[];
+  isComplete: boolean;
+  ownedCount: number;
 }
 
-/**
- * Indicateurs pour l'interface utilisateur
- */
 export interface UIFlags {
-  showAddButton: boolean;     // Afficher le bouton d'ajout à l'inventaire
-  showWishButton: boolean;    // Afficher le bouton Wishlist
-  hasBulkActions: boolean;    // La série permet-elle des actions groupées ?
-  alertDuplicate: boolean;    // Faut-il afficher l'alerte de doublon d'œuvre ?
+  showAddButton: boolean;
+  showWishButton: boolean;
+  hasBulkActions: boolean;
+  alertDuplicate: boolean;
+  showLoanButton: boolean;
+  showReturnButton: boolean;
 }
 
-/**
- * RÉPONSE GLOBALE DE L'ORCHESTRATEUR (SearchService)
- * C'est le "paquet" de données final envoyé au Frontend
- */
 export interface SearchResponse {
-  mainBook: HumanizedBook;    // Le livre principal scanné
+  mainBook: HumanizedBook;
   ownership: OwnershipAnalysis;
   series?: SeriesContext;
+  loan: {
+    isLent: boolean;
+    details?: LoanRecord;
+  };
   ui: UIFlags;
-  source: 'cache' | 'network'; // Origine de la donnée pour le debug
+  source: 'cache' | 'network';
 }

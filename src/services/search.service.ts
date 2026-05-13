@@ -62,7 +62,11 @@ export const searchService = {
     // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
     book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
 
-    // 3. PHASE EXPANSION : Contexte de Série
+    // 3. PHASE ANALYSE DES PRÊTS
+    const loanDetails = await databaseService.getLoan(book.uri);
+    const isLent = !!loanDetails;
+
+    // 4. PHASE EXPANSION : Contexte de Série
     let seriesContext = undefined;
     if (book.seriesId) {
       console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
@@ -78,12 +82,14 @@ export const searchService = {
       };
     }
 
-    // 4. PHASE UI : Calcul des indicateurs pour le Frontend
+    // 5. PHASE UI : Calcul des indicateurs pour le Frontend
     const ui = {
       showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
       showWishButton: !isWorkOwned && !isWished,
       alertDuplicate: !isEditionOwned && isWorkOwned,
-      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none')
+      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
+      showLoanButton: isEditionOwned && !isLent,
+      showReturnButton: isLent
     };
 
     // SONDE DEBUG : OBJET FINAL
@@ -92,7 +98,7 @@ export const searchService = {
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
 
-    // 5. RÉSULTAT : Le "Paquet" final prêt à l'emploi
+    // 6. RÉSULTAT : Le "Paquet" final prêt à l'emploi
     return {
       mainBook: book,
       ownership: {
@@ -102,6 +108,10 @@ export const searchService = {
         duplicateEdition
       },
       series: seriesContext,
+      loan: {
+        isLent: isLent,
+        details: loanDetails
+      },
       ui,
       source
     };

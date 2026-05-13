@@ -1,24 +1,22 @@
 // src/services/database.service.ts
 import Dexie, { type Table } from 'dexie';
-import type { HumanizedBook } from '../resolvers/types';
-
-export interface RegistryEntry {
-  uri: string;
-  addedAt: number;
-}
+import type { HumanizedBook, LoanRecord, RegistryEntry } from '../resolvers/types';
 
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;
   wishlist!: Table<RegistryEntry, string>;
   cache_books!: Table<HumanizedBook, string>;
+  loans!: Table<LoanRecord, string>; // Nouvelle table pour le carnet de prêt
 
   constructor() {
     super('InventaireLocalDBV2');
-    // On passe à la version 2 et on enlève le "&" redondant sur les clés primaires
-    this.version(2).stores({
+    
+    // Version 3 : Ajout de la table des prêts
+    this.version(3).stores({
       inventory: 'uri',
       wishlist: 'uri',
-      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus' 
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName' // Indexation par URI et Nom d'ami
     });
   }
 }
@@ -35,19 +33,13 @@ export const databaseService = {
       .first();
   },
 
-  /**
-   * RECTIFICATION : Ne se fie plus au champ 'ownershipStatus' du cache (statique)
-   * mais vérifie la présence réelle de l'URI dans le registre inventory.
-   */
   async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
     if (!workUri) return undefined;
     
-    // On récupère toutes les éditions de cette œuvre présentes en cache
     const candidates = await db.cache_books
       .where('workUri').equals(workUri)
       .toArray();
 
-    // On cherche la première qui est réellement marquée comme possédée dans le registre
     for (const book of candidates) {
       if (book.uri !== currentEditionUri) {
         const isOwned = await this.isUriInRegistry('inventory', book.uri);
@@ -57,9 +49,6 @@ export const databaseService = {
     return undefined;
   },
 
-  /**
-   * AJOUT : Permet de retrouver une édition mise en cache à partir de son œuvre
-   */
   async getEditionByWorkFromCache(workUri: string): Promise<HumanizedBook | undefined> {
     return await db.cache_books.where('workUri').equals(workUri).first();
   },
@@ -67,8 +56,7 @@ export const databaseService = {
   // --- GESTION DU CACHE (Fiches complètes) ---
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
-    // SONDE DEBUG : ÉCRITURE CACHE
-    console.log(`[DEBUG-DB] Tentative d'écriture de ${book.uri} dans le cache. coverUrl:`, book.coverUrl, "localCover:", !!book.localCover);
+    console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
     await db.cache_books.put(book);
   },
 
@@ -104,5 +92,23 @@ export const databaseService = {
     await db[tableName].clear();
     const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
     await db[tableName].bulkPut(entries);
+  },
+
+  // --- NOUVEAU : GESTION DES PRÊTS (Table locale) ---
+
+  async saveLoan(loan: LoanRecord): Promise<void> {
+    await db.loans.put(loan);
+  },
+
+  async deleteLoan(uri: string): Promise<void> {
+    await db.loans.delete(uri);
+  },
+
+  async getLoan(uri: string): Promise<LoanRecord | undefined> {
+    return await db.loans.get(uri);
+  },
+
+  async getAllLoans(): Promise<LoanRecord[]> {
+    return await db.loans.toArray();
   }
 };
