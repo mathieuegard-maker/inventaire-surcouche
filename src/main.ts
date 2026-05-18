@@ -6,6 +6,7 @@ import { inventoryService } from './core/services/inventory.service';
 import { wishlistService } from './core/services/wishlist.service';
 import { searchService } from './core/orchestrators/search.orchestrator';
 import { loanService } from './core/services/loan.service';
+import { queueService } from './core/orchestrators/queue.orchestrator'; // AJOUT : Import de la file d'attente
 import type { SearchResponse, HumanizedBook } from './core/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
@@ -43,6 +44,13 @@ function renderMainBookDebugTable(res: SearchResponse) {
   table.style.borderCollapse = 'collapse';
   table.style.fontSize = '14px';
 
+  // --- RECONSTRUCTION LOCALE DES RÈGLES UI (Pureté du Middle-End) ---
+  const showAddButton = !res.ownership.isWorkOwned;
+  const showWishButton = !res.ownership.isWorkOwned && !res.ownership.isWished;
+  const alertDuplicate = !res.ownership.isEditionOwned && res.ownership.isWorkOwned;
+  const showLoanButton = res.ownership.isEditionOwned && !res.loan.isLent;
+  const showReturnButton = res.loan.isLent;
+
   // Calcul du texte de statut de possession
   let statusHtml = '';
   if (res.ownership.isEditionOwned) {
@@ -62,7 +70,7 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   let duplicateAlertHtml = '';
-  if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
+  if (alertDuplicate && res.ownership.duplicateEdition) {
     duplicateAlertHtml = `
       <div style="margin-top:10px; padding:10px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba; border-radius:4px;">
         <strong>⚠️ Attention :</strong> Vous possédez déjà une autre édition de cette œuvre.<br>
@@ -126,16 +134,17 @@ function renderMainBookDebugTable(res: SearchResponse) {
   };
 
   // Bouton Ajouter Inventaire
-  if (res.ui.showAddButton) {
+  if (showAddButton) {
     const btnAdd = document.createElement('button');
     btnAdd.textContent = "Ajouter (Inventaire)";
     Object.assign(btnAdd.style, { backgroundColor: '#27ae60', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnAdd.onclick = async () => {
       btnAdd.disabled = true;
-      btnAdd.textContent = "Ajout...";
+      btnAdd.textContent = "Ajout en file d'attente...";
       try {
-        await inventoryService.addToLibrary(res.mainBook.uri);
-        addLog(`Ajouté à l'inventaire : ${res.mainBook.title}`, 'success');
+        // AJOUT : Passage par l'Optimistic UI
+        await queueService.enqueueAction('ADD_INVENTORY', res.mainBook.uri);
+        addLog(`Ajouté à l'inventaire localement : ${res.mainBook.title}`, 'success');
         const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
         if (freshRes) renderMainBookDebugTable(freshRes);
       } catch (e: any) {
@@ -148,16 +157,17 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Ajouter Wishlist
-  if (res.ui.showWishButton) {
+  if (showWishButton) {
     const btnWish = document.createElement('button');
     btnWish.textContent = "Ajouter (Wishlist)";
     Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#2980b9', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnWish.onclick = async () => {
       btnWish.disabled = true;
-      btnWish.textContent = "Ajout...";
+      btnWish.textContent = "Ajout en file d'attente...";
       try {
-        await wishlistService.addToWishlist(res.mainBook.uri);
-        addLog(`Ajouté à la wishlist : ${res.mainBook.title}`, 'success');
+        // AJOUT : Passage par l'Optimistic UI
+        await queueService.enqueueAction('ADD_WISHLIST', res.mainBook.uri);
+        addLog(`Ajouté à la wishlist localement : ${res.mainBook.title}`, 'success');
         const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
         if (freshRes) renderMainBookDebugTable(freshRes);
       } catch (e: any) {
@@ -170,7 +180,7 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Prêter
-  if (res.ui.showLoanButton) {
+  if (showLoanButton) {
     const btnLoan = document.createElement('button');
     btnLoan.textContent = "Prêter l'exemplaire";
     Object.assign(btnLoan.style, { marginTop: '5px', backgroundColor: '#e67e22', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
@@ -178,13 +188,14 @@ function renderMainBookDebugTable(res: SearchResponse) {
       const friendName = prompt("À qui prêtez-vous ce livre ?");
       if (friendName && friendName.trim() !== '') {
         btnLoan.disabled = true;
-        btnLoan.textContent = "Enregistrement...";
-        const success = await loanService.lend(res.mainBook.uri, friendName.trim());
-        if (success) {
-          addLog(`Livre prêté à ${friendName}`, 'success');
+        btnLoan.textContent = "Mise en file d'attente...";
+        try {
+          // AJOUT : Passage par l'Optimistic UI
+          await queueService.enqueueAction('LEND', res.mainBook.uri, { friendName: friendName.trim() });
+          addLog(`Prêt enregistré localement pour ${friendName}`, 'success');
           const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
           if (freshRes) renderMainBookDebugTable(freshRes);
-        } else {
+        } catch (e: any) {
           addLog(`Erreur lors du prêt`, 'error');
           btnLoan.disabled = false;
           btnLoan.textContent = "Prêter l'exemplaire";
@@ -195,20 +206,21 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Retour
-  if (res.ui.showReturnButton) {
+  if (showReturnButton) {
     const btnReturn = document.createElement('button');
     btnReturn.textContent = "Marquer comme Rendu";
     Object.assign(btnReturn.style, { marginTop: '5px', backgroundColor: '#8e44ad', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnReturn.onclick = async () => {
       if (confirm("Confirmer le retour de ce livre ?")) {
         btnReturn.disabled = true;
-        btnReturn.textContent = "Enregistrement...";
-        const success = await loanService.returnBook(res.mainBook.uri);
-        if (success) {
-          addLog(`Livre marqué comme rendu`, 'success');
+        btnReturn.textContent = "Mise en file d'attente...";
+        try {
+          // AJOUT : Passage par l'Optimistic UI
+          await queueService.enqueueAction('RETURN', res.mainBook.uri);
+          addLog(`Retour enregistré localement`, 'success');
           const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
           if (freshRes) renderMainBookDebugTable(freshRes);
-        } else {
+        } catch (e: any) {
           addLog(`Erreur lors du retour`, 'error');
           btnReturn.disabled = false;
           btnReturn.textContent = "Marquer comme Rendu";

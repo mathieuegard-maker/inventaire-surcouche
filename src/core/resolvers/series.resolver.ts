@@ -1,8 +1,9 @@
-// src/resolvers/series.resolver.ts
+// src/core/resolvers/series.resolver.ts
 import { entityMapper } from './mapper';
 import { databaseService } from '../database/database.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
+import { syncOrchestrator } from '../orchestrators/sync.orchestrator'; // AJOUT
 import type { HumanizedBook } from '../types';
 
 export const seriesResolver = {
@@ -45,16 +46,32 @@ export const seriesResolver = {
       }
     }
 
-    console.log(`[SERIES] Cache local : ${fullTomes.length} | À télécharger : ${missingUris.length}`);
-
-    // 3. RÉCUPÉRATION ET TRADUCTION EN BATCH DES MANQUANTS
+    // ========================================================
+    // AJOUT : ALGORITHME DE WINDOWING (Aspiration silencieuse)
+    // ========================================================
+    let urgentUris: string[] = [];
+    
     if (missingUris.length > 0) {
-      const resData = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(missingUris.join('|'))}`);
+      const URGENT_LIMIT = 20; // Seuil de blocage maximal pour préserver l'UI
+      urgentUris = missingUris.slice(0, URGENT_LIMIT);
+      const backgroundUris = missingUris.slice(URGENT_LIMIT);
+
+      console.log(`[SERIES] Windowing activé : ${urgentUris.length} urgents, ${backgroundUris.length} en arrière-plan.`);
+
+      // Si la série est fleuve, on confie le reste au téléchargeur de l'ombre de manière non-bloquante
+      if (backgroundUris.length > 0) {
+        syncOrchestrator.hydrateRemainingSeries(backgroundUris).catch(e => console.error(e));
+      }
+    }
+
+    // 3. RÉCUPÉRATION ET TRADUCTION BATCH POUR LES URGENTS UNIQUEMENT
+    if (urgentUris.length > 0) {
+      const resData = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
       const data = await resData.json();
       const entities = data.entities || data;
 
       const idsToTranslate = new Set<string>();
-      const rawBooks = missingUris.map((uri: string) => {
+      const rawBooks = urgentUris.map((uri: string) => {
         const raw = entityMapper.mapResponse(uri, entities[uri]);
         [...raw.authorIds, ...raw.illustratorIds, ...raw.scriptwriterIds, ...raw.genreIds].forEach(id => {
           if (id) idsToTranslate.add(id);

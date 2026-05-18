@@ -1,4 +1,4 @@
-// src/resolvers/types.ts
+// src/core/types.ts
 
 export interface RegistryEntry {
   uri: string;
@@ -21,6 +21,7 @@ export interface BaseBook {
   pageCount?: number;
   publishDate?: string;
   format?: string;
+  updatedAt?: number; // AJOUT : Horodatage pour le système de péremption du cache (TTL)
 }
 
 export interface RawBook extends BaseBook {
@@ -83,15 +84,6 @@ export interface SeriesContext {
   ownedCount: number;
 }
 
-export interface UIFlags {
-  showAddButton: boolean;
-  showWishButton: boolean;
-  hasBulkActions: boolean;
-  alertDuplicate: boolean;
-  showLoanButton: boolean;
-  showReturnButton: boolean;
-}
-
 export interface SearchResponse {
   mainBook: HumanizedBook;
   ownership: OwnershipAnalysis;
@@ -100,6 +92,5 @@ export interface SearchResponse {
     isLent: boolean;
     details?: LoanRecord;
   };
-  ui: UIFlags;
   source: 'cache' | 'network';
 }

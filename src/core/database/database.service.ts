@@ -75,6 +75,7 @@ export const databaseService = {
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
     console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
+    book.updatedAt = Date.now(); // AJOUT : Marquage temporel automatique (TTL)
     await db.cache_books.put(book);
   },
 

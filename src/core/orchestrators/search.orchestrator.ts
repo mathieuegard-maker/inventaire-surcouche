@@ -5,6 +5,7 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { imageService } from '../services/image.service';
+import { syncOrchestrator } from './sync.orchestrator'; // AJOUT
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -59,6 +60,13 @@ export const searchService = {
       }
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
+      // AJOUT : Vérification du TTL (Time To Live = 30 jours)
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      if (!book.updatedAt || (Date.now() - book.updatedAt > THIRTY_DAYS)) {
+        console.log(`[SEARCH] Cache périmé (TTL > 30j) pour ${isbn}. Rafraîchissement fantôme...`);
+        // Déclenchement de la mise à jour en tâche de fond (Fire and forget)
+        syncOrchestrator.refreshBookInBackground(isbn).catch(e => console.error(e));
+      }
     }
 
     // 2. PHASE ANALYSE DE POSSESSION (Double Check)
@@ -98,16 +106,6 @@ export const searchService = {
       };
     }
 
-    // 5. PHASE UI : Calcul des indicateurs pour le Frontend
-    const ui = {
-      showAddButton: !isWorkOwned,
-      showWishButton: !isWorkOwned && !isWished,
-      alertDuplicate: !isEditionOwned && isWorkOwned,
-      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
-      showLoanButton: isEditionOwned && !isLent,
-      showReturnButton: isLent
-    };
-
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
@@ -126,7 +124,6 @@ export const searchService = {
         isLent: isLent,
         details: loanDetails
       },
-      ui,
       source
     };
   }
