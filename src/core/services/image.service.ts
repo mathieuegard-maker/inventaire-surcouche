@@ -1,4 +1,4 @@
-// src/services/image.service.ts
+// src/core/services/image.service.ts
 
 export const imageService = {
   /**

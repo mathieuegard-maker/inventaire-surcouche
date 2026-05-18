@@ -1,9 +1,10 @@
-// src/services/search.service.ts
+// src/core/orchestrators/search.orchestrator.ts
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
+import { imageService } from '../services/image.service';
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -20,7 +21,6 @@ export const searchService = {
 
     if (!book) {
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
       const raw = await entityResolver.fromIsbn(isbn);
       
       if (!raw) {
@@ -29,28 +29,45 @@ export const searchService = {
         return null;
       }
       
-      // Humanisation (Traductions + Compression d'image)
+      // Humanisation (Traductions groupées ultra-rapides)
       book = await entityHumanizer.humanize(raw);
       
-      // SONDE DEBUG : AVANT SAUVEGARDE CACHE
       console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
 
-      // Sauvegarde immédiate dans le cache books
+      // Sauvegarde immédiate dans le cache (sans bloquer pour l'image locale)
       await databaseService.saveBookToCache(book);
       source = 'network';
+
+      // ========================================================
+      // OPTIMISATION "FIRE AND FORGET" : Compression en arrière-plan
+      // ========================================================
+      if (book.coverUrl) {
+        console.log(`[SEARCH] Lancement de la tâche de fond pour l'image...`);
+        // Note : Pas de 'await'. L'orchestrateur n'attend pas la fin pour continuer.
+        imageService.compressAndEncode(book.coverUrl).then(async (base64) => {
+          if (base64) {
+            // Sécurité : On recharge le livre pour ne pas écraser d'éventuelles
+            // modifications de statut ('owned') faites entre-temps par l'utilisateur.
+            const currentBook = await databaseService.getBookFromCache(book!.uri);
+            if (currentBook) {
+              currentBook.localCover = base64;
+              await databaseService.saveBookToCache(currentBook);
+              console.log(`[BACKGROUND] Image WebP sauvegardée en silence pour ${book!.uri}`);
+            }
+          }
+        }).catch(e => console.error(`[BACKGROUND] Erreur compression:`, e));
+      }
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
     }
 
     // 2. PHASE ANALYSE DE POSSESSION (Double Check)
-    // CORRECTION : On passe systématiquement le workUri pour la conscience de l'œuvre
     const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
     const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
     
     let isWorkOwned = isEditionOwned;
     let duplicateEdition: HumanizedBook | undefined = undefined;
 
-    // Si on n'a pas cet exemplaire précis, on cherche si on a une autre édition de la même œuvre
     if (!isEditionOwned && book.workUri) {
       const other = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
       if (other) {
@@ -59,7 +76,6 @@ export const searchService = {
       }
     }
 
-    // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
     book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
 
     // 3. PHASE ANALYSE DES PRÊTS
@@ -84,7 +100,7 @@ export const searchService = {
 
     // 5. PHASE UI : Calcul des indicateurs pour le Frontend
     const ui = {
-      showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
+      showAddButton: !isWorkOwned,
       showWishButton: !isWorkOwned && !isWished,
       alertDuplicate: !isEditionOwned && isWorkOwned,
       hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
@@ -92,9 +108,7 @@ export const searchService = {
       showReturnButton: isLent
     };
 
-    // SONDE DEBUG : OBJET FINAL
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
-
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
 
