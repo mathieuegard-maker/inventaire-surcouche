@@ -118,12 +118,14 @@ full_project_code.txt
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest"
   },
   "devDependencies": {
     "@vercel/node": "^5.7.16",
     "typescript": "~6.0.2",
-    "vite": "^8.0.10"
+    "vite": "^8.0.10",
+    "vitest": "^4.1.6"
   },
   "dependencies": {
     "dexie": "^4.4.2"
@@ -7463,11 +7465,11 @@ export function setupCounter(element: HTMLButtonElement) {
 
 // src/main.ts
 import { authService } from './core/services/auth.service';
-import { connectionService } from './core/orchestrators/connection.service';
+import { connectionService } from './core/orchestrators/connection.orchestrator';
 //import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './core/services/inventory.service';
 import { wishlistService } from './core/services/wishlist.service';
-import { searchService } from './core/orchestrators/search.service';
+import { searchService } from './core/orchestrators/search.orchestrator';
 import { loanService } from './core/services/loan.service';
 import type { SearchResponse, HumanizedBook } from './core/types';
 
@@ -8400,49 +8402,63 @@ export const databaseService = {
 ### FICHIER : src/core/resolvers/humanizer.ts
 ################################################################################
 
-// src/resolvers/humanizer.ts
-import { entityResolver } from './entity.resolver';
+// src/core/resolvers/humanizer.ts
+//import { entityResolver } from './entity.resolver';
 import type { RawBook, HumanizedBook } from '../types';
-import { imageService } from './image.service';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
     console.log(`[HUMANIZER] Début pour ${rawBook.uri}`);
 
-    const [
-      authors,
-      illustrators,
-      scriptwriters,
-      publisher,
-      series,
-      genres,
-      collection
-    ] = await Promise.all([
-      Promise.all((rawBook.authorIds || []).map(id => entityResolver.resolveName(id))),
-      Promise.all((rawBook.illustratorIds || []).map(id => entityResolver.resolveName(id))),
-      Promise.all((rawBook.scriptwriterIds || []).map(id => entityResolver.resolveName(id))),
-      rawBook.publisherId ? entityResolver.resolveName(rawBook.publisherId) : Promise.resolve(undefined),
-      rawBook.seriesId ? entityResolver.resolveName(rawBook.seriesId) : Promise.resolve(undefined),
-      Promise.all((rawBook.genreIds || []).map(id => entityResolver.resolveName(id))),
-      rawBook.collectionId ? entityResolver.resolveName(rawBook.collectionId) : Promise.resolve(undefined)
-    ]);
+    // 1. COLLECTE : On ramasse tous les IDs obscurs (wdt:...) sans exception
+    const allIds = new Set<string>();
+    const addIds = (ids?: string | string[]) => {
+      if (!ids) return;
+      if (Array.isArray(ids)) ids.forEach(id => allIds.add(id));
+      else allIds.add(ids);
+    };
 
-    // SONDE DEBUG : URL REÇUE DANS LE HUMANIZER
-    console.log(`[DEBUG-HUMANIZER] URL avant compression pour ${rawBook.uri} :`, rawBook.coverUrl);
+    addIds(rawBook.authorIds);
+    addIds(rawBook.illustratorIds);
+    addIds(rawBook.scriptwriterIds);
+    addIds(rawBook.publisherId);
+    addIds(rawBook.seriesId);
+    addIds(rawBook.genreIds);
+    addIds(rawBook.collectionId);
 
-    // Tolérance si le mapper utilise encore l'ancien format 'image'
-    const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
-    
-    // Compression de l'image pour le cache local
-    let localCover = undefined;
-    if (targetImageUrl) {
-      console.log(`[HUMANIZER] Compression de la couverture pour ${rawBook.uri}...`);
-      localCover = await imageService.compressAndEncode(targetImageUrl) || undefined;
-      
-      // SONDE DEBUG : RÉSULTAT COMPRESSION
-      console.log(`[DEBUG-HUMANIZER] Résultat compression (localCover) :`, localCover ? "OK (Base64)" : "ÉCHEC (Null)");
+    const idArray = Array.from(allIds);
+    const dictionary: Record<string, string> = {};
+
+    // 2. MEGA-BATCHING : Une seule requête pour tout traduire d'un coup
+    if (idArray.length > 0) {
+      try {
+        console.log(`[HUMANIZER] Traduction groupée de ${idArray.length} métadonnées...`);
+        // Découpage en paquets de 50 pour respecter la limite d'Inventaire.io
+        for (let i = 0; i < idArray.length; i += 50) {
+          const chunk = idArray.slice(i, i + 50);
+          const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+          const data = await res.json();
+          const entities = data.entities || {};
+          
+          for (const id of chunk) {
+            const labels = entities[id]?.labels;
+            // Priorité au Français, fallback sur l'Anglais, ou conservation de l'ID si introuvable
+            dictionary[id] = labels?.fr || labels?.en || id;
+          }
+        }
+      } catch (error) {
+        console.error("[HUMANIZER] Erreur lors de la résolution groupée:", error);
+        idArray.forEach(id => dictionary[id] = id); // Filet de sécurité
+      }
     }
 
+    // Fonctions utilitaires pour appliquer le dictionnaire
+    const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id]).filter(Boolean);
+    const translateSingle = (id?: string) => id ? dictionary[id] : undefined;
+
+    const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
+
+    // 3. ASSEMBLAGE
     const humanized: HumanizedBook = {
       uri: rawBook.uri,
       workUri: rawBook.workUri,
@@ -8454,30 +8470,122 @@ export const entityHumanizer = {
       isbn13: rawBook.isbn13,
       isbn10: rawBook.isbn10,
       coverUrl: targetImageUrl,
-      localCover: localCover,
+      localCover: undefined, // OPTIMISATION : L'image n'est plus traitée ici, l'UI est débloquée.
       pageCount: rawBook.pageCount,
       publishDate: rawBook.publishDate,
       format: rawBook.format,
       language: rawBook.language,
 
-      authors: authors.filter(Boolean) as string[],
-      illustrators: illustrators.filter(Boolean) as string[],
-      scriptwriters: scriptwriters.filter(Boolean) as string[],
-      publisher: publisher || undefined,
-      series: series || undefined,
+      authors: translateArray(rawBook.authorIds),
+      illustrators: translateArray(rawBook.illustratorIds),
+      scriptwriters: translateArray(rawBook.scriptwriterIds),
+      publisher: translateSingle(rawBook.publisherId),
+      series: translateSingle(rawBook.seriesId),
       seriesId: rawBook.seriesId,
       seriesNumber: rawBook.seriesNumber,
-      genres: genres.filter(Boolean) as string[],
-      collection: collection || undefined,
+      genres: translateArray(rawBook.genreIds),
+      collection: translateSingle(rawBook.collectionId),
 
-      // Initialisation par défaut pour le Cerveau Métier
       ownershipStatus: 'none'
     };
 
-    console.log(`[HUMANIZER] Succès pour ${rawBook.uri}`);
+    console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Temps de blocage réduit à néant)`);
     return humanized;
   }
 };
+
+
+################################################################################
+### FICHIER : src/core/resolvers/humanizer.test.ts
+################################################################################
+
+// src/core/resolvers/humanizer.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { entityHumanizer } from './humanizer';
+import { imageService } from '../services/image.service';
+import type { RawBook } from '../types';
+
+// 1. MOCKING (Les Simulacres)
+// On désactive le vrai service d'image pour ne pas faire planter Node.js avec des Canvas
+vi.mock('../services/image.service', () => ({
+  imageService: {
+    compressAndEncode: vi.fn()
+  }
+}));
+
+// On intercepte TOUTES les requêtes réseau (fetch) via globalThis (Standard JS)
+globalThis.fetch = vi.fn();
+
+describe('Entity Humanizer', () => {
+  
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('doit regrouper les traductions (Mega-Batching) et ne pas bloquer sur l\'image', async () => {
+    // --- ARRANGE (Préparation) ---
+    const fakeRawBook: RawBook = {
+      uri: 'wd:Q_ASTERIX',
+      type: 'edition',
+      title: 'Astérix le Gaulois',
+      authorIds: ['wd:Q_GOSCINNY', 'wd:Q_UDERZO'],
+      publisherId: 'wd:Q_DARGAUD',
+      genreIds: ['wd:Q_BD'],
+      coverUrl: 'https://inventaire.io/img/asterix.jpg'
+    } as RawBook;
+
+    const fakeApiResponse = {
+      entities: {
+        'wd:Q_GOSCINNY': { labels: { fr: 'René Goscinny' } },
+        'wd:Q_UDERZO': { labels: { en: 'Albert Uderzo' } },
+        'wd:Q_DARGAUD': { labels: { fr: 'Dargaud' } },
+        'wd:Q_BD': { labels: { fr: 'Bande Dessinée' } }
+      }
+    };
+
+    // On dit au faux 'fetch' de renvoyer notre faux dictionnaire
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      json: vi.fn().mockResolvedValue(fakeApiResponse)
+    } as any);
+
+    // --- ACT (Action) ---
+    const result = await entityHumanizer.humanize(fakeRawBook);
+
+    // --- ASSERT (Vérifications) ---
+    
+    // Test 1 : Vérifier le Mega-Batching
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    
+    const fetchUrl = vi.mocked(globalThis.fetch).mock.calls[0][0] as string;
+    // CORRECTION : On s'attend bien à ce que le ":" soit encodé en "%3A" et le "|" en "%7C"
+    expect(fetchUrl).toContain('uris=wd%3AQ_GOSCINNY%7Cwd%3AQ_UDERZO%7Cwd%3AQ_DARGAUD%7Cwd%3AQ_BD');
+
+    // Test 2 : Vérifier les traductions
+    expect(result.authors).toEqual(['René Goscinny', 'Albert Uderzo']);
+    expect(result.publisher).toBe('Dargaud');
+    expect(result.genres).toEqual(['Bande Dessinée']);
+
+    // Test 3 : Vérifier le Fire & Forget (L'image ne bloque plus)
+    expect(result.localCover).toBeUndefined();
+    expect(imageService.compressAndEncode).not.toHaveBeenCalled();
+    expect(result.coverUrl).toBe('https://inventaire.io/img/asterix.jpg');
+  });
+
+  it('doit survivre si l\'API d\'Inventaire ne connait pas l\'identifiant', async () => {
+    // Arrange
+    const fakeRawBook = { uri: 'wd:Q1', title: 'Test', authorIds: ['wd:Q_INCONNU'] } as RawBook;
+    
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      json: vi.fn().mockResolvedValue({ entities: {} })
+    } as any);
+
+    // Act
+    const result = await entityHumanizer.humanize(fakeRawBook);
+
+    // Assert
+    expect(result.authors).toEqual(['wd:Q_INCONNU']);
+  });
+});
 
 
 ################################################################################
@@ -8592,73 +8700,6 @@ export const seriesResolver = {
       const numB = parseInt(b.seriesNumber || '999');
       return numA - numB;
     });
-  }
-};
-
-
-################################################################################
-### FICHIER : src/core/resolvers/image.service.ts
-################################################################################
-
-// src/services/image.service.ts
-
-export const imageService = {
-  /**
-   * Télécharge, redimensionne et compresse une image en Base64 (WebP).
-   * @param imageUrl L'URL de l'image source (Inventaire.io ou Wikidata)
-   * @param maxWidth Largeur maximale pour la compression (défaut 300px)
-   * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
-   */
-  async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
-    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
-    try {
-      const response = await fetch(imageUrl);
-      
-      if (!response.ok) {
-        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
-        throw new Error(`Erreur réseau: ${response.status}`);
-      }
-      
-      const blob = await response.blob();
-      console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
-      
-      // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
-      const img = await createImageBitmap(blob);
-      console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
-      
-      let width = img.width;
-      let height = img.height;
-
-      // Calcul des nouvelles dimensions en respectant le ratio d'aspect
-      if (width > maxWidth) {
-        const ratio = maxWidth / width;
-        width = maxWidth;
-        height = Math.round(height * ratio);
-      }
-      
-      // Préparation du canvas pour le redimensionnement
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        console.error("[DEBUG-IMAGE-SERVICE] Impossible de créer le contexte 2D du Canvas");
-        return null;
-      }
-      
-      // Dessin de l'image redimensionnée
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      // Exportation en WebP (format très léger idéal pour IndexedDB)
-      const finalData = canvas.toDataURL('image/webp', quality);
-      console.log("[DEBUG-IMAGE-SERVICE] DataURL généré avec succès.");
-      return finalData;
-
-    } catch (error) {
-      console.warn(`[IMAGE SERVICE] Échec du traitement pour ${imageUrl}:`, error);
-      return null;
-    }
   }
 };
 
@@ -8936,129 +8977,109 @@ export const entityMapper = {
 
 
 ################################################################################
-### FICHIER : src/core/orchestrators/connection.service.ts
+### FICHIER : src/core/orchestrators/connection.orchestrator.test.ts
 ################################################################################
 
-// src/services/connection.service.ts
+// src/core/orchestrators/connection.orchestrator.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { connectionService } from './connection.orchestrator';
 import { userService } from '../services/user.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import { databaseService } from '../database/database.service';
-import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
 import { loanService } from '../services/loan.service';
 
-export const connectionService = {
-  isInitialized: false,
-  userUri: null as string | null,
+// --- 1. MOCKING DES SERVICES (Les Simulacres) ---
+// On remplace les vrais appels réseau par de fausses fonctions que l'on contrôle
+vi.mock('../services/user.service', () => ({
+  userService: { fetchProfile: vi.fn() }
+}));
 
-  /**
-   * Initialisation globale de l'application
-   */
-  async initializeApp(): Promise<boolean> {
-    console.group("[CONNECTION SERVICE] Démarrage de l'application");
-    try {
-      console.log("Tentative de récupération du profil...");
-      const profile = await userService.fetchProfile();
-      
-      if (!profile || !profile.uri) {
-        console.warn("Aucune session active. Utilisateur déconnecté.");
-        console.groupEnd();
-        return false;
-      }
+vi.mock('../services/inventory.service', () => ({
+  inventoryService: { loadLibrary: vi.fn() }
+}));
 
-      this.userUri = profile.uri;
-      console.log(`Session trouvée : ${profile.username} (${this.userUri})`);
+vi.mock('../services/wishlist.service', () => ({
+  wishlistService: { loadWishlist: vi.fn() }
+}));
 
-      // 1. Synchronisation bloquante des registres légers
-      console.log("Synchronisation des registres (Inventory, Wishlist, Loans)...");
-      await Promise.all([
-        inventoryService.loadLibrary(this.userUri),
-        wishlistService.loadWishlist(this.userUri),
-        loanService.sync(this.userUri) // CORRECTION : On passe l'URI utilisateur
-      ]);
-      
-      this.isInitialized = true;
-      console.log("Application prête et registres à jour !");
-      console.groupEnd();
+vi.mock('../services/loan.service', () => ({
+  loanService: { sync: vi.fn() }
+}));
 
-      // 2. Lancement asynchrone de l'hydratation (Ne bloque pas l'UI)
-      this.hydrateCacheInBackground();
+// On court-circuite la tâche de fond pour qu'elle ne gêne pas nos tests synchrones
+vi.spyOn(connectionService, 'hydrateCacheInBackground').mockImplementation(async () => {});
 
-      return true;
-    } catch (error) {
-      console.error("[CONNECTION SERVICE] Erreur fatale d'initialisation :", error);
-      console.groupEnd();
-      return false;
-    }
-  },
+// --- 2. LE CAHIER DE TESTS ---
+describe('Connection Orchestrator', () => {
+  
+  // Avant chaque test, on remet tout à zéro pour qu'ils ne se polluent pas entre eux
+  beforeEach(() => {
+    vi.clearAllMocks();
+    connectionService.isInitialized = false;
+    connectionService.userUri = null;
+  });
 
-  /**
-   * Tâche de fond : Télécharge et met en cache les fiches complètes des livres possédés/souhaités
-   */
-  async hydrateCacheInBackground(): Promise<void> {
-    console.group("[HYDRATATION] Démarrage de la tâche de fond");
-    try {
-      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
-      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
-      
-      // Fusion et déduplication des listes
-      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
-      console.log(`[HYDRATATION] ${allUris.length} URIs à vérifier en cache.`);
+  it('ne doit pas démarrer si aucun utilisateur n\'est connecté', async () => {
+    // Arrange : On simule une absence de profil
+    vi.mocked(userService.fetchProfile).mockResolvedValue(null);
 
-      let addedCount = 0;
+    // Act : On lance le démarrage
+    const result = await connectionService.initializeApp();
 
-      // Par lot pour ne pas surcharger le navigateur ou l'API
-      for (const uri of allUris) {
-        const existingBook = await databaseService.getBookFromCache(uri);
-        
-        if (!existingBook) {
-          const rawBook = await entityResolver.fromUri(uri);
-          if (rawBook) {
-            const humanizedBook = await entityHumanizer.humanize(rawBook);
-            
-            if (inventoryUris.includes(uri)) {
-              humanizedBook.ownershipStatus = 'owned';
-            } else if (wishlistUris.includes(uri)) {
-              humanizedBook.ownershipStatus = 'wish';
-            }
+    // Assert : On vérifie que c'est un échec propre
+    expect(result).toBe(false);
+    expect(connectionService.isInitialized).toBe(false);
+  });
 
-            await databaseService.saveBookToCache(humanizedBook);
-            addedCount++;
-          }
-        } else {
-          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
-          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
-          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
+  it('doit démarrer même si la wishlist plante (Tolérance aux pannes)', async () => {
+    // Arrange : On prépare nos fausses données
+    const fakeItems = [{ id: '1', entity: 'wd:Q1' }];
+    vi.mocked(userService.fetchProfile).mockResolvedValue({ uri: 'wd:User', username: 'Test' } as any);
+    vi.mocked(inventoryService.loadLibrary).mockResolvedValue({ count: 1, items: fakeItems });
+    
+    // 🔥 On force la wishlist à planter (Simulation d'erreur réseau)
+    vi.mocked(wishlistService.loadWishlist).mockRejectedValue(new Error('Serveur HS'));
+    vi.mocked(loanService.sync).mockResolvedValue();
 
-          if (existingBook.ownershipStatus !== expectedStatus) {
-             existingBook.ownershipStatus = expectedStatus;
-             await databaseService.saveBookToCache(existingBook);
-             console.log(`[HYDRATATION] Mise à jour du statut pour : ${uri} (${expectedStatus})`);
-          }
-        }
-      }
+    // Act
+    const result = await connectionService.initializeApp();
 
-      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
-    } catch (error) {
-      console.error("[HYDRATATION] Erreur durant la tâche de fond :", error);
-    } finally {
-      console.groupEnd();
-    }
-  }
-};
+    // Assert : L'application DOIT avoir démarré malgré le crash de la wishlist
+    expect(result).toBe(true);
+    expect(connectionService.isInitialized).toBe(true);
+  });
+
+  it('doit transmettre les données d\'inventaire aux prêts (Pas de double requête réseau)', async () => {
+    // Arrange
+    const fakeItems = [
+      { id: '1', entity: 'wd:Q1' },
+      { id: '2', entity: 'wd:Q2' }
+    ];
+    vi.mocked(userService.fetchProfile).mockResolvedValue({ uri: 'wd:User', username: 'Test' } as any);
+    vi.mocked(inventoryService.loadLibrary).mockResolvedValue({ count: 2, items: fakeItems });
+    vi.mocked(wishlistService.loadWishlist).mockResolvedValue(undefined as any);
+    vi.mocked(loanService.sync).mockResolvedValue();
+
+    // Act
+    await connectionService.initializeApp();
+
+    // Assert : On vérifie que l'orchestrateur a bien passé les "fakeItems" au service de prêt
+    expect(loanService.sync).toHaveBeenCalledWith('wd:User', fakeItems);
+  });
+});
 
 
 ################################################################################
-### FICHIER : src/core/orchestrators/search.service.ts
+### FICHIER : src/core/orchestrators/search.orchestrator.ts
 ################################################################################
 
-// src/services/search.service.ts
+// src/core/orchestrators/search.orchestrator.ts
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
+import { imageService } from '../services/image.service';
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -9075,7 +9096,6 @@ export const searchService = {
 
     if (!book) {
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
       const raw = await entityResolver.fromIsbn(isbn);
       
       if (!raw) {
@@ -9084,28 +9104,45 @@ export const searchService = {
         return null;
       }
       
-      // Humanisation (Traductions + Compression d'image)
+      // Humanisation (Traductions groupées ultra-rapides)
       book = await entityHumanizer.humanize(raw);
       
-      // SONDE DEBUG : AVANT SAUVEGARDE CACHE
       console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
 
-      // Sauvegarde immédiate dans le cache books
+      // Sauvegarde immédiate dans le cache (sans bloquer pour l'image locale)
       await databaseService.saveBookToCache(book);
       source = 'network';
+
+      // ========================================================
+      // OPTIMISATION "FIRE AND FORGET" : Compression en arrière-plan
+      // ========================================================
+      if (book.coverUrl) {
+        console.log(`[SEARCH] Lancement de la tâche de fond pour l'image...`);
+        // Note : Pas de 'await'. L'orchestrateur n'attend pas la fin pour continuer.
+        imageService.compressAndEncode(book.coverUrl).then(async (base64) => {
+          if (base64) {
+            // Sécurité : On recharge le livre pour ne pas écraser d'éventuelles
+            // modifications de statut ('owned') faites entre-temps par l'utilisateur.
+            const currentBook = await databaseService.getBookFromCache(book!.uri);
+            if (currentBook) {
+              currentBook.localCover = base64;
+              await databaseService.saveBookToCache(currentBook);
+              console.log(`[BACKGROUND] Image WebP sauvegardée en silence pour ${book!.uri}`);
+            }
+          }
+        }).catch(e => console.error(`[BACKGROUND] Erreur compression:`, e));
+      }
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
     }
 
     // 2. PHASE ANALYSE DE POSSESSION (Double Check)
-    // CORRECTION : On passe systématiquement le workUri pour la conscience de l'œuvre
     const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
     const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
     
     let isWorkOwned = isEditionOwned;
     let duplicateEdition: HumanizedBook | undefined = undefined;
 
-    // Si on n'a pas cet exemplaire précis, on cherche si on a une autre édition de la même œuvre
     if (!isEditionOwned && book.workUri) {
       const other = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
       if (other) {
@@ -9114,7 +9151,6 @@ export const searchService = {
       }
     }
 
-    // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
     book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
 
     // 3. PHASE ANALYSE DES PRÊTS
@@ -9139,7 +9175,7 @@ export const searchService = {
 
     // 5. PHASE UI : Calcul des indicateurs pour le Frontend
     const ui = {
-      showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
+      showAddButton: !isWorkOwned,
       showWishButton: !isWorkOwned && !isWished,
       alertDuplicate: !isEditionOwned && isWorkOwned,
       hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
@@ -9147,9 +9183,7 @@ export const searchService = {
       showReturnButton: isLent
     };
 
-    // SONDE DEBUG : OBJET FINAL
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
-
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
 
@@ -9175,18 +9209,206 @@ export const searchService = {
 
 
 ################################################################################
+### FICHIER : src/core/orchestrators/connection.orchestrator.ts
+################################################################################
+
+// src/core/orchestrators/connection.orchestrator.ts
+import { userService } from '../services/user.service';
+import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
+import { databaseService } from '../database/database.service';
+//import { entityResolver } from '../resolvers/entity.resolver';
+import { entityHumanizer } from '../resolvers/humanizer';
+import { loanService } from '../services/loan.service';
+import { entityMapper } from '../resolvers/mapper'; // AJOUT pour le batching
+
+export const connectionService = {
+  isInitialized: false,
+  userUri: null as string | null,
+
+  /**
+   * Initialisation globale de l'application (Résistante aux pannes)
+   */
+  async initializeApp(): Promise<boolean> {
+    console.group("[CONNECTION SERVICE] Démarrage de l'application");
+    try {
+      console.log("Tentative de récupération du profil...");
+      const profile = await userService.fetchProfile();
+      if (!profile || !profile.uri) {
+        console.warn("Aucune session active. Utilisateur déconnecté.");
+        console.groupEnd();
+        return false;
+      }
+
+      this.userUri = profile.uri;
+      console.log(`Session trouvée : ${profile.username} (${this.userUri})`);
+
+      // 1. Synchronisation NON-bloquante des registres avec Tolérance aux Pannes
+      console.log("Synchronisation des registres (Inventory, Wishlist, Loans)...");
+      let inventoryData = { count: 0, items: [] as any[] };
+
+      // Lancement en parallèle, mais une erreur n'arrête pas le processus global
+      await Promise.all([
+        inventoryService.loadLibrary(this.userUri)
+          .then(data => { inventoryData = data; })
+          .catch(e => console.error("[CONNECTION SERVICE] ⚠️ Échec chargement Inventaire :", e)),
+          
+        wishlistService.loadWishlist(this.userUri)
+          .catch(e => console.error("[CONNECTION SERVICE] ⚠️ Échec chargement Wishlist :", e))
+      ]);
+
+      // OPTIMISATION RÉSEAU : La synchronisation des prêts réutilise les données de l'inventaire
+      await loanService.sync(this.userUri, inventoryData.items)
+          .catch(e => console.error("[CONNECTION SERVICE] ⚠️ Échec synchronisation Prêts :", e));
+
+      this.isInitialized = true;
+      console.log("Application prête (mode résilient) !");
+      console.groupEnd();
+
+      // 2. Lancement asynchrone de l'hydratation (Ne bloque pas l'UI)
+      this.hydrateCacheInBackground();
+
+      return true;
+    } catch (error) {
+      console.error("[CONNECTION SERVICE] Erreur fatale d'initialisation :", error);
+      console.groupEnd();
+      return false;
+    }
+  },
+
+  /**
+   * Tâche de fond : MEGA-BATCHING des fiches complètes (Optimisé API)
+   */
+  async hydrateCacheInBackground(): Promise<void> {
+    console.group("[HYDRATATION] Démarrage de la tâche de fond (Mega-Batching)");
+    try {
+      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
+      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
+      
+      // Fusion et déduplication des listes
+      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
+      console.log(`[HYDRATATION] ${allUris.length} URIs totales détectées.`);
+
+      const missingUris: string[] = [];
+      
+      // Filtre : Séparer ce qui est déjà en cache de ce qu'il faut télécharger
+      for (const uri of allUris) {
+        const existingBook = await databaseService.getBookFromCache(uri);
+        if (!existingBook) {
+          missingUris.push(uri);
+        } else {
+          // Mise à jour silencieuse du statut si nécessaire
+          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
+          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
+          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
+          
+          if (existingBook.ownershipStatus !== expectedStatus) {
+             existingBook.ownershipStatus = expectedStatus;
+             await databaseService.saveBookToCache(existingBook);
+             console.log(`[HYDRATATION] Statut mis à jour en local pour : ${uri} (${expectedStatus})`);
+          }
+        }
+      }
+
+      console.log(`[HYDRATATION] ${missingUris.length} nouvelles fiches à télécharger en batch.`);
+
+      let addedCount = 0;
+      const CHUNK_SIZE = 50; // Limite stricte de l'API Inventaire.io
+
+      // Traitement par paquets de 50 URIs
+      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
+        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
+        console.log(`[HYDRATATION] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} URIs)...`);
+        
+        try {
+           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
+           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
+           const data = await res.json();
+           const entities = data.entities || {};
+
+           // Extraction des Œuvres (Works) manquantes pour l'enrichissement (Logique Rebond P629)
+           const workUrisToFetch = new Set<string>();
+           for (const uri of chunk) {
+              const entityData = entities[uri];
+              if (entityData && entityData.type !== 'work') {
+                 const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+                 const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+                 if (workUri && !entities[workUri]) {
+                    workUrisToFetch.add(workUri);
+                 }
+              }
+           }
+
+           // Batch secondaire pour récupérer toutes les Œuvres manquantes d'un coup
+           let workEntities: any = {};
+           if (workUrisToFetch.size > 0) {
+               const worksChunk = Array.from(workUrisToFetch);
+               const worksUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(worksChunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
+               const wRes = await fetch(worksUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
+               const wData = await wRes.json();
+               workEntities = wData.entities || {};
+           }
+
+           // Mapping et Humanisation en parallèle pour le lot entier
+           const humanizePromises = chunk.map(async (uri) => {
+              const entityData = entities[uri];
+              if (!entityData) return;
+
+              const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+              const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+              const workData = workUri ? workEntities[workUri] : undefined;
+
+              // Création de l'objet brut
+              const rawBook = entityMapper.mapResponse(uri, entityData, workData);
+              
+              // Humanisation (Traduction IDs + Compression Image)
+              const humanizedBook = await entityHumanizer.humanize(rawBook);
+              
+              // Inscription du statut visuel
+              if (inventoryUris.includes(uri)) {
+                humanizedBook.ownershipStatus = 'owned';
+              } else if (wishlistUris.includes(uri)) {
+                humanizedBook.ownershipStatus = 'wish';
+              }
+              
+              // Sauvegarde en IndexedDB
+              await databaseService.saveBookToCache(humanizedBook);
+              addedCount++;
+           });
+
+           // On attend que les 50 traductions/compressions soient finies avant de passer au lot suivant
+           await Promise.all(humanizePromises);
+           
+        } catch (chunkError) {
+           console.error(`[HYDRATATION] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
+        }
+      }
+      
+      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
+    } catch (error) {
+      console.error("[HYDRATATION] Erreur durant la tâche de fond globale :", error);
+    } finally {
+      console.groupEnd();
+    }
+  }
+};
+
+
+################################################################################
 ### FICHIER : src/core/services/inventory.service.ts
 ################################################################################
 
-// src/services/inventory.service.ts
+// src/core/services/inventory.service.ts
 import { databaseService } from '../database/database.service';
 
 export const inventoryService = {
-  async loadLibrary(uri: string): Promise<number> {
+  // OPTIMISATION : Retourne les items bruts en plus du compteur pour éviter la double requête
+  async loadLibrary(uri: string): Promise<{ count: number, items: any[] }> {
     console.group(`[INVENTORY] Synchronisation pour ${uri}`);
     try {
       const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(uri)}`);
       const data = await res.json();
+      
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
       
@@ -9194,7 +9416,7 @@ export const inventoryService = {
       await databaseService.syncRegistry('inventory', urisToSync);
       
       console.groupEnd();
-      return urisToSync.length;
+      return { count: urisToSync.length, items: itemList };
     } catch (error) {
       console.error("[INVENTORY] Erreur :", error);
       console.groupEnd();
@@ -9227,6 +9449,7 @@ export const inventoryService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uri })
     });
+
     if (!res.ok) throw new Error("Erreur ajout");
     await databaseService.addRegistryEntry('inventory', uri);
     return true;
@@ -9238,6 +9461,7 @@ export const inventoryService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uris })
     });
+
     if (!res.ok) throw new Error("Erreur bulk");
     for (const uri of uris) await databaseService.addRegistryEntry('inventory', uri);
     return true;
@@ -9249,7 +9473,7 @@ export const inventoryService = {
 ### FICHIER : src/core/services/loan.service.ts
 ################################################################################
 
-// src/services/loan.service.ts
+// src/core/services/loan.service.ts
 import { databaseService } from '../database/database.service';
 
 export const loanService = {
@@ -9262,6 +9486,7 @@ export const loanService = {
     try {
       const response = await fetch(url, options);
       const text = await response.text();
+      
       if (!response.ok) {
         console.error(`[LOAN DEBUG] ❌ Erreur API:`, text.substring(0, 250));
         throw new Error(`HTTP Error ${response.status}`);
@@ -9281,6 +9506,7 @@ export const loanService = {
     try {
       const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
+      
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
       
@@ -9321,9 +9547,10 @@ export const loanService = {
     
     try {
       const data = await this.safeFetch(`/api/shelves?path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
+      
       let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
       let shelf = shelvesArray.find((s: any) => s && s.name === this.shelfName);
-      
+
       if (!shelf) {
         const createData = await this.safeFetch('/api/shelves', {
           method: 'POST',
@@ -9343,8 +9570,9 @@ export const loanService = {
 
   /**
    * Synchronisation (Réconciliation blindée via itemId)
+   * OPTIMISATION : Accepte un dictionnaire pré-chargé pour éviter les requêtes réseau redondantes
    */
-  async sync(userUri: string): Promise<void> {
+  async sync(userUri: string, preloadedInventoryItems?: any[]): Promise<void> {
     console.group("[LOAN SERVICE] Synchronisation des prêts");
     this.userUri = userUri;
     
@@ -9360,15 +9588,27 @@ export const loanService = {
       const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
       
       const localLoans = await databaseService.getAllLoans();
-      const inventoryMap = await this.getInventoryMap(); // Plan de secours
+      
+      // OPTIMISATION RÉSEAU : Utilisation du cache d'inventaire fourni par l'orchestrateur
+      let inventoryMap: Record<string, string> = {};
+      if (preloadedInventoryItems && preloadedInventoryItems.length > 0) {
+        console.log(`[LOAN SERVICE] Utilisation du dictionnaire d'inventaire pré-chargé (${preloadedInventoryItems.length} items)`);
+        inventoryMap = preloadedInventoryItems.reduce((acc, item) => {
+          const id = item._id || item.id;
+          const entity = (typeof item.entity === 'string') ? item.entity : (item.entity?.uri || item.uri);
+          if (id && entity) acc[id] = entity;
+          return acc;
+        }, {} as Record<string, string>);
+      } else {
+        console.log(`[LOAN SERVICE] Téléchargement du dictionnaire d'inventaire (Fallback)`);
+        inventoryMap = await this.getInventoryMap();
+      }
       
       console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
 
       // 1. Suppression des retours (Un livre local qui n'est plus sur l'étagère web)
       for (const localLoan of localLoans) {
-        // La condition absolue : on vérifie l'itemId local avec les items web
-        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || 
-                               distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
+        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
         
         if (!isStillOnShelf) {
           console.log(`[LOAN SERVICE] Retour détecté pour ${localLoan.uri}. Suppression locale.`);
@@ -9378,7 +9618,6 @@ export const loanService = {
 
       // 2. Ajouts distants (Un livre prêté via le site officiel)
       for (const distantId of distantItemIds) {
-        // Est-ce qu'on connaît déjà cet ID physiquement ou via son URI ?
         const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === inventoryMap[distantId]);
         
         if (!isKnownLocally) {
@@ -9414,14 +9653,12 @@ export const loanService = {
         body: JSON.stringify({ id: shelfId, items: [itemId] }) 
       });
 
-      // SAUVEGARDE EN BÉTON ARMÉ : On lie l'URI et le physical ID
       await databaseService.saveLoan({ 
         uri, 
         friendName, 
         loanDate: Date.now(),
         itemId 
       });
-      
       console.log(`[LOAN SERVICE] Livre ${uri} prêté à ${friendName}`);
       return true;
     } catch (error) {
@@ -9672,6 +9909,73 @@ export const userService = {
     
     sessionStore.setUser(data);
     return sessionStore.state.user;
+  }
+};
+
+
+################################################################################
+### FICHIER : src/core/services/image.service.ts
+################################################################################
+
+// src/core/services/image.service.ts
+
+export const imageService = {
+  /**
+   * Télécharge, redimensionne et compresse une image en Base64 (WebP).
+   * @param imageUrl L'URL de l'image source (Inventaire.io ou Wikidata)
+   * @param maxWidth Largeur maximale pour la compression (défaut 300px)
+   * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
+   */
+  async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
+    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
+    try {
+      const response = await fetch(imageUrl);
+      
+      if (!response.ok) {
+        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
+        throw new Error(`Erreur réseau: ${response.status}`);
+      }
+      
+      const blob = await response.blob();
+      console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
+      
+      // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
+      const img = await createImageBitmap(blob);
+      console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
+      
+      let width = img.width;
+      let height = img.height;
+
+      // Calcul des nouvelles dimensions en respectant le ratio d'aspect
+      if (width > maxWidth) {
+        const ratio = maxWidth / width;
+        width = maxWidth;
+        height = Math.round(height * ratio);
+      }
+      
+      // Préparation du canvas pour le redimensionnement
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error("[DEBUG-IMAGE-SERVICE] Impossible de créer le contexte 2D du Canvas");
+        return null;
+      }
+      
+      // Dessin de l'image redimensionnée
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Exportation en WebP (format très léger idéal pour IndexedDB)
+      const finalData = canvas.toDataURL('image/webp', quality);
+      console.log("[DEBUG-IMAGE-SERVICE] DataURL généré avec succès.");
+      return finalData;
+
+    } catch (error) {
+      console.warn(`[IMAGE SERVICE] Échec du traitement pour ${imageUrl}:`, error);
+      return null;
+    }
   }
 };
 

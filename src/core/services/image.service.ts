@@ -8,19 +8,24 @@ export const imageService = {
    * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
    */
   async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
-    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
+    console.log(`[DEBUG-IMAGE-SERVICE] URL d'origine : ${imageUrl}`);
     try {
-      const response = await fetch(imageUrl);
+      // --- CONTOURNEMENT CORS VIA PROXY VERCEL ---
+      // On encode l'URL cible et on la passe à notre propre serveur backend
+      const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+      console.log(`[DEBUG-IMAGE-SERVICE] Appel via proxy : ${proxyUrl}`);
+      
+      const response = await fetch(proxyUrl);
       
       if (!response.ok) {
-        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
+        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour le proxy`);
         throw new Error(`Erreur réseau: ${response.status}`);
       }
       
       const blob = await response.blob();
       console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
       
-      // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
+      // Utilisation de createImageBitmap pour un traitement performant hors thread principal
       const img = await createImageBitmap(blob);
       console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
       
