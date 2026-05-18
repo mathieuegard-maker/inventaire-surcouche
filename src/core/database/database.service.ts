@@ -1,22 +1,42 @@
-// src/services/database.service.ts
+// src/core/database/database.service.ts
 import Dexie, { type Table } from 'dexie';
 import type { HumanizedBook, LoanRecord, RegistryEntry } from '../types';
+
+// NOUVEAU : Interface pour la file d'attente (Optimistic UI)
+export interface PendingAction {
+  id?: number;
+  action: 'LEND' | 'RETURN' | 'ADD_INVENTORY' | 'REMOVE_INVENTORY' | 'ADD_WISHLIST' | 'REMOVE_WISHLIST';
+  uri: string;
+  payload?: any;
+  status: 'pending' | 'failed';
+  createdAt: number;
+}
 
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;
   wishlist!: Table<RegistryEntry, string>;
   cache_books!: Table<HumanizedBook, string>;
-  loans!: Table<LoanRecord, string>; // Nouvelle table pour le carnet de prêt
+  loans!: Table<LoanRecord, string>; // Table pour le carnet de prêt
+  pending_actions!: Table<PendingAction, number>; // NOUVELLE TABLE : File d'attente
 
   constructor() {
     super('InventaireLocalDBV2');
     
-    // Version 3 : Ajout de la table des prêts
+    // Historique conservé pour la migration fluide des utilisateurs existants
     this.version(3).stores({
       inventory: 'uri',
       wishlist: 'uri',
       cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
-      loans: 'uri, friendName' // Indexation par URI et Nom d'ami
+      loans: 'uri, friendName'
+    });
+
+    // Version 4 : Ajout de la table pending_actions pour l'Optimistic UI
+    this.version(4).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName',
+      pending_actions: '++id, action, uri, status, createdAt' // ++id génère un auto-incrément mathématique
     });
   }
 }
@@ -35,11 +55,9 @@ export const databaseService = {
 
   async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
     if (!workUri) return undefined;
-    
     const candidates = await db.cache_books
       .where('workUri').equals(workUri)
       .toArray();
-
     for (const book of candidates) {
       if (book.uri !== currentEditionUri) {
         const isOwned = await this.isUriInRegistry('inventory', book.uri);
@@ -94,7 +112,7 @@ export const databaseService = {
     await db[tableName].bulkPut(entries);
   },
 
-  // --- NOUVEAU : GESTION DES PRÊTS (Table locale) ---
+  // --- GESTION DES PRÊTS (Table locale) ---
 
   async saveLoan(loan: LoanRecord): Promise<void> {
     await db.loans.put(loan);
@@ -110,5 +128,19 @@ export const databaseService = {
 
   async getAllLoans(): Promise<LoanRecord[]> {
     return await db.loans.toArray();
+  },
+
+  // --- NOUVEAU : GESTION DE LA FILE D'ATTENTE (Optimistic UI) ---
+
+  async savePendingAction(action: PendingAction): Promise<number> {
+    return await db.pending_actions.put(action);
+  },
+
+  async getPendingActions(): Promise<PendingAction[]> {
+    return await db.pending_actions.orderBy('createdAt').toArray();
+  },
+
+  async deletePendingAction(id: number): Promise<void> {
+    await db.pending_actions.delete(id);
   }
 };

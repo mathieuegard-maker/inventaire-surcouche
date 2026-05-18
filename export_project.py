@@ -15,7 +15,8 @@ def export_project_to_txt(source_folder, output_file):
         '.jpg',
         '.png',
         '.ico', 
-        'jpeg'
+        'jpeg',
+        'documentation_API_invrntaire.io.txt'
     }
     
     # On convertit source_folder en chemin absolu pour des calculs propres
