@@ -2,8 +2,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { seriesResolver } from './series.resolver';
 import { databaseService } from '../database/database.service';
-import { inventoryService } from '../services/inventory.service';
-import { wishlistService } from '../services/wishlist.service';
 import { syncOrchestrator } from '../orchestrators/sync.orchestrator';
 
 // --- MOCKING ---

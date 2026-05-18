@@ -60,9 +60,6 @@ export const syncOrchestrator = {
            const humanizePromises = chunk.map(async (uri) => {
               const entityData = entities[uri];
               if (!entityData) return;
-
-              const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
-              const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
               
               // Simplification : on ne fait pas de double-rebond pour le fond, l'édition suffit généralement
               const rawBook = entityMapper.mapResponse(uri, entityData, undefined);

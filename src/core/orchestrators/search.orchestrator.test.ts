@@ -3,10 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { searchService } from './search.orchestrator';
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
-import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
-import { seriesResolver } from '../resolvers/series.resolver';
-import { imageService } from '../services/image.service';
 import { syncOrchestrator } from './sync.orchestrator';
 
 // --- MOCKING ---

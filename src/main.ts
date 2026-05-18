@@ -2,10 +2,7 @@
 import { authService } from './core/services/auth.service';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 //import { manualIsbnProvider } from './providers/manual-isbn.provider';
-import { inventoryService } from './core/services/inventory.service';
-import { wishlistService } from './core/services/wishlist.service';
 import { searchService } from './core/orchestrators/search.orchestrator';
-import { loanService } from './core/services/loan.service';
 import { queueService } from './core/orchestrators/queue.orchestrator'; // AJOUT : Import de la file d'attente
 import type { SearchResponse, HumanizedBook } from './core/types';
 
