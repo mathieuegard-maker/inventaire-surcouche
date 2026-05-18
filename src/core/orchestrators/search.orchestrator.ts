@@ -5,7 +5,8 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { imageService } from '../services/image.service';
-import { syncOrchestrator } from './sync.orchestrator'; // AJOUT
+import { syncOrchestrator } from './sync.orchestrator';
+import { isbnUtil } from '../utils/isbn.util';
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -13,7 +14,16 @@ export const searchService = {
    * Orchestration complète d'une recherche par ISBN
    * Local-First -> Network Fallback -> Double Check -> Série -> Paquet UI
    */
-  async searchByIsbn(isbn: string): Promise<SearchResponse | null> {
+  async searchByIsbn(rawIsbn: string): Promise<SearchResponse | null> {
+    // Utilisation de l'utilitaire centralisé pour nettoyer l'entrée
+    const isbn = isbnUtil.normalize(rawIsbn);
+
+    // Sécurité supplémentaire grâce à l'utilitaire
+    if (!isbnUtil.isValidFormat(isbn)) {
+      console.warn(`[SEARCH] Format ISBN invalide : ${isbn}`);
+      return null;
+    }
+
     console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
     
     // 1. PHASE IDENTIFICATION : Local-First
@@ -60,7 +70,7 @@ export const searchService = {
       }
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
-      // AJOUT : Vérification du TTL (Time To Live = 30 jours)
+      // Vérification du TTL (Time To Live = 30 jours)
       const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
       if (!book.updatedAt || (Date.now() - book.updatedAt > THIRTY_DAYS)) {
         console.log(`[SEARCH] Cache périmé (TTL > 30j) pour ${isbn}. Rafraîchissement fantôme...`);
