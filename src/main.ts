@@ -1,7 +1,7 @@
 // src/main.ts
 import { authService } from './services/auth.service';
 import { connectionService } from './services/connection.service';
-import { manualIsbnProvider } from './providers/manual-isbn.provider';
+//import { manualIsbnProvider } from './providers/manual-isbn.provider';
 import { inventoryService } from './services/inventory.service';
 import { wishlistService } from './services/wishlist.service';
 import { searchService } from './services/search.service';
