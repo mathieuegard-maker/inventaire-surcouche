@@ -1,5 +1,5 @@
 // src/resolvers/mapper.ts
-import type { RawBook } from './types';
+import type { RawBook } from '../types';
 
 export const entityMapper = {
   /**

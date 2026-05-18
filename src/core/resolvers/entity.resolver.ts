@@ -1,6 +1,6 @@
 // src/resolvers/entity.resolver.ts
 import { entityMapper } from './mapper';
-import type { RawBook } from './types';
+import type { RawBook } from '../types';
 
 const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
 

@@ -1,6 +1,6 @@
 // src/services/database.service.ts
 import Dexie, { type Table } from 'dexie';
-import type { HumanizedBook, LoanRecord, RegistryEntry } from '../resolvers/types';
+import type { HumanizedBook, LoanRecord, RegistryEntry } from '../types';
 
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;

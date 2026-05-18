@@ -1,6 +1,6 @@
 // src/resolvers/humanizer.ts
 import { entityResolver } from './entity.resolver';
-import type { RawBook, HumanizedBook } from './types';
+import type { RawBook, HumanizedBook } from '../types';
 import { imageService } from '../services/image.service';
 
 export const entityHumanizer = {

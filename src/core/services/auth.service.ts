@@ -1,5 +1,5 @@
 // src/services/auth.service.ts
-import { sessionStore } from '../state/session';
+import { sessionStore } from '../../state/session';
 
 export const authService = {
   async login(username: string, password: string) {

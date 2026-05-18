@@ -1,5 +1,5 @@
 // src/services/inventory.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const inventoryService = {
   async loadLibrary(uri: string): Promise<number> {

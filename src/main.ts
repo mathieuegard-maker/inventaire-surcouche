@@ -1,12 +1,12 @@
 // src/main.ts
-import { authService } from './services/auth.service';
-import { connectionService } from './services/connection.service';
+import { authService } from './core/services/auth.service';
+import { connectionService } from './core/orchestrators/connection.orchestrator';
 //import { manualIsbnProvider } from './providers/manual-isbn.provider';
-import { inventoryService } from './services/inventory.service';
-import { wishlistService } from './services/wishlist.service';
-import { searchService } from './services/search.service';
-import { loanService } from './services/loan.service';
-import type { SearchResponse, HumanizedBook } from './resolvers/types';
+import { inventoryService } from './core/services/inventory.service';
+import { wishlistService } from './core/services/wishlist.service';
+import { searchService } from './core/orchestrators/search.orchestrator';
+import { loanService } from './core/services/loan.service';
+import type { SearchResponse, HumanizedBook } from './core/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;

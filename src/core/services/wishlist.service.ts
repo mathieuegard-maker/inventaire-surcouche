@@ -1,5 +1,5 @@
 // src/services/wishlist.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const wishlistService = {
   wishlistId: null as string | null,

@@ -1,5 +1,5 @@
 // src/services/loan.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const loanService = {
   userUri: null as string | null,

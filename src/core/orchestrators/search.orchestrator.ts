@@ -1,10 +1,10 @@
 // src/services/search.service.ts
-import { databaseService } from './database.service';
-import { wishlistService } from './wishlist.service';
+import { databaseService } from '../database/database.service';
+import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
-import type { SearchResponse, HumanizedBook } from '../resolvers/types';
+import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
   /**

@@ -6801,6 +6801,49 @@ Le pipeline de données (Backend) est robuste et performant. Les prochaines éta
 
 
 ################################################################################
+### FICHIER : api/shelves.ts
+################################################################################
+
+// api/shelves.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    
+    // On extrait la vraie route désirée (ex: "by-owners" ou "add-items")
+    const path = url.searchParams.get('path');
+    url.searchParams.delete('path'); // On le retire pour ne pas polluer l'API finale
+
+    // Reconstruction de l'URL exacte selon la doc Inventaire
+    let inventaireUrl = 'https://inventaire.io/api/shelves';
+    if (path) {
+      inventaireUrl += `/${path}`; 
+    }
+    inventaireUrl += url.search; // On ajoute le reste (ex: ?owners=1234)
+
+    console.log(`[PROXY SHELVES] Redirection vers : ${inventaireUrl}`);
+
+    const response = await fetch(inventaireUrl, {
+      method: req.method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': req.headers.cookie || '',
+        'User-Agent': 'InventaireMobileOverlay/1.8'
+      },
+      body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(req.body) : undefined
+    });
+    
+    const data = await response.json();
+    res.status(response.status).json(data);
+  } catch (error: any) {
+    console.error("[PROXY SHELVES] Erreur interne :", error.message);
+    res.status(500).json({ error: error.message });
+  }
+}
+
+
+################################################################################
 ### FICHIER : api/series/list.ts
 ################################################################################
 
@@ -7090,117 +7133,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(data);
   } catch (err: any) {
     return res.status(500).json({ error: 'Proxy Login Crash', details: err.message });
-  }
-}
-
-
-################################################################################
-### FICHIER : api/shelves/items.ts
-################################################################################
-
-// api/shelves/items.ts
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    // Reconstruction de l'URL pour conserver les paramètres de requête (ex: ?shelfId=...)
-    const urlObj = new URL(req.url!, `http://${req.headers.host}`);
-    const inventaireUrl = `https://inventaire.io${urlObj.pathname}${urlObj.search}`;
-    
-    const response = await fetch(inventaireUrl, {
-      method: 'GET',
-      headers: {
-        'Accept': 'application/json',
-        'Cookie': req.headers.cookie || '',
-        'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)'
-      }
-    });
-    
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-}
-
-
-################################################################################
-### FICHIER : api/shelves/remove-items.ts
-################################################################################
-
-// api/shelves/remove-items.ts
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    const response = await fetch('https://inventaire.io/api/shelves/remove-items', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': req.headers.cookie || '',
-        'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)'
-      },
-      body: JSON.stringify(req.body)
-    });
-    
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-}
-
-
-################################################################################
-### FICHIER : api/shelves/index.ts
-################################################################################
-
-// api/shelves/index.ts
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    const response = await fetch('https://inventaire.io/api/shelves', {
-      method: req.method,
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': req.headers.cookie || '',
-        'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)'
-      },
-      body: req.method === 'POST' ? JSON.stringify(req.body) : undefined
-    });
-    
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-}
-
-
-################################################################################
-### FICHIER : api/shelves/add-items.ts
-################################################################################
-
-// api/shelves/add-items.ts
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  try {
-    const response = await fetch('https://inventaire.io/api/shelves/add-items', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': req.headers.cookie || '',
-        'User-Agent': 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)'
-      },
-      body: JSON.stringify(req.body)
-    });
-    
-    const data = await response.json();
-    res.status(response.status).json(data);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
   }
 }
 
@@ -7530,20 +7462,21 @@ export function setupCounter(element: HTMLButtonElement) {
 ################################################################################
 
 // src/main.ts
-import { authService } from './services/auth.service';
-import { connectionService } from './services/connection.service';
-import { manualIsbnProvider } from './providers/manual-isbn.provider';
-import { inventoryService } from './services/inventory.service';
-import { wishlistService } from './services/wishlist.service';
-import { searchService } from './services/search.service';
-import type { SearchResponse, HumanizedBook } from './resolvers/types';
+import { authService } from './core/services/auth.service';
+import { connectionService } from './core/orchestrators/connection.service';
+//import { manualIsbnProvider } from './providers/manual-isbn.provider';
+import { inventoryService } from './core/services/inventory.service';
+import { wishlistService } from './core/services/wishlist.service';
+import { searchService } from './core/orchestrators/search.service';
+import { loanService } from './core/services/loan.service';
+import type { SearchResponse, HumanizedBook } from './core/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
 const logs = document.getElementById('logs')!;
 const acquisitionZone = document.getElementById('acquisition-zone')!;
 
 /**
- * Console de debug visuelle (Identique à l'originale)
+ * Console de debug visuelle
  */
 function addLog(msg: string, type = 'info') {
   const div = document.createElement('div');
@@ -7558,106 +7491,274 @@ function addLog(msg: string, type = 'info') {
 }
 
 /**
- * Rendu technique : Tableau du livre principal avec STATUT DÉTAILLÉ et ALERTE DOUBLON
+ * Rendu technique : Tableau du livre principal avec STATUT DÉTAILLÉ, PRÊT et ALERTE DOUBLON
  */
 function renderMainBookDebugTable(res: SearchResponse) {
-  const { mainBook: book, source, ownership } = res;
+  const existing = document.getElementById('debug-table-container');
+  if (existing) existing.remove();
+
   const container = document.createElement('div');
-  container.style.marginTop = '15px';
-  container.innerHTML = `<h3 style="color: #3498db; font-size: 13px; margin-bottom: 5px;">📖 Livre Actuel (${source.toUpperCase()})</h3>`;
+  container.id = 'debug-table-container';
+  container.style.marginTop = '20px';
 
   const table = document.createElement('table');
-  Object.assign(table.style, {
-    width: '100%', borderCollapse: 'collapse', fontSize: '11px', color: '#ccc', border: '1px solid #444'
-  });
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
+  table.style.fontSize = '14px';
 
-  const imgSrc = book.localCover || book.coverUrl || '';
-  
-  // LOGIQUE DE STATUT DÉTAILLÉE
-  let statusText = "INCONNU";
-  let statusColor = "#888";
-  
-  if (ownership.isEditionOwned) {
-    statusText = "POSSÉDÉ (CETTE ÉDITION)";
-    statusColor = "#0f0";
-  } else if (ownership.isWorkOwned) {
-    statusText = "POSSÉDÉ (AUTRE ÉDITION)";
-    statusColor = "#ffa500"; // Orange pour signaler le doublon d'œuvre
-  } else if (ownership.isWished) {
-    statusText = "EN WISHLIST";
-    statusColor = "#3498db";
+  // Calcul du texte de statut de possession
+  let statusHtml = '';
+  if (res.ownership.isEditionOwned) {
+    statusHtml = `<span style="color: green; font-weight: bold;">Possédé (Cette édition)</span>`;
+  } else if (res.ownership.isWorkOwned) {
+    statusHtml = `<span style="color: #27ae60; font-weight: bold;">Possédé (Autre édition)</span>`;
+  } else if (res.ownership.isWished) {
+    statusHtml = `<span style="color: #2980b9; font-weight: bold;">Dans la Wishlist</span>`;
+  } else {
+    statusHtml = `<span style="color: #c0392b;">Non possédé</span>`;
   }
 
-  // PRÉPARATION DE L'ALERTE VISUELLE (Double Check)
-  const alertRow = (ownership.isWorkOwned && !ownership.isEditionOwned && ownership.duplicateEdition) 
-    ? `<tr style="background: rgba(255, 165, 0, 0.2);">
-         <td colspan="2" style="padding: 8px; color: #ffa500; border: 1px solid #ffa500; font-weight: bold; text-align: center;">
-           ⚠️ ATTENTION : Vous possédez déjà cette œuvre !<br/>
-           <span style="font-size: 9px; font-weight: normal;">Édition possédée : ${ownership.duplicateEdition.title}</span>
-         </td>
-       </tr>`
-    : '';
+  // Affichage du statut de prêt
+  if (res.loan.isLent && res.loan.details) {
+    const dateStr = new Date(res.loan.details.loanDate).toLocaleDateString();
+    statusHtml += `<br><span style="color: #e67e22; font-weight: bold; font-size: 0.9em;">⚠️ Prêté à ${res.loan.details.friendName} (le ${dateStr})</span>`;
+  }
 
-  table.innerHTML = `
-    ${alertRow}
-    <tr style="border-bottom: 1px solid #333;">
-      <td rowspan="5" style="width: 60px; padding: 5px; text-align: center; vertical-align: top;">
-        ${imgSrc ? `<img src="${imgSrc}" style="width: 50px; border-radius: 2px;">` : 'N/A'}
-      </td>
-      <td style="padding: 5px; color: #fff; font-weight: bold;">${book.title}</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Auteurs : ${book.authors.join(', ') || 'Inconnu'}</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Série : ${book.series || 'Aucune'} (Tome ${book.seriesNumber || '?'})</td>
-    </tr>
-    <tr style="border-bottom: 1px solid #333;">
-      <td style="padding: 5px;">Statut : <span style="color: ${statusColor}; font-weight: bold;">${statusText}</span></td>
-    </tr>
-    <tr>
-      <td style="padding: 5px; font-size: 9px; color: #777;">URI : ${book.uri} | Work : ${book.workUri || 'N/A'}</td>
+  let duplicateAlertHtml = '';
+  if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
+    duplicateAlertHtml = `
+      <div style="margin-top:10px; padding:10px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba; border-radius:4px;">
+        <strong>⚠️ Attention :</strong> Vous possédez déjà une autre édition de cette œuvre.<br>
+        <em>Édition possédée : ${res.ownership.duplicateEdition.title} (${res.ownership.duplicateEdition.isbn13 || 'Sans ISBN'})</em>
+      </div>
+    `;
+  }
+
+  const thead = `
+    <tr style="background-color: #eee; text-align: left;">
+      <th style="padding: 8px; border: 1px solid #ccc;">Couverture</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Informations (Main Book)</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Statut Inventaire</th>
+      <th style="padding: 8px; border: 1px solid #ccc;">Actions Rapides</th>
     </tr>
   `;
+
+  table.innerHTML = thead;
+  const tr = document.createElement('tr');
+
+  // Cellule 1 : Couverture
+  const coverCell = document.createElement('td');
+  coverCell.style.padding = '8px';
+  coverCell.style.border = '1px solid #ccc';
+  coverCell.style.width = '100px';
+  coverCell.style.textAlign = 'center';
+  
+  const coverImg = document.createElement('img');
+  coverImg.style.maxWidth = '80px';
+  coverImg.style.maxHeight = '120px';
+  coverImg.style.objectFit = 'contain';
+  coverImg.src = res.mainBook.localCover || res.mainBook.coverUrl || 'https://via.placeholder.com/80x120?text=No+Cover';
+  coverCell.appendChild(coverImg);
+
+  // Cellule 2 : Infos
+  const infoCell = document.createElement('td');
+  infoCell.style.padding = '8px';
+  infoCell.style.border = '1px solid #ccc';
+  infoCell.innerHTML = `
+    <strong>${res.mainBook.title}</strong><br>
+    <span style="color: #666; font-size: 12px;">${res.mainBook.authors.join(', ')}</span><br>
+    <span style="color: #888; font-size: 11px;">ISBN: ${res.mainBook.isbn13 || res.mainBook.isbn10 || 'N/A'}</span>
+    ${duplicateAlertHtml}
+  `;
+
+  // Cellule 3 : Statut
+  const statusCell = document.createElement('td');
+  statusCell.style.padding = '8px';
+  statusCell.style.border = '1px solid #ccc';
+  statusCell.innerHTML = statusHtml;
+
+  // Cellule 4 : Actions
+  const actionCell = document.createElement('td');
+  actionCell.style.padding = '8px';
+  actionCell.style.border = '1px solid #ccc';
+
+  // Utilitaire pour récupérer l'ISBN actuel depuis le champ de recherche pour les rafraîchissements
+  const getCurrentSearchIsbn = () => {
+    const input = document.getElementById('isbn-input') as HTMLInputElement;
+    return input ? input.value.trim() : '';
+  };
+
+  // Bouton Ajouter Inventaire
+  if (res.ui.showAddButton) {
+    const btnAdd = document.createElement('button');
+    btnAdd.textContent = "Ajouter (Inventaire)";
+    Object.assign(btnAdd.style, { backgroundColor: '#27ae60', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnAdd.onclick = async () => {
+      btnAdd.disabled = true;
+      btnAdd.textContent = "Ajout...";
+      try {
+        await inventoryService.addToLibrary(res.mainBook.uri);
+        addLog(`Ajouté à l'inventaire : ${res.mainBook.title}`, 'success');
+        const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+        if (freshRes) renderMainBookDebugTable(freshRes);
+      } catch (e: any) {
+        addLog(`Erreur: ${e.message}`, 'error');
+        btnAdd.disabled = false;
+        btnAdd.textContent = "Ajouter (Inventaire)";
+      }
+    };
+    actionCell.appendChild(btnAdd);
+  }
+
+  // Bouton Ajouter Wishlist
+  if (res.ui.showWishButton) {
+    const btnWish = document.createElement('button');
+    btnWish.textContent = "Ajouter (Wishlist)";
+    Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#2980b9', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnWish.onclick = async () => {
+      btnWish.disabled = true;
+      btnWish.textContent = "Ajout...";
+      try {
+        await wishlistService.addToWishlist(res.mainBook.uri);
+        addLog(`Ajouté à la wishlist : ${res.mainBook.title}`, 'success');
+        const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+        if (freshRes) renderMainBookDebugTable(freshRes);
+      } catch (e: any) {
+        addLog(`Erreur: ${e.message}`, 'error');
+        btnWish.disabled = false;
+        btnWish.textContent = "Ajouter (Wishlist)";
+      }
+    };
+    actionCell.appendChild(btnWish);
+  }
+
+  // Bouton Prêter
+  if (res.ui.showLoanButton) {
+    const btnLoan = document.createElement('button');
+    btnLoan.textContent = "Prêter l'exemplaire";
+    Object.assign(btnLoan.style, { marginTop: '5px', backgroundColor: '#e67e22', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnLoan.onclick = async () => {
+      const friendName = prompt("À qui prêtez-vous ce livre ?");
+      if (friendName && friendName.trim() !== '') {
+        btnLoan.disabled = true;
+        btnLoan.textContent = "Enregistrement...";
+        const success = await loanService.lend(res.mainBook.uri, friendName.trim());
+        if (success) {
+          addLog(`Livre prêté à ${friendName}`, 'success');
+          const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+          if (freshRes) renderMainBookDebugTable(freshRes);
+        } else {
+          addLog(`Erreur lors du prêt`, 'error');
+          btnLoan.disabled = false;
+          btnLoan.textContent = "Prêter l'exemplaire";
+        }
+      }
+    };
+    actionCell.appendChild(btnLoan);
+  }
+
+  // Bouton Retour
+  if (res.ui.showReturnButton) {
+    const btnReturn = document.createElement('button');
+    btnReturn.textContent = "Marquer comme Rendu";
+    Object.assign(btnReturn.style, { marginTop: '5px', backgroundColor: '#8e44ad', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
+    btnReturn.onclick = async () => {
+      if (confirm("Confirmer le retour de ce livre ?")) {
+        btnReturn.disabled = true;
+        btnReturn.textContent = "Enregistrement...";
+        const success = await loanService.returnBook(res.mainBook.uri);
+        if (success) {
+          addLog(`Livre marqué comme rendu`, 'success');
+          const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
+          if (freshRes) renderMainBookDebugTable(freshRes);
+        } else {
+          addLog(`Erreur lors du retour`, 'error');
+          btnReturn.disabled = false;
+          btnReturn.textContent = "Marquer comme Rendu";
+        }
+      }
+    };
+    actionCell.appendChild(btnReturn);
+  }
+
+  tr.appendChild(coverCell);
+  tr.appendChild(infoCell);
+  tr.appendChild(statusCell);
+  tr.appendChild(actionCell);
+  table.appendChild(tr);
 
   container.appendChild(table);
   acquisitionZone.appendChild(container);
 }
 
 /**
- * Rendu technique : Tableau de debug des séries (Identique)
+ * Rendu technique : Tableau de la Série
  */
 function renderSeriesDebugTable(tomes: HumanizedBook[]) {
+  const existing = document.getElementById('series-table-container');
+  if (existing) existing.remove();
+
   const container = document.createElement('div');
-  container.style.marginTop = '15px';
-  container.innerHTML = `<h3 style="color: #5bc31b; font-size: 13px; margin-bottom: 5px;">🛠 Debug Série (Composition)</h3>`;
+  container.id = 'series-table-container';
+  container.style.marginTop = '20px';
+  container.style.borderTop = '2px solid #ccc';
+  container.style.paddingTop = '10px';
+
+  const title = document.createElement('h3');
+  title.textContent = "📚 Contexte de la Série";
+  title.style.marginTop = '0';
+  container.appendChild(title);
 
   const table = document.createElement('table');
-  Object.assign(table.style, {
-    width: '100%', borderCollapse: 'collapse', fontSize: '10px', color: '#ccc', border: '1px solid #444'
+  table.style.width = '100%';
+  table.style.borderCollapse = 'collapse';
+  table.style.fontSize = '12px';
+
+  const thead = `
+    <tr style="background-color: #eee; text-align: left;">
+      <th style="padding: 5px; border: 1px solid #ccc;">N°</th>
+      <th style="padding: 5px; border: 1px solid #ccc;">Titre du tome</th>
+      <th style="padding: 5px; border: 1px solid #ccc;">Statut</th>
+    </tr>
+  `;
+  table.innerHTML = thead;
+
+  // Tri des tomes par numéro
+  const sortedTomes = [...tomes].sort((a, b) => {
+    const numA = parseInt(a.seriesNumber || '0');
+    const numB = parseInt(b.seriesNumber || '0');
+    return numA - numB;
   });
 
-  table.innerHTML = `
-    <thead>
-      <tr style="background: #222; text-align: left;">
-        <th style="padding: 3px; border: 1px solid #444;">Tome</th>
-        <th style="padding: 3px; border: 1px solid #444;">Titre</th>
-        <th style="padding: 3px; border: 1px solid #444;">Statut</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-
-  const tbody = table.querySelector('tbody')!;
-  tomes.forEach(t => {
+  sortedTomes.forEach(tome => {
     const tr = document.createElement('tr');
-    const statusColor = t.ownershipStatus === 'owned' ? '#0f0' : (t.ownershipStatus === 'wish' ? '#ffa500' : '#888');
-    tr.innerHTML = `
-      <td style="padding: 3px; border: 1px solid #444; text-align: center;">${t.seriesNumber || '?'}</td>
-      <td style="padding: 3px; border: 1px solid #444;">${t.title}</td>
-      <td style="padding: 3px; border: 1px solid #444; color: ${statusColor};">${t.ownershipStatus.toUpperCase()}</td>
-    `;
-    tbody.appendChild(tr);
+    
+    const tdNum = document.createElement('td');
+    tdNum.style.padding = '5px';
+    tdNum.style.border = '1px solid #ccc';
+    tdNum.textContent = tome.seriesNumber || '-';
+
+    const tdTitle = document.createElement('td');
+    tdTitle.style.padding = '5px';
+    tdTitle.style.border = '1px solid #ccc';
+    tdTitle.textContent = tome.title;
+
+    const tdStatus = document.createElement('td');
+    tdStatus.style.padding = '5px';
+    tdStatus.style.border = '1px solid #ccc';
+    
+    if (tome.ownershipStatus === 'owned') {
+      tdStatus.innerHTML = '<span style="color: green; font-weight: bold;">✓ Possédé</span>';
+    } else if (tome.ownershipStatus === 'wish') {
+      tdStatus.innerHTML = '<span style="color: #2980b9;">⭐ Wishlist</span>';
+    } else {
+      tdStatus.innerHTML = '<span style="color: #c0392b;">❌ Manquant</span>';
+    }
+
+    tr.appendChild(tdNum);
+    tr.appendChild(tdTitle);
+    tr.appendChild(tdStatus);
+    table.appendChild(tr);
   });
 
   container.appendChild(table);
@@ -7665,72 +7766,47 @@ function renderSeriesDebugTable(tomes: HumanizedBook[]) {
 }
 
 /**
- * Initialisation du module de scan
+ * Initialisation de l'interface après connexion
  */
 function initApp() {
-  addLog("Module d'acquisition prêt.", "success");
+  const section = document.createElement('div');
+  section.innerHTML = `
+    <h2>Test Orchestrateur & UI Flags</h2>
+    <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+      <input type="text" id="isbn-input" placeholder="Scanner ou taper un ISBN..." style="flex-grow: 1;">
+      <button id="btn-search" style="width: auto; background-color: #3498db;">Rechercher</button>
+    </div>
+  `;
+  acquisitionZone.appendChild(section);
 
-  manualIsbnProvider.setup('acquisition-zone', async (isbn) => {
-    // Nettoyage de la zone
-    const existing = acquisitionZone.querySelectorAll('div, button, table');
-    existing.forEach(el => el.remove());
+  const input = document.getElementById('isbn-input') as HTMLInputElement;
+  const btn = document.getElementById('btn-search') as HTMLButtonElement;
 
-    addLog(`Recherche ISBN : ${isbn}...`);
+  btn.addEventListener('click', async () => {
+    const isbn = input.value.trim();
+    if (!isbn) return;
     
+    addLog(`Lancement orchestration pour : ${isbn}...`);
     try {
-      // UTILISATION DE L'ORCHESTRATEUR
-      const res: SearchResponse | null = await searchService.searchByIsbn(isbn);
+      const res = await searchService.searchByIsbn(isbn);
       
       if (!res) {
-        throw new Error("Aucun résultat trouvé.");
+        addLog(`Livre introuvable.`, "error");
+        return;
       }
 
-      addLog(`✓ Récupéré via : ${res.source.toUpperCase()}`, "success");
+      addLog(`Orchestration terminée (Source: ${res.source}). Rendu de l'UI en cours...`, "success");
       
-      // 1. Affichage du tableau principal (avec détection intelligente de doublon)
+      // Rendu du composant "Livre Principal"
       renderMainBookDebugTable(res);
 
-      // 2. Alerte Double Check (Logs console)
-      if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
-        addLog(`⚠️ DOUBLON D'ŒUVRE : Vous possédez déjà "${res.ownership.duplicateEdition.title}"`, "warning");
-      }
-
-      // 3. Bouton Ajouter à la collection (si pas déjà possédé sous CETTE édition)
-      if (res.ui.showAddButton) {
-        const btnAdd = document.createElement('button');
-        btnAdd.textContent = `➕ Ajouter à ma collection`;
-        Object.assign(btnAdd.style, { marginTop: '10px', backgroundColor: '#5bc31b', color: 'white', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
-        btnAdd.onclick = async () => {
-          try {
-            btnAdd.disabled = true;
-            await inventoryService.addToLibrary(res.mainBook.uri);
-            addLog(`🎉 "${res.mainBook.title}" ajouté à l'inventaire !`, "success");
-            btnAdd.textContent = "✓ Ajouté";
-          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnAdd.disabled = false; }
-        };
-        acquisitionZone.appendChild(btnAdd);
-      }
-
-      // 4. Bouton Ajouter à la Wishlist (si pas possédé et pas déjà en wish)
-      if (res.ui.showWishButton) {
-        const btnWish = document.createElement('button');
-        btnWish.textContent = `⭐ Mettre en Wishlist`;
-        Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#f1c40f', color: '#2c3e50', padding: '10px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer', fontWeight: 'bold' });
-        btnWish.onclick = async () => {
-          try {
-            btnWish.disabled = true;
-            await wishlistService.addToWishlist(res.mainBook.workUri || res.mainBook.uri);
-            addLog(`⭐ "${res.mainBook.title}" ajouté à la Wishlist.`, "success");
-            btnWish.textContent = "✓ Souhaité";
-          } catch (e: any) { addLog(`Erreur : ${e.message}`, "error"); btnWish.disabled = false; }
-        };
-        acquisitionZone.appendChild(btnWish);
-      }
-
-      // 5. Bouton d'affichage de la série
+      // Si le contexte de série est présent, on propose d'afficher les détails
+      const existingSeriesTable = document.getElementById('series-table-container');
+      if (existingSeriesTable) existingSeriesTable.remove();
+      
       if (res.series) {
         const btnShowSeries = document.createElement('button');
-        btnShowSeries.textContent = `📚 Voir la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
+        btnShowSeries.textContent = `Afficher la série (${res.series.ownedCount}/${res.series.tomes.length} possédés)`;
         Object.assign(btnShowSeries.style, { marginTop: '5px', backgroundColor: '#34495e', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
         btnShowSeries.onclick = () => {
           btnShowSeries.remove();
@@ -7775,9 +7851,12 @@ form.addEventListener('submit', async (e) => {
     if (await connectionService.initializeApp()) {
       form.style.display = 'none';
       acquisitionZone.style.display = 'block';
+      addLog("Connecté !", "success");
       initApp();
     }
-  } catch (err: any) { addLog(`ÉCHEC : ${err.message}`, "error"); }
+  } catch (err: any) {
+    addLog("Erreur: " + err.message, "error");
+  }
 });
 
 autoInit();
@@ -8087,81 +8166,244 @@ code {
 
 
 ################################################################################
-### FICHIER : src/providers/manual-isbn.provider.ts
+### FICHIER : src/core/types.ts
 ################################################################################
 
-// src/providers/manual-isbn.provider.ts
+// src/resolvers/types.ts
 
-export const manualIsbnProvider = {
-  /**
-   * Injecte le HTML de recherche dans un conteneur et configure l'écouteur
-   */
-  setup(containerId: string, onSearch: (isbn: string) => void) {
-    const container = document.getElementById(containerId);
-    if (!container) return;
+export interface RegistryEntry {
+  uri: string;
+  addedAt: number;
+}
 
-    container.innerHTML = `
-      <div class="acquisition-box" style="margin-top: 20px; padding: 15px; border: 1px dashed #ccc;">
-        <h3>Acquisition Manuelle</h3>
-        <input type="text" id="manual-isbn-input" placeholder="Entrez un ISBN (ex: 9782012101333)" style="width: 70%; padding: 8px;">
-        <button id="manual-isbn-btn" style="padding: 8px 15px; cursor: pointer;">Rechercher</button>
-      </div>
-    `;
+export interface BaseBook {
+  uri: string;
+  workUri?: string;
+  isbn13?: string;
+  isbn10?: string;
+  type: 'edition' | 'work' | 'unknown';
+  title: string;
+  subtitle?: string;
+  originalTitle?: string;
+  description?: string;
+  coverUrl?: string;
+  localCover?: string;
+  language?: string;
+  pageCount?: number;
+  publishDate?: string;
+  format?: string;
+}
 
-    const btn = document.getElementById('manual-isbn-btn');
-    const input = document.getElementById('manual-isbn-input') as HTMLInputElement;
+export interface RawBook extends BaseBook {
+  authorIds: string[];
+  illustratorIds: string[];
+  scriptwriterIds: string[];
+  publisherId?: string;
+  seriesId?: string;
+  seriesNumber?: string;
+  genreIds: string[];
+  collectionId?: string;
+}
 
-    btn?.addEventListener('click', () => {
-      const value = input.value.trim().replace(/-/g, ''); // Nettoyage de base
-      if (value) {
-        onSearch(value);
-      }
+export interface HumanizedBook extends BaseBook {
+  authors: string[];
+  illustrators: string[];
+  scriptwriters: string[];
+  publisher?: string;
+  series?: string;
+  seriesId?: string;
+  seriesNumber?: string;
+  genres: string[];
+  collection?: string;
+  ownershipStatus: 'owned' | 'wish' | 'none';
+}
+
+/**
+ * Structure pour le carnet de prêt local
+ */
+export interface LoanRecord {
+  uri: string;
+  friendName: string;
+  loanDate: number;
+  itemId?: string; // AJOUT : Sauvegarde de l'ID physique pour fiabiliser la synchro
+}
+
+export interface InventoryItem {
+  _id?: string;
+  entity: string;
+  status: 'owned' | 'wishlist' | 'loaned' | 'sold';
+  state?: 'new' | 'good' | 'worn' | 'damaged';
+  available?: boolean;
+  lentTo?: string;
+  dateAdded: string;
+  personalNote?: string;
+}
+
+export interface OwnershipAnalysis {
+  isEditionOwned: boolean;
+  isWorkOwned: boolean;
+  isWished: boolean;
+  duplicateEdition?: HumanizedBook;
+}
+
+export interface SeriesContext {
+  id?: string;
+  name?: string;
+  tomes: HumanizedBook[];
+  isComplete: boolean;
+  ownedCount: number;
+}
+
+export interface UIFlags {
+  showAddButton: boolean;
+  showWishButton: boolean;
+  hasBulkActions: boolean;
+  alertDuplicate: boolean;
+  showLoanButton: boolean;
+  showReturnButton: boolean;
+}
+
+export interface SearchResponse {
+  mainBook: HumanizedBook;
+  ownership: OwnershipAnalysis;
+  series?: SeriesContext;
+  loan: {
+    isLent: boolean;
+    details?: LoanRecord;
+  };
+  ui: UIFlags;
+  source: 'cache' | 'network';
+}
+
+
+################################################################################
+### FICHIER : src/core/database/database.service.ts
+################################################################################
+
+// src/services/database.service.ts
+import Dexie, { type Table } from 'dexie';
+import type { HumanizedBook, LoanRecord, RegistryEntry } from '../types';
+
+export class AppDatabase extends Dexie {
+  inventory!: Table<RegistryEntry, string>;
+  wishlist!: Table<RegistryEntry, string>;
+  cache_books!: Table<HumanizedBook, string>;
+  loans!: Table<LoanRecord, string>; // Nouvelle table pour le carnet de prêt
+
+  constructor() {
+    super('InventaireLocalDBV2');
+    
+    // Version 3 : Ajout de la table des prêts
+    this.version(3).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName' // Indexation par URI et Nom d'ami
     });
   }
-};
+}
 
+export const db = new AppDatabase();
 
-################################################################################
-### FICHIER : src/state/session.ts
-################################################################################
+export const databaseService = {
+  // --- RECHERCHES LOCAL-FIRST (Double Check) ---
 
-// src/state/session.ts
-export const sessionStore = {
-  state: {
-    user: null as { uri: string; username: string } | null,
+  async getBookByIsbn(isbn: string): Promise<HumanizedBook | undefined> {
+    return await db.cache_books
+      .where('isbn13').equals(isbn)
+      .or('isbn10').equals(isbn)
+      .first();
   },
-  
-  setUser(data: any) {
-    // Extraction de l'objet (parfois dans .user, parfois à la racine)
-    const u = data.user || data;
+
+  async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
+    if (!workUri) return undefined;
     
-    // LOG DE DÉBOGAGE : Affiche les clés disponibles dans la console du navigateur
-    console.log('[DEBUG] Clés reçues de l’API :', Object.keys(u));
-    console.log('[DEBUG] Objet complet :', u);
+    const candidates = await db.cache_books
+      .where('workUri').equals(workUri)
+      .toArray();
 
-    // Recherche exhaustive de l'identifiant selon la doc [cite: 163, 263, 672]
-    const finalUri = u.uri || u.id || u._id || u.acct || '';
-
-    this.state.user = {
-      uri: finalUri,
-      username: u.username || u.label || u.name || 'Utilisateur',
-    };
+    for (const book of candidates) {
+      if (book.uri !== currentEditionUri) {
+        const isOwned = await this.isUriInRegistry('inventory', book.uri);
+        if (isOwned) return book;
+      }
+    }
+    return undefined;
   },
+
+  async getEditionByWorkFromCache(workUri: string): Promise<HumanizedBook | undefined> {
+    return await db.cache_books.where('workUri').equals(workUri).first();
+  },
+
+  // --- GESTION DU CACHE (Fiches complètes) ---
   
-  getUserUri() {
-    return this.state.user?.uri;
+  async saveBookToCache(book: HumanizedBook): Promise<void> {
+    console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
+    await db.cache_books.put(book);
+  },
+
+  async getBookFromCache(uri: string): Promise<HumanizedBook | undefined> {
+    return await db.cache_books.get(uri);
+  },
+
+  async getAllCachedBooks(): Promise<HumanizedBook[]> {
+    return await db.cache_books.toArray();
+  },
+
+  // --- GESTION DES REGISTRES (Listes légères) ---
+  
+  async addRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
+    await db[tableName].put({ uri, addedAt: Date.now() });
+  },
+
+  async removeRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
+    await db[tableName].delete(uri);
+  },
+
+  async isUriInRegistry(tableName: 'inventory' | 'wishlist', uri: string): Promise<boolean> {
+    const entry = await db[tableName].get(uri);
+    return !!entry;
+  },
+
+  async getAllRegistryUris(tableName: 'inventory' | 'wishlist'): Promise<string[]> {
+    const entries = await db[tableName].toArray();
+    return entries.map((entry: RegistryEntry) => entry.uri);
+  },
+
+  async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
+    await db[tableName].clear();
+    const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
+    await db[tableName].bulkPut(entries);
+  },
+
+  // --- NOUVEAU : GESTION DES PRÊTS (Table locale) ---
+
+  async saveLoan(loan: LoanRecord): Promise<void> {
+    await db.loans.put(loan);
+  },
+
+  async deleteLoan(uri: string): Promise<void> {
+    await db.loans.delete(uri);
+  },
+
+  async getLoan(uri: string): Promise<LoanRecord | undefined> {
+    return await db.loans.get(uri);
+  },
+
+  async getAllLoans(): Promise<LoanRecord[]> {
+    return await db.loans.toArray();
   }
 };
 
 
 ################################################################################
-### FICHIER : src/resolvers/humanizer.ts
+### FICHIER : src/core/resolvers/humanizer.ts
 ################################################################################
 
 // src/resolvers/humanizer.ts
 import { entityResolver } from './entity.resolver';
-import type { RawBook, HumanizedBook } from './types';
-import { imageService } from '../services/image.service';
+import type { RawBook, HumanizedBook } from '../types';
+import { imageService } from './image.service';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
@@ -8239,15 +8481,15 @@ export const entityHumanizer = {
 
 
 ################################################################################
-### FICHIER : src/resolvers/series.resolver.ts
+### FICHIER : src/core/resolvers/series.resolver.ts
 ################################################################################
 
 // src/resolvers/series.resolver.ts
 import { entityMapper } from './mapper';
-import { databaseService } from '../services/database.service';
+import { databaseService } from '../database/database.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import type { HumanizedBook } from './types';
+import type { HumanizedBook } from '../types';
 
 export const seriesResolver = {
   /**
@@ -8355,122 +8597,79 @@ export const seriesResolver = {
 
 
 ################################################################################
-### FICHIER : src/resolvers/types.ts
+### FICHIER : src/core/resolvers/image.service.ts
 ################################################################################
 
-// src/resolvers/types.ts
+// src/services/image.service.ts
 
-export interface RegistryEntry {
-  uri: string;
-  addedAt: number;
-}
+export const imageService = {
+  /**
+   * Télécharge, redimensionne et compresse une image en Base64 (WebP).
+   * @param imageUrl L'URL de l'image source (Inventaire.io ou Wikidata)
+   * @param maxWidth Largeur maximale pour la compression (défaut 300px)
+   * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
+   */
+  async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
+    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
+    try {
+      const response = await fetch(imageUrl);
+      
+      if (!response.ok) {
+        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
+        throw new Error(`Erreur réseau: ${response.status}`);
+      }
+      
+      const blob = await response.blob();
+      console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
+      
+      // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
+      const img = await createImageBitmap(blob);
+      console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
+      
+      let width = img.width;
+      let height = img.height;
 
-export interface BaseBook {
-  uri: string;
-  workUri?: string;
-  isbn13?: string;
-  isbn10?: string;
-  type: 'edition' | 'work' | 'unknown';
-  title: string;
-  subtitle?: string;
-  originalTitle?: string;
-  description?: string;
-  coverUrl?: string;
-  localCover?: string;
-  language?: string;
-  pageCount?: number;
-  publishDate?: string;
-  format?: string;
-}
+      // Calcul des nouvelles dimensions en respectant le ratio d'aspect
+      if (width > maxWidth) {
+        const ratio = maxWidth / width;
+        width = maxWidth;
+        height = Math.round(height * ratio);
+      }
+      
+      // Préparation du canvas pour le redimensionnement
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error("[DEBUG-IMAGE-SERVICE] Impossible de créer le contexte 2D du Canvas");
+        return null;
+      }
+      
+      // Dessin de l'image redimensionnée
+      ctx.drawImage(img, 0, 0, width, height);
+      
+      // Exportation en WebP (format très léger idéal pour IndexedDB)
+      const finalData = canvas.toDataURL('image/webp', quality);
+      console.log("[DEBUG-IMAGE-SERVICE] DataURL généré avec succès.");
+      return finalData;
 
-export interface RawBook extends BaseBook {
-  authorIds: string[];
-  illustratorIds: string[];
-  scriptwriterIds: string[];
-  publisherId?: string;
-  seriesId?: string;
-  seriesNumber?: string;
-  genreIds: string[];
-  collectionId?: string;
-}
-
-export interface HumanizedBook extends BaseBook {
-  authors: string[];
-  illustrators: string[];
-  scriptwriters: string[];
-  publisher?: string;
-  series?: string;
-  seriesId?: string;
-  seriesNumber?: string;
-  genres: string[];
-  collection?: string;
-  ownershipStatus: 'owned' | 'wish' | 'none';
-}
-
-/**
- * Structure pour le carnet de prêt local
- */
-export interface LoanRecord {
-  uri: string;
-  friendName: string;
-  loanDate: number;
-}
-
-export interface InventoryItem {
-  _id?: string;
-  entity: string;
-  status: 'owned' | 'wishlist' | 'loaned' | 'sold';
-  state?: 'new' | 'good' | 'worn' | 'damaged';
-  available?: boolean;
-  lentTo?: string;
-  dateAdded: string;
-  personalNote?: string;
-}
-
-export interface OwnershipAnalysis {
-  isEditionOwned: boolean;
-  isWorkOwned: boolean;
-  isWished: boolean;
-  duplicateEdition?: HumanizedBook;
-}
-
-export interface SeriesContext {
-  id?: string;
-  name?: string;
-  tomes: HumanizedBook[];
-  isComplete: boolean;
-  ownedCount: number;
-}
-
-export interface UIFlags {
-  showAddButton: boolean;
-  showWishButton: boolean;
-  hasBulkActions: boolean;
-  alertDuplicate: boolean;
-  showLoanButton: boolean;
-  showReturnButton: boolean;
-}
-
-export interface SearchResponse {
-  mainBook: HumanizedBook;
-  ownership: OwnershipAnalysis;
-  series?: SeriesContext;
-  loan: {
-    isLent: boolean;
-    details?: LoanRecord;
-  };
-  ui: UIFlags;
-  source: 'cache' | 'network';
-}
+    } catch (error) {
+      console.warn(`[IMAGE SERVICE] Échec du traitement pour ${imageUrl}:`, error);
+      return null;
+    }
+  }
+};
 
 
 ################################################################################
-### FICHIER : src/resolvers/entity.resolver.ts
+### FICHIER : src/core/resolvers/entity.resolver.ts
 ################################################################################
 
 // src/resolvers/entity.resolver.ts
 import { entityMapper } from './mapper';
-import type { RawBook } from './types';
+import type { RawBook } from '../types';
 
 const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
 
@@ -8618,11 +8817,11 @@ export const entityResolver = {
 
 
 ################################################################################
-### FICHIER : src/resolvers/mapper.ts
+### FICHIER : src/core/resolvers/mapper.ts
 ################################################################################
 
 // src/resolvers/mapper.ts
-import type { RawBook } from './types';
+import type { RawBook } from '../types';
 
 export const entityMapper = {
   /**
@@ -8737,34 +8936,250 @@ export const entityMapper = {
 
 
 ################################################################################
-### FICHIER : src/assets/hero.png
+### FICHIER : src/core/orchestrators/connection.service.ts
 ################################################################################
 
-[CONTENU NON TEXTUEL OU ILLISIBLE : hero.png]
+// src/services/connection.service.ts
+import { userService } from '../services/user.service';
+import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
+import { databaseService } from '../database/database.service';
+import { entityResolver } from '../resolvers/entity.resolver';
+import { entityHumanizer } from '../resolvers/humanizer';
+import { loanService } from '../services/loan.service';
+
+export const connectionService = {
+  isInitialized: false,
+  userUri: null as string | null,
+
+  /**
+   * Initialisation globale de l'application
+   */
+  async initializeApp(): Promise<boolean> {
+    console.group("[CONNECTION SERVICE] Démarrage de l'application");
+    try {
+      console.log("Tentative de récupération du profil...");
+      const profile = await userService.fetchProfile();
+      
+      if (!profile || !profile.uri) {
+        console.warn("Aucune session active. Utilisateur déconnecté.");
+        console.groupEnd();
+        return false;
+      }
+
+      this.userUri = profile.uri;
+      console.log(`Session trouvée : ${profile.username} (${this.userUri})`);
+
+      // 1. Synchronisation bloquante des registres légers
+      console.log("Synchronisation des registres (Inventory, Wishlist, Loans)...");
+      await Promise.all([
+        inventoryService.loadLibrary(this.userUri),
+        wishlistService.loadWishlist(this.userUri),
+        loanService.sync(this.userUri) // CORRECTION : On passe l'URI utilisateur
+      ]);
+      
+      this.isInitialized = true;
+      console.log("Application prête et registres à jour !");
+      console.groupEnd();
+
+      // 2. Lancement asynchrone de l'hydratation (Ne bloque pas l'UI)
+      this.hydrateCacheInBackground();
+
+      return true;
+    } catch (error) {
+      console.error("[CONNECTION SERVICE] Erreur fatale d'initialisation :", error);
+      console.groupEnd();
+      return false;
+    }
+  },
+
+  /**
+   * Tâche de fond : Télécharge et met en cache les fiches complètes des livres possédés/souhaités
+   */
+  async hydrateCacheInBackground(): Promise<void> {
+    console.group("[HYDRATATION] Démarrage de la tâche de fond");
+    try {
+      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
+      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
+      
+      // Fusion et déduplication des listes
+      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
+      console.log(`[HYDRATATION] ${allUris.length} URIs à vérifier en cache.`);
+
+      let addedCount = 0;
+
+      // Par lot pour ne pas surcharger le navigateur ou l'API
+      for (const uri of allUris) {
+        const existingBook = await databaseService.getBookFromCache(uri);
+        
+        if (!existingBook) {
+          const rawBook = await entityResolver.fromUri(uri);
+          if (rawBook) {
+            const humanizedBook = await entityHumanizer.humanize(rawBook);
+            
+            if (inventoryUris.includes(uri)) {
+              humanizedBook.ownershipStatus = 'owned';
+            } else if (wishlistUris.includes(uri)) {
+              humanizedBook.ownershipStatus = 'wish';
+            }
+
+            await databaseService.saveBookToCache(humanizedBook);
+            addedCount++;
+          }
+        } else {
+          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
+          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
+          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
+
+          if (existingBook.ownershipStatus !== expectedStatus) {
+             existingBook.ownershipStatus = expectedStatus;
+             await databaseService.saveBookToCache(existingBook);
+             console.log(`[HYDRATATION] Mise à jour du statut pour : ${uri} (${expectedStatus})`);
+          }
+        }
+      }
+
+      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
+    } catch (error) {
+      console.error("[HYDRATATION] Erreur durant la tâche de fond :", error);
+    } finally {
+      console.groupEnd();
+    }
+  }
+};
 
 
 ################################################################################
-### FICHIER : src/assets/vite.svg
+### FICHIER : src/core/orchestrators/search.service.ts
 ################################################################################
 
-<svg xmlns="http://www.w3.org/2000/svg" width="77" height="47" fill="none" aria-labelledby="vite-logo-title" viewBox="0 0 77 47"><title id="vite-logo-title">Vite</title><style>.parenthesis{fill:#000}@media (prefers-color-scheme:dark){.parenthesis{fill:#fff}}</style><path fill="#9135ff" d="M40.151 45.71c-.663.844-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.493c-.92 0-1.457-1.04-.92-1.788l7.479-10.471c1.07-1.498 0-3.578-1.842-3.578H15.443c-.92 0-1.456-1.04-.92-1.788l9.696-13.576c.213-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.472c-1.07 1.497 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.087.89 1.83L40.153 45.712z"/><mask id="a" width="48" height="47" x="14" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M40.047 45.71c-.663.843-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.389c-.92 0-1.457-1.04-.92-1.788l7.479-10.472c1.07-1.497 0-3.578-1.842-3.578H15.34c-.92 0-1.456-1.04-.92-1.788l9.696-13.575c.213-.297.556-.474.92-.474H53.93c.92 0 1.456 1.04.92 1.788L47.37 13.03c-1.07 1.498 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.088.89 1.831L40.049 45.712z"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#eee6ff" rx="5.508" ry="14.704" transform="rotate(269.814 20.96 11.29)scale(-1 1)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#eee6ff" rx="10.399" ry="29.851" transform="rotate(89.814 -16.902 -8.275)scale(1 -1)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#8900ff" rx="5.508" ry="30.487" transform="rotate(89.814 -19.197 -7.127)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.928 4.177)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.738 5.52)scale(1 -1)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#eee6ff" rx="14.072" ry="22.078" transform="rotate(93.35 31.245 55.578)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx="14.592" cy="9.743" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(39.51 14.592 9.743)"/></g><g filter="url(#k)"><ellipse cx="61.728" cy="-5.321" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 61.728 -5.32)"/></g><g filter="url(#l)"><ellipse cx="55.618" cy="7.104" fill="#00c2ff" rx="5.971" ry="9.665" transform="rotate(37.892 55.618 7.104)"/></g><g filter="url(#m)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#n)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#o)"><ellipse cx="49.857" cy="30.678" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 49.857 30.678)"/></g><g filter="url(#p)"><ellipse cx="52.623" cy="33.171" fill="#00c2ff" rx="5.971" ry="15.297" transform="rotate(37.892 52.623 33.17)"/></g></g><path d="M6.919 0c-9.198 13.166-9.252 33.575 0 46.789h6.215c-9.25-13.214-9.196-33.623 0-46.789zm62.424 0h-6.215c9.198 13.166 9.252 33.575 0 46.789h6.215c9.25-13.214 9.196-33.623 0-46.789" class="parenthesis"/><defs><filter id="b" width="60.045" height="41.654" x="-5.564" y="16.92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-40.407" y="-6.762" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-35.435" y="2.801" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-30.84" y="20.8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-29.307" y="21.949" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="29.961" y="-17.13" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-13.43" y="-22.082" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="34.321" y="-37.644" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="38.847" y="-10.552" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="22.45" y="-1.645" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="32.919" y="11.36" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter></defs></svg>
+// src/services/search.service.ts
+import { databaseService } from '../database/database.service';
+import { wishlistService } from '../services/wishlist.service';
+import { entityResolver } from '../resolvers/entity.resolver';
+import { entityHumanizer } from '../resolvers/humanizer';
+import { seriesResolver } from '../resolvers/series.resolver';
+import type { SearchResponse, HumanizedBook } from '../types';
 
+export const searchService = {
+  /**
+   * Orchestration complète d'une recherche par ISBN
+   * Local-First -> Network Fallback -> Double Check -> Série -> Paquet UI
+   */
+  async searchByIsbn(isbn: string): Promise<SearchResponse | null> {
+    console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
+    
+    // 1. PHASE IDENTIFICATION : Local-First
+    let book = await databaseService.getBookByIsbn(isbn);
+    let source: 'cache' | 'network' = 'cache';
+
+    if (!book) {
+      console.log("[SEARCH] Absent du cache, interrogation réseau...");
+      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
+      const raw = await entityResolver.fromIsbn(isbn);
+      
+      if (!raw) {
+        console.warn("[SEARCH] Livre introuvable.");
+        console.groupEnd();
+        return null;
+      }
+      
+      // Humanisation (Traductions + Compression d'image)
+      book = await entityHumanizer.humanize(raw);
+      
+      // SONDE DEBUG : AVANT SAUVEGARDE CACHE
+      console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
+
+      // Sauvegarde immédiate dans le cache books
+      await databaseService.saveBookToCache(book);
+      source = 'network';
+    } else {
+      console.log("[SEARCH] Trouvé en cache local.");
+    }
+
+    // 2. PHASE ANALYSE DE POSSESSION (Double Check)
+    // CORRECTION : On passe systématiquement le workUri pour la conscience de l'œuvre
+    const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
+    const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
+    
+    let isWorkOwned = isEditionOwned;
+    let duplicateEdition: HumanizedBook | undefined = undefined;
+
+    // Si on n'a pas cet exemplaire précis, on cherche si on a une autre édition de la même œuvre
+    if (!isEditionOwned && book.workUri) {
+      const other = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
+      if (other) {
+        isWorkOwned = true;
+        duplicateEdition = other;
+      }
+    }
+
+    // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
+    book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
+
+    // 3. PHASE ANALYSE DES PRÊTS
+    const loanDetails = await databaseService.getLoan(book.uri);
+    const isLent = !!loanDetails;
+
+    // 4. PHASE EXPANSION : Contexte de Série
+    let seriesContext = undefined;
+    if (book.seriesId) {
+      console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
+      const tomes = await seriesResolver.getFullSeries(book.seriesId);
+      const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
+      
+      seriesContext = {
+        id: book.seriesId,
+        name: book.series,
+        tomes: tomes,
+        ownedCount: ownedCount,
+        isComplete: tomes.length > 0 && ownedCount === tomes.length
+      };
+    }
+
+    // 5. PHASE UI : Calcul des indicateurs pour le Frontend
+    const ui = {
+      showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
+      showWishButton: !isWorkOwned && !isWished,
+      alertDuplicate: !isEditionOwned && isWorkOwned,
+      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
+      showLoanButton: isEditionOwned && !isLent,
+      showReturnButton: isLent
+    };
+
+    // SONDE DEBUG : OBJET FINAL
+    console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
+
+    console.log("[SEARCH] Orchestration terminée avec succès.");
+    console.groupEnd();
+
+    // 6. RÉSULTAT : Le "Paquet" final prêt à l'emploi
+    return {
+      mainBook: book,
+      ownership: {
+        isEditionOwned,
+        isWorkOwned,
+        isWished,
+        duplicateEdition
+      },
+      series: seriesContext,
+      loan: {
+        isLent: isLent,
+        details: loanDetails
+      },
+      ui,
+      source
+    };
+  }
+};
 
 
 ################################################################################
-### FICHIER : src/assets/typescript.svg
-################################################################################
-
-<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="32" height="32" viewBox="0 0 256 256"><path fill="#007ACC" d="M0 128v128h256V0H0z"/><path fill="#FFF" d="m56.612 128.85l-.081 10.483h33.32v94.68h23.568v-94.68h33.321v-10.28c0-5.69-.122-10.444-.284-10.566c-.122-.162-20.4-.244-44.983-.203l-44.74.122l-.121 10.443Zm149.955-10.742c6.501 1.625 11.459 4.51 16.01 9.224c2.357 2.52 5.851 7.111 6.136 8.208c.08.325-11.053 7.802-17.798 11.988c-.244.162-1.22-.894-2.317-2.52c-3.291-4.795-6.745-6.867-12.028-7.233c-7.76-.528-12.759 3.535-12.718 10.321c0 1.992.284 3.17 1.097 4.795c1.707 3.536 4.876 5.649 14.832 9.956c18.326 7.883 26.168 13.084 31.045 20.48c5.445 8.249 6.664 21.415 2.966 31.208c-4.063 10.646-14.14 17.879-28.323 20.276c-4.388.772-14.79.65-19.504-.203c-10.28-1.828-20.033-6.908-26.047-13.572c-2.357-2.6-6.949-9.387-6.664-9.874c.122-.163 1.178-.813 2.356-1.504c1.138-.65 5.446-3.129 9.509-5.485l7.355-4.267l1.544 2.276c2.154 3.29 6.867 7.801 9.712 9.305c8.167 4.307 19.383 3.698 24.909-1.26c2.357-2.153 3.332-4.388 3.332-7.68c0-2.966-.366-4.266-1.91-6.501c-1.99-2.845-6.054-5.242-17.595-10.24c-13.206-5.69-18.895-9.224-24.096-14.832c-3.007-3.25-5.852-8.452-7.03-12.8c-.975-3.617-1.22-12.678-.447-16.335c2.723-12.76 12.353-21.659 26.25-24.3c4.51-.853 14.994-.528 19.424.569Z"/></svg>
-
-
-
-################################################################################
-### FICHIER : src/services/inventory.service.ts
+### FICHIER : src/core/services/inventory.service.ts
 ################################################################################
 
 // src/services/inventory.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const inventoryService = {
   async loadLibrary(uri: string): Promise<number> {
@@ -8831,155 +9246,210 @@ export const inventoryService = {
 
 
 ################################################################################
-### FICHIER : src/services/loan.service.ts
+### FICHIER : src/core/services/loan.service.ts
 ################################################################################
 
 // src/services/loan.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const loanService = {
+  userUri: null as string | null,
   shelfId: null as string | null,
-  shelfName: 'Prêts', // Le nom de l'étagère qui servira de marqueur sur Inventaire.io
+  shelfName: 'Prêts',
+
+  async safeFetch(url: string, options?: RequestInit): Promise<any> {
+    console.log(`[LOAN DEBUG] 🚀 fetch: ${options?.method || 'GET'} ${url}`);
+    try {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      if (!response.ok) {
+        console.error(`[LOAN DEBUG] ❌ Erreur API:`, text.substring(0, 250));
+        throw new Error(`HTTP Error ${response.status}`);
+      }
+      return JSON.parse(text);
+    } catch (error) {
+      console.error(`[LOAN DEBUG] 💥 Exception:`, error);
+      throw error;
+    }
+  },
 
   /**
-   * Récupère ou crée l'étagère "Prêts" sur le compte Inventaire
+   * Extrait un dictionnaire de secours depuis l'inventaire
    */
+  async getInventoryMap(): Promise<Record<string, string>> {
+    if (!this.userUri) return {};
+    try {
+      const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
+      const data = await res.json();
+      const items = data.items || [];
+      const itemList = Array.isArray(items) ? items : Object.values(items);
+      
+      const map: Record<string, string> = {};
+      for (const item of itemList) {
+        const id = item._id || item.id;
+        const entity = (typeof item.entity === 'string') ? item.entity : (item.entity?.uri || item.uri);
+        if (id && entity) map[id] = entity;
+      }
+      return map;
+    } catch (e) {
+      return {};
+    }
+  },
+
+  /**
+   * Trouve l'ID unique de l'exemplaire physique dans l'inventaire
+   */
+  async getInventoryItemId(entityUri: string): Promise<string | null> {
+    if (!this.userUri) return null;
+    try {
+      const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
+      const data = await res.json();
+      const items = data.items || [];
+      const itemList = Array.isArray(items) ? items : Object.values(items);
+      
+      const item = itemList.find((i: any) => i.entity === entityUri || i.uri === entityUri);
+      return item ? (item._id || item.id) : null;
+    } catch (e) {
+      console.error("[LOAN SERVICE] Erreur lors de la recherche de l'exemplaire:", e);
+      return null;
+    }
+  },
+
   async initializeShelf(): Promise<string | null> {
     if (this.shelfId) return this.shelfId;
+    if (!this.userUri) return null;
     
     try {
-      // 1. Récupération de la liste des étagères de l'utilisateur
-      const res = await fetch('/api/shelves');
-      const data = await res.json();
-      const shelves = data.shelves || (Array.isArray(data) ? data : Object.values(data));
+      const data = await this.safeFetch(`/api/shelves?path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
+      let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
+      let shelf = shelvesArray.find((s: any) => s && s.name === this.shelfName);
       
-      let shelf = shelves.find((s: any) => s.name === this.shelfName);
-      
-      // 2. Création si elle n'existe pas encore
       if (!shelf) {
-        console.log(`[LOAN SERVICE] Création de l'étagère "${this.shelfName}"...`);
-        const createRes = await fetch('/api/shelves', {
+        const createData = await this.safeFetch('/api/shelves', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: this.shelfName, description: 'Carnet de prêts' })
+          body: JSON.stringify({ name: this.shelfName, description: 'Carnet de prêts local Epiqoi' })
         });
-        const createData = await createRes.json();
         shelf = createData.shelf || createData;
       }
 
       this.shelfId = shelf._id || shelf.id;
       return this.shelfId;
     } catch (error) {
-      console.error("[LOAN SERVICE] Erreur lors de l'initialisation de l'étagère:", error);
+      console.error("[LOAN SERVICE] Erreur d'initialisation:", error);
       return null;
     }
   },
 
   /**
-   * Synchronise l'étagère distante avec la base locale (La Réconciliation)
+   * Synchronisation (Réconciliation blindée via itemId)
    */
-  async sync(): Promise<void> {
+  async sync(userUri: string): Promise<void> {
     console.group("[LOAN SERVICE] Synchronisation des prêts");
+    this.userUri = userUri;
+    
     try {
       const shelfId = await this.initializeShelf();
-      if (!shelfId) throw new Error("Impossible d'accéder à l'étagère de prêts.");
+      if (!shelfId) throw new Error("Étagère introuvable.");
 
-      // ÉTAPE A : Récupération de la vérité distante (Cloud)
-      const res = await fetch(`/api/shelves/items?shelfId=${shelfId}`);
-      const data = await res.json();
-      const items = data.items || [];
-      const distantUris = items.map((item: any) => item.entity || item.uri).filter(Boolean);
+      const data = await this.safeFetch(`/api/shelves?path=by-ids&ids=${encodeURIComponent(shelfId)}&with-items-ids=true`);
+      let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
+      const shelf = shelvesArray.find((s: any) => s && (s._id === shelfId || s.id === shelfId)) || shelvesArray[0];
       
-      console.log(`[LOAN SERVICE] ${distantUris.length} prêts trouvés en ligne.`);
-
-      // ÉTAPE B : Analyse du carnet local (IndexedDB)
+      const items = shelf?.items || [];
+      const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
+      
       const localLoans = await databaseService.getAllLoans();
-      const localUris = localLoans.map(loan => loan.uri);
-
-      // ÉTAPE C : La Réconciliation (Miroir dynamique)
+      const inventoryMap = await this.getInventoryMap(); // Plan de secours
       
-      // 1. Suppression des orphelins : Présents en local mais retirés de l'étagère web = Rendus
-      for (const localUri of localUris) {
-        if (!distantUris.includes(localUri)) {
-          console.log(`[LOAN SERVICE] Réconciliation : Retour détecté pour ${localUri}. Suppression locale.`);
-          await databaseService.deleteLoan(localUri);
+      console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
+
+      // 1. Suppression des retours (Un livre local qui n'est plus sur l'étagère web)
+      for (const localLoan of localLoans) {
+        // La condition absolue : on vérifie l'itemId local avec les items web
+        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || 
+                               distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
+        
+        if (!isStillOnShelf) {
+          console.log(`[LOAN SERVICE] Retour détecté pour ${localLoan.uri}. Suppression locale.`);
+          await databaseService.deleteLoan(localLoan.uri);
         }
       }
 
-      // 2. Ajouts extérieurs : Présents sur le web mais inconnus en local = Prêtés depuis un autre appareil
-      for (const distantUri of distantUris) {
-        if (!localUris.includes(distantUri)) {
-          console.log(`[LOAN SERVICE] Réconciliation : Prêt distant détecté pour ${distantUri}. Ajout local.`);
+      // 2. Ajouts distants (Un livre prêté via le site officiel)
+      for (const distantId of distantItemIds) {
+        // Est-ce qu'on connaît déjà cet ID physiquement ou via son URI ?
+        const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === inventoryMap[distantId]);
+        
+        if (!isKnownLocally) {
+          const entityUri = inventoryMap[distantId] || distantId;
+          console.log(`[LOAN SERVICE] Prêt web détecté (${entityUri}). Ajout local.`);
           await databaseService.saveLoan({
-            uri: distantUri,
-            friendName: 'Inconnu (Ajout depuis le site)',
-            loanDate: Date.now()
+            uri: entityUri,
+            friendName: 'Inconnu (Ajout web)',
+            loanDate: Date.now(),
+            itemId: distantId
           });
         }
       }
-
       console.log("[LOAN SERVICE] Synchronisation terminée avec succès.");
     } catch (error) {
-      console.error("[LOAN SERVICE] Erreur de synchronisation:", error);
+      console.error("[LOAN SERVICE] Erreur:", error);
     } finally {
       console.groupEnd();
     }
   },
 
-  /**
-   * Action métier : Enregistrer un nouveau prêt
-   */
   async lend(uri: string, friendName: string): Promise<boolean> {
     try {
       const shelfId = await this.initializeShelf();
       if (!shelfId) throw new Error("Étagère non initialisée");
 
-      // 1. Appel API : Marquage sur le cloud (Ajout à l'étagère)
-      const res = await fetch('/api/shelves/add-items', {
+      const itemId = await this.getInventoryItemId(uri);
+      if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
+
+      await this.safeFetch('/api/shelves?path=add-items', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shelfId, uris: [uri] })
-      });
-      if (!res.ok) throw new Error("Erreur réseau lors de l'ajout à l'étagère");
-
-      // 2. Écriture Locale : Remplissage du carnet
-      await databaseService.saveLoan({
-        uri,
-        friendName,
-        loanDate: Date.now()
+        body: JSON.stringify({ id: shelfId, items: [itemId] }) 
       });
 
+      // SAUVEGARDE EN BÉTON ARMÉ : On lie l'URI et le physical ID
+      await databaseService.saveLoan({ 
+        uri, 
+        friendName, 
+        loanDate: Date.now(),
+        itemId 
+      });
+      
       console.log(`[LOAN SERVICE] Livre ${uri} prêté à ${friendName}`);
       return true;
     } catch (error) {
-      console.error("[LOAN SERVICE] Erreur lors du prêt:", error);
+      console.error("[LOAN SERVICE] Erreur prêt:", error);
       return false;
     }
   },
 
-  /**
-   * Action métier : Marquer un livre comme rendu
-   */
   async returnBook(uri: string): Promise<boolean> {
     try {
       const shelfId = await this.initializeShelf();
       if (!shelfId) throw new Error("Étagère non initialisée");
 
-      // 1. Appel API : Retrait du cloud
-      const res = await fetch('/api/shelves/remove-items', {
+      const localLoan = await databaseService.getLoan(uri);
+      const itemId = localLoan?.itemId || await this.getInventoryItemId(uri);
+      if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
+
+      await this.safeFetch('/api/shelves?path=remove-items', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shelfId, uris: [uri] })
+        body: JSON.stringify({ id: shelfId, items: [itemId] })
       });
-      if (!res.ok) throw new Error("Erreur réseau lors du retrait de l'étagère");
 
-      // 2. Nettoyage Local : On déchire la page du carnet
       await databaseService.deleteLoan(uri);
-
       console.log(`[LOAN SERVICE] Livre ${uri} rendu.`);
       return true;
     } catch (error) {
-      console.error("[LOAN SERVICE] Erreur lors du retour:", error);
+      console.error("[LOAN SERVICE] Erreur retour:", error);
       return false;
     }
   }
@@ -8987,11 +9457,11 @@ export const loanService = {
 
 
 ################################################################################
-### FICHIER : src/services/auth.service.ts
+### FICHIER : src/core/services/auth.service.ts
 ################################################################################
 
 // src/services/auth.service.ts
-import { sessionStore } from '../state/session';
+import { sessionStore } from '../../state/session';
 
 export const authService = {
   async login(username: string, password: string) {
@@ -9021,11 +9491,11 @@ export const authService = {
 
 
 ################################################################################
-### FICHIER : src/services/wishlist.service.ts
+### FICHIER : src/core/services/wishlist.service.ts
 ################################################################################
 
 // src/services/wishlist.service.ts
-import { databaseService } from './database.service';
+import { databaseService } from '../database/database.service';
 
 export const wishlistService = {
   wishlistId: null as string | null,
@@ -9183,254 +9653,11 @@ export const wishlistService = {
 
 
 ################################################################################
-### FICHIER : src/services/connection.service.ts
-################################################################################
-
-// src/services/connection.service.ts
-import { userService } from './user.service';
-import { inventoryService } from './inventory.service';
-import { wishlistService } from './wishlist.service';
-import { databaseService } from './database.service';
-import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
-import { loanService } from './loan.service'; // AJOUT : Import du nouveau service
-
-export const connectionService = {
-  isInitialized: false,
-  userUri: null as string | null,
-
-  /**
-   * Initialisation globale de l'application
-   */
-  async initializeApp(): Promise<boolean> {
-    console.group("[CONNECTION SERVICE] Démarrage de l'application");
-    try {
-      console.log("Tentative de récupération du profil...");
-      const profile = await userService.fetchProfile();
-      
-      if (!profile || !profile.uri) {
-        console.warn("Aucune session active. Utilisateur déconnecté.");
-        console.groupEnd();
-        return false;
-      }
-
-      this.userUri = profile.uri;
-      console.log(`Session trouvée : ${profile.username} (${this.userUri})`);
-
-      // 1. Synchronisation bloquante des registres légers
-      console.log("Synchronisation des registres (Inventory, Wishlist, Loans)...");
-      await Promise.all([
-        inventoryService.loadLibrary(this.userUri),
-        wishlistService.loadWishlist(this.userUri),
-        loanService.sync() // AJOUT : Déclenchement du miroir dynamique des prêts
-      ]);
-      
-      this.isInitialized = true;
-      console.log("Application prête et registres à jour !");
-      console.groupEnd();
-
-      // 2. Lancement asynchrone de l'hydratation (Ne bloque pas l'UI)
-      this.hydrateCacheInBackground();
-
-      return true;
-    } catch (error) {
-      console.error("[CONNECTION SERVICE] Erreur fatale d'initialisation :", error);
-      console.groupEnd();
-      return false;
-    }
-  },
-
-  /**
-   * Tâche de fond : Télécharge et met en cache les fiches complètes des livres possédés/souhaités
-   */
-  async hydrateCacheInBackground(): Promise<void> {
-    console.group("[HYDRATATION] Démarrage de la tâche de fond");
-    try {
-      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
-      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
-      
-      // Fusion et déduplication des listes
-      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
-      console.log(`[HYDRATATION] ${allUris.length} URIs à vérifier en cache.`);
-
-      let addedCount = 0;
-
-      // Par lot pour ne pas surcharger le navigateur ou l'API
-      for (const uri of allUris) {
-        const existingBook = await databaseService.getBookFromCache(uri);
-        
-        if (!existingBook) {
-          const rawBook = await entityResolver.fromUri(uri);
-          if (rawBook) {
-            // Le humanizer s'occupe désormais de la compression de l'image
-            const humanizedBook = await entityHumanizer.humanize(rawBook);
-            
-            // On attribue le bon statut selon son registre d'appartenance
-            if (inventoryUris.includes(uri)) {
-              humanizedBook.ownershipStatus = 'owned';
-            } else if (wishlistUris.includes(uri)) {
-              humanizedBook.ownershipStatus = 'wish';
-            }
-
-            // On le range dans le coffre-fort
-            await databaseService.saveBookToCache(humanizedBook);
-            addedCount++;
-          }
-        } else {
-          // Sécurité : On s'assure que le statut en cache correspond bien au serveur (en cas de transfert wishlist -> inventory par ex.)
-          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
-          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
-          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
-
-          if (existingBook.ownershipStatus !== expectedStatus) {
-             existingBook.ownershipStatus = expectedStatus;
-             await databaseService.saveBookToCache(existingBook);
-             console.log(`[HYDRATATION] Mise à jour du statut pour : ${uri} (${expectedStatus})`);
-          }
-        }
-      }
-
-      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
-    } catch (error) {
-      console.error("[HYDRATATION] Erreur durant la tâche de fond :", error);
-    } finally {
-      console.groupEnd();
-    }
-  }
-};
-
-
-################################################################################
-### FICHIER : src/services/search.service.ts
-################################################################################
-
-// src/services/search.service.ts
-import { databaseService } from './database.service';
-import { wishlistService } from './wishlist.service';
-import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
-import { seriesResolver } from '../resolvers/series.resolver';
-import type { SearchResponse, HumanizedBook } from '../resolvers/types';
-
-export const searchService = {
-  /**
-   * Orchestration complète d'une recherche par ISBN
-   * Local-First -> Network Fallback -> Double Check -> Série -> Paquet UI
-   */
-  async searchByIsbn(isbn: string): Promise<SearchResponse | null> {
-    console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
-    
-    // 1. PHASE IDENTIFICATION : Local-First
-    let book = await databaseService.getBookByIsbn(isbn);
-    let source: 'cache' | 'network' = 'cache';
-
-    if (!book) {
-      console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      // Appel au résolveur intelligent (qui rebondit sur l'œuvre)
-      const raw = await entityResolver.fromIsbn(isbn);
-      
-      if (!raw) {
-        console.warn("[SEARCH] Livre introuvable.");
-        console.groupEnd();
-        return null;
-      }
-      
-      // Humanisation (Traductions + Compression d'image)
-      book = await entityHumanizer.humanize(raw);
-      
-      // SONDE DEBUG : AVANT SAUVEGARDE CACHE
-      console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
-
-      // Sauvegarde immédiate dans le cache books
-      await databaseService.saveBookToCache(book);
-      source = 'network';
-    } else {
-      console.log("[SEARCH] Trouvé en cache local.");
-    }
-
-    // 2. PHASE ANALYSE DE POSSESSION (Double Check)
-    // CORRECTION : On passe systématiquement le workUri pour la conscience de l'œuvre
-    const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
-    const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
-    
-    let isWorkOwned = isEditionOwned;
-    let duplicateEdition: HumanizedBook | undefined = undefined;
-
-    // Si on n'a pas cet exemplaire précis, on cherche si on a une autre édition de la même œuvre
-    if (!isEditionOwned && book.workUri) {
-      const other = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
-      if (other) {
-        isWorkOwned = true;
-        duplicateEdition = other;
-      }
-    }
-
-    // Mise à jour du statut temps réel pour l'affichage (L'œuvre prime sur le souhait)
-    book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
-
-    // 3. PHASE ANALYSE DES PRÊTS
-    const loanDetails = await databaseService.getLoan(book.uri);
-    const isLent = !!loanDetails;
-
-    // 4. PHASE EXPANSION : Contexte de Série
-    let seriesContext = undefined;
-    if (book.seriesId) {
-      console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
-      const tomes = await seriesResolver.getFullSeries(book.seriesId);
-      const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
-      
-      seriesContext = {
-        id: book.seriesId,
-        name: book.series,
-        tomes: tomes,
-        ownedCount: ownedCount,
-        isComplete: tomes.length > 0 && ownedCount === tomes.length
-      };
-    }
-
-    // 5. PHASE UI : Calcul des indicateurs pour le Frontend
-    const ui = {
-      showAddButton: !isWorkOwned, // On ne propose l'ajout que si on ne possède aucune édition
-      showWishButton: !isWorkOwned && !isWished,
-      alertDuplicate: !isEditionOwned && isWorkOwned,
-      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
-      showLoanButton: isEditionOwned && !isLent,
-      showReturnButton: isLent
-    };
-
-    // SONDE DEBUG : OBJET FINAL
-    console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
-
-    console.log("[SEARCH] Orchestration terminée avec succès.");
-    console.groupEnd();
-
-    // 6. RÉSULTAT : Le "Paquet" final prêt à l'emploi
-    return {
-      mainBook: book,
-      ownership: {
-        isEditionOwned,
-        isWorkOwned,
-        isWished,
-        duplicateEdition
-      },
-      series: seriesContext,
-      loan: {
-        isLent: isLent,
-        details: loanDetails
-      },
-      ui,
-      source
-    };
-  }
-};
-
-
-################################################################################
-### FICHIER : src/services/user.service.ts
+### FICHIER : src/core/services/user.service.ts
 ################################################################################
 
 // src/services/user.service.ts
-import { sessionStore } from '../state/session';
+import { sessionStore } from '../../state/session';
 
 export const userService = {
   async fetchProfile() {
@@ -9450,188 +9677,92 @@ export const userService = {
 
 
 ################################################################################
-### FICHIER : src/services/database.service.ts
+### FICHIER : src/plugins/manual/manual-isbn.provider.ts
 ################################################################################
 
-// src/services/database.service.ts
-import Dexie, { type Table } from 'dexie';
-import type { HumanizedBook, LoanRecord, RegistryEntry } from '../resolvers/types';
+// src/providers/manual-isbn.provider.ts
 
-export class AppDatabase extends Dexie {
-  inventory!: Table<RegistryEntry, string>;
-  wishlist!: Table<RegistryEntry, string>;
-  cache_books!: Table<HumanizedBook, string>;
-  loans!: Table<LoanRecord, string>; // Nouvelle table pour le carnet de prêt
+export const manualIsbnProvider = {
+  /**
+   * Injecte le HTML de recherche dans un conteneur et configure l'écouteur
+   */
+  setup(containerId: string, onSearch: (isbn: string) => void) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
 
-  constructor() {
-    super('InventaireLocalDBV2');
-    
-    // Version 3 : Ajout de la table des prêts
-    this.version(3).stores({
-      inventory: 'uri',
-      wishlist: 'uri',
-      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
-      loans: 'uri, friendName' // Indexation par URI et Nom d'ami
+    container.innerHTML = `
+      <div class="acquisition-box" style="margin-top: 20px; padding: 15px; border: 1px dashed #ccc;">
+        <h3>Acquisition Manuelle</h3>
+        <input type="text" id="manual-isbn-input" placeholder="Entrez un ISBN (ex: 9782012101333)" style="width: 70%; padding: 8px;">
+        <button id="manual-isbn-btn" style="padding: 8px 15px; cursor: pointer;">Rechercher</button>
+      </div>
+    `;
+
+    const btn = document.getElementById('manual-isbn-btn');
+    const input = document.getElementById('manual-isbn-input') as HTMLInputElement;
+
+    btn?.addEventListener('click', () => {
+      const value = input.value.trim().replace(/-/g, ''); // Nettoyage de base
+      if (value) {
+        onSearch(value);
+      }
     });
   }
-}
+};
 
-export const db = new AppDatabase();
 
-export const databaseService = {
-  // --- RECHERCHES LOCAL-FIRST (Double Check) ---
+################################################################################
+### FICHIER : src/state/session.ts
+################################################################################
 
-  async getBookByIsbn(isbn: string): Promise<HumanizedBook | undefined> {
-    return await db.cache_books
-      .where('isbn13').equals(isbn)
-      .or('isbn10').equals(isbn)
-      .first();
+// src/state/session.ts
+export const sessionStore = {
+  state: {
+    user: null as { uri: string; username: string } | null,
   },
-
-  async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
-    if (!workUri) return undefined;
+  
+  setUser(data: any) {
+    // Extraction de l'objet (parfois dans .user, parfois à la racine)
+    const u = data.user || data;
     
-    const candidates = await db.cache_books
-      .where('workUri').equals(workUri)
-      .toArray();
+    // LOG DE DÉBOGAGE : Affiche les clés disponibles dans la console du navigateur
+    console.log('[DEBUG] Clés reçues de l’API :', Object.keys(u));
+    console.log('[DEBUG] Objet complet :', u);
 
-    for (const book of candidates) {
-      if (book.uri !== currentEditionUri) {
-        const isOwned = await this.isUriInRegistry('inventory', book.uri);
-        if (isOwned) return book;
-      }
-    }
-    return undefined;
+    // Recherche exhaustive de l'identifiant selon la doc [cite: 163, 263, 672]
+    const finalUri = u.uri || u.id || u._id || u.acct || '';
+
+    this.state.user = {
+      uri: finalUri,
+      username: u.username || u.label || u.name || 'Utilisateur',
+    };
   },
-
-  async getEditionByWorkFromCache(workUri: string): Promise<HumanizedBook | undefined> {
-    return await db.cache_books.where('workUri').equals(workUri).first();
-  },
-
-  // --- GESTION DU CACHE (Fiches complètes) ---
   
-  async saveBookToCache(book: HumanizedBook): Promise<void> {
-    console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
-    await db.cache_books.put(book);
-  },
-
-  async getBookFromCache(uri: string): Promise<HumanizedBook | undefined> {
-    return await db.cache_books.get(uri);
-  },
-
-  async getAllCachedBooks(): Promise<HumanizedBook[]> {
-    return await db.cache_books.toArray();
-  },
-
-  // --- GESTION DES REGISTRES (Listes légères) ---
-  
-  async addRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
-    await db[tableName].put({ uri, addedAt: Date.now() });
-  },
-
-  async removeRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
-    await db[tableName].delete(uri);
-  },
-
-  async isUriInRegistry(tableName: 'inventory' | 'wishlist', uri: string): Promise<boolean> {
-    const entry = await db[tableName].get(uri);
-    return !!entry;
-  },
-
-  async getAllRegistryUris(tableName: 'inventory' | 'wishlist'): Promise<string[]> {
-    const entries = await db[tableName].toArray();
-    return entries.map((entry: RegistryEntry) => entry.uri);
-  },
-
-  async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
-    await db[tableName].clear();
-    const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
-    await db[tableName].bulkPut(entries);
-  },
-
-  // --- NOUVEAU : GESTION DES PRÊTS (Table locale) ---
-
-  async saveLoan(loan: LoanRecord): Promise<void> {
-    await db.loans.put(loan);
-  },
-
-  async deleteLoan(uri: string): Promise<void> {
-    await db.loans.delete(uri);
-  },
-
-  async getLoan(uri: string): Promise<LoanRecord | undefined> {
-    return await db.loans.get(uri);
-  },
-
-  async getAllLoans(): Promise<LoanRecord[]> {
-    return await db.loans.toArray();
+  getUserUri() {
+    return this.state.user?.uri;
   }
 };
 
 
 ################################################################################
-### FICHIER : src/services/image.service.ts
+### FICHIER : src/assets/hero.png
 ################################################################################
 
-// src/services/image.service.ts
+[CONTENU NON TEXTUEL OU ILLISIBLE : hero.png]
 
-export const imageService = {
-  /**
-   * Télécharge, redimensionne et compresse une image en Base64 (WebP).
-   * @param imageUrl L'URL de l'image source (Inventaire.io ou Wikidata)
-   * @param maxWidth Largeur maximale pour la compression (défaut 300px)
-   * @param quality Qualité de compression de 0 à 1 (défaut 0.7)
-   */
-  async compressAndEncode(imageUrl: string, maxWidth = 300, quality = 0.7): Promise<string | null> {
-    console.log(`[DEBUG-IMAGE-SERVICE] Tentative fetch sur : ${imageUrl}`);
-    try {
-      const response = await fetch(imageUrl);
-      
-      if (!response.ok) {
-        console.error(`[DEBUG-IMAGE-SERVICE] HTTP Error ${response.status} pour ${imageUrl}`);
-        throw new Error(`Erreur réseau: ${response.status}`);
-      }
-      
-      const blob = await response.blob();
-      console.log(`[DEBUG-IMAGE-SERVICE] Blob reçu :`, blob.type, blob.size, "octets");
-      
-      // Utilisation de createImageBitmap pour un traitement performant hors thread principal si possible
-      const img = await createImageBitmap(blob);
-      console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
-      
-      let width = img.width;
-      let height = img.height;
 
-      // Calcul des nouvelles dimensions en respectant le ratio d'aspect
-      if (width > maxWidth) {
-        const ratio = maxWidth / width;
-        width = maxWidth;
-        height = Math.round(height * ratio);
-      }
-      
-      // Préparation du canvas pour le redimensionnement
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        console.error("[DEBUG-IMAGE-SERVICE] Impossible de créer le contexte 2D du Canvas");
-        return null;
-      }
-      
-      // Dessin de l'image redimensionnée
-      ctx.drawImage(img, 0, 0, width, height);
-      
-      // Exportation en WebP (format très léger idéal pour IndexedDB)
-      const finalData = canvas.toDataURL('image/webp', quality);
-      console.log("[DEBUG-IMAGE-SERVICE] DataURL généré avec succès.");
-      return finalData;
+################################################################################
+### FICHIER : src/assets/vite.svg
+################################################################################
 
-    } catch (error) {
-      console.warn(`[IMAGE SERVICE] Échec du traitement pour ${imageUrl}:`, error);
-      return null;
-    }
-  }
-};
+<svg xmlns="http://www.w3.org/2000/svg" width="77" height="47" fill="none" aria-labelledby="vite-logo-title" viewBox="0 0 77 47"><title id="vite-logo-title">Vite</title><style>.parenthesis{fill:#000}@media (prefers-color-scheme:dark){.parenthesis{fill:#fff}}</style><path fill="#9135ff" d="M40.151 45.71c-.663.844-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.493c-.92 0-1.457-1.04-.92-1.788l7.479-10.471c1.07-1.498 0-3.578-1.842-3.578H15.443c-.92 0-1.456-1.04-.92-1.788l9.696-13.576c.213-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.472c-1.07 1.497 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.087.89 1.83L40.153 45.712z"/><mask id="a" width="48" height="47" x="14" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M40.047 45.71c-.663.843-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.389c-.92 0-1.457-1.04-.92-1.788l7.479-10.472c1.07-1.497 0-3.578-1.842-3.578H15.34c-.92 0-1.456-1.04-.92-1.788l9.696-13.575c.213-.297.556-.474.92-.474H53.93c.92 0 1.456 1.04.92 1.788L47.37 13.03c-1.07 1.498 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.088.89 1.831L40.049 45.712z"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#eee6ff" rx="5.508" ry="14.704" transform="rotate(269.814 20.96 11.29)scale(-1 1)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#eee6ff" rx="10.399" ry="29.851" transform="rotate(89.814 -16.902 -8.275)scale(1 -1)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#8900ff" rx="5.508" ry="30.487" transform="rotate(89.814 -19.197 -7.127)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.928 4.177)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.738 5.52)scale(1 -1)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#eee6ff" rx="14.072" ry="22.078" transform="rotate(93.35 31.245 55.578)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx="14.592" cy="9.743" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(39.51 14.592 9.743)"/></g><g filter="url(#k)"><ellipse cx="61.728" cy="-5.321" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 61.728 -5.32)"/></g><g filter="url(#l)"><ellipse cx="55.618" cy="7.104" fill="#00c2ff" rx="5.971" ry="9.665" transform="rotate(37.892 55.618 7.104)"/></g><g filter="url(#m)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#n)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#o)"><ellipse cx="49.857" cy="30.678" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 49.857 30.678)"/></g><g filter="url(#p)"><ellipse cx="52.623" cy="33.171" fill="#00c2ff" rx="5.971" ry="15.297" transform="rotate(37.892 52.623 33.17)"/></g></g><path d="M6.919 0c-9.198 13.166-9.252 33.575 0 46.789h6.215c-9.25-13.214-9.196-33.623 0-46.789zm62.424 0h-6.215c9.198 13.166 9.252 33.575 0 46.789h6.215c9.25-13.214 9.196-33.623 0-46.789" class="parenthesis"/><defs><filter id="b" width="60.045" height="41.654" x="-5.564" y="16.92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-40.407" y="-6.762" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-35.435" y="2.801" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-30.84" y="20.8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-29.307" y="21.949" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="29.961" y="-17.13" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-13.43" y="-22.082" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="34.321" y="-37.644" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="38.847" y="-10.552" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="22.45" y="-1.645" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="32.919" y="11.36" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter></defs></svg>
+
+
+
+################################################################################
+### FICHIER : src/assets/typescript.svg
+################################################################################
+
+<svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="32" height="32" viewBox="0 0 256 256"><path fill="#007ACC" d="M0 128v128h256V0H0z"/><path fill="#FFF" d="m56.612 128.85l-.081 10.483h33.32v94.68h23.568v-94.68h33.321v-10.28c0-5.69-.122-10.444-.284-10.566c-.122-.162-20.4-.244-44.983-.203l-44.74.122l-.121 10.443Zm149.955-10.742c6.501 1.625 11.459 4.51 16.01 9.224c2.357 2.52 5.851 7.111 6.136 8.208c.08.325-11.053 7.802-17.798 11.988c-.244.162-1.22-.894-2.317-2.52c-3.291-4.795-6.745-6.867-12.028-7.233c-7.76-.528-12.759 3.535-12.718 10.321c0 1.992.284 3.17 1.097 4.795c1.707 3.536 4.876 5.649 14.832 9.956c18.326 7.883 26.168 13.084 31.045 20.48c5.445 8.249 6.664 21.415 2.966 31.208c-4.063 10.646-14.14 17.879-28.323 20.276c-4.388.772-14.79.65-19.504-.203c-10.28-1.828-20.033-6.908-26.047-13.572c-2.357-2.6-6.949-9.387-6.664-9.874c.122-.163 1.178-.813 2.356-1.504c1.138-.65 5.446-3.129 9.509-5.485l7.355-4.267l1.544 2.276c2.154 3.29 6.867 7.801 9.712 9.305c8.167 4.307 19.383 3.698 24.909-1.26c2.357-2.153 3.332-4.388 3.332-7.68c0-2.966-.366-4.266-1.91-6.501c-1.99-2.845-6.054-5.242-17.595-10.24c-13.206-5.69-18.895-9.224-24.096-14.832c-3.007-3.25-5.852-8.452-7.03-12.8c-.975-3.617-1.22-12.678-.447-16.335c2.723-12.76 12.353-21.659 26.25-24.3c4.51-.853 14.994-.528 19.424.569Z"/></svg>
+
 

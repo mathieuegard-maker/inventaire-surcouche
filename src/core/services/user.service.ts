@@ -1,5 +1,5 @@
 // src/services/user.service.ts
-import { sessionStore } from '../state/session';
+import { sessionStore } from '../../state/session';
 
 export const userService = {
   async fetchProfile() {

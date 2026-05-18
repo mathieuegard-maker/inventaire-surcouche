@@ -1,11 +1,11 @@
 // src/services/connection.service.ts
-import { userService } from './user.service';
-import { inventoryService } from './inventory.service';
-import { wishlistService } from './wishlist.service';
-import { databaseService } from './database.service';
+import { userService } from '../services/user.service';
+import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
+import { databaseService } from '../database/database.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
-import { loanService } from './loan.service';
+import { loanService } from '../services/loan.service';
 
 export const connectionService = {
   isInitialized: false,
