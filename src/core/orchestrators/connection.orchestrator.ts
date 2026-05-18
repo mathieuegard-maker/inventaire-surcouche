@@ -61,5 +61,32 @@ export const connectionService = {
       console.groupEnd();
       return false;
     }
+  },
+
+  /**
+   * Séquence d'authentification et d'amorçage de session
+   */
+  async login(username: string, password: string): Promise<boolean> {
+    console.group("[CONNECTION SERVICE] Tentative de connexion de l'utilisateur");
+    try {
+      // On relaie la requête brute au service utilisateur dédié
+      const success = await userService.login(username, password);
+      
+      if (!success) {
+        console.warn("Identifiants refusés par le service utilisateur.");
+        console.groupEnd();
+        return false;
+      }
+
+      console.log("Authentification validée. Amorçage des données utilisateur...");
+      console.groupEnd();
+      
+      // On lance immédiatement l'initialisation des bases et caches locaux
+      return await this.initializeApp();
+    } catch (error) {
+      console.error("[CONNECTION SERVICE] Erreur critique pendant le login :", error);
+      console.groupEnd();
+      throw error;
+    }
   }
 };

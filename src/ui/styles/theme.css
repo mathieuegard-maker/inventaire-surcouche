@@ -1,0 +1,20 @@
+/* src/ui/styles/theme.css */
+
+:root {
+  /* Charte graphique (Couleurs) */
+  --color-primary: #5bc31b;
+  --color-primary-hover: #4ca916;
+  --color-primary-light: #f0f9eb;
+  --color-text-main: #333333;
+  --color-text-muted: #555555;
+  --color-overlay: rgba(0, 0, 0, 0.5);
+  --color-surface: #ffffff;
+
+  /* Structure & Mises en page */
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.15);
+  
+  /* Typographie */
+  --font-main: sans-serif;
+}

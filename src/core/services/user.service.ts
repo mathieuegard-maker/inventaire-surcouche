@@ -2,6 +2,9 @@
 import { sessionStore } from '../../state/session';
 
 export const userService = {
+  /**
+   * Récupère le profil de l'utilisateur actuellement connecté via le cookie de session
+   */
   async fetchProfile() {
     const res = await fetch('/api/gateway?action=user-get');
     const data = await res.json();
@@ -13,5 +16,33 @@ export const userService = {
     
     sessionStore.setUser(data);
     return sessionStore.state.user;
+  },
+
+  /**
+   * Envoie une requête d'authentification au Gateway avec les identifiants requis
+   */
+  async login(username: string, password: string): Promise<boolean> {
+    // CORRECTION : Remplacement de 'login' par 'auth-login' pour s'aligner sur le switch du Gateway
+    const res = await fetch('/api/gateway?action=auth-login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.log('[DEBUG] Échec de la connexion API :', data);
+      return false;
+    }
+
+    // Si le Gateway renvoie directement les données utilisateur à la connexion
+    if (data) {
+      sessionStore.setUser(data);
+    }
+    
+    return true;
   }
 };
