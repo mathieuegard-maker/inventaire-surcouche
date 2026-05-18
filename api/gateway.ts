@@ -1,46 +1,23 @@
 // api/gateway.ts
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import * as https from 'https';
 import { Buffer } from 'buffer';
 
 const USER_AGENT_BASE = 'InventaireMobileOverlay/2.0 (mathieu.egard@gmail.com)';
 
-// --- POLYFILL INDESTRUCTIBLE ---
-// Contourne le bug "fetch failed" de Node 18/Undici sur MacOS
-function reliableFetch(urlStr: string, options: any = {}): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(urlStr);
-    const req = https.request(url, {
-      method: options.method || 'GET',
-      headers: options.headers || {}
-    }, (res) => {
-      const chunks: Buffer[] = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => {
-        const buffer = Buffer.concat(chunks);
-        resolve({
-          ok: res.statusCode && res.statusCode >= 200 && res.statusCode < 300,
-          status: res.statusCode || 200,
-          headers: {
-            getSetCookie: () => {
-                const sc = res.headers['set-cookie'];
-                return Array.isArray(sc) ? sc : (sc ? [sc] : []);
-            },
-            get: (name: string) => {
-                const val = res.headers[name.toLowerCase()];
-                return Array.isArray(val) ? val[0] : val;
-            }
-          },
-          text: async () => buffer.toString('utf8'),
-          buffer: async () => buffer // Renvoi brut pour les images
-        });
-      });
-    });
-    req.on('error', reject);
-    if (options.body) req.write(options.body);
-    req.end();
-  });
-}
+// --- RÉSILENCE MILITAIRE : Auto-Retry en cas de micro-coupure réseau ---
+const resilientFetch = async (url: string, options?: RequestInit, retries = 3): Promise<Response> => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const res = await fetch(url, options);
+      return res; // Si succès, on renvoie immédiatement
+    } catch (err: any) {
+      if (i === retries - 1) throw err; // Si c'est le 3ème échec, on abandonne
+      console.warn(`[RETRY] Micro-coupure réseau sur ${url}. Nouvel essai dans ${500 * (i + 1)}ms...`);
+      await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // Attente progressive (500ms, puis 1s...)
+    }
+  }
+  throw new Error("Unreachable");
+};
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = req.query.action as string;
@@ -51,8 +28,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // --- HELPER ROBUSTE ---
-  const proxyFetch = async (url: string, options: any) => {
-    const response = await reliableFetch(url, options); // Utilisation du polyfill
+  const proxyFetch = async (url: string, options: RequestInit) => {
+    const response = await resilientFetch(url, options);
     const text = await response.text();
     let data;
     
@@ -67,26 +44,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
       }
     } else {
-      data = {}; // Gestion propre des réponses vides (204)
+      data = {};
     }
     
     // Traitement spécial des cookies pour la connexion
     if (action === 'auth-login' && response.ok) {
-        const setCookies = response.headers.getSetCookie();
-        const rawCookie = response.headers.get('set-cookie');
+        let setCookies: string[] = [];
+        if (typeof response.headers.getSetCookie === 'function') {
+           setCookies = response.headers.getSetCookie();
+        } else {
+           const rawCookie = response.headers.get('set-cookie');
+           if (rawCookie) setCookies = [rawCookie];
+        }
         
-        if (setCookies && setCookies.length > 0) {
-          const cleanCookies = setCookies.map((c: string) => c.split(';').map(part => part.trim()).filter(part => {
+        if (setCookies.length > 0) {
+          const cleanCookies = setCookies.map(c => c.split(';').map(part => part.trim()).filter(part => {
               const p = part.toLowerCase();
               return !p.startsWith('domain=') && !p.startsWith('samesite=') && !p.startsWith('secure');
             }).join('; ') + '; Path=/; SameSite=Lax; HttpOnly');
           res.setHeader('Set-Cookie', cleanCookies);
-        } else if (rawCookie) {
-          const cleanCookie = rawCookie.split(';').map((part: string) => part.trim()).filter((part: string) => {
-              const p = part.toLowerCase();
-              return !p.startsWith('domain=') && !p.startsWith('samesite=') && !p.startsWith('secure');
-            }).join('; ') + '; Path=/; SameSite=Lax; HttpOnly';
-          res.setHeader('Set-Cookie', cleanCookie);
         }
     }
 
@@ -128,7 +104,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         let successCount = 0;
         const errors = [];
         for (const uri of uris) {
-          const response = await reliableFetch('https://inventaire.io/api/items', {
+          // Utilisation du resilientFetch ici aussi pour l'ajout massif
+          const response = await resilientFetch('https://inventaire.io/api/items', {
             method: 'POST',
             headers: { ...headers, 'Content-Type': 'application/json' },
             body: JSON.stringify({ entity: uri }) 
@@ -194,15 +171,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { url } = req.query;
         if (!url) return res.status(400).json({ error: 'URL requise' });
         
-        const response = await reliableFetch(url as string);
+        // Résilience sur le proxy d'image également
+        const response = await resilientFetch(url as string);
         if (!response.ok) throw new Error(`Erreur réseau distante: ${response.status}`);
         
         const contentType = response.headers.get('content-type');
         if (contentType) res.setHeader('Content-Type', contentType);
         res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
-        const rawBuffer = await response.buffer();
-        return res.status(200).send(rawBuffer);
+        const arrayBuffer = await response.arrayBuffer();
+        return res.status(200).send(Buffer.from(arrayBuffer));
       }
 
       default:

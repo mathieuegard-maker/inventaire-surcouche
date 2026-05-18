@@ -11,9 +11,13 @@ export const seriesResolver = {
     console.group(`[SERIES RESOLVER] Récupération de la série: ${seriesId}`);
     
     const resList = await fetch(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
-    const { tomes: tomeUris } = await resList.json();
+    const dataList = await resList.json();
+    
+    // CORRECTION : On lit 'uris' tel que renvoyé par l'API Inventaire native via le Gateway
+    const tomeUris = dataList.uris || dataList.tomes || [];
     
     if (!tomeUris || tomeUris.length === 0) {
+      console.log(`[SERIES RESOLVER] Aucun tome trouvé pour la série.`);
       console.groupEnd();
       return [];
     }
@@ -54,8 +58,6 @@ export const seriesResolver = {
     }
 
     if (urgentUris.length > 0) {
-      // NOTE : Si le nombre d'URIs est très long, on passera la requête au proxy Inventaire officiel
-      // Mais ici, on utilise l'endpoint Vercel gateway
       const resData = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
       const data = await resData.json();
       const entities = data.entities || data;
