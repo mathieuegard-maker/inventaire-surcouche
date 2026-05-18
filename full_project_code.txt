@@ -1058,10 +1058,8 @@ export function setupCounter(element: HTMLButtonElement) {
 import { authService } from './core/services/auth.service';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 //import { manualIsbnProvider } from './providers/manual-isbn.provider';
-import { inventoryService } from './core/services/inventory.service';
-import { wishlistService } from './core/services/wishlist.service';
 import { searchService } from './core/orchestrators/search.orchestrator';
-import { loanService } from './core/services/loan.service';
+import { queueService } from './core/orchestrators/queue.orchestrator'; // AJOUT : Import de la file d'attente
 import type { SearchResponse, HumanizedBook } from './core/types';
 
 const form = document.getElementById('login-form') as HTMLFormElement;
@@ -1099,6 +1097,13 @@ function renderMainBookDebugTable(res: SearchResponse) {
   table.style.borderCollapse = 'collapse';
   table.style.fontSize = '14px';
 
+  // --- RECONSTRUCTION LOCALE DES RÈGLES UI (Pureté du Middle-End) ---
+  const showAddButton = !res.ownership.isWorkOwned;
+  const showWishButton = !res.ownership.isWorkOwned && !res.ownership.isWished;
+  const alertDuplicate = !res.ownership.isEditionOwned && res.ownership.isWorkOwned;
+  const showLoanButton = res.ownership.isEditionOwned && !res.loan.isLent;
+  const showReturnButton = res.loan.isLent;
+
   // Calcul du texte de statut de possession
   let statusHtml = '';
   if (res.ownership.isEditionOwned) {
@@ -1118,7 +1123,7 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   let duplicateAlertHtml = '';
-  if (res.ui.alertDuplicate && res.ownership.duplicateEdition) {
+  if (alertDuplicate && res.ownership.duplicateEdition) {
     duplicateAlertHtml = `
       <div style="margin-top:10px; padding:10px; background-color:#fff3cd; color:#856404; border:1px solid #ffeeba; border-radius:4px;">
         <strong>⚠️ Attention :</strong> Vous possédez déjà une autre édition de cette œuvre.<br>
@@ -1182,16 +1187,17 @@ function renderMainBookDebugTable(res: SearchResponse) {
   };
 
   // Bouton Ajouter Inventaire
-  if (res.ui.showAddButton) {
+  if (showAddButton) {
     const btnAdd = document.createElement('button');
     btnAdd.textContent = "Ajouter (Inventaire)";
     Object.assign(btnAdd.style, { backgroundColor: '#27ae60', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnAdd.onclick = async () => {
       btnAdd.disabled = true;
-      btnAdd.textContent = "Ajout...";
+      btnAdd.textContent = "Ajout en file d'attente...";
       try {
-        await inventoryService.addToLibrary(res.mainBook.uri);
-        addLog(`Ajouté à l'inventaire : ${res.mainBook.title}`, 'success');
+        // AJOUT : Passage par l'Optimistic UI
+        await queueService.enqueueAction('ADD_INVENTORY', res.mainBook.uri);
+        addLog(`Ajouté à l'inventaire localement : ${res.mainBook.title}`, 'success');
         const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
         if (freshRes) renderMainBookDebugTable(freshRes);
       } catch (e: any) {
@@ -1204,16 +1210,17 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Ajouter Wishlist
-  if (res.ui.showWishButton) {
+  if (showWishButton) {
     const btnWish = document.createElement('button');
     btnWish.textContent = "Ajouter (Wishlist)";
     Object.assign(btnWish.style, { marginTop: '5px', backgroundColor: '#2980b9', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnWish.onclick = async () => {
       btnWish.disabled = true;
-      btnWish.textContent = "Ajout...";
+      btnWish.textContent = "Ajout en file d'attente...";
       try {
-        await wishlistService.addToWishlist(res.mainBook.uri);
-        addLog(`Ajouté à la wishlist : ${res.mainBook.title}`, 'success');
+        // AJOUT : Passage par l'Optimistic UI
+        await queueService.enqueueAction('ADD_WISHLIST', res.mainBook.uri);
+        addLog(`Ajouté à la wishlist localement : ${res.mainBook.title}`, 'success');
         const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
         if (freshRes) renderMainBookDebugTable(freshRes);
       } catch (e: any) {
@@ -1226,7 +1233,7 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Prêter
-  if (res.ui.showLoanButton) {
+  if (showLoanButton) {
     const btnLoan = document.createElement('button');
     btnLoan.textContent = "Prêter l'exemplaire";
     Object.assign(btnLoan.style, { marginTop: '5px', backgroundColor: '#e67e22', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
@@ -1234,13 +1241,14 @@ function renderMainBookDebugTable(res: SearchResponse) {
       const friendName = prompt("À qui prêtez-vous ce livre ?");
       if (friendName && friendName.trim() !== '') {
         btnLoan.disabled = true;
-        btnLoan.textContent = "Enregistrement...";
-        const success = await loanService.lend(res.mainBook.uri, friendName.trim());
-        if (success) {
-          addLog(`Livre prêté à ${friendName}`, 'success');
+        btnLoan.textContent = "Mise en file d'attente...";
+        try {
+          // AJOUT : Passage par l'Optimistic UI
+          await queueService.enqueueAction('LEND', res.mainBook.uri, { friendName: friendName.trim() });
+          addLog(`Prêt enregistré localement pour ${friendName}`, 'success');
           const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
           if (freshRes) renderMainBookDebugTable(freshRes);
-        } else {
+        } catch (e: any) {
           addLog(`Erreur lors du prêt`, 'error');
           btnLoan.disabled = false;
           btnLoan.textContent = "Prêter l'exemplaire";
@@ -1251,20 +1259,21 @@ function renderMainBookDebugTable(res: SearchResponse) {
   }
 
   // Bouton Retour
-  if (res.ui.showReturnButton) {
+  if (showReturnButton) {
     const btnReturn = document.createElement('button');
     btnReturn.textContent = "Marquer comme Rendu";
     Object.assign(btnReturn.style, { marginTop: '5px', backgroundColor: '#8e44ad', color: 'white', padding: '8px', border: 'none', borderRadius: '4px', width: '100%', cursor: 'pointer' });
     btnReturn.onclick = async () => {
       if (confirm("Confirmer le retour de ce livre ?")) {
         btnReturn.disabled = true;
-        btnReturn.textContent = "Enregistrement...";
-        const success = await loanService.returnBook(res.mainBook.uri);
-        if (success) {
-          addLog(`Livre marqué comme rendu`, 'success');
+        btnReturn.textContent = "Mise en file d'attente...";
+        try {
+          // AJOUT : Passage par l'Optimistic UI
+          await queueService.enqueueAction('RETURN', res.mainBook.uri);
+          addLog(`Retour enregistré localement`, 'success');
           const freshRes = await searchService.searchByIsbn(getCurrentSearchIsbn());
           if (freshRes) renderMainBookDebugTable(freshRes);
-        } else {
+        } catch (e: any) {
           addLog(`Erreur lors du retour`, 'error');
           btnReturn.disabled = false;
           btnReturn.textContent = "Marquer comme Rendu";
@@ -1762,7 +1771,7 @@ code {
 ### FICHIER : src/core/types.ts
 ################################################################################
 
-// src/resolvers/types.ts
+// src/core/types.ts
 
 export interface RegistryEntry {
   uri: string;
@@ -1785,6 +1794,7 @@ export interface BaseBook {
   pageCount?: number;
   publishDate?: string;
   format?: string;
+  updatedAt?: number; // AJOUT : Horodatage pour le système de péremption du cache (TTL)
 }
 
 export interface RawBook extends BaseBook {
@@ -1847,15 +1857,6 @@ export interface SeriesContext {
   ownedCount: number;
 }
 
-export interface UIFlags {
-  showAddButton: boolean;
-  showWishButton: boolean;
-  hasBulkActions: boolean;
-  alertDuplicate: boolean;
-  showLoanButton: boolean;
-  showReturnButton: boolean;
-}
-
 export interface SearchResponse {
   mainBook: HumanizedBook;
   ownership: OwnershipAnalysis;
@@ -1864,7 +1865,6 @@ export interface SearchResponse {
     isLent: boolean;
     details?: LoanRecord;
   };
-  ui: UIFlags;
   source: 'cache' | 'network';
 }
 
@@ -1873,25 +1873,45 @@ export interface SearchResponse {
 ### FICHIER : src/core/database/database.service.ts
 ################################################################################
 
-// src/services/database.service.ts
+// src/core/database/database.service.ts
 import Dexie, { type Table } from 'dexie';
 import type { HumanizedBook, LoanRecord, RegistryEntry } from '../types';
+
+// NOUVEAU : Interface pour la file d'attente (Optimistic UI)
+export interface PendingAction {
+  id?: number;
+  action: 'LEND' | 'RETURN' | 'ADD_INVENTORY' | 'REMOVE_INVENTORY' | 'ADD_WISHLIST' | 'REMOVE_WISHLIST';
+  uri: string;
+  payload?: any;
+  status: 'pending' | 'failed';
+  createdAt: number;
+}
 
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;
   wishlist!: Table<RegistryEntry, string>;
   cache_books!: Table<HumanizedBook, string>;
-  loans!: Table<LoanRecord, string>; // Nouvelle table pour le carnet de prêt
+  loans!: Table<LoanRecord, string>; // Table pour le carnet de prêt
+  pending_actions!: Table<PendingAction, number>; // NOUVELLE TABLE : File d'attente
 
   constructor() {
     super('InventaireLocalDBV2');
     
-    // Version 3 : Ajout de la table des prêts
+    // Historique conservé pour la migration fluide des utilisateurs existants
     this.version(3).stores({
       inventory: 'uri',
       wishlist: 'uri',
       cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
-      loans: 'uri, friendName' // Indexation par URI et Nom d'ami
+      loans: 'uri, friendName'
+    });
+
+    // Version 4 : Ajout de la table pending_actions pour l'Optimistic UI
+    this.version(4).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName',
+      pending_actions: '++id, action, uri, status, createdAt' // ++id génère un auto-incrément mathématique
     });
   }
 }
@@ -1910,11 +1930,9 @@ export const databaseService = {
 
   async getOtherOwnedEdition(workUri: string, currentEditionUri: string): Promise<HumanizedBook | undefined> {
     if (!workUri) return undefined;
-    
     const candidates = await db.cache_books
       .where('workUri').equals(workUri)
       .toArray();
-
     for (const book of candidates) {
       if (book.uri !== currentEditionUri) {
         const isOwned = await this.isUriInRegistry('inventory', book.uri);
@@ -1932,6 +1950,7 @@ export const databaseService = {
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
     console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
+    book.updatedAt = Date.now(); // AJOUT : Marquage temporel automatique (TTL)
     await db.cache_books.put(book);
   },
 
@@ -1969,7 +1988,7 @@ export const databaseService = {
     await db[tableName].bulkPut(entries);
   },
 
-  // --- NOUVEAU : GESTION DES PRÊTS (Table locale) ---
+  // --- GESTION DES PRÊTS (Table locale) ---
 
   async saveLoan(loan: LoanRecord): Promise<void> {
     await db.loans.put(loan);
@@ -1985,6 +2004,20 @@ export const databaseService = {
 
   async getAllLoans(): Promise<LoanRecord[]> {
     return await db.loans.toArray();
+  },
+
+  // --- NOUVEAU : GESTION DE LA FILE D'ATTENTE (Optimistic UI) ---
+
+  async savePendingAction(action: PendingAction): Promise<number> {
+    return await db.pending_actions.put(action);
+  },
+
+  async getPendingActions(): Promise<PendingAction[]> {
+    return await db.pending_actions.orderBy('createdAt').toArray();
+  },
+
+  async deletePendingAction(id: number): Promise<void> {
+    await db.pending_actions.delete(id);
   }
 };
 
@@ -2180,14 +2213,89 @@ describe('Entity Humanizer', () => {
 
 
 ################################################################################
+### FICHIER : src/core/resolvers/series.resolver.test.ts
+################################################################################
+
+// src/core/resolvers/series.resolver.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { seriesResolver } from './series.resolver';
+import { databaseService } from '../database/database.service';
+import { syncOrchestrator } from '../orchestrators/sync.orchestrator';
+
+// --- MOCKING ---
+vi.mock('../database/database.service', () => ({
+  databaseService: {
+    getBookFromCache: vi.fn(),
+    getEditionByWorkFromCache: vi.fn(),
+    saveBookToCache: vi.fn()
+  }
+}));
+vi.mock('../services/inventory.service', () => ({
+  inventoryService: { isUriOwned: vi.fn() }
+}));
+vi.mock('../services/wishlist.service', () => ({
+  wishlistService: { isUriWished: vi.fn() }
+}));
+vi.mock('../orchestrators/sync.orchestrator', () => ({
+  syncOrchestrator: { hydrateRemainingSeries: vi.fn().mockResolvedValue(undefined) }
+}));
+
+globalThis.fetch = vi.fn();
+
+describe('Series Resolver (Windowing)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('doit isoler 20 tomes urgents et envoyer le reste en arrière-plan', async () => {
+    // Arrange : On invente une série de 25 tomes (pour dépasser la limite de 20)
+    const fakeUris = Array.from({length: 25}, (_, i) => `wd:Tome${i+1}`);
+    
+    vi.mocked(globalThis.fetch).mockImplementation(async (url: string | Request | URL) => {
+      const urlStr = url.toString();
+      if (urlStr.includes('/api/series/list')) {
+        return { json: async () => ({ tomes: fakeUris }) } as any;
+      }
+      if (urlStr.includes('/api/entities/by-uris')) {
+        // Simulation des traductions brutes pour éviter que le mapper ne plante
+        const mockEntities: any = {};
+        fakeUris.forEach(uri => { mockEntities[uri] = { type: 'work', claims: {} }; });
+        return { json: async () => ({ entities: mockEntities }) } as any;
+      }
+      return { json: async () => ({}) } as any;
+    });
+
+    // On simule une base de données vide pour forcer le téléchargement des 25 tomes
+    vi.mocked(databaseService.getBookFromCache).mockResolvedValue(undefined);
+    vi.mocked(databaseService.getEditionByWorkFromCache).mockResolvedValue(undefined);
+
+    // Act
+    await seriesResolver.getFullSeries('wd:SERIE_TEST');
+
+    // Assert : Vérification de la mécanique de coupe (Windowing)
+    expect(syncOrchestrator.hydrateRemainingSeries).toHaveBeenCalledTimes(1);
+    
+    // On vérifie que la tâche de fond a bien reçu EXACTEMENT les 5 tomes restants
+    const backgroundCallArg = vi.mocked(syncOrchestrator.hydrateRemainingSeries).mock.calls[0][0];
+    expect(backgroundCallArg.length).toBe(5);
+    
+    // On s'assure que le lot de fond contient bien les tomes 21 à 25
+    expect(backgroundCallArg).toContain('wd:Tome21');
+    expect(backgroundCallArg).toContain('wd:Tome25');
+  });
+});
+
+
+################################################################################
 ### FICHIER : src/core/resolvers/series.resolver.ts
 ################################################################################
 
-// src/resolvers/series.resolver.ts
+// src/core/resolvers/series.resolver.ts
 import { entityMapper } from './mapper';
 import { databaseService } from '../database/database.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
+import { syncOrchestrator } from '../orchestrators/sync.orchestrator'; // AJOUT
 import type { HumanizedBook } from '../types';
 
 export const seriesResolver = {
@@ -2230,16 +2338,32 @@ export const seriesResolver = {
       }
     }
 
-    console.log(`[SERIES] Cache local : ${fullTomes.length} | À télécharger : ${missingUris.length}`);
-
-    // 3. RÉCUPÉRATION ET TRADUCTION EN BATCH DES MANQUANTS
+    // ========================================================
+    // AJOUT : ALGORITHME DE WINDOWING (Aspiration silencieuse)
+    // ========================================================
+    let urgentUris: string[] = [];
+    
     if (missingUris.length > 0) {
-      const resData = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(missingUris.join('|'))}`);
+      const URGENT_LIMIT = 20; // Seuil de blocage maximal pour préserver l'UI
+      urgentUris = missingUris.slice(0, URGENT_LIMIT);
+      const backgroundUris = missingUris.slice(URGENT_LIMIT);
+
+      console.log(`[SERIES] Windowing activé : ${urgentUris.length} urgents, ${backgroundUris.length} en arrière-plan.`);
+
+      // Si la série est fleuve, on confie le reste au téléchargeur de l'ombre de manière non-bloquante
+      if (backgroundUris.length > 0) {
+        syncOrchestrator.hydrateRemainingSeries(backgroundUris).catch(e => console.error(e));
+      }
+    }
+
+    // 3. RÉCUPÉRATION ET TRADUCTION BATCH POUR LES URGENTS UNIQUEMENT
+    if (urgentUris.length > 0) {
+      const resData = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
       const data = await resData.json();
       const entities = data.entities || data;
 
       const idsToTranslate = new Set<string>();
-      const rawBooks = missingUris.map((uri: string) => {
+      const rawBooks = urgentUris.map((uri: string) => {
         const raw = entityMapper.mapResponse(uri, entities[uri]);
         [...raw.authorIds, ...raw.illustratorIds, ...raw.scriptwriterIds, ...raw.genreIds].forEach(id => {
           if (id) idsToTranslate.add(id);
@@ -2578,9 +2702,9 @@ import { userService } from '../services/user.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import { loanService } from '../services/loan.service';
+//import { syncOrchestrator } from './sync.orchestrator';
 
 // --- 1. MOCKING DES SERVICES (Les Simulacres) ---
-// On remplace les vrais appels réseau par de fausses fonctions que l'on contrôle
 vi.mock('../services/user.service', () => ({
   userService: { fetchProfile: vi.fn() }
 }));
@@ -2597,13 +2721,14 @@ vi.mock('../services/loan.service', () => ({
   loanService: { sync: vi.fn() }
 }));
 
-// On court-circuite la tâche de fond pour qu'elle ne gêne pas nos tests synchrones
-vi.spyOn(connectionService, 'hydrateCacheInBackground').mockImplementation(async () => {});
+// NOUVEAU : On mocke le syncOrchestrator car la fonction a déménagé
+vi.mock('./sync.orchestrator', () => ({
+  syncOrchestrator: { hydrateCacheInBackground: vi.fn() }
+}));
 
 // --- 2. LE CAHIER DE TESTS ---
 describe('Connection Orchestrator', () => {
   
-  // Avant chaque test, on remet tout à zéro pour qu'ils ne se polluent pas entre eux
   beforeEach(() => {
     vi.clearAllMocks();
     connectionService.isInitialized = false;
@@ -2611,37 +2736,26 @@ describe('Connection Orchestrator', () => {
   });
 
   it('ne doit pas démarrer si aucun utilisateur n\'est connecté', async () => {
-    // Arrange : On simule une absence de profil
     vi.mocked(userService.fetchProfile).mockResolvedValue(null);
-
-    // Act : On lance le démarrage
     const result = await connectionService.initializeApp();
-
-    // Assert : On vérifie que c'est un échec propre
     expect(result).toBe(false);
     expect(connectionService.isInitialized).toBe(false);
   });
 
   it('doit démarrer même si la wishlist plante (Tolérance aux pannes)', async () => {
-    // Arrange : On prépare nos fausses données
     const fakeItems = [{ id: '1', entity: 'wd:Q1' }];
     vi.mocked(userService.fetchProfile).mockResolvedValue({ uri: 'wd:User', username: 'Test' } as any);
     vi.mocked(inventoryService.loadLibrary).mockResolvedValue({ count: 1, items: fakeItems });
-    
-    // 🔥 On force la wishlist à planter (Simulation d'erreur réseau)
     vi.mocked(wishlistService.loadWishlist).mockRejectedValue(new Error('Serveur HS'));
     vi.mocked(loanService.sync).mockResolvedValue();
 
-    // Act
     const result = await connectionService.initializeApp();
 
-    // Assert : L'application DOIT avoir démarré malgré le crash de la wishlist
     expect(result).toBe(true);
     expect(connectionService.isInitialized).toBe(true);
   });
 
   it('doit transmettre les données d\'inventaire aux prêts (Pas de double requête réseau)', async () => {
-    // Arrange
     const fakeItems = [
       { id: '1', entity: 'wd:Q1' },
       { id: '2', entity: 'wd:Q2' }
@@ -2651,11 +2765,128 @@ describe('Connection Orchestrator', () => {
     vi.mocked(wishlistService.loadWishlist).mockResolvedValue(undefined as any);
     vi.mocked(loanService.sync).mockResolvedValue();
 
-    // Act
     await connectionService.initializeApp();
 
-    // Assert : On vérifie que l'orchestrateur a bien passé les "fakeItems" au service de prêt
     expect(loanService.sync).toHaveBeenCalledWith('wd:User', fakeItems);
+  });
+});
+
+
+################################################################################
+### FICHIER : src/core/orchestrators/queue.orchestrator.test.ts
+################################################################################
+
+// src/core/orchestrators/queue.orchestrator.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { queueService } from './queue.orchestrator';
+import { databaseService } from '../database/database.service';
+import { loanService } from '../services/loan.service';
+//import { inventoryService } from '../services/inventory.service';
+//import { wishlistService } from '../services/wishlist.service';
+
+// --- 1. MOCKING DES SERVICES ET DE LA BASE DE DONNÉES ---
+vi.mock('../database/database.service', () => ({
+  databaseService: {
+    savePendingAction: vi.fn(),
+    getPendingActions: vi.fn(),
+    deletePendingAction: vi.fn(),
+    deleteLoan: vi.fn(),
+    saveLoan: vi.fn(),
+    removeRegistryEntry: vi.fn()
+  }
+}));
+
+vi.mock('../services/loan.service', () => ({
+  loanService: {
+    lend: vi.fn(),
+    returnBook: vi.fn()
+  }
+}));
+
+vi.mock('../services/inventory.service', () => ({
+  inventoryService: {
+    addToLibrary: vi.fn()
+  }
+}));
+
+vi.mock('../services/wishlist.service', () => ({
+  wishlistService: {
+    addToWishlist: vi.fn()
+  }
+}));
+
+describe('Queue Orchestrator (Optimistic UI)', () => {
+  
+  beforeEach(() => {
+    vi.clearAllMocks();
+    queueService.isProcessing = false;
+  });
+
+  it('Étape 1 : Doit enregistrer une action localement et lancer le traitement', async () => {
+    // Arrange
+    // On isole l'espion dans une variable
+    const processSpy = vi.spyOn(queueService, 'processQueue').mockImplementation(async () => {});
+    vi.mocked(databaseService.savePendingAction).mockResolvedValue(1);
+
+    // Act
+    await queueService.enqueueAction('LEND', 'wd:Q123', { friendName: 'Jean' });
+
+    // Assert
+    expect(databaseService.savePendingAction).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'LEND',
+      uri: 'wd:Q123',
+      status: 'pending'
+    }));
+    expect(processSpy).toHaveBeenCalled(); 
+
+    // NETTOYAGE CRUCIAL : On rend à la fonction son vrai comportement pour les autres tests
+    processSpy.mockRestore();
+  });
+
+  it('Étape 2A : Doit traiter une action avec succès et la purger de la file', async () => {
+    // Arrange
+    const fakeAction = { id: 1, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
+    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    vi.mocked(loanService.lend).mockResolvedValue(true); // Le serveur répond OUI
+
+    // Act
+    await queueService.processQueue();
+
+    // Assert
+    expect(loanService.lend).toHaveBeenCalledWith('wd:Q123', 'Jean');
+    expect(databaseService.deletePendingAction).toHaveBeenCalledWith(1); // Action purgée
+  });
+
+  it('Étape 2B : Doit conserver l\'action en cas de "Soft Fail" (ex: perte de réseau dans la cave)', async () => {
+    // Arrange
+    const fakeAction = { id: 2, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
+    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    vi.mocked(loanService.lend).mockResolvedValue(false); // Le réseau échoue silencieusement
+
+    // Act
+    await queueService.processQueue();
+
+    // Assert
+    expect(loanService.lend).toHaveBeenCalled();
+    // CRUCIAL : On ne supprime PAS l'action, elle sera retentée plus tard
+    expect(databaseService.deletePendingAction).not.toHaveBeenCalled();
+  });
+
+  it('Étape 3 : Doit déclencher un Rollback local en cas de "Hard Fail" (ex: refus définitif du serveur)', async () => {
+    // Arrange
+    const fakeAction = { id: 3, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
+    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    // Simulation d'une API qui explose (livre inexistant côté serveur)
+    vi.mocked(loanService.lend).mockRejectedValue(new Error('Livre introuvable sur le serveur web'));
+
+    // Act
+    await queueService.processQueue();
+
+    // Assert
+    // 1. Le Rollback doit avoir supprimé le faux prêt local pour se réaligner avec la réalité
+    expect(databaseService.deleteLoan).toHaveBeenCalledWith('wd:Q123'); 
+    // 2. L'action est purgée pour ne pas boucler indéfiniment sur une erreur fatale
+    expect(databaseService.deletePendingAction).toHaveBeenCalledWith(3);
   });
 });
 
@@ -2671,6 +2902,7 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { imageService } from '../services/image.service';
+import { syncOrchestrator } from './sync.orchestrator'; // AJOUT
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -2725,6 +2957,13 @@ export const searchService = {
       }
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
+      // AJOUT : Vérification du TTL (Time To Live = 30 jours)
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      if (!book.updatedAt || (Date.now() - book.updatedAt > THIRTY_DAYS)) {
+        console.log(`[SEARCH] Cache périmé (TTL > 30j) pour ${isbn}. Rafraîchissement fantôme...`);
+        // Déclenchement de la mise à jour en tâche de fond (Fire and forget)
+        syncOrchestrator.refreshBookInBackground(isbn).catch(e => console.error(e));
+      }
     }
 
     // 2. PHASE ANALYSE DE POSSESSION (Double Check)
@@ -2764,16 +3003,6 @@ export const searchService = {
       };
     }
 
-    // 5. PHASE UI : Calcul des indicateurs pour le Frontend
-    const ui = {
-      showAddButton: !isWorkOwned,
-      showWishButton: !isWorkOwned && !isWished,
-      alertDuplicate: !isEditionOwned && isWorkOwned,
-      hasBulkActions: !!seriesContext && seriesContext.tomes.some(t => t.ownershipStatus === 'none'),
-      showLoanButton: isEditionOwned && !isLent,
-      showReturnButton: isLent
-    };
-
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
     console.log("[SEARCH] Orchestration terminée avec succès.");
     console.groupEnd();
@@ -2792,9 +3021,417 @@ export const searchService = {
         isLent: isLent,
         details: loanDetails
       },
-      ui,
       source
     };
+  }
+};
+
+
+################################################################################
+### FICHIER : src/core/orchestrators/queue.orchestrator.ts
+################################################################################
+
+// src/core/orchestrators/queue.orchestrator.ts
+import { databaseService, type PendingAction } from '../database/database.service';
+import { loanService } from '../services/loan.service';
+import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
+
+export const queueService = {
+  isProcessing: false,
+
+  /**
+   * Étape 1 de l'Optimistic UI : Enregistre une action en base locale pour libérer l'interface
+   * et tente de l'exécuter en arrière-plan.
+   */
+  async enqueueAction(actionType: PendingAction['action'], uri: string, payload?: any): Promise<void> {
+    console.group(`[QUEUE] Nouvelle action interceptée: ${actionType} sur ${uri}`);
+    
+    const action: PendingAction = {
+      action: actionType,
+      uri,
+      payload,
+      status: 'pending',
+      createdAt: Date.now()
+    };
+
+    const actionId = await databaseService.savePendingAction(action);
+    console.log(`[QUEUE] Trace sauvegardée localement (ID: ${actionId})`);
+    console.groupEnd();
+
+    // Lancement "Fire and Forget" du traitement
+    this.processQueue();
+  },
+
+  /**
+   * Étape 2 : Dépile et exécute séquentiellement les actions en attente vers le serveur
+   */
+  async processQueue(): Promise<void> {
+    if (this.isProcessing) return;
+    this.isProcessing = true;
+
+    try {
+      const actions = await databaseService.getPendingActions();
+      if (actions.length === 0) {
+        this.isProcessing = false;
+        return;
+      }
+
+      console.group(`[QUEUE] Démarrage du traitement de ${actions.length} actions en attente...`);
+
+      for (const action of actions) {
+        if (!action.id) continue;
+
+        try {
+          let success = false;
+
+          // Aiguillage réseau selon le type d'action
+          switch (action.action) {
+            case 'LEND':
+              success = await loanService.lend(action.uri, action.payload?.friendName);
+              break;
+            case 'RETURN':
+              success = await loanService.returnBook(action.uri);
+              break;
+            case 'ADD_INVENTORY':
+              success = await inventoryService.addToLibrary(action.uri);
+              break;
+            case 'ADD_WISHLIST':
+              success = await wishlistService.addToWishlist(action.uri);
+              break;
+            default:
+              console.warn(`[QUEUE] Action non reconnue: ${action.action}`);
+              success = true; // Auto-validation pour purge
+          }
+
+          if (success) {
+            console.log(`[QUEUE] ✅ Succès réseau pour ${action.action} sur ${action.uri}`);
+            await databaseService.deletePendingAction(action.id);
+          } else {
+            console.warn(`[QUEUE] ⚠️ Soft Fail pour ${action.action}. Mise en attente pour la prochaine synchronisation.`);
+            // Sortie de boucle immédiate en cas de perte de réseau pour ne pas bloquer les autres
+            break; 
+          }
+
+        } catch (error: any) {
+           console.error(`[QUEUE] 💥 Hard Fail (Refus Serveur) pour ${action.action}:`, error);
+           await this.rollbackAction(action);
+           await databaseService.deletePendingAction(action.id);
+        }
+      }
+    } finally {
+      console.groupEnd();
+      this.isProcessing = false;
+    }
+  },
+
+  /**
+   * Étape 3 (Sécurité) : Annule silencieusement l'action dans IndexedDB si le serveur la refuse définitivement.
+   */
+  async rollbackAction(action: PendingAction): Promise<void> {
+    console.warn(`[QUEUE] ⏪ Rollback local déclenché pour ${action.action} sur ${action.uri}`);
+    
+    switch (action.action) {
+      case 'LEND':
+        // Le serveur a refusé le prêt, on l'efface de notre carnet local
+        await databaseService.deleteLoan(action.uri);
+        break;
+      case 'RETURN':
+        // Le retour a échoué, on remet le prêt localement
+        if (action.payload) {
+           await databaseService.saveLoan(action.payload);
+        }
+        break;
+      case 'ADD_INVENTORY':
+        await databaseService.removeRegistryEntry('inventory', action.uri);
+        break;
+      case 'ADD_WISHLIST':
+        await databaseService.removeRegistryEntry('wishlist', action.uri);
+        break;
+    }
+    
+    // NOTE ARCHITECTURE : 
+    // Plus tard, nous brancherons ici un EventBus (ou Pinia) pour pousser un "Toast" visuel
+    // à l'utilisateur : "La synchronisation du livre X a échoué."
+  }
+};
+
+
+################################################################################
+### FICHIER : src/core/orchestrators/search.orchestrator.test.ts
+################################################################################
+
+// src/core/orchestrators/search.orchestrator.test.ts
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { searchService } from './search.orchestrator';
+import { databaseService } from '../database/database.service';
+import { wishlistService } from '../services/wishlist.service';
+import { syncOrchestrator } from './sync.orchestrator';
+
+// --- MOCKING ---
+vi.mock('../database/database.service', () => ({
+  databaseService: {
+    getBookByIsbn: vi.fn(),
+    saveBookToCache: vi.fn(),
+    getBookFromCache: vi.fn(),
+    isUriInRegistry: vi.fn(),
+    getOtherOwnedEdition: vi.fn(),
+    getLoan: vi.fn()
+  }
+}));
+
+vi.mock('../services/wishlist.service', () => ({
+  wishlistService: { isUriWished: vi.fn() }
+}));
+vi.mock('../resolvers/entity.resolver', () => ({
+  entityResolver: { fromIsbn: vi.fn() }
+}));
+vi.mock('../resolvers/humanizer', () => ({
+  entityHumanizer: { humanize: vi.fn() }
+}));
+vi.mock('../resolvers/series.resolver', () => ({
+  seriesResolver: { getFullSeries: vi.fn() }
+}));
+vi.mock('../services/image.service', () => ({
+  imageService: { compressAndEncode: vi.fn() }
+}));
+vi.mock('./sync.orchestrator', () => ({
+  syncOrchestrator: { refreshBookInBackground: vi.fn().mockResolvedValue(undefined) }
+}));
+
+describe('Search Orchestrator (TTL & Cache)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('doit renvoyer le livre du cache directement si récent (TTL < 30j)', async () => {
+    // Arrange : Un livre vieux de seulement 1 seconde
+    const freshBook = { uri: 'wd:Q1', title: 'Récent', updatedAt: Date.now() - 1000 };
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(freshBook as any);
+    vi.mocked(databaseService.isUriInRegistry).mockResolvedValue(false);
+    vi.mocked(wishlistService.isUriWished).mockResolvedValue(false);
+    vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
+
+    // Act
+    const res = await searchService.searchByIsbn('123456');
+
+    // Assert : Le livre vient du cache, et on n'a PAS appelé le rafraichissement
+    expect(res?.source).toBe('cache');
+    expect(syncOrchestrator.refreshBookInBackground).not.toHaveBeenCalled();
+  });
+
+  it('doit déclencher un rafraichissement fantôme si le cache est périmé (TTL > 30j)', async () => {
+    // Arrange : Un livre vieux de 31 jours
+    const THIRTY_ONE_DAYS = 31 * 24 * 60 * 60 * 1000;
+    const oldBook = { uri: 'wd:Q1', title: 'Vieux', updatedAt: Date.now() - THIRTY_ONE_DAYS };
+    
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(oldBook as any);
+    vi.mocked(databaseService.isUriInRegistry).mockResolvedValue(false);
+    vi.mocked(wishlistService.isUriWished).mockResolvedValue(false);
+    vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
+
+    // Act
+    const res = await searchService.searchByIsbn('123456');
+
+    // Assert : Le livre vient toujours du cache pour la rapidité visuelle...
+    expect(res?.source).toBe('cache');
+    // ... MAIS la mise à jour fantôme a bien été ordonnée en tâche de fond !
+    expect(syncOrchestrator.refreshBookInBackground).toHaveBeenCalledWith('123456');
+  });
+});
+
+
+################################################################################
+### FICHIER : src/core/orchestrators/sync.orchestrator.ts
+################################################################################
+
+// src/core/orchestrators/sync.orchestrator.ts
+import { databaseService } from '../database/database.service';
+import { entityHumanizer } from '../resolvers/humanizer';
+import { entityMapper } from '../resolvers/mapper';
+import { entityResolver } from '../resolvers/entity.resolver';
+import { imageService } from '../services/image.service';
+
+export const syncOrchestrator = {
+  
+  /**
+   * AJOUT (TTL) : Rafraîchit un livre en cache de manière totalement silencieuse
+   */
+  async refreshBookInBackground(isbn: string): Promise<void> {
+    console.log(`[BACKGROUND] Rafraîchissement silencieux (TTL) de l'ISBN: ${isbn}`);
+    try {
+      const raw = await entityResolver.fromIsbn(isbn);
+      if (raw) {
+        const book = await entityHumanizer.humanize(raw);
+        await databaseService.saveBookToCache(book);
+        
+        // Compression de la nouvelle couverture si elle a changé
+        if (book.coverUrl) {
+          const base64 = await imageService.compressAndEncode(book.coverUrl);
+          if (base64) {
+            const currentBook = await databaseService.getBookFromCache(book.uri);
+            if (currentBook) {
+              currentBook.localCover = base64;
+              await databaseService.saveBookToCache(currentBook);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[BACKGROUND] Erreur lors du rafraîchissement de ${isbn}:`, e);
+    }
+  },
+
+  /**
+   * AJOUT (WINDOWING) : Aspire les tomes manquants d'une série longue (Mega-Batching)
+   */
+  async hydrateRemainingSeries(missingUris: string[]): Promise<void> {
+    console.group(`[BACKGROUND SERIES] Aspiration silencieuse de ${missingUris.length} tomes...`);
+    try {
+      let addedCount = 0;
+      const CHUNK_SIZE = 50;
+
+      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
+      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
+
+      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
+        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
+        console.log(`[BACKGROUND SERIES] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} tomes)...`);
+        
+        try {
+           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
+           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
+           const data = await res.json();
+           const entities = data.entities || {};
+
+           const humanizePromises = chunk.map(async (uri) => {
+              const entityData = entities[uri];
+              if (!entityData) return;
+              
+              // Simplification : on ne fait pas de double-rebond pour le fond, l'édition suffit généralement
+              const rawBook = entityMapper.mapResponse(uri, entityData, undefined);
+              const humanizedBook = await entityHumanizer.humanize(rawBook);
+              
+              if (inventoryUris.includes(uri)) humanizedBook.ownershipStatus = 'owned';
+              else if (wishlistUris.includes(uri)) humanizedBook.ownershipStatus = 'wish';
+              
+              await databaseService.saveBookToCache(humanizedBook);
+              addedCount++;
+           });
+
+           await Promise.all(humanizePromises);
+           
+        } catch (chunkError) {
+           console.error(`[BACKGROUND SERIES] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
+        }
+      }
+      
+      console.log(`[BACKGROUND SERIES] Terminée. ${addedCount} tomes aspirés.`);
+    } catch (error) {
+      console.error("[BACKGROUND SERIES] Erreur globale :", error);
+    } finally {
+      console.groupEnd();
+    }
+  },
+
+  async hydrateCacheInBackground(): Promise<void> {
+    console.group("[HYDRATATION] Démarrage de la tâche de fond (Mega-Batching)");
+    try {
+      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
+      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
+      
+      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
+      console.log(`[HYDRATATION] ${allUris.length} URIs totales détectées.`);
+
+      const missingUris: string[] = [];
+      
+      for (const uri of allUris) {
+        const existingBook = await databaseService.getBookFromCache(uri);
+        if (!existingBook) {
+          missingUris.push(uri);
+        } else {
+          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
+          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
+          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
+          
+          if (existingBook.ownershipStatus !== expectedStatus) {
+             existingBook.ownershipStatus = expectedStatus;
+             await databaseService.saveBookToCache(existingBook);
+             console.log(`[HYDRATATION] Statut mis à jour en local pour : ${uri} (${expectedStatus})`);
+          }
+        }
+      }
+
+      console.log(`[HYDRATATION] ${missingUris.length} nouvelles fiches à télécharger en batch.`);
+
+      let addedCount = 0;
+      const CHUNK_SIZE = 50;
+
+      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
+        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
+        console.log(`[HYDRATATION] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} URIs)...`);
+        
+        try {
+           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
+           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
+           const data = await res.json();
+           const entities = data.entities || {};
+
+           const workUrisToFetch = new Set<string>();
+           for (const uri of chunk) {
+              const entityData = entities[uri];
+              if (entityData && entityData.type !== 'work') {
+                 const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+                 const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+                 if (workUri && !entities[workUri]) {
+                    workUrisToFetch.add(workUri);
+                 }
+              }
+           }
+
+           let workEntities: any = {};
+           if (workUrisToFetch.size > 0) {
+               const worksChunk = Array.from(workUrisToFetch);
+               const worksUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(worksChunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
+               const wRes = await fetch(worksUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
+               const wData = await wRes.json();
+               workEntities = wData.entities || {};
+           }
+
+           const humanizePromises = chunk.map(async (uri) => {
+              const entityData = entities[uri];
+              if (!entityData) return;
+
+              const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
+              const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+              const workData = workUri ? workEntities[workUri] : undefined;
+
+              const rawBook = entityMapper.mapResponse(uri, entityData, workData);
+              const humanizedBook = await entityHumanizer.humanize(rawBook);
+              
+              if (inventoryUris.includes(uri)) {
+                humanizedBook.ownershipStatus = 'owned';
+              } else if (wishlistUris.includes(uri)) {
+                humanizedBook.ownershipStatus = 'wish';
+              }
+              
+              await databaseService.saveBookToCache(humanizedBook);
+              addedCount++;
+           });
+
+           await Promise.all(humanizePromises);
+           
+        } catch (chunkError) {
+           console.error(`[HYDRATATION] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
+        }
+      }
+      
+      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
+    } catch (error) {
+      console.error("[HYDRATATION] Erreur durant la tâche de fond globale :", error);
+    } finally {
+      console.groupEnd();
+    }
   }
 };
 
@@ -2807,11 +3444,12 @@ export const searchService = {
 import { userService } from '../services/user.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import { databaseService } from '../database/database.service';
+//import { databaseService } from '../database/database.service';
 //import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
+//import { entityHumanizer } from '../resolvers/humanizer';
 import { loanService } from '../services/loan.service';
-import { entityMapper } from '../resolvers/mapper'; // AJOUT pour le batching
+//import { entityMapper } from '../resolvers/mapper'; // AJOUT pour le batching
+import { syncOrchestrator } from './sync.orchestrator';
 
 export const connectionService = {
   isInitialized: false,
@@ -2856,130 +3494,14 @@ export const connectionService = {
       console.log("Application prête (mode résilient) !");
       console.groupEnd();
 
-      // 2. Lancement asynchrone de l'hydratation (Ne bloque pas l'UI)
-      this.hydrateCacheInBackground();
+      // 2. Lancement asynchrone de l'hydratation DÉLÉGUÉ au Sync Orchestrator
+      syncOrchestrator.hydrateCacheInBackground();
 
       return true;
     } catch (error) {
       console.error("[CONNECTION SERVICE] Erreur fatale d'initialisation :", error);
       console.groupEnd();
       return false;
-    }
-  },
-
-  /**
-   * Tâche de fond : MEGA-BATCHING des fiches complètes (Optimisé API)
-   */
-  async hydrateCacheInBackground(): Promise<void> {
-    console.group("[HYDRATATION] Démarrage de la tâche de fond (Mega-Batching)");
-    try {
-      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
-      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
-      
-      // Fusion et déduplication des listes
-      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
-      console.log(`[HYDRATATION] ${allUris.length} URIs totales détectées.`);
-
-      const missingUris: string[] = [];
-      
-      // Filtre : Séparer ce qui est déjà en cache de ce qu'il faut télécharger
-      for (const uri of allUris) {
-        const existingBook = await databaseService.getBookFromCache(uri);
-        if (!existingBook) {
-          missingUris.push(uri);
-        } else {
-          // Mise à jour silencieuse du statut si nécessaire
-          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
-          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
-          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
-          
-          if (existingBook.ownershipStatus !== expectedStatus) {
-             existingBook.ownershipStatus = expectedStatus;
-             await databaseService.saveBookToCache(existingBook);
-             console.log(`[HYDRATATION] Statut mis à jour en local pour : ${uri} (${expectedStatus})`);
-          }
-        }
-      }
-
-      console.log(`[HYDRATATION] ${missingUris.length} nouvelles fiches à télécharger en batch.`);
-
-      let addedCount = 0;
-      const CHUNK_SIZE = 50; // Limite stricte de l'API Inventaire.io
-
-      // Traitement par paquets de 50 URIs
-      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
-        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
-        console.log(`[HYDRATATION] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} URIs)...`);
-        
-        try {
-           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
-           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
-           const data = await res.json();
-           const entities = data.entities || {};
-
-           // Extraction des Œuvres (Works) manquantes pour l'enrichissement (Logique Rebond P629)
-           const workUrisToFetch = new Set<string>();
-           for (const uri of chunk) {
-              const entityData = entities[uri];
-              if (entityData && entityData.type !== 'work') {
-                 const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
-                 const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
-                 if (workUri && !entities[workUri]) {
-                    workUrisToFetch.add(workUri);
-                 }
-              }
-           }
-
-           // Batch secondaire pour récupérer toutes les Œuvres manquantes d'un coup
-           let workEntities: any = {};
-           if (workUrisToFetch.size > 0) {
-               const worksChunk = Array.from(workUrisToFetch);
-               const worksUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(worksChunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
-               const wRes = await fetch(worksUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
-               const wData = await wRes.json();
-               workEntities = wData.entities || {};
-           }
-
-           // Mapping et Humanisation en parallèle pour le lot entier
-           const humanizePromises = chunk.map(async (uri) => {
-              const entityData = entities[uri];
-              if (!entityData) return;
-
-              const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
-              const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
-              const workData = workUri ? workEntities[workUri] : undefined;
-
-              // Création de l'objet brut
-              const rawBook = entityMapper.mapResponse(uri, entityData, workData);
-              
-              // Humanisation (Traduction IDs + Compression Image)
-              const humanizedBook = await entityHumanizer.humanize(rawBook);
-              
-              // Inscription du statut visuel
-              if (inventoryUris.includes(uri)) {
-                humanizedBook.ownershipStatus = 'owned';
-              } else if (wishlistUris.includes(uri)) {
-                humanizedBook.ownershipStatus = 'wish';
-              }
-              
-              // Sauvegarde en IndexedDB
-              await databaseService.saveBookToCache(humanizedBook);
-              addedCount++;
-           });
-
-           // On attend que les 50 traductions/compressions soient finies avant de passer au lot suivant
-           await Promise.all(humanizePromises);
-           
-        } catch (chunkError) {
-           console.error(`[HYDRATATION] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
-        }
-      }
-      
-      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
-    } catch (error) {
-      console.error("[HYDRATATION] Erreur durant la tâche de fond globale :", error);
-    } finally {
-      console.groupEnd();
     }
   }
 };

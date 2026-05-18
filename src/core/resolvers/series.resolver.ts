@@ -3,18 +3,14 @@ import { entityMapper } from './mapper';
 import { databaseService } from '../database/database.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import { syncOrchestrator } from '../orchestrators/sync.orchestrator'; // AJOUT
+import { syncOrchestrator } from '../orchestrators/sync.orchestrator'; 
 import type { HumanizedBook } from '../types';
 
 export const seriesResolver = {
-  /**
-   * Récupère tous les tomes d'une série en mode Local-First
-   */
   async getFullSeries(seriesId: string): Promise<HumanizedBook[]> {
     console.group(`[SERIES RESOLVER] Récupération de la série: ${seriesId}`);
     
-    // 1. Liste des IDs via notre proxy
-    const resList = await fetch(`/api/series/list?seriesId=${encodeURIComponent(seriesId)}`);
+    const resList = await fetch(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
     const { tomes: tomeUris } = await resList.json();
     
     if (!tomeUris || tomeUris.length === 0) {
@@ -25,17 +21,14 @@ export const seriesResolver = {
     const fullTomes: HumanizedBook[] = [];
     const missingUris: string[] = [];
 
-    // 2. TUNNEL LOCAL-FIRST INTELLIGENT
     for (const uri of tomeUris) {
       let cachedBook = await databaseService.getBookFromCache(uri);
       
-      // AJOUT : Si la série donne une Œuvre (wd:) mais qu'on a l'Édition (inv:) en cache
       if (!cachedBook && uri.startsWith('wd:')) {
         cachedBook = await databaseService.getEditionByWorkFromCache(uri);
       }
 
       if (cachedBook) {
-        // Utilisation de la vérification intelligente
         const isOwned = await inventoryService.isUriOwned(cachedBook.uri, cachedBook.workUri);
         const isWished = await wishlistService.isUriWished(cachedBook.uri, cachedBook.workUri);
         cachedBook.ownershipStatus = isOwned ? 'owned' : (isWished ? 'wish' : 'none');
@@ -46,27 +39,24 @@ export const seriesResolver = {
       }
     }
 
-    // ========================================================
-    // AJOUT : ALGORITHME DE WINDOWING (Aspiration silencieuse)
-    // ========================================================
     let urgentUris: string[] = [];
     
     if (missingUris.length > 0) {
-      const URGENT_LIMIT = 20; // Seuil de blocage maximal pour préserver l'UI
+      const URGENT_LIMIT = 20; 
       urgentUris = missingUris.slice(0, URGENT_LIMIT);
       const backgroundUris = missingUris.slice(URGENT_LIMIT);
 
       console.log(`[SERIES] Windowing activé : ${urgentUris.length} urgents, ${backgroundUris.length} en arrière-plan.`);
 
-      // Si la série est fleuve, on confie le reste au téléchargeur de l'ombre de manière non-bloquante
       if (backgroundUris.length > 0) {
         syncOrchestrator.hydrateRemainingSeries(backgroundUris).catch(e => console.error(e));
       }
     }
 
-    // 3. RÉCUPÉRATION ET TRADUCTION BATCH POUR LES URGENTS UNIQUEMENT
     if (urgentUris.length > 0) {
-      const resData = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
+      // NOTE : Si le nombre d'URIs est très long, on passera la requête au proxy Inventaire officiel
+      // Mais ici, on utilise l'endpoint Vercel gateway
+      const resData = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
       const data = await resData.json();
       const entities = data.entities || data;
 
@@ -82,7 +72,7 @@ export const seriesResolver = {
         return raw;
       });
 
-      const resTrans = await fetch(`/api/entities/by-uris?uris=${encodeURIComponent(Array.from(idsToTranslate).join('|'))}`);
+      const resTrans = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${encodeURIComponent(Array.from(idsToTranslate).join('|'))}`);
       const transData = await resTrans.json();
       const transEntities = transData.entities || transData;
 

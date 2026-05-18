@@ -11,7 +11,6 @@ export const loanService = {
     try {
       const response = await fetch(url, options);
       const text = await response.text();
-      
       if (!response.ok) {
         console.error(`[LOAN DEBUG] ❌ Erreur API:`, text.substring(0, 250));
         throw new Error(`HTTP Error ${response.status}`);
@@ -23,15 +22,11 @@ export const loanService = {
     }
   },
 
-  /**
-   * Extrait un dictionnaire de secours depuis l'inventaire
-   */
   async getInventoryMap(): Promise<Record<string, string>> {
     if (!this.userUri) return {};
     try {
-      const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
+      const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
-      
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
       
@@ -47,17 +42,13 @@ export const loanService = {
     }
   },
 
-  /**
-   * Trouve l'ID unique de l'exemplaire physique dans l'inventaire
-   */
   async getInventoryItemId(entityUri: string): Promise<string | null> {
     if (!this.userUri) return null;
     try {
-      const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
+      const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
-      
       const item = itemList.find((i: any) => i.entity === entityUri || i.uri === entityUri);
       return item ? (item._id || item.id) : null;
     } catch (e) {
@@ -71,13 +62,12 @@ export const loanService = {
     if (!this.userUri) return null;
     
     try {
-      const data = await this.safeFetch(`/api/shelves?path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
-      
+      const data = await this.safeFetch(`/api/gateway?action=shelves&path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
       let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
       let shelf = shelvesArray.find((s: any) => s && s.name === this.shelfName);
 
       if (!shelf) {
-        const createData = await this.safeFetch('/api/shelves', {
+        const createData = await this.safeFetch('/api/gateway?action=shelves', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: this.shelfName, description: 'Carnet de prêts local Epiqoi' })
@@ -93,10 +83,6 @@ export const loanService = {
     }
   },
 
-  /**
-   * Synchronisation (Réconciliation blindée via itemId)
-   * OPTIMISATION : Accepte un dictionnaire pré-chargé pour éviter les requêtes réseau redondantes
-   */
   async sync(userUri: string, preloadedInventoryItems?: any[]): Promise<void> {
     console.group("[LOAN SERVICE] Synchronisation des prêts");
     this.userUri = userUri;
@@ -105,16 +91,14 @@ export const loanService = {
       const shelfId = await this.initializeShelf();
       if (!shelfId) throw new Error("Étagère introuvable.");
 
-      const data = await this.safeFetch(`/api/shelves?path=by-ids&ids=${encodeURIComponent(shelfId)}&with-items-ids=true`);
+      const data = await this.safeFetch(`/api/gateway?action=shelves&path=by-ids&ids=${encodeURIComponent(shelfId)}&with-items-ids=true`);
       let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
       const shelf = shelvesArray.find((s: any) => s && (s._id === shelfId || s.id === shelfId)) || shelvesArray[0];
-      
+
       const items = shelf?.items || [];
       const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
-      
       const localLoans = await databaseService.getAllLoans();
       
-      // OPTIMISATION RÉSEAU : Utilisation du cache d'inventaire fourni par l'orchestrateur
       let inventoryMap: Record<string, string> = {};
       if (preloadedInventoryItems && preloadedInventoryItems.length > 0) {
         console.log(`[LOAN SERVICE] Utilisation du dictionnaire d'inventaire pré-chargé (${preloadedInventoryItems.length} items)`);
@@ -131,7 +115,6 @@ export const loanService = {
       
       console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
 
-      // 1. Suppression des retours (Un livre local qui n'est plus sur l'étagère web)
       for (const localLoan of localLoans) {
         const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
         
@@ -141,10 +124,8 @@ export const loanService = {
         }
       }
 
-      // 2. Ajouts distants (Un livre prêté via le site officiel)
       for (const distantId of distantItemIds) {
         const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === inventoryMap[distantId]);
-        
         if (!isKnownLocally) {
           const entityUri = inventoryMap[distantId] || distantId;
           console.log(`[LOAN SERVICE] Prêt web détecté (${entityUri}). Ajout local.`);
@@ -172,7 +153,7 @@ export const loanService = {
       const itemId = await this.getInventoryItemId(uri);
       if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
 
-      await this.safeFetch('/api/shelves?path=add-items', {
+      await this.safeFetch('/api/gateway?action=shelves&path=add-items', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: shelfId, items: [itemId] }) 
@@ -184,6 +165,7 @@ export const loanService = {
         loanDate: Date.now(),
         itemId 
       });
+
       console.log(`[LOAN SERVICE] Livre ${uri} prêté à ${friendName}`);
       return true;
     } catch (error) {
@@ -201,7 +183,7 @@ export const loanService = {
       const itemId = localLoan?.itemId || await this.getInventoryItemId(uri);
       if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
 
-      await this.safeFetch('/api/shelves?path=remove-items', {
+      await this.safeFetch('/api/gateway?action=shelves&path=remove-items', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: shelfId, items: [itemId] })

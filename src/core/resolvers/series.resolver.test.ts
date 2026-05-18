@@ -35,10 +35,12 @@ describe('Series Resolver (Windowing)', () => {
     
     vi.mocked(globalThis.fetch).mockImplementation(async (url: string | Request | URL) => {
       const urlStr = url.toString();
-      if (urlStr.includes('/api/series/list')) {
+      // CORRECTION : On écoute la nouvelle route Gateway
+      if (urlStr.includes('action=series-list')) {
         return { json: async () => ({ tomes: fakeUris }) } as any;
       }
-      if (urlStr.includes('/api/entities/by-uris')) {
+      // CORRECTION : On rend l'écoute de by-uris plus flexible
+      if (urlStr.includes('entities/by-uris')) {
         // Simulation des traductions brutes pour éviter que le mapper ne plante
         const mockEntities: any = {};
         fakeUris.forEach(uri => { mockEntities[uri] = { type: 'work', claims: {} }; });

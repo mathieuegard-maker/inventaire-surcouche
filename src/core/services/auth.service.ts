@@ -1,15 +1,14 @@
-// src/services/auth.service.ts
+// src/core/services/auth.service.ts
 import { sessionStore } from '../../state/session';
 
 export const authService = {
   async login(username: string, password: string) {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
 
-    // On vérifie si la réponse est bien du JSON
     const contentType = res.headers.get("content-type");
     if (!contentType || !contentType.includes("application/json")) {
       const text = await res.text();
