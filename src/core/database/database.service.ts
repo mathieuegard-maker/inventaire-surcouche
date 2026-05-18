@@ -1,13 +1,12 @@
 // src/core/database/database.service.ts
 import Dexie, { type Table } from 'dexie';
-import type { HumanizedBook, LoanRecord, RegistryEntry } from '../types';
+import type { HumanizedBook, LoanRecord, RegistryEntry, QueueActionPayload } from '../types';
 
-// NOUVEAU : Interface pour la file d'attente (Optimistic UI)
 export interface PendingAction {
   id?: number;
   action: 'LEND' | 'RETURN' | 'ADD_INVENTORY' | 'REMOVE_INVENTORY' | 'ADD_WISHLIST' | 'REMOVE_WISHLIST';
   uri: string;
-  payload?: any;
+  payload?: QueueActionPayload; // CORRECTION : Typage strict appliqué (finis les "any")
   status: 'pending' | 'failed';
   createdAt: number;
 }
@@ -107,10 +106,13 @@ export const databaseService = {
     return entries.map((entry: RegistryEntry) => entry.uri);
   },
 
+  // CORRECTION : Encapsulation dans une transaction atomique "rw" (Read/Write)
   async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
-    await db[tableName].clear();
-    const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
-    await db[tableName].bulkPut(entries);
+    await db.transaction('rw', db[tableName], async () => {
+      await db[tableName].clear();
+      const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
+      await db[tableName].bulkPut(entries);
+    });
   },
 
   // --- GESTION DES PRÊTS (Table locale) ---

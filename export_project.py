@@ -16,7 +16,8 @@ def export_project_to_txt(source_folder, output_file):
         '.png',
         '.ico', 
         'jpeg',
-        'documentation_API_invrntaire.io.txt'
+        'documentation_API_invrntaire.io.txt',
+        '.vercel/repo.json'
     }
     
     # On convertit source_folder en chemin absolu pour des calculs propres

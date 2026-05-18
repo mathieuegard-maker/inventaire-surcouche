@@ -5,6 +5,8 @@ export const loanService = {
   userUri: null as string | null,
   shelfId: null as string | null,
   shelfName: 'Prêts',
+  // Cache en mémoire pour éviter les re-téléchargements inutiles
+  cachedInventoryMap: null as Record<string, string> | null,
 
   async safeFetch(url: string, options?: RequestInit): Promise<any> {
     console.log(`[LOAN DEBUG] 🚀 fetch: ${options?.method || 'GET'} ${url}`);
@@ -22,8 +24,17 @@ export const loanService = {
     }
   },
 
+  /**
+   * Construit ou récupère le dictionnaire des IDs physiques de l'inventaire
+   */
   async getInventoryMap(): Promise<Record<string, string>> {
+    if (this.cachedInventoryMap) {
+       console.log(`[LOAN SERVICE] Utilisation du cache mémoire pour l'inventaire`);
+       return this.cachedInventoryMap;
+    }
+    
     if (!this.userUri) return {};
+    
     try {
       const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
@@ -36,25 +47,32 @@ export const loanService = {
         const entity = (typeof item.entity === 'string') ? item.entity : (item.entity?.uri || item.uri);
         if (id && entity) map[id] = entity;
       }
+      
+      this.cachedInventoryMap = map; // Sauvegarde en mémoire
       return map;
     } catch (e) {
+      console.error("[LOAN SERVICE] Erreur récupération dictionnaire:", e);
       return {};
     }
   },
 
+  /**
+   * OPTIMISATION : Trouve l'ID physique sans faire de nouvel appel réseau
+   */
   async getInventoryItemId(entityUri: string): Promise<string | null> {
     if (!this.userUri) return null;
-    try {
-      const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
-      const data = await res.json();
-      const items = data.items || [];
-      const itemList = Array.isArray(items) ? items : Object.values(items);
-      const item = itemList.find((i: any) => i.entity === entityUri || i.uri === entityUri);
-      return item ? (item._id || item.id) : null;
-    } catch (e) {
-      console.error("[LOAN SERVICE] Erreur lors de la recherche de l'exemplaire:", e);
-      return null;
+    
+    // On utilise la map construite (qui sera piochée dans le cache si elle existe déjà)
+    const map = await this.getInventoryMap();
+    
+    // Recherche inversée : trouver la clé (ID physique) à partir de la valeur (URI logique)
+    const itemId = Object.keys(map).find(key => map[key] === entityUri);
+    
+    if (!itemId) {
+        console.warn(`[LOAN SERVICE] Impossible de trouver l'exemplaire physique pour ${entityUri}`);
     }
+    
+    return itemId || null;
   },
 
   async initializeShelf(): Promise<string | null> {
@@ -99,19 +117,17 @@ export const loanService = {
       const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
       const localLoans = await databaseService.getAllLoans();
       
-      let inventoryMap: Record<string, string> = {};
       if (preloadedInventoryItems && preloadedInventoryItems.length > 0) {
-        console.log(`[LOAN SERVICE] Utilisation du dictionnaire d'inventaire pré-chargé (${preloadedInventoryItems.length} items)`);
-        inventoryMap = preloadedInventoryItems.reduce((acc, item) => {
+        console.log(`[LOAN SERVICE] Remplissage du cache avec ${preloadedInventoryItems.length} items pré-chargés`);
+        this.cachedInventoryMap = preloadedInventoryItems.reduce((acc, item) => {
           const id = item._id || item.id;
           const entity = (typeof item.entity === 'string') ? item.entity : (item.entity?.uri || item.uri);
           if (id && entity) acc[id] = entity;
           return acc;
         }, {} as Record<string, string>);
-      } else {
-        console.log(`[LOAN SERVICE] Téléchargement du dictionnaire d'inventaire (Fallback)`);
-        inventoryMap = await this.getInventoryMap();
       }
+      
+      const inventoryMap = await this.getInventoryMap();
       
       console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
 
@@ -150,6 +166,7 @@ export const loanService = {
       const shelfId = await this.initializeShelf();
       if (!shelfId) throw new Error("Étagère non initialisée");
 
+      // Appelle désormais la méthode optimisée qui pioche dans le cache
       const itemId = await this.getInventoryItemId(uri);
       if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
 
@@ -180,6 +197,7 @@ export const loanService = {
       if (!shelfId) throw new Error("Étagère non initialisée");
 
       const localLoan = await databaseService.getLoan(uri);
+      // Appelle désormais la méthode optimisée qui pioche dans le cache
       const itemId = localLoan?.itemId || await this.getInventoryItemId(uri);
       if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
 

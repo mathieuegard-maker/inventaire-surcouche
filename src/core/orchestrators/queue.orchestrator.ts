@@ -3,6 +3,7 @@ import { databaseService, type PendingAction } from '../database/database.servic
 import { loanService } from '../services/loan.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
+import type { LendPayload, QueueActionPayload } from '../types';
 
 export const queueService = {
   isProcessing: false,
@@ -11,7 +12,7 @@ export const queueService = {
    * Étape 1 de l'Optimistic UI : Enregistre une action en base locale pour libérer l'interface
    * et tente de l'exécuter en arrière-plan.
    */
-  async enqueueAction(actionType: PendingAction['action'], uri: string, payload?: any): Promise<void> {
+  async enqueueAction(actionType: PendingAction['action'], uri: string, payload?: QueueActionPayload): Promise<void> {
     console.group(`[QUEUE] Nouvelle action interceptée: ${actionType} sur ${uri}`);
     
     const action: PendingAction = {
@@ -55,7 +56,8 @@ export const queueService = {
           // Aiguillage réseau selon le type d'action
           switch (action.action) {
             case 'LEND':
-              success = await loanService.lend(action.uri, action.payload?.friendName);
+              const lendPayload = action.payload as LendPayload;
+              success = await loanService.lend(action.uri, lendPayload?.friendName || 'Inconnu');
               break;
             case 'RETURN':
               success = await loanService.returnBook(action.uri);
@@ -104,10 +106,13 @@ export const queueService = {
         await databaseService.deleteLoan(action.uri);
         break;
       case 'RETURN':
-        // Le retour a échoué, on remet le prêt localement
-        if (action.payload) {
-           await databaseService.saveLoan(action.payload);
-        }
+        // Le retour a échoué, on reconstruit le prêt localement avec les bonnes données
+        const restoredPayload = action.payload as LendPayload;
+        await databaseService.saveLoan({
+          uri: action.uri,
+          friendName: restoredPayload?.friendName || 'Inconnu (Restauration)',
+          loanDate: action.createdAt // On utilise la date de l'action pour combler
+        });
         break;
       case 'ADD_INVENTORY':
         await databaseService.removeRegistryEntry('inventory', action.uri);

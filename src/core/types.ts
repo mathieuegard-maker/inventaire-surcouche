@@ -94,3 +94,14 @@ export interface SearchResponse {
   };
   source: 'cache' | 'network';
 }
+
+// ============================================================================
+// NOUVEAU : TYPES STRICTS POUR L'OPTIMISTIC UI (Remplacement des "any")
+// ============================================================================
+
+export interface LendPayload {
+  friendName: string;
+}
+
+// Le payload peut être soit vide (pour un retour, ajout wishlist, etc.), soit contenir les infos du prêt
+export type QueueActionPayload = LendPayload | Record<string, never> | undefined;

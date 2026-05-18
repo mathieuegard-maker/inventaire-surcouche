@@ -11,10 +11,10 @@ export const isbnUtil = {
 
   /**
    * Vérifie si la longueur correspond à un format standard (10 ou 13 chiffres)
-   * (Peut être enrichi plus tard avec un vrai calcul de Checksum)
+   * Utilise une regex stricte pour bloquer les lettres et caractères spéciaux
    */
   isValidFormat(isbn: string): boolean {
     const cleanIsbn = this.normalize(isbn);
-    return cleanIsbn.length === 10 || cleanIsbn.length === 13;
+    return /^(\d{10}|\d{13})$/.test(cleanIsbn);
   }
 };

@@ -32,23 +32,26 @@ export const entityHumanizer = {
         // Découpage en paquets de 50 pour respecter la limite d'Inventaire.io
         for (let i = 0; i < idArray.length; i += 50) {
           const chunk = idArray.slice(i, i + 50);
-          const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
-          const data = await res.json();
-          const entities = data.entities || {};
           
-          for (const id of chunk) {
-            const labels = entities[id]?.labels;
-            // Priorité au Français, fallback sur l'Anglais, ou conservation de l'ID si introuvable
-            dictionary[id] = labels?.fr || labels?.en || id;
+          // CORRECTION : Passage par le proxy Vercel pour centraliser le trafic et verrouiller les CORS
+          const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+          const data = await res.json();
+          const entities = data.entities || data;
+
+          for (const [uri, entity] of Object.entries(entities)) {
+            const e = entity as any;
+            if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
+            else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
+            else if (e.label) dictionary[uri] = e.label;
+            else dictionary[uri] = uri;
           }
         }
-      } catch (error) {
-        console.error("[HUMANIZER] Erreur lors de la résolution groupée:", error);
-        idArray.forEach(id => dictionary[id] = id); // Filet de sécurité
+      } catch (e) {
+        console.warn("[HUMANIZER] Échec de traduction, utilisation des IDs bruts:", e);
       }
     }
 
-    // Fonctions utilitaires pour appliquer le dictionnaire
+    // Utilitaire pour piocher dans le dictionnaire
     const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id]).filter(Boolean);
     const translateSingle = (id?: string) => id ? dictionary[id] : undefined;
 
@@ -81,7 +84,6 @@ export const entityHumanizer = {
       seriesNumber: rawBook.seriesNumber,
       genres: translateArray(rawBook.genreIds),
       collection: translateSingle(rawBook.collectionId),
-
       ownershipStatus: 'none'
     };
 
