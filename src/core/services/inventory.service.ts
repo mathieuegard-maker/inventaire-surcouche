@@ -1,12 +1,14 @@
-// src/services/inventory.service.ts
+// src/core/services/inventory.service.ts
 import { databaseService } from '../database/database.service';
 
 export const inventoryService = {
-  async loadLibrary(uri: string): Promise<number> {
+  // OPTIMISATION : Retourne les items bruts en plus du compteur pour éviter la double requête
+  async loadLibrary(uri: string): Promise<{ count: number, items: any[] }> {
     console.group(`[INVENTORY] Synchronisation pour ${uri}`);
     try {
       const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(uri)}`);
       const data = await res.json();
+      
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
       
@@ -14,7 +16,7 @@ export const inventoryService = {
       await databaseService.syncRegistry('inventory', urisToSync);
       
       console.groupEnd();
-      return urisToSync.length;
+      return { count: urisToSync.length, items: itemList };
     } catch (error) {
       console.error("[INVENTORY] Erreur :", error);
       console.groupEnd();
@@ -47,6 +49,7 @@ export const inventoryService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uri })
     });
+
     if (!res.ok) throw new Error("Erreur ajout");
     await databaseService.addRegistryEntry('inventory', uri);
     return true;
@@ -58,6 +61,7 @@ export const inventoryService = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uris })
     });
+
     if (!res.ok) throw new Error("Erreur bulk");
     for (const uri of uris) await databaseService.addRegistryEntry('inventory', uri);
     return true;

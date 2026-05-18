@@ -1,4 +1,4 @@
-// src/services/loan.service.ts
+// src/core/services/loan.service.ts
 import { databaseService } from '../database/database.service';
 
 export const loanService = {
@@ -11,6 +11,7 @@ export const loanService = {
     try {
       const response = await fetch(url, options);
       const text = await response.text();
+      
       if (!response.ok) {
         console.error(`[LOAN DEBUG] ❌ Erreur API:`, text.substring(0, 250));
         throw new Error(`HTTP Error ${response.status}`);
@@ -30,6 +31,7 @@ export const loanService = {
     try {
       const res = await fetch(`/api/inventory/list?uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
+      
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
       
@@ -70,9 +72,10 @@ export const loanService = {
     
     try {
       const data = await this.safeFetch(`/api/shelves?path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
+      
       let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
       let shelf = shelvesArray.find((s: any) => s && s.name === this.shelfName);
-      
+
       if (!shelf) {
         const createData = await this.safeFetch('/api/shelves', {
           method: 'POST',
@@ -92,8 +95,9 @@ export const loanService = {
 
   /**
    * Synchronisation (Réconciliation blindée via itemId)
+   * OPTIMISATION : Accepte un dictionnaire pré-chargé pour éviter les requêtes réseau redondantes
    */
-  async sync(userUri: string): Promise<void> {
+  async sync(userUri: string, preloadedInventoryItems?: any[]): Promise<void> {
     console.group("[LOAN SERVICE] Synchronisation des prêts");
     this.userUri = userUri;
     
@@ -109,15 +113,27 @@ export const loanService = {
       const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
       
       const localLoans = await databaseService.getAllLoans();
-      const inventoryMap = await this.getInventoryMap(); // Plan de secours
+      
+      // OPTIMISATION RÉSEAU : Utilisation du cache d'inventaire fourni par l'orchestrateur
+      let inventoryMap: Record<string, string> = {};
+      if (preloadedInventoryItems && preloadedInventoryItems.length > 0) {
+        console.log(`[LOAN SERVICE] Utilisation du dictionnaire d'inventaire pré-chargé (${preloadedInventoryItems.length} items)`);
+        inventoryMap = preloadedInventoryItems.reduce((acc, item) => {
+          const id = item._id || item.id;
+          const entity = (typeof item.entity === 'string') ? item.entity : (item.entity?.uri || item.uri);
+          if (id && entity) acc[id] = entity;
+          return acc;
+        }, {} as Record<string, string>);
+      } else {
+        console.log(`[LOAN SERVICE] Téléchargement du dictionnaire d'inventaire (Fallback)`);
+        inventoryMap = await this.getInventoryMap();
+      }
       
       console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
 
       // 1. Suppression des retours (Un livre local qui n'est plus sur l'étagère web)
       for (const localLoan of localLoans) {
-        // La condition absolue : on vérifie l'itemId local avec les items web
-        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || 
-                               distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
+        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
         
         if (!isStillOnShelf) {
           console.log(`[LOAN SERVICE] Retour détecté pour ${localLoan.uri}. Suppression locale.`);
@@ -127,7 +143,6 @@ export const loanService = {
 
       // 2. Ajouts distants (Un livre prêté via le site officiel)
       for (const distantId of distantItemIds) {
-        // Est-ce qu'on connaît déjà cet ID physiquement ou via son URI ?
         const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === inventoryMap[distantId]);
         
         if (!isKnownLocally) {
@@ -163,14 +178,12 @@ export const loanService = {
         body: JSON.stringify({ id: shelfId, items: [itemId] }) 
       });
 
-      // SAUVEGARDE EN BÉTON ARMÉ : On lie l'URI et le physical ID
       await databaseService.saveLoan({ 
         uri, 
         friendName, 
         loanDate: Date.now(),
         itemId 
       });
-      
       console.log(`[LOAN SERVICE] Livre ${uri} prêté à ${friendName}`);
       return true;
     } catch (error) {
