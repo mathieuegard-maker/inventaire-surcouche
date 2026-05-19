@@ -1,5 +1,6 @@
 // src/resolvers/mapper.ts
 import type { RawBook } from '../types';
+import { isbnUtil } from '../utils/isbn.util';
 
 export const entityMapper = {
   /**
@@ -79,11 +80,20 @@ export const entityMapper = {
       return Array.from(new Set([...fromEdition, ...fromWork]));
     };
 
+    // Extraction des chaînes brutes d'ISBN
+    const rawIsbn13 = getClaimValue(editionClaims, 'P212') || raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined);
+    const rawIsbn10 = getClaimValue(editionClaims, 'P957') || raw.isbn10;
+
     const mappedBook: RawBook = {
       uri: uri,
       workUri: workUri,
-      isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
-      isbn10: raw.isbn10,
+      
+      // ====================================================================
+      // UTILISATION DE TON UTILITAIRE CENTRALISÉ POUR SÉCURISER L'INDEXATION
+      // ====================================================================
+      isbn13: rawIsbn13 ? isbnUtil.normalize(rawIsbn13) : undefined,
+      isbn10: rawIsbn10 ? isbnUtil.normalize(rawIsbn10) : undefined,
+      
       type: (raw.type as any) || 'unknown',
       title: title,
       subtitle: raw.subtitle || workRaw?.subtitle,
