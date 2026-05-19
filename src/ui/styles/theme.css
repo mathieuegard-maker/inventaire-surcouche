@@ -67,15 +67,14 @@ body {
 /* =========================================
    BOUTONS & ELEMENTS D'INTERACTION
 ========================================= */
-/* Neutralisation de toutes les variantes de boutons (Primary, Danger, Actions, Liens) */
 .btn-action, .btn-submit, .btn-close, .btn-pwa-update, .btn-link, .btn-primary, .btn-danger, .btn-pwa-close {
   display: inline-block;
   padding: 12px 24px;
   background-color: var(--color-bg-main);
   color: var(--color-text-main);
   border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important; /* Force la suppression du radius */
-  box-shadow: none !important; /* Force la suppression des ombres */
+  border-radius: var(--radius-none) !important;
+  box-shadow: none !important;
   font-weight: bold;
   font-family: var(--font-main);
   font-size: 16px;
@@ -86,7 +85,6 @@ body {
   text-transform: uppercase;
 }
 
-/* Comportement au survol unique pour tout le monde */
 .btn-action:hover, .btn-submit:hover, .btn-close:hover, .btn-pwa-update:hover, .btn-link:hover, .btn-primary:hover, .btn-danger:hover, .btn-pwa-close:hover {
   background-color: var(--color-border);
   color: var(--color-text-inverse);
@@ -132,7 +130,6 @@ body {
   margin-bottom: var(--spacing-lg);
 }
 
-/* Formulaire de Connexion */
 .login-container {
   display: flex;
   align-items: center;
@@ -155,7 +152,7 @@ body {
 }
 
 /* =========================================
-   MODALE D'ONBOARDING (Le Guide / WelcomeModal)
+   MODALE D'ONBOARDING (WelcomeModal)
 ========================================= */
 .modal-overlay {
   position: fixed;
@@ -197,9 +194,8 @@ body {
 }
 
 /* =========================================
-   PLUGINS & RESTITUTION MÉTIER
+   PLUGINS (Scanner & Manuel)
 ========================================= */
-/* Scanner Caméra */
 .scanner-viewport-wrapper {
   position: relative;
   width: 100%;
@@ -214,7 +210,6 @@ body {
   border: none !important;
 }
 
-/* Acquisition Manuelle */
 .plugin-manual-container {
   border: var(--border-width) dashed var(--color-border);
   padding: var(--spacing-md);
@@ -232,7 +227,9 @@ body {
   gap: var(--spacing-sm);
 }
 
-/* Fiche Livre (BookResultCard) & Alertes */
+/* =========================================
+   FICHE LIVRE (BookResultCard) & METADONNEES
+========================================= */
 .result-card.success, .result-card.error {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
@@ -257,9 +254,109 @@ body {
   margin: 0 0 var(--spacing-sm) 0;
   font-weight: bold;
   text-transform: uppercase;
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+}
+
+.book-card-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+@media (min-width: 600px) {
+  .book-card-layout {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+}
+
+.book-cover-placeholder {
+  width: 120px;
+  height: 180px;
+  flex-shrink: 0;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-alt);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.book-cover-image {
+  width: 120px;
+  height: auto;
+  flex-shrink: 0;
+  border: var(--border-width) solid var(--color-border);
+  object-fit: contain;
+  background-color: var(--color-bg-alt);
+}
+
+.book-info-layout {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.book-title {
+  font-size: 20px;
+  font-weight: bold;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.book-subtitle {
+  font-size: 14px;
+  font-weight: normal;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+/* Nouveaux blocs fil de fer pour structurer la donnée dense */
+.book-meta-group {
+  border: var(--border-width) dashed var(--color-border);
+  background-color: var(--color-bg-alt);
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.book-meta-item {
+  margin: 0;
+  font-size: 14px;
+}
+
+.book-meta-item strong {
+  text-transform: uppercase;
+}
+
+.book-actions-layout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  border-top: var(--border-width) solid var(--color-border);
+  padding-top: var(--spacing-md);
+}
+
+@media (min-width: 600px) {
+  .book-actions-layout {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
 }
 
 /* Badges de possession */
+.badge-container {
+  margin-top: var(--spacing-sm);
+}
+
 .badge, .badge.owned, .badge.missing {
   display: inline-block;
   padding: 4px 8px;
@@ -267,7 +364,7 @@ body {
   border-radius: var(--radius-none) !important;
   font-weight: bold;
   text-transform: uppercase;
-  font-size: 12px;
+  font-size: 14px;
   background-color: var(--color-bg-main);
   color: var(--color-text-main);
 }

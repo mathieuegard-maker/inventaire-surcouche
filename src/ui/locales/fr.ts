@@ -2,7 +2,8 @@
 
 export const TEXTS = {
   app: {
-    name: "Nom du projet"
+    name: "Nom de l'application",
+    description: "Description de l'application"
   },
   status: {
     initializing: "Chargement en cours...",
@@ -28,12 +29,39 @@ export const TEXTS = {
     btnClose: "❌ Fermer le scanner",
     searching: "Analyse du code en cours...",
     errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
-    successDetected: "Code-barres détecté avec succès !"
+    successDetected: "Recherche terminée",
+    addInventorySuccess: "L'ouvrage a été ajouté à votre collection !",
+    addWishlistSuccess: "L'ouvrage a été ajouté à votre liste d'envies !",
+    errorGeneral: "Erreur lors du traitement de l'ouvrage.",
+    errorQueue: "Erreur lors de la mise en file d'attente.",
+    notFound: "Ouvrage introuvable sur les serveurs d'Inventaire.io."
   },
   pwa: {
     updateReady: "Une nouvelle version de l'application est disponible !",
     offlineReady: "L'application est prête à fonctionner hors-ligne.",
     btnReload: "Mettre à jour",
     btnClose: "Fermer"
+  },
+  bookCard: {
+    owned: "Possédé",
+    missing: "Absent",
+    series: "Série",
+    volume: "Tome",
+    btnAddInventory: "Ajouter à la collection",
+    btnAddWishlist: "Ajouter à la liste d'envies",
+    btnLend: "Prêter ce livre",
+    btnViewSeries: "Afficher toute la série",
+    meta: {
+      authors: "Auteur(s)",
+      illustrators: "Dessinateur(s)",
+      scriptwriters: "Scénariste(s)",
+      publisher: "Éditeur",
+      collection: "Collection",
+      genres: "Genre(s)",
+      publishDate: "Parution",
+      pageCount: "Pages",
+      language: "Langue",
+      format: "Format"
+    }
   }
 };
