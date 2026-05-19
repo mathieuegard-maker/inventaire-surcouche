@@ -1,271 +1,162 @@
 /* src/ui/styles/theme.css */
 
 :root {
-  /* Charte graphique (Couleurs) */
-  --color-primary: #5bc31b;
-  --color-primary-hover: #4ca916;
-  --color-primary-light: #f0f9eb;
-  --color-text-main: #333333;
-  --color-text-muted: #555555;
-  --color-overlay: rgba(0, 0, 0, 0.5);
-  --color-surface: #ffffff;
-  --color-background: #f4f4f9;
-
-  /* Structure & Mises en page */
-  --radius-md: 6px;
-  --radius-lg: 12px;
-  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.15);
+  /* Design Tokens : Mode "Wireframe" Strict (Monochrome & Angles droits) */
+  --color-bg-main: #ffffff;
+  --color-bg-alt: #f4f4f4;
+  --color-border: #000000;
+  --color-text-main: #000000;
+  --color-text-muted: #666666;
+  --color-text-inverse: #ffffff;
+  --color-overlay: rgba(0, 0, 0, 0.8);
+  
+  /* Structure brute (Zéro arrondi, zéro ombre) */
+  --border-width: 2px;
+  --radius-none: 0px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
   
   /* Typographie */
-  --font-main: sans-serif;
+  --font-main: monospace, sans-serif;
 }
 
-/* Styles Globaux Dom */
+/* =========================================
+   STYLES GLOBAUX & STRUCTURE
+========================================= */
 body {
   margin: 0;
   font-family: var(--font-main);
-  background-color: var(--color-background);
+  background-color: var(--color-bg-alt);
   color: var(--color-text-main);
 }
 
-/* Alignement Structurel du Tableau de Bord */
 .view-container {
-  padding: 30px;
-  font-family: var(--font-main);
+  padding: var(--spacing-lg);
   max-width: 800px;
   margin: 0 auto;
 }
 
 .view-container h2 {
-  color: var(--color-text-main);
-  border-bottom: 2px solid var(--color-primary-light);
-  padding-bottom: 10px;
-}
-
-.action-section {
-  margin: 20px 0;
-}
-
-.btn-action {
-  padding: 12px 24px;
-  border: none;
-  border-radius: var(--radius-md);
-  font-weight: bold;
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.btn-primary {
-  background-color: var(--color-primary);
-  color: var(--color-surface);
-}
-
-.btn-primary:hover {
-  background-color: var(--color-primary-hover);
-}
-
-.btn-danger {
-  background-color: #f56c6c;
-  color: #ffffff;
-}
-
-.btn-danger:hover {
-  background-color: #e64242;
-}
-
-/* Fenêtre de rendu du Scanner Matériel */
-.scanner-box {
-  background-color: var(--color-surface);
-  padding: 20px;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
-  margin-bottom: 25px;
-  text-align: center;
-}
-
-.scanner-box h3 {
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
   margin-top: 0;
-  color: var(--color-text-main);
+  text-transform: uppercase;
 }
 
-.scanner-viewport-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 500px;
-  margin: 0 auto;
-  background-color: #000000;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-}
-
-.scanner-viewport {
-  width: 100% !important;
-  border: none !important;
-}
-
-#barcode-scanner-viewport__video {
-  width: 100% !important;
-  height: auto !important;
-  object-fit: cover;
-}
-
-.scanner-placeholder {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+/* =========================================
+   SPLASH SCREEN (App.vue)
+========================================= */
+.splash-screen {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background-color: rgba(0, 0, 0, 0.7);
-  color: #ffffff;
+  height: 100vh;
+  text-align: center;
+  background-color: var(--color-bg-main);
 }
 
-/* Cartes de restitution des Résultats Métier */
-.result-card {
-  padding: 20px;
-  border-radius: var(--radius-md);
-  margin-top: 20px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.05);
-}
-
-.result-card.success {
-  background-color: var(--color-primary-light);
-  border-left: 5px solid var(--color-primary);
+.app-title {
   color: var(--color-text-main);
-  text-align: left;
+  text-transform: uppercase;
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-sm) var(--spacing-md);
 }
 
-.result-card.error {
-  background-color: #fde2e2;
-  border-left: 5px solid #f56c6c;
-  color: #f56c6c;
-  text-align: left;
-}
-
-.result-title {
-  margin: 0 0 10px 0;
+/* =========================================
+   BOUTONS & ELEMENTS D'INTERACTION
+========================================= */
+/* Neutralisation de toutes les variantes de boutons (Primary, Danger, Actions, Liens) */
+.btn-action, .btn-submit, .btn-close, .btn-pwa-update, .btn-link, .btn-primary, .btn-danger, .btn-pwa-close {
+  display: inline-block;
+  padding: 12px 24px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-none) !important; /* Force la suppression du radius */
+  box-shadow: none !important; /* Force la suppression des ombres */
   font-weight: bold;
+  font-family: var(--font-main);
+  font-size: 16px;
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+  text-transform: uppercase;
 }
 
-.book-title {
-  font-size: 18px;
-  margin: 0 0 5px 0;
+/* Comportement au survol unique pour tout le monde */
+.btn-action:hover, .btn-submit:hover, .btn-close:hover, .btn-pwa-update:hover, .btn-link:hover, .btn-primary:hover, .btn-danger:hover, .btn-pwa-close:hover {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
 }
 
-.book-authors {
+.btn-submit:disabled, .btn-action:disabled {
+  background-color: var(--color-bg-alt);
   color: var(--color-text-muted);
-  margin: 0 0 5px 0;
+  border-style: dashed;
+  cursor: not-allowed;
 }
 
-.book-isbn {
-  font-size: 13px;
-  color: #888888;
-  margin: 0 0 10px 0;
+/* =========================================
+   CHAMPS DE SAISIE (Inputs)
+========================================= */
+.form-input, .plugin-manual-input {
+  padding: 12px;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-none) !important;
+  font-family: var(--font-main);
+  font-size: 15px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  width: 100%;
+  box-sizing: border-box;
+  outline: none;
+  box-shadow: none !important;
 }
 
-.badge {
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: bold;
+.form-input:focus, .plugin-manual-input:focus {
+  background-color: var(--color-bg-alt);
 }
 
-.badge.owned {
-  background-color: var(--color-primary);
-  color: white;
+/* =========================================
+   CONTENEURS (Modales, Cartes, Box)
+========================================= */
+.login-card, .scanner-box, .modal-box, .result-card, .pwa-toast {
+  background-color: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-none) !important;
+  box-shadow: none !important;
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
 }
 
-.badge.missing {
-  background-color: #e6a23c;
-  color: white;
-}
-
-/* Alignement Structurel de la Vue Connexion (Login) */
+/* Formulaire de Connexion */
 .login-container {
   display: flex;
   align-items: center;
   justify-content: center;
   height: 100vh;
-  font-family: var(--font-main);
-  background-color: var(--color-background);
+  padding: var(--spacing-md);
+  box-sizing: border-box;
+  background-color: var(--color-bg-alt);
 }
 
 .login-card {
-  background-color: var(--color-surface);
-  padding: 40px;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
   max-width: 400px;
   width: 100%;
-  text-align: center;
 }
 
-.login-card h2 {
-  color: var(--color-text-main);
-  margin-top: 0;
-  margin-bottom: 25px;
-}
-
-.error-banner {
-  background-color: #fde2e2;
-  color: #f56c6c;
-  padding: 10px;
-  border-radius: var(--radius-md);
-  margin-bottom: 20px;
-  font-size: 14px;
-  border: 1px solid #fcd3d3;
-}
-
-.login-form {
+.login-form, .modal-actions {
   display: flex;
   flex-direction: column;
-  gap: 15px;
+  gap: var(--spacing-md);
 }
 
-.form-input {
-  padding: 12px;
-  border: 1px solid #dddddd;
-  border-radius: var(--radius-md);
-  font-size: 15px;
-  outline: none;
-}
-
-.form-input:focus {
-  border-color: var(--color-primary);
-}
-
-.form-input:disabled {
-  background-color: #f5f7fa;
-  color: #c0c4cc;
-  cursor: not-allowed;
-}
-
-.btn-submit {
-  padding: 12px;
-  background-color: var(--color-primary);
-  color: var(--color-surface);
-  border: none;
-  border-radius: var(--radius-md);
-  font-weight: bold;
-  font-size: 16px;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.btn-submit:hover:not(:disabled) {
-  background-color: var(--color-primary-hover);
-}
-
-.btn-submit:disabled {
-  background-color: var(--color-text-muted);
-  opacity: 0.7;
-  cursor: not-allowed;
-}
-
-/* Fenêtre de la Modale d'Onboarding (WelcomeModal) */
+/* =========================================
+   MODALE D'ONBOARDING (Le Guide / WelcomeModal)
+========================================= */
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -277,138 +168,124 @@ body {
   align-items: center;
   justify-content: center;
   z-index: 1000;
-  padding: 20px;
+  padding: var(--spacing-md);
   box-sizing: border-box;
 }
 
 .modal-box {
-  background-color: var(--color-surface);
-  padding: 30px;
-  border-radius: var(--radius-lg);
   max-width: 450px;
   width: 100%;
-  box-shadow: var(--shadow-lg);
   text-align: center;
-  font-family: var(--font-main);
 }
 
 .modal-box h2 {
-  color: var(--color-primary);
+  text-transform: uppercase;
   margin-top: 0;
-  font-size: 24px;
 }
 
 .modal-text {
   font-size: 15px;
-  line-height: 1.5;
-  color: var(--color-text-muted);
-  margin: 15px 0;
+  line-height: 1.6;
+  margin: var(--spacing-md) 0;
 }
 
 .modal-text.highlight {
-  font-weight: 600;
-  color: var(--color-text-main);
-  background-color: var(--color-primary-light);
-  padding: 10px;
-  border-radius: var(--radius-md);
-  border-left: 4px solid var(--color-primary);
+  border: var(--border-width) dashed var(--color-border);
+  padding: var(--spacing-md);
+  font-weight: bold;
+  background-color: var(--color-bg-alt);
 }
 
-.modal-actions {
+/* =========================================
+   PLUGINS & RESTITUTION MÉTIER
+========================================= */
+/* Scanner Caméra */
+.scanner-viewport-wrapper {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  margin: 0 auto;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-alt);
+}
+
+.scanner-viewport {
+  width: 100% !important;
+  border: none !important;
+}
+
+/* Acquisition Manuelle */
+.plugin-manual-container {
+  border: var(--border-width) dashed var(--color-border);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  background-color: var(--color-bg-main);
+}
+
+.plugin-manual-container h3 {
+  margin-top: 0;
+  text-transform: uppercase;
+}
+
+.plugin-manual-form {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin-top: 25px;
+  gap: var(--spacing-sm);
 }
 
-.btn-link {
-  display: block;
-  padding: 12px;
-  background-color: transparent;
-  color: var(--color-primary);
-  border: 2px solid var(--color-primary);
-  border-radius: var(--radius-md);
-  text-decoration: none;
+/* Fiche Livre (BookResultCard) & Alertes */
+.result-card.success, .result-card.error {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  text-align: left;
+}
+
+.result-card.error {
+  border-style: dashed;
+  background-color: var(--color-bg-alt);
+}
+
+.error-banner {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
   font-weight: bold;
-  font-size: 15px;
-  transition: background-color 0.2s;
+  text-transform: uppercase;
 }
 
-.btn-link:hover {
-  background-color: var(--color-primary-light);
-}
-
-.btn-close {
-  padding: 12px;
-  background-color: var(--color-primary);
-  color: var(--color-surface);
-  border: none;
-  border-radius: var(--radius-md);
+.result-title {
+  margin: 0 0 var(--spacing-sm) 0;
   font-weight: bold;
-  font-size: 15px;
-  cursor: pointer;
-  transition: background-color 0.2s;
+  text-transform: uppercase;
 }
 
-.btn-close:hover {
-  background-color: var(--color-primary-hover);
+/* Badges de possession */
+.badge, .badge.owned, .badge.missing {
+  display: inline-block;
+  padding: 4px 8px;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-radius: var(--radius-none) !important;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
 }
 
-/* Notifications PWA (Mise à jour & Hors-ligne) */
+.badge.owned {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+}
+
+/* =========================================
+   NOTIFICATIONS SYSTEME PWA (Toast)
+========================================= */
 .pwa-toast {
   position: fixed;
   right: 0;
   bottom: 0;
-  margin: 16px;
-  padding: 20px;
-  background-color: var(--color-surface);
-  border: 1px solid var(--color-primary-light);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  margin: var(--spacing-md);
   z-index: 9999;
-  text-align: left;
-  font-family: var(--font-main);
   max-width: 350px;
-}
-
-.pwa-message {
-  margin-bottom: 15px;
-  font-size: 15px;
-  color: var(--color-text-main);
-  font-weight: 500;
-}
-
-.pwa-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.btn-pwa-update {
-  padding: 8px 16px;
-  background-color: var(--color-primary);
-  color: var(--color-surface);
-  border: none;
-  border-radius: var(--radius-md);
-  font-weight: bold;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.btn-pwa-update:hover {
-  background-color: var(--color-primary-hover);
-}
-
-.btn-pwa-close {
-  padding: 8px 16px;
-  background-color: transparent;
-  color: var(--color-text-muted);
-  border: 1px solid #dddddd;
-  border-radius: var(--radius-md);
-  font-weight: bold;
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.btn-pwa-close:hover {
-  background-color: #f4f4f9;
+  width: calc(100% - 32px);
 }

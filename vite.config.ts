@@ -12,12 +12,16 @@ export default defineConfig({
         enabled: true, // Permet de tester le Service Worker en local via `vercel dev`
         type: 'module'
       },
+      // Ajout de cette section pour corriger l'avertissement
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'] // On retire .wasm de la liste
+      },
       manifest: {
         name: 'nom du projet',
         short_name: 'projet',
         description: 'Surcouche mobile optimisée pour Inventaire.io',
         theme_color: '#5bc31b',
-        background_color: '#f4f4f9',
+        background_color: '#ffffff',
         display: 'standalone',
         icons: [
           {

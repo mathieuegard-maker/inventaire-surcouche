@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref, nextTick, onUnmounted } from 'vue';
+import { ref, nextTick, onMounted, onUnmounted } from 'vue';
 import { barcodeIsbnProvider } from '../../plugins/barcode/barcode-isbn.provider';
+import { manualIsbnProvider } from '../../plugins/manual/manual-isbn.provider';
+import { searchService } from '../../core/orchestrators/search.orchestrator';
+import BaseButton from '../components/BaseButton.vue';
+import BookResultCard from '../components/BookResultCard.vue';
 import { TEXTS } from '../locales/fr';
 import type { SearchResponse } from '../../core/types';
 
@@ -8,14 +12,33 @@ const isScanningActive = ref(false);
 const isSearching = ref(false);
 const searchResult = ref<SearchResponse | null>(null);
 const errorMessage = ref<string | null>(null);
+
 const scannerId = 'barcode-scanner-viewport';
+const manualContainerId = 'manual-input-container';
+
+onMounted(() => {
+  // Initialisation du plugin d'acquisition manuelle dans son conteneur dédié
+  manualIsbnProvider.setup(manualContainerId, async (isbn) => {
+    searchResult.value = null;
+    errorMessage.value = null;
+    try {
+      const response = await searchService.searchByIsbn(isbn);
+      if (response) {
+        searchResult.value = response;
+      } else {
+        errorMessage.value = "Ouvrage introuvable sur les serveurs d'Inventaire.io.";
+      }
+    } catch (err: any) {
+      errorMessage.value = err.message || "Erreur lors du traitement de l'ouvrage.";
+    }
+  });
+});
 
 const startScanningSequence = async () => {
   searchResult.value = null;
   errorMessage.value = null;
   isScanningActive.value = true;
 
-  // Attente impérative du cycle de rendu Vue pour garantir la présence de l'ID cible dans le DOM
   await nextTick();
 
   await barcodeIsbnProvider.startScanner(
@@ -47,7 +70,6 @@ const stopScanningSequence = async () => {
 };
 
 onUnmounted(async () => {
-  // Sécurité matériel : coupure obligatoire si l'utilisateur change d'onglet ou de route
   await barcodeIsbnProvider.stopScanner();
 });
 </script>
@@ -57,12 +79,12 @@ onUnmounted(async () => {
     <h2>📚 {{ TEXTS.app.name }} - Dashboard</h2>
     
     <div class="action-section">
-      <button 
+      <BaseButton 
         @click="isScanningActive ? stopScanningSequence() : startScanningSequence()" 
-        :class="['btn-action', isScanningActive ? 'btn-danger' : 'btn-primary']"
+        :variantClass="isScanningActive ? 'btn-danger' : 'btn-primary'"
       >
         {{ isScanningActive ? TEXTS.scanner.btnClose : TEXTS.scanner.btnOpen }}
-      </button>
+      </BaseButton>
     </div>
 
     <div v-show="isScanningActive" class="scanner-box">
@@ -75,29 +97,12 @@ onUnmounted(async () => {
       </div>
     </div>
 
+    <div :id="manualContainerId"></div>
+
     <div v-if="errorMessage" class="result-card error">
       <p class="result-value">{{ errorMessage }}</p>
     </div>
 
-    <div v-if="searchResult" class="result-card success">
-      <p class="result-title">{{ TEXTS.scanner.successDetected }}</p>
-      <div class="book-details">
-        <div class="book-info">
-          <p class="book-title"><strong>{{ searchResult.mainBook.title }}</strong></p>
-          <p class="book-authors" v-if="searchResult.mainBook.authors?.length">
-            {{ searchResult.mainBook.authors.join(', ') }}
-          </p>
-          <p class="book-isbn" v-if="searchResult.mainBook.isbn13">
-            ISBN : {{ searchResult.mainBook.isbn13 }}
-          </p>
-          <p class="ownership-status">
-            Statut de possession : 
-            <span class="badge" :class="searchResult.ownership.isWorkOwned ? 'owned' : 'missing'">
-              {{ searchResult.ownership.isWorkOwned ? 'Possédé' : 'Absent' }}
-            </span>
-          </p>
-        </div>
-      </div>
-    </div>
+    <BookResultCard v-if="searchResult" :searchResult="searchResult" />
   </div>
 </template>

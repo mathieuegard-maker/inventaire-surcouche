@@ -1,4 +1,4 @@
-// src/providers/manual-isbn.provider.ts
+// src/plugins/manual/manual-isbn.provider.ts
 
 export const manualIsbnProvider = {
   /**
@@ -9,10 +9,12 @@ export const manualIsbnProvider = {
     if (!container) return;
 
     container.innerHTML = `
-      <div class="acquisition-box" style="margin-top: 20px; padding: 15px; border: 1px dashed #ccc;">
+      <div class="plugin-manual-container">
         <h3>Acquisition Manuelle</h3>
-        <input type="text" id="manual-isbn-input" placeholder="Entrez un ISBN (ex: 9782012101333)" style="width: 70%; padding: 8px;">
-        <button id="manual-isbn-btn" style="padding: 8px 15px; cursor: pointer;">Rechercher</button>
+        <div class="plugin-manual-form">
+          <input type="text" id="manual-isbn-input" class="plugin-manual-input" placeholder="Entrez un ISBN (ex: 9782012101333)">
+          <button id="manual-isbn-btn" class="btn-action">Rechercher</button>
+        </div>
       </div>
     `;
 
