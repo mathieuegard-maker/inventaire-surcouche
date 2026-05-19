@@ -10,8 +10,27 @@ SÉCURITÉ : SYNTHÈSE DU DOSSIER /Users/mathieuegard/Dropbox/Mac/Desktop/script
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Nom du projet</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+
+
+################################################################################
+### FICHIER : test.html
+################################################################################
+
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Test Auth - Inventaire</title>
+    <title>Laboratoire de Test - Middle-End</title>
     <style>
       body { font-family: sans-serif; padding: 20px; max-width: 500px; margin: auto; background: #f4f4f9; }
       #app { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
@@ -25,19 +44,17 @@ SÉCURITÉ : SYNTHÈSE DU DOSSIER /Users/mathieuegard/Dropbox/Mac/Desktop/script
   </head>
   <body>
     <div id="app">
-      <h2>Connexion Inventaire</h2>
+      <h2>Connexion Inventaire (Lab)</h2>
       <form id="login-form">
-        <input type="text" id="username" placeholder="Pseudo ou Email" required />
-        <input type="password" id="password" placeholder="Mot de passe" required />
+        <input type="text" id="username" placeholder="Nom d'utilisateur" required>
+        <input type="password" id="password" placeholder="Mot de passe" required>
         <button type="submit">Se connecter</button>
       </form>
-      <div id="logs">
-        <div class="log-entry">Système prêt. En attente de connexion...</div>
-      </div>
+      <div id="acquisition-zone" style="display:none;"></div>
+      <div id="logs"></div>
     </div>
-    <div id="acquisition-zone"></div>
-    <div id="logs"></div>
-    <script type="module" src="/src/main.ts"></script>
+    
+    <script type="module" src="/src/test-lab.ts"></script>
   </body>
 </html>
 
@@ -124,12 +141,17 @@ full_project_code.txt
   "devDependencies": {
     "@types/node": "^25.8.0",
     "@vercel/node": "^5.7.16",
+    "@vitejs/plugin-vue": "^6.0.7",
     "typescript": "~6.0.2",
     "vite": "^8.0.10",
     "vitest": "^4.1.6"
   },
   "dependencies": {
-    "dexie": "^4.4.2"
+    "dexie": "^4.4.2",
+    "html5-qrcode": "^2.3.8",
+    "pinia": "^3.0.4",
+    "vue": "^3.5.34",
+    "vue-router": "^5.0.7"
   }
 }
 
@@ -163,6 +185,21 @@ full_project_code.txt
   "include": ["src"]
 }
 
+
+
+################################################################################
+### FICHIER : vite.config.ts
+################################################################################
+
+import { defineConfig } from 'vite';
+import vue from '@vitejs/plugin-vue';
+
+// https://vitejs.dev/config/
+export default defineConfig({
+  plugins: [
+    vue()
+  ]
+});
 
 
 ################################################################################
@@ -547,6 +584,74 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 
 ################################################################################
+### FICHIER : src/App.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { connectionService } from './core/orchestrators/connection.orchestrator';
+import { TEXTS } from './ui/locales/fr';
+
+const isInitializing = ref(true);
+const router = useRouter(); // Permet de manipuler la navigation
+
+onMounted(async () => {
+  try {
+    // On lance la mécanique lourde du Middle-End
+    const isConnected = await connectionService.initializeApp();
+    
+    // Routage intelligent selon la réponse de l'orchestrateur
+    if (isConnected) {
+      router.push('/dashboard');
+    } else {
+      router.push('/login');
+    }
+  } catch (error) {
+    console.error("[VUE] Erreur lors de l'initialisation :", error);
+    // Sécurité : en cas de plantage, on renvoie à la page de connexion
+    router.push('/login');
+  } finally {
+    // Le chargement est terminé, on fait disparaître le Splash Screen
+    isInitializing.value = false;
+  }
+});
+</script>
+
+<template>
+  <div v-if="isInitializing" class="splash-screen">
+    <h1>{{ TEXTS.app.name }}</h1>
+    <p>{{ TEXTS.status.initializing }}</p>
+  </div>
+
+  <router-view v-else></router-view>
+</template>
+
+<style>
+/* Style global de base */
+body {
+  margin: 0;
+  font-family: sans-serif;
+  background-color: #f4f4f9;
+  color: #333;
+}
+
+.splash-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  text-align: center;
+}
+
+h1 {
+  color: #5bc31b;
+}
+</style>
+
+
+################################################################################
 ### FICHIER : src/counter.ts
 ################################################################################
 
@@ -564,6 +669,343 @@ export function setupCounter(element: HTMLButtonElement) {
 
 ################################################################################
 ### FICHIER : src/main.ts
+################################################################################
+
+// src/main.ts
+import { createApp } from 'vue';
+import { createPinia } from 'pinia';
+import { router } from './router';
+import App from './App.vue';
+
+// Injection du Design System global
+import './ui/styles/theme.css';
+
+const app = createApp(App);
+const pinia = createPinia();
+
+app.use(pinia);
+app.use(router);
+app.mount('#app');
+
+
+################################################################################
+### FICHIER : src/env.d.ts
+################################################################################
+
+/// <reference types="vite/client" />
+
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue';
+  const component: DefineComponent<{}, {}, any>;
+  export default component;
+}
+
+
+################################################################################
+### FICHIER : src/style.css
+################################################################################
+
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow:
+    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light dark;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #9ca3af;
+    --text-h: #f3f4f6;
+    --bg: #16171d;
+    --border: #2e303a;
+    --code-bg: #1f2028;
+    --accent: #c084fc;
+    --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-border: rgba(192, 132, 252, 0.5);
+    --social-bg: rgba(47, 48, 58, 0.5);
+    --shadow:
+      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  }
+
+  #social .button-icon {
+    filter: invert(1) brightness(2);
+  }
+}
+
+body {
+  margin: 0;
+}
+
+h1,
+h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) {
+    font-size: 36px;
+    margin: 20px 0;
+  }
+}
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) {
+    font-size: 20px;
+  }
+}
+p {
+  margin: 0;
+}
+
+code,
+.counter {
+  font-family: var(--mono);
+  display: inline-flex;
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+code {
+  font-size: 15px;
+  line-height: 135%;
+  padding: 4px 8px;
+  background: var(--code-bg);
+}
+
+.counter {
+  font-size: 16px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 2px solid transparent;
+  transition: border-color 0.3s;
+  margin-bottom: 24px;
+
+  &:hover {
+    border-color: var(--accent-border);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+
+.hero {
+  position: relative;
+
+  .base,
+  .framework,
+  .vite {
+    inset-inline: 0;
+    margin: 0 auto;
+  }
+
+  .base {
+    width: 170px;
+    position: relative;
+    z-index: 0;
+  }
+
+  .framework,
+  .vite {
+    position: absolute;
+  }
+
+  .framework {
+    z-index: 1;
+    top: 34px;
+    height: 28px;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
+      scale(1.4);
+  }
+
+  .vite {
+    z-index: 0;
+    top: 107px;
+    height: 26px;
+    width: auto;
+    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
+      scale(0.8);
+  }
+}
+
+#app {
+  width: 1126px;
+  max-width: 100%;
+  margin: 0 auto;
+  text-align: center;
+  border-inline: 1px solid var(--border);
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+#center {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  place-content: center;
+  place-items: center;
+  flex-grow: 1;
+
+  @media (max-width: 1024px) {
+    padding: 32px 20px 24px;
+    gap: 18px;
+  }
+}
+
+#next-steps {
+  display: flex;
+  border-top: 1px solid var(--border);
+  text-align: left;
+
+  & > div {
+    flex: 1 1 0;
+    padding: 32px;
+    @media (max-width: 1024px) {
+      padding: 24px 20px;
+    }
+  }
+
+  .icon {
+    margin-bottom: 16px;
+    width: 22px;
+    height: 22px;
+  }
+
+  @media (max-width: 1024px) {
+    flex-direction: column;
+    text-align: center;
+  }
+}
+
+#docs {
+  border-right: 1px solid var(--border);
+
+  @media (max-width: 1024px) {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+#next-steps ul {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  gap: 8px;
+  margin: 32px 0 0;
+
+  .logo {
+    height: 18px;
+  }
+
+  a {
+    color: var(--text-h);
+    font-size: 16px;
+    border-radius: 6px;
+    background: var(--social-bg);
+    display: flex;
+    padding: 6px 12px;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    transition: box-shadow 0.3s;
+
+    &:hover {
+      box-shadow: var(--shadow);
+    }
+    .button-icon {
+      height: 18px;
+      width: 18px;
+    }
+  }
+
+  @media (max-width: 1024px) {
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+
+    li {
+      flex: 1 1 calc(50% - 8px);
+    }
+
+    a {
+      width: 100%;
+      justify-content: center;
+      box-sizing: border-box;
+    }
+  }
+}
+
+#spacer {
+  height: 88px;
+  border-top: 1px solid var(--border);
+  @media (max-width: 1024px) {
+    height: 48px;
+  }
+}
+
+.ticks {
+  position: relative;
+  width: 100%;
+
+  &::before,
+  &::after {
+    content: '';
+    position: absolute;
+    top: -4.5px;
+    border: 5px solid transparent;
+  }
+
+  &::before {
+    left: 0;
+    border-left-color: var(--border);
+  }
+  &::after {
+    right: 0;
+    border-right-color: var(--border);
+  }
+}
+
+
+
+################################################################################
+### FICHIER : src/test-lab.ts
 ################################################################################
 
 // src/main.ts
@@ -977,306 +1419,408 @@ autoInit();
 
 
 ################################################################################
-### FICHIER : src/style.css
+### FICHIER : src/ui/locales/fr.ts
 ################################################################################
 
+// src/ui/locales/fr.ts
+
+export const TEXTS = {
+  app: {
+    name: "Nom du projet"
+  },
+  status: {
+    initializing: "Chargement en cours...",
+    offlineMode: "Mode hors-ligne actif"
+  },
+  onboarding: {
+    title: "Bienvenue !",
+    description: "Cette application est une surcouche optimisée et indépendante qui se connecte directement au service ouvert et citoyen Inventaire.io.",
+    requirement: "Un compte sur Inventaire.io est indispensable pour pouvoir utiliser cette application et synchroniser vos livres.",
+    actionLink: "Créer un compte sur Inventaire.io",
+    actionClose: "J'ai compris"
+  },
+  login: {
+    title: "Connexion",
+    usernamePlaceholder: "Nom d'utilisateur",
+    passwordPlaceholder: "Mot de passe",
+    submitButton: "Se connecter",
+    loading: "Connexion au serveur..."
+  },
+  scanner: {
+    title: "Scanner le code-barres d'un livre",
+    btnOpen: "📸 Scanner un livre",
+    btnClose: "❌ Fermer le scanner",
+    searching: "Analyse du code en cours...",
+    errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
+    successDetected: "Code-barres détecté avec succès !"
+  }
+};
+
+
+################################################################################
+### FICHIER : src/ui/styles/theme.css
+################################################################################
+
+/* src/ui/styles/theme.css */
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* Charte graphique (Couleurs) */
+  --color-primary: #5bc31b;
+  --color-primary-hover: #4ca916;
+  --color-primary-light: #f0f9eb;
+  --color-text-main: #333333;
+  --color-text-muted: #555555;
+  --color-overlay: rgba(0, 0, 0, 0.5);
+  --color-surface: #ffffff;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  /* Structure & Mises en page */
+  --radius-md: 6px;
+  --radius-lg: 12px;
+  --shadow-lg: 0 4px 20px rgba(0, 0, 0, 0.15);
+  
+  /* Typographie */
+  --font-main: sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
 
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
+################################################################################
+### FICHIER : src/ui/components/WelcomeModal.vue
+################################################################################
 
-body {
-  margin: 0;
-}
+<script setup lang="ts">
+import { TEXTS } from '../locales/fr';
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
+// Définition des propriétés d'entrée (props)
+defineProps<{
+  show: boolean;
+}>();
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
+// Définition des événements de sortie (emits)
+const emit = defineEmits<{
+  (e: 'close'): void;
+}>();
+</script>
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
+<template>
+  <div v-if="show" class="modal-overlay">
+    <div class="modal-box">
+      <h2>{{ TEXTS.onboarding.title }}</h2>
+      
+      <p class="modal-text">{{ TEXTS.onboarding.description }}</p>
+      <p class="modal-text highlight">{{ TEXTS.onboarding.requirement }}</p>
+      
+      <div class="modal-actions">
+        <a 
+          href="https://inventaire.io" 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          class="btn-link"
+        >
+          {{ TEXTS.onboarding.actionLink }}
+        </a>
+        
+        <button @click="emit('close')" class="btn-close">
+          {{ TEXTS.onboarding.actionClose }}
+        </button>
+      </div>
+    </div>
+  </div>
+</template>
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
-}
-
-.counter {
-  font-size: 16px;
-  padding: 5px 10px;
-  border-radius: 5px;
-  color: var(--accent);
-  background: var(--accent-bg);
-  border: 2px solid transparent;
-  transition: border-color 0.3s;
-  margin-bottom: 24px;
-
-  &:hover {
-    border-color: var(--accent-border);
-  }
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-}
-
-.hero {
-  position: relative;
-
-  .base,
-  .framework,
-  .vite {
-    inset-inline: 0;
-    margin: 0 auto;
-  }
-
-  .base {
-    width: 170px;
-    position: relative;
-    z-index: 0;
-  }
-
-  .framework,
-  .vite {
-    position: absolute;
-  }
-
-  .framework {
-    z-index: 1;
-    top: 34px;
-    height: 28px;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(44deg) rotateY(39deg)
-      scale(1.4);
-  }
-
-  .vite {
-    z-index: 0;
-    top: 107px;
-    height: 26px;
-    width: auto;
-    transform: perspective(2000px) rotateZ(300deg) rotateX(40deg) rotateY(39deg)
-      scale(0.8);
-  }
-}
-
-#app {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+<style scoped>
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: var(--color-overlay);
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
   box-sizing: border-box;
 }
 
-#center {
+.modal-box {
+  background-color: var(--color-surface);
+  padding: 30px;
+  border-radius: var(--radius-lg);
+  max-width: 450px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  text-align: center;
+  font-family: var(--font-main);
+}
+
+h2 {
+  color: var(--color-primary);
+  margin-top: 0;
+  font-size: 24px;
+}
+
+.modal-text {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  margin: 15px 0;
+}
+
+.modal-text.highlight {
+  font-weight: 600;
+  color: var(--color-text-main);
+  background-color: var(--color-primary-light);
+  padding: 10px;
+  border-radius: var(--radius-md);
+  border-left: 4px solid var(--color-primary);
+}
+
+.modal-actions {
   display: flex;
   flex-direction: column;
-  gap: 25px;
-  place-content: center;
-  place-items: center;
-  flex-grow: 1;
-
-  @media (max-width: 1024px) {
-    padding: 32px 20px 24px;
-    gap: 18px;
-  }
+  gap: 12px;
+  margin-top: 25px;
 }
 
-#next-steps {
+.btn-link {
+  display: block;
+  padding: 12px;
+  background-color: transparent;
+  color: var(--color-primary);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  font-weight: bold;
+  font-size: 15px;
+  transition: background-color 0.2s;
+}
+
+.btn-link:hover {
+  background-color: var(--color-primary-light);
+}
+
+.btn-close {
+  padding: 12px;
+  background-color: var(--color-primary);
+  color: var(--color-surface);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: bold;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-close:hover {
+  background-color: var(--color-primary-hover);
+}
+</style>
+
+
+################################################################################
+### FICHIER : src/ui/views/LoginView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import WelcomeModal from '../components/WelcomeModal.vue';
+import { TEXTS } from '../locales/fr';
+import { connectionService } from '../../core/orchestrators/connection.orchestrator';
+
+const router = useRouter();
+const showWelcome = ref(false);
+
+// États réactifs pour le formulaire de connexion
+const username = ref('');
+const password = ref('');
+const isLoading = ref(false);
+const errorMessage = ref('');
+
+onMounted(() => {
+  // Étape 1 : On vérifie si l'utilisateur a déjà vu la modale d'onboarding
+  const hasSeenWelcome = localStorage.getItem('has_seen_welcome');
+  
+  if (!hasSeenWelcome) {
+    // Si la clé n'existe pas, c'est une première ouverture : on affiche la modale
+    showWelcome.value = true;
+  }
+});
+
+const handleCloseWelcome = () => {
+  // Étape 2 : Quand l'utilisateur ferme la modale, on enregistre le flag
+  localStorage.setItem('has_seen_welcome', 'true');
+  showWelcome.value = false;
+};
+
+// Traitement de la soumission du formulaire
+const handleLogin = async () => {
+  if (!username.value || !password.value) return;
+  
+  isLoading.value = true;
+  errorMessage.value = '';
+  
+  try {
+    // Exécution via le chef d'orchestre mis à jour
+    const isConnected = await connectionService.login(username.value, password.value);
+    
+    if (isConnected) {
+      // Redirection immédiate vers le tableau de bord
+      router.push('/dashboard');
+    } else {
+      errorMessage.value = "Identifiants invalides ou compte inconnu.";
+    }
+  } catch (error) {
+    console.error("[VUE] Échec de l'action de connexion :", error);
+    errorMessage.value = "Impossible de joindre le serveur de synchronisation.";
+  } finally {
+    isLoading.value = false;
+  }
+};
+</script>
+
+<template>
+  <div class="login-container">
+    <div class="login-card">
+      <h2>{{ TEXTS.login.title }}</h2>
+      
+      <div v-if="errorMessage" class="error-banner">
+        {{ errorMessage }}
+      </div>
+      
+      <form @submit.prevent="handleLogin" class="login-form">
+        <input 
+          v-model="username"
+          type="text" 
+          :placeholder="TEXTS.login.usernamePlaceholder" 
+          class="form-input"
+          :disabled="isLoading"
+          required
+        />
+        <input 
+          v-model="password"
+          type="password" 
+          :placeholder="TEXTS.login.passwordPlaceholder" 
+          class="form-input"
+          :disabled="isLoading"
+          required
+        />
+        <button type="submit" class="btn-submit" :disabled="isLoading">
+          {{ isLoading ? TEXTS.login.loading : TEXTS.login.submitButton }}
+        </button>
+      </form>
+    </div>
+
+    <WelcomeModal :show="showWelcome" @close="handleCloseWelcome" />
+  </div>
+</template>
+
+<style scoped>
+.login-container {
   display: flex;
-  border-top: 1px solid var(--border);
-  text-align: left;
-
-  & > div {
-    flex: 1 1 0;
-    padding: 32px;
-    @media (max-width: 1024px) {
-      padding: 24px 20px;
-    }
-  }
-
-  .icon {
-    margin-bottom: 16px;
-    width: 22px;
-    height: 22px;
-  }
-
-  @media (max-width: 1024px) {
-    flex-direction: column;
-    text-align: center;
-  }
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-family: var(--font-main);
+  background-color: var(--color-background);
 }
 
-#docs {
-  border-right: 1px solid var(--border);
-
-  @media (max-width: 1024px) {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-}
-
-#next-steps ul {
-  list-style: none;
-  padding: 0;
-  display: flex;
-  gap: 8px;
-  margin: 32px 0 0;
-
-  .logo {
-    height: 18px;
-  }
-
-  a {
-    color: var(--text-h);
-    font-size: 16px;
-    border-radius: 6px;
-    background: var(--social-bg);
-    display: flex;
-    padding: 6px 12px;
-    align-items: center;
-    gap: 8px;
-    text-decoration: none;
-    transition: box-shadow 0.3s;
-
-    &:hover {
-      box-shadow: var(--shadow);
-    }
-    .button-icon {
-      height: 18px;
-      width: 18px;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    margin-top: 20px;
-    flex-wrap: wrap;
-    justify-content: center;
-
-    li {
-      flex: 1 1 calc(50% - 8px);
-    }
-
-    a {
-      width: 100%;
-      justify-content: center;
-      box-sizing: border-box;
-    }
-  }
-}
-
-#spacer {
-  height: 88px;
-  border-top: 1px solid var(--border);
-  @media (max-width: 1024px) {
-    height: 48px;
-  }
-}
-
-.ticks {
-  position: relative;
+.login-card {
+  background-color: var(--color-surface);
+  padding: 40px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  max-width: 400px;
   width: 100%;
-
-  &::before,
-  &::after {
-    content: '';
-    position: absolute;
-    top: -4.5px;
-    border: 5px solid transparent;
-  }
-
-  &::before {
-    left: 0;
-    border-left-color: var(--border);
-  }
-  &::after {
-    right: 0;
-    border-right-color: var(--border);
-  }
+  text-align: center;
 }
 
+h2 {
+  color: var(--color-text-main);
+  margin-top: 0;
+  margin-bottom: 25px;
+}
+
+.error-banner {
+  background-color: #fde2e2;
+  color: #f56c6c;
+  padding: 10px;
+  border-radius: var(--radius-md);
+  margin-bottom: 20px;
+  font-size: 14px;
+  border: 1px solid #fcd3d3;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.form-input {
+  padding: 12px;
+  border: 1px solid #dddddd;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--color-primary);
+}
+
+.form-input:disabled {
+  background-color: #f5f7fa;
+  color: #c0c4cc;
+  cursor: not-allowed;
+}
+
+.btn-submit {
+  padding: 12px;
+  background-color: var(--color-primary);
+  color: var(--color-surface);
+  border: none;
+  border-radius: var(--radius-md);
+  font-weight: bold;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-submit:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.btn-submit:disabled {
+  background-color: var(--color-text-muted);
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+</style>
+
+
+################################################################################
+### FICHIER : src/ui/views/DashboardView.vue
+################################################################################
+
+<script setup lang="ts">
+// Tableau de bord principal (coquille vide)
+</script>
+
+<template>
+  <div class="view-container">
+    <h2>📚 Tableau de Bord</h2>
+    <p>Bienvenue ! Vous êtes connecté (ou en mode hors-ligne résilient).</p>
+  </div>
+</template>
+
+<style scoped>
+.view-container {
+  padding: 20px;
+  text-align: center;
+}
+</style>
 
 
 ################################################################################
@@ -3057,6 +3601,33 @@ export const connectionService = {
       console.groupEnd();
       return false;
     }
+  },
+
+  /**
+   * Séquence d'authentification et d'amorçage de session
+   */
+  async login(username: string, password: string): Promise<boolean> {
+    console.group("[CONNECTION SERVICE] Tentative de connexion de l'utilisateur");
+    try {
+      // On relaie la requête brute au service utilisateur dédié
+      const success = await userService.login(username, password);
+      
+      if (!success) {
+        console.warn("Identifiants refusés par le service utilisateur.");
+        console.groupEnd();
+        return false;
+      }
+
+      console.log("Authentification validée. Amorçage des données utilisateur...");
+      console.groupEnd();
+      
+      // On lance immédiatement l'initialisation des bases et caches locaux
+      return await this.initializeApp();
+    } catch (error) {
+      console.error("[CONNECTION SERVICE] Erreur critique pendant le login :", error);
+      console.groupEnd();
+      throw error;
+    }
   }
 };
 
@@ -3529,6 +4100,9 @@ export const wishlistService = {
 import { sessionStore } from '../../state/session';
 
 export const userService = {
+  /**
+   * Récupère le profil de l'utilisateur actuellement connecté via le cookie de session
+   */
   async fetchProfile() {
     const res = await fetch('/api/gateway?action=user-get');
     const data = await res.json();
@@ -3540,6 +4114,34 @@ export const userService = {
     
     sessionStore.setUser(data);
     return sessionStore.state.user;
+  },
+
+  /**
+   * Envoie une requête d'authentification au Gateway avec les identifiants requis
+   */
+  async login(username: string, password: string): Promise<boolean> {
+    // CORRECTION : Remplacement de 'login' par 'auth-login' pour s'aligner sur le switch du Gateway
+    const res = await fetch('/api/gateway?action=auth-login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.log('[DEBUG] Échec de la connexion API :', data);
+      return false;
+    }
+
+    // Si le Gateway renvoie directement les données utilisateur à la connexion
+    if (data) {
+      sessionStore.setUser(data);
+    }
+    
+    return true;
   }
 };
 
@@ -3692,4 +4294,35 @@ export const sessionStore = {
 
 <svg xmlns="http://www.w3.org/2000/svg" aria-hidden="true" width="32" height="32" viewBox="0 0 256 256"><path fill="#007ACC" d="M0 128v128h256V0H0z"/><path fill="#FFF" d="m56.612 128.85l-.081 10.483h33.32v94.68h23.568v-94.68h33.321v-10.28c0-5.69-.122-10.444-.284-10.566c-.122-.162-20.4-.244-44.983-.203l-44.74.122l-.121 10.443Zm149.955-10.742c6.501 1.625 11.459 4.51 16.01 9.224c2.357 2.52 5.851 7.111 6.136 8.208c.08.325-11.053 7.802-17.798 11.988c-.244.162-1.22-.894-2.317-2.52c-3.291-4.795-6.745-6.867-12.028-7.233c-7.76-.528-12.759 3.535-12.718 10.321c0 1.992.284 3.17 1.097 4.795c1.707 3.536 4.876 5.649 14.832 9.956c18.326 7.883 26.168 13.084 31.045 20.48c5.445 8.249 6.664 21.415 2.966 31.208c-4.063 10.646-14.14 17.879-28.323 20.276c-4.388.772-14.79.65-19.504-.203c-10.28-1.828-20.033-6.908-26.047-13.572c-2.357-2.6-6.949-9.387-6.664-9.874c.122-.163 1.178-.813 2.356-1.504c1.138-.65 5.446-3.129 9.509-5.485l7.355-4.267l1.544 2.276c2.154 3.29 6.867 7.801 9.712 9.305c8.167 4.307 19.383 3.698 24.909-1.26c2.357-2.153 3.332-4.388 3.332-7.68c0-2.966-.366-4.266-1.91-6.501c-1.99-2.845-6.054-5.242-17.595-10.24c-13.206-5.69-18.895-9.224-24.096-14.832c-3.007-3.25-5.852-8.452-7.03-12.8c-.975-3.617-1.22-12.678-.447-16.335c2.723-12.76 12.353-21.659 26.25-24.3c4.51-.853 14.994-.528 19.424.569Z"/></svg>
 
+
+
+################################################################################
+### FICHIER : src/router/index.ts
+################################################################################
+
+// src/router/index.ts
+import { createRouter, createWebHistory } from 'vue-router';
+import LoginView from '../ui/views/LoginView.vue';
+import DashboardView from '../ui/views/DashboardView.vue';
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: LoginView
+    },
+    {
+      path: '/dashboard',
+      name: 'dashboard',
+      component: DashboardView
+    },
+    // Redirection de sécurité : si on tape une URL qui n'existe pas
+    {
+      path: '/:pathMatch(.*)*',
+      redirect: '/login'
+    }
+  ]
+});
 

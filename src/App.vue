@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
+import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 
 const isInitializing = ref(true);
 const router = useRouter(); // Permet de manipuler la navigation
@@ -36,6 +37,8 @@ onMounted(async () => {
   </div>
 
   <router-view v-else></router-view>
+  
+  <PwaReloadPrompt />
 </template>
 
 <style>

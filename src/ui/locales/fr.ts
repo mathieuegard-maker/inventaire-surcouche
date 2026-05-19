@@ -2,7 +2,7 @@
 
 export const TEXTS = {
   app: {
-    name: "Nom du projet" // Nom provisoire de l'application
+    name: "Nom du projet"
   },
   status: {
     initializing: "Chargement en cours...",
@@ -21,5 +21,19 @@ export const TEXTS = {
     passwordPlaceholder: "Mot de passe",
     submitButton: "Se connecter",
     loading: "Connexion au serveur..."
+  },
+  scanner: {
+    title: "Scanner le code-barres d'un livre",
+    btnOpen: "📸 Scanner un livre",
+    btnClose: "❌ Fermer le scanner",
+    searching: "Analyse du code en cours...",
+    errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
+    successDetected: "Code-barres détecté avec succès !"
+  },
+  pwa: {
+    updateReady: "Une nouvelle version de l'application est disponible !",
+    offlineReady: "L'application est prête à fonctionner hors-ligne.",
+    btnReload: "Mettre à jour",
+    btnClose: "Fermer"
   }
 };
