@@ -70,6 +70,13 @@ export const databaseService = {
     return await db.cache_books.where('workUri').equals(workUri).first();
   },
 
+  /**
+   * [NOUVEAU V2] Récupère tous les tomes physiques associés à une série
+   */
+  async getBooksBySeriesId(seriesId: string): Promise<HumanizedBook[]> {
+    return await db.cache_books.where('seriesId').equals(seriesId).toArray();
+  },
+
   // --- GESTION DU CACHE (Fiches complètes) ---
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
@@ -83,6 +90,13 @@ export const databaseService = {
   },
 
   async getAllCachedBooks(): Promise<HumanizedBook[]> {
+    return await db.cache_books.toArray();
+  },
+
+  /**
+   * [NOUVEAU V2] Récupère l'intégralité du cache local (pour la tâche de fond)
+   */
+  async getAllBooksFromCache(): Promise<HumanizedBook[]> {
     return await db.cache_books.toArray();
   },
 

@@ -4952,7 +4952,12 @@ export const TEXTS = {
     btnClose: "❌ Fermer le scanner",
     searching: "Analyse du code en cours...",
     errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
-    successDetected: "Recherche terminée"
+    successDetected: "Recherche terminée",
+    addInventorySuccess: "L'ouvrage a été ajouté à votre collection !",
+    addWishlistSuccess: "L'ouvrage a été ajouté à votre liste d'envies !",
+    errorGeneral: "Erreur lors du traitement de l'ouvrage.",
+    errorQueue: "Erreur lors de la mise en file d'attente.",
+    notFound: "Ouvrage introuvable sur les serveurs d'Inventaire.io."
   },
   pwa: {
     updateReady: "Une nouvelle version de l'application est disponible !",
@@ -5611,6 +5616,96 @@ defineEmits<{
 
 
 ################################################################################
+### FICHIER : src/ui/components/SelectableBookList.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, watch, onMounted, nextTick } from 'vue';
+import { TEXTS } from '../locales/fr';
+import type { HumanizedBook } from '../../core/types';
+
+const props = defineProps<{
+  items: HumanizedBook[];
+  focusIdentifier?: string;
+}>();
+
+const emit = defineEmits<{
+  (e: 'update:selection', selectedIds: string[]): void;
+}>();
+
+const selectedIds = ref<string[]>([]);
+
+watch(selectedIds, (newVal) => {
+  emit('update:selection', newVal);
+}, { deep: true });
+
+onMounted(async () => {
+  await nextTick();
+  if (props.focusIdentifier) {
+    const targetElement = document.getElementById(`book-item-${props.focusIdentifier}`);
+    if (targetElement) {
+      targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // La classe highlight-focus ajoutera un flash visuel noir (via CSS)
+      targetElement.classList.add('highlight-focus');
+    }
+  }
+});
+
+const toggleSelectAll = (selectAll: boolean) => {
+  if (selectAll) {
+    selectedIds.value = props.items.map(item => item.isbn13 || item.uri);
+  } else {
+    selectedIds.value = [];
+  }
+};
+
+defineExpose({
+  toggleSelectAll,
+  selectedIds
+});
+</script>
+
+<template>
+  <div class="selectable-list-container">
+    <div 
+      v-for="item in items" 
+      :key="item.isbn13 || item.uri"
+      :id="`book-item-${item.isbn13 || item.uri}`"
+      class="list-item-card"
+    >
+      <div class="list-item-checkbox">
+        <input 
+          type="checkbox" 
+          class="wireframe-checkbox"
+          :value="item.isbn13 || item.uri" 
+          v-model="selectedIds"
+        />
+      </div>
+
+      <div class="list-item-thumbnail-wrapper">
+        <img v-if="item.coverUrl" :src="item.coverUrl" :alt="item.title" class="list-item-thumbnail" />
+        <div v-else class="list-item-thumbnail-placeholder">X</div>
+      </div>
+
+      <div class="list-item-info">
+        <p class="list-item-title">
+          <span v-if="item.seriesNumber">Tome {{ item.seriesNumber }} - </span>
+          {{ item.title }}
+        </p>
+        <p class="list-item-subtitle" v-if="item.subtitle">{{ item.subtitle }}</p>
+      </div>
+
+      <div class="list-item-badge">
+        <span class="badge" :class="item.ownershipStatus === 'owned' ? 'owned' : 'missing'">
+          {{ item.ownershipStatus === 'owned' ? TEXTS.bookCard.owned : TEXTS.bookCard.missing }}
+        </span>
+      </div>
+    </div>
+  </div>
+</template>
+
+
+################################################################################
 ### FICHIER : src/ui/components/PwaReloadPrompt.vue
 ################################################################################
 
@@ -5753,6 +5848,148 @@ const handleLogin = async () => {
 
 
 ################################################################################
+### FICHIER : src/ui/views/SeriesView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import SelectableBookList from '../components/SelectableBookList.vue';
+import BaseButton from '../components/BaseButton.vue';
+import { TEXTS } from '../locales/fr';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+
+// AJOUT CRUCIAL : Import de ton vrai resolver de série depuis le Middle-End
+import { seriesResolver } from '../../core/resolvers/series.resolver';
+import type { HumanizedBook } from '../../core/types';
+
+const route = useRoute();
+const router = useRouter();
+
+const seriesId = computed(() => route.params.id as string);
+const focusIdentifier = computed(() => route.query.focus as string);
+
+const seriesTomes = ref<HumanizedBook[]>([]);
+const selectedIds = ref<string[]>([]);
+const isLoading = ref(true);
+
+const bookListRef = ref<InstanceType<typeof SelectableBookList> | null>(null);
+
+const isAllSelected = computed(() => {
+  return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
+});
+
+// Calcul intelligent du titre : on cherche le nom humain de la série dans le premier tome
+const seriesName = computed(() => {
+  if (seriesTomes.value.length > 0) {
+    return seriesTomes.value[0].series || seriesTomes.value[0].seriesName || seriesId.value;
+  }
+  return seriesId.value;
+});
+
+onMounted(async () => {
+  isLoading.value = true;
+  try {
+    // LE CÂBLAGE RÉEL : On appelle ton resolver qui va faire le "Windowing" (20 tomes urgents + background)
+    const tomes = await seriesResolver.getFullSeries(seriesId.value);
+    seriesTomes.value = tomes;
+  } catch (error) {
+    console.error("[VUE] Erreur lors du chargement de la série :", error);
+  } finally {
+    isLoading.value = false;
+  }
+});
+
+const handleBack = () => {
+  router.back();
+};
+
+const toggleSelection = () => {
+  if (bookListRef.value) {
+    bookListRef.value.toggleSelectAll(!isAllSelected.value);
+  }
+};
+
+const handleUpdateSelection = (ids: string[]) => {
+  selectedIds.value = ids;
+};
+
+const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
+  // Traitement optimiste pour la réactivité visuelle (Optimistic UI)
+  for (const id of selectedIds.value) {
+    await queueService.enqueueAction(action, id);
+    
+    // Mise à jour immédiate de la carte dans l'interface
+    const tome = seriesTomes.value.find(t => (t.isbn13 === id || t.uri === id));
+    if (tome) {
+      tome.ownershipStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
+    }
+  }
+  
+  // Réinitialisation de la sélection une fois le travail envoyé en file d'attente
+  if (bookListRef.value) {
+     bookListRef.value.toggleSelectAll(false);
+  }
+};
+</script>
+
+<template>
+  <div class="series-view-container">
+    
+    <div class="series-header">
+      <BaseButton @click="handleBack">
+        {{ TEXTS.seriesView.back }}
+      </BaseButton>
+      <h2>{{ seriesName }}</h2>
+      <p v-if="!isLoading">{{ seriesTomes.length }} tomes dans la série</p>
+    </div>
+
+    <div class="sticky-action-bar">
+      <div class="selection-status">
+        <input 
+          type="checkbox" 
+          class="wireframe-checkbox"
+          :checked="isAllSelected" 
+          @change="toggleSelection" 
+          :disabled="isLoading"
+        />
+        <span>
+          {{ selectedIds.length > 0 
+            ? `${selectedIds.length} ${TEXTS.seriesView.selectedCount}` 
+            : TEXTS.seriesView.emptySelection 
+          }}
+        </span>
+      </div>
+
+      <div class="group-actions" v-if="selectedIds.length > 0">
+        <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
+          {{ TEXTS.bookCard.btnAddInventory }}
+        </BaseButton>
+        <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
+          {{ TEXTS.bookCard.btnAddWishlist }}
+        </BaseButton>
+        <BaseButton @click="console.log('Action de prêt groupée en cours de dev')">
+          {{ TEXTS.bookCard.btnLend }}
+        </BaseButton>
+      </div>
+    </div>
+
+    <div v-if="isLoading" class="result-card">
+      {{ TEXTS.seriesView.loading }}
+    </div>
+
+    <SelectableBookList 
+      v-else
+      ref="bookListRef"
+      :items="seriesTomes"
+      :focusIdentifier="focusIdentifier"
+      @update:selection="handleUpdateSelection"
+    />
+  </div>
+</template>
+
+
+################################################################################
 ### FICHIER : src/ui/views/DashboardView.vue
 ################################################################################
 
@@ -5761,6 +5998,7 @@ import { ref, nextTick, onMounted, onUnmounted } from 'vue';
 import { barcodeIsbnProvider } from '../../plugins/barcode/barcode-isbn.provider';
 import { manualIsbnProvider } from '../../plugins/manual/manual-isbn.provider';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BaseButton from '../components/BaseButton.vue';
 import BookResultCard from '../components/BookResultCard.vue';
 import { TEXTS } from '../locales/fr';
@@ -5768,35 +6006,39 @@ import type { SearchResponse } from '../../core/types';
 
 const isScanningActive = ref(false);
 const isSearching = ref(false);
+
 const searchResult = ref<SearchResponse | null>(null);
 const errorMessage = ref<string | null>(null);
+const successMessage = ref<string | null>(null);
 
 const scannerId = 'barcode-scanner-viewport';
 const manualContainerId = 'manual-input-container';
 
 onMounted(() => {
-  // Initialisation du plugin d'acquisition manuelle dans son conteneur dédié
   manualIsbnProvider.setup(manualContainerId, async (isbn) => {
-    searchResult.value = null;
-    errorMessage.value = null;
+    resetStates();
     try {
       const response = await searchService.searchByIsbn(isbn);
       if (response) {
         searchResult.value = response;
       } else {
-        errorMessage.value = "Ouvrage introuvable sur les serveurs d'Inventaire.io.";
+        errorMessage.value = TEXTS.scanner.notFound;
       }
     } catch (err: any) {
-      errorMessage.value = err.message || "Erreur lors du traitement de l'ouvrage.";
+      errorMessage.value = TEXTS.scanner.errorGeneral;
     }
   });
 });
 
-const startScanningSequence = async () => {
+const resetStates = () => {
   searchResult.value = null;
   errorMessage.value = null;
-  isScanningActive.value = true;
+  successMessage.value = null;
+};
 
+const startScanningSequence = async () => {
+  resetStates();
+  isScanningActive.value = true;
   await nextTick();
 
   await barcodeIsbnProvider.startScanner(
@@ -5804,20 +6046,15 @@ const startScanningSequence = async () => {
     (response) => {
       isScanningActive.value = false;
       isSearching.value = false;
-      if (response) {
-        searchResult.value = response;
-      } else {
-        errorMessage.value = "Ouvrage introuvable sur les serveurs d'Inventaire.io.";
-      }
+      if (response) searchResult.value = response;
+      else errorMessage.value = TEXTS.scanner.notFound;
     },
     (errorMsg) => {
       isScanningActive.value = false;
       isSearching.value = false;
       errorMessage.value = errorMsg;
     },
-    () => {
-      isSearching.value = true;
-    }
+    () => { isSearching.value = true; }
   );
 };
 
@@ -5830,6 +6067,43 @@ const stopScanningSequence = async () => {
 onUnmounted(async () => {
   await barcodeIsbnProvider.stopScanner();
 });
+
+const handleAddInventory = async (identifier: string) => {
+  errorMessage.value = null;
+  successMessage.value = null;
+  try {
+    if (searchResult.value) {
+      searchResult.value.ownership.isWorkOwned = true;
+      searchResult.value.ownership.isEditionOwned = true;
+    }
+    successMessage.value = TEXTS.scanner.addInventorySuccess;
+    await queueService.enqueueAction('ADD_INVENTORY', identifier);
+  } catch (error) {
+    errorMessage.value = TEXTS.scanner.errorQueue;
+  }
+};
+
+const handleAddWishlist = async (identifier: string) => {
+  errorMessage.value = null;
+  successMessage.value = null;
+  try {
+    if (searchResult.value) {
+      searchResult.value.ownership.isWished = true;
+    }
+    successMessage.value = TEXTS.scanner.addWishlistSuccess;
+    await queueService.enqueueAction('ADD_WISHLIST', identifier);
+  } catch (error) {
+    errorMessage.value = TEXTS.scanner.errorQueue;
+  }
+};
+
+const handleLend = (identifier: string) => {
+  console.log("Ouverture du tunnel de prêt pour :", identifier);
+};
+
+const handleViewSeries = (seriesId: string) => {
+  console.log("Recherche de la série :", seriesId);
+};
 </script>
 
 <template>
@@ -5857,11 +6131,22 @@ onUnmounted(async () => {
 
     <div :id="manualContainerId"></div>
 
-    <div v-if="errorMessage" class="result-card error">
-      <p class="result-value">{{ errorMessage }}</p>
+    <div v-if="errorMessage" class="error-banner">
+      {{ errorMessage }}
+    </div>
+    
+    <div v-if="successMessage" class="result-card success">
+      <p>✅ {{ successMessage }}</p>
     </div>
 
-    <BookResultCard v-if="searchResult" :searchResult="searchResult" />
+    <BookResultCard 
+      v-if="searchResult" 
+      :searchResult="searchResult" 
+      @action-add-inventory="handleAddInventory"
+      @action-add-wishlist="handleAddWishlist"
+      @action-lend="handleLend"
+      @action-view-series="handleViewSeries"
+    />
   </div>
 </template>
 
@@ -6055,6 +6340,13 @@ export const databaseService = {
     return await db.cache_books.where('workUri').equals(workUri).first();
   },
 
+  /**
+   * [NOUVEAU V2] Récupère tous les tomes physiques associés à une série
+   */
+  async getBooksBySeriesId(seriesId: string): Promise<HumanizedBook[]> {
+    return await db.cache_books.where('seriesId').equals(seriesId).toArray();
+  },
+
   // --- GESTION DU CACHE (Fiches complètes) ---
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
@@ -6068,6 +6360,13 @@ export const databaseService = {
   },
 
   async getAllCachedBooks(): Promise<HumanizedBook[]> {
+    return await db.cache_books.toArray();
+  },
+
+  /**
+   * [NOUVEAU V2] Récupère l'intégralité du cache local (pour la tâche de fond)
+   */
+  async getAllBooksFromCache(): Promise<HumanizedBook[]> {
     return await db.cache_books.toArray();
   },
 
@@ -6260,6 +6559,157 @@ export const entityHumanizer = {
 
 
 ################################################################################
+### FICHIER : src/core/resolvers/workUri.resolver.ts
+################################################################################
+
+// src/core/resolvers/workUri.resolver.ts
+import { databaseService } from '../database/database.service';
+
+/**
+ * Calcule la distance de Levenshtein entre deux chaînes (Score de similarité)
+ */
+function getEditDistance(a: string, b: string): number {
+  if (!a) return b ? b.length : 0;
+  if (!b) return a ? a.length : 0;
+  const matrix: number[][] = [];
+  for (let i = 0; i <= a.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1].toLowerCase() === b[j - 1].toLowerCase() ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+export const workUriResolver = {
+  /**
+   * Convertit une liste d'œuvres (wd:) en la meilleure liste d'éditions physiques (inv: ou isbn:)
+   */
+  async resolveBulk(workUris: string[]): Promise<string[]> {
+    console.group(`[WORK-URI RESOLVER] Concrétisation de ${workUris.length} œuvres...`);
+    const physicalUris: string[] = [];
+    const missingWorks: string[] = [];
+
+    // 1. Barrière Locale (Cache-First)
+    for (const uri of workUris) {
+      if (!uri.startsWith('wd:')) {
+        physicalUris.push(uri); // C'est déjà une édition physique
+        continue;
+      }
+      const editionLocal = await databaseService.getEditionByWorkFromCache(uri);
+      if (editionLocal) {
+        physicalUris.push(editionLocal.uri);
+      } else {
+        missingWorks.push(uri);
+      }
+    }
+
+    if (missingWorks.length === 0) {
+      console.log('[WORK-URI RESOLVER] 100% résolu depuis le cache local.');
+      console.groupEnd();
+      return physicalUris;
+    }
+
+    console.log(`[WORK-URI RESOLVER] ${missingWorks.length} œuvres nécessitent une résolution réseau...`);
+
+    // 2. Résolution Réseau Groupée (Reverse-claims)
+    const workToEditionsMap: Record<string, string[]> = {};
+    const allEditionUrisToFetch = new Set<string>();
+
+    await Promise.all(missingWorks.map(async (workUri) => {
+      try {
+        const res = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+        const data = await res.json();
+        const uris = data.uris || [];
+        workToEditionsMap[workUri] = uris;
+        uris.forEach((u: string) => allEditionUrisToFetch.add(u));
+      } catch (e) {
+        console.error(`[WORK-URI RESOLVER] Erreur reverse-claims pour ${workUri}`, e);
+        workToEditionsMap[workUri] = [];
+      }
+    }));
+
+    // 3. Récupération des Labels pour l'analyse sémantique (Mega-Batching)
+    const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
+    const editionDataMap: Record<string, any> = {};
+    const urisArray = Array.from(allEditionUrisToFetch);
+    const CHUNK_SIZE = 50;
+
+    for (let i = 0; i < urisArray.length; i += CHUNK_SIZE) {
+      const chunk = urisArray.slice(i, i + CHUNK_SIZE);
+      try {
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const data = await res.json();
+        Object.assign(editionDataMap, data.entities || {});
+      } catch (e) {
+        console.error(`[WORK-URI RESOLVER] Erreur fetch labels éditions`, e);
+      }
+    }
+
+    const workDataMap: Record<string, any> = {};
+    for (let i = 0; i < missingWorks.length; i += CHUNK_SIZE) {
+      const chunk = missingWorks.slice(i, i + CHUNK_SIZE);
+      try {
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const data = await res.json();
+        Object.assign(workDataMap, data.entities || {});
+      } catch (e) {}
+    }
+
+    // 4. Élection de l'édition canonique
+    for (const workUri of missingWorks) {
+      const editions = workToEditionsMap[workUri] || [];
+      if (editions.length === 0) continue; 
+
+      // Fast-Path
+      if (editions.length === 1) {
+        physicalUris.push(editions[0]);
+        continue;
+      }
+
+      const workLabel = workDataMap[workUri]?.labels?.fr || workDataMap[workUri]?.labels?.en || workDataMap[workUri]?.label || '';
+
+      // Filtrage par Regex
+      const validEditions = editions.filter(edUri => {
+        const edData = editionDataMap[edUri];
+        if (!edData) return false;
+        const edLabel = edData.labels?.fr || edData.labels?.en || edData.label || '';
+        return !JUNK_REGEX.test(edLabel);
+      });
+
+      // Si la regex a tout supprimé, on annule le filtre par sécurité
+      const targetEditions = validEditions.length > 0 ? validEditions : editions;
+
+      if (targetEditions.length === 1) {
+        physicalUris.push(targetEditions[0]);
+        continue;
+      }
+
+      // Scoring de similarité (Levenshtein)
+      let bestUri = targetEditions[0];
+      let bestScore = Infinity;
+
+      for (const edUri of targetEditions) {
+        const edData = editionDataMap[edUri];
+        const edLabel = edData?.labels?.fr || edData?.labels?.en || edData?.label || '';
+        const score = getEditDistance(workLabel, edLabel);
+        if (score < bestScore) {
+          bestScore = score;
+          bestUri = edUri;
+        }
+      }
+      physicalUris.push(bestUri);
+    }
+
+    console.groupEnd();
+    return physicalUris;
+  }
+};
+
+
+################################################################################
 ### FICHIER : src/core/resolvers/humanizer.test.ts
 ################################################################################
 
@@ -6425,122 +6875,33 @@ describe('Series Resolver (Windowing)', () => {
 ################################################################################
 
 // src/core/resolvers/series.resolver.ts
-import { entityMapper } from './mapper';
-import { databaseService } from '../database/database.service';
-import { inventoryService } from '../services/inventory.service';
-import { wishlistService } from '../services/wishlist.service';
-import { syncOrchestrator } from '../orchestrators/sync.orchestrator'; 
-import type { HumanizedBook } from '../types';
 
 export const seriesResolver = {
-  async getFullSeries(seriesId: string): Promise<HumanizedBook[]> {
+  /**
+   * Récupère la liste brute des œuvres (wd:) constituant une série.
+   * Aucune traduction ni résolution d'édition n'est effectuée ici.
+   */
+  async getSeriesWorks(seriesId: string): Promise<string[]> {
     console.group(`[SERIES RESOLVER] Récupération de la série: ${seriesId}`);
-    
-    const resList = await fetch(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
-    const dataList = await resList.json();
-    
-    // CORRECTION : On lit 'uris' tel que renvoyé par l'API Inventaire native via le Gateway
-    const tomeUris = dataList.uris || dataList.tomes || [];
-    
-    if (!tomeUris || tomeUris.length === 0) {
-      console.log(`[SERIES RESOLVER] Aucun tome trouvé pour la série.`);
-      console.groupEnd();
-      return [];
-    }
-
-    const fullTomes: HumanizedBook[] = [];
-    const missingUris: string[] = [];
-
-    for (const uri of tomeUris) {
-      let cachedBook = await databaseService.getBookFromCache(uri);
+    try {
+      const resList = await fetch(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
+      const dataList = await resList.json();
       
-      if (!cachedBook && uri.startsWith('wd:')) {
-        cachedBook = await databaseService.getEditionByWorkFromCache(uri);
+      const tomeUris = dataList.uris || dataList.tomes || [];
+      
+      if (!tomeUris || tomeUris.length === 0) {
+        console.log(`[SERIES RESOLVER] Aucun tome trouvé pour la série.`);
+        return [];
       }
 
-      if (cachedBook) {
-        const isOwned = await inventoryService.isUriOwned(cachedBook.uri, cachedBook.workUri);
-        const isWished = await wishlistService.isUriWished(cachedBook.uri, cachedBook.workUri);
-        cachedBook.ownershipStatus = isOwned ? 'owned' : (isWished ? 'wish' : 'none');
-        
-        fullTomes.push(cachedBook);
-      } else {
-        missingUris.push(uri);
-      }
+      console.log(`[SERIES RESOLVER] ${tomeUris.length} œuvres trouvées pour la saga.`);
+      return tomeUris;
+    } catch (e) {
+      console.error(`[SERIES RESOLVER] Erreur lors de la récupération :`, e);
+      return [];
+    } finally {
+      console.groupEnd();
     }
-
-    let urgentUris: string[] = [];
-    
-    if (missingUris.length > 0) {
-      const URGENT_LIMIT = 20; 
-      urgentUris = missingUris.slice(0, URGENT_LIMIT);
-      const backgroundUris = missingUris.slice(URGENT_LIMIT);
-
-      console.log(`[SERIES] Windowing activé : ${urgentUris.length} urgents, ${backgroundUris.length} en arrière-plan.`);
-
-      if (backgroundUris.length > 0) {
-        syncOrchestrator.hydrateRemainingSeries(backgroundUris).catch(e => console.error(e));
-      }
-    }
-
-    if (urgentUris.length > 0) {
-      const resData = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${encodeURIComponent(urgentUris.join('|'))}`);
-      const data = await resData.json();
-      const entities = data.entities || data;
-
-      const idsToTranslate = new Set<string>();
-      const rawBooks = urgentUris.map((uri: string) => {
-        const raw = entityMapper.mapResponse(uri, entities[uri]);
-        [...raw.authorIds, ...raw.illustratorIds, ...raw.scriptwriterIds, ...raw.genreIds].forEach(id => {
-          if (id) idsToTranslate.add(id);
-        });
-        if (raw.seriesId) idsToTranslate.add(raw.seriesId);
-        if (raw.publisherId) idsToTranslate.add(raw.publisherId);
-        if (raw.collectionId) idsToTranslate.add(raw.collectionId);
-        return raw;
-      });
-
-      const resTrans = await fetch(`https://inventaire.io/api/entities/by-uris?uris=${encodeURIComponent(Array.from(idsToTranslate).join('|'))}`);
-      const transData = await resTrans.json();
-      const transEntities = transData.entities || transData;
-
-      const getName = (id?: string) => {
-        const e = transEntities[id || ''];
-        return e ? (e.label || e.labels?.fr || id) : id;
-      };
-
-      for (const raw of rawBooks) {
-        const translatedAuthors = raw.authorIds.map(id => getName(id)!);
-        const translatedIllustrators = raw.illustratorIds.map(id => getName(id)!);
-        const translatedScriptwriters = raw.scriptwriterIds.map(id => getName(id)!);
-
-        const isOwned = await inventoryService.isUriOwned(raw.uri, raw.workUri);
-        const isWished = await wishlistService.isUriWished(raw.uri, raw.workUri);
-
-        const humanized: HumanizedBook = {
-          ...raw,
-          authors: translatedAuthors.length > 0 ? translatedAuthors : Array.from(new Set([...translatedScriptwriters, ...translatedIllustrators])),
-          illustrators: translatedIllustrators,
-          scriptwriters: translatedScriptwriters,
-          genres: raw.genreIds.map(id => getName(id)!),
-          series: getName(raw.seriesId),
-          publisher: getName(raw.publisherId),
-          collection: getName(raw.collectionId),
-          ownershipStatus: isOwned ? 'owned' : (isWished ? 'wish' : 'none')
-        };
-
-        await databaseService.saveBookToCache(humanized);
-        fullTomes.push(humanized);
-      }
-    }
-
-    console.groupEnd();
-    
-    return fullTomes.sort((a, b) => {
-      const numA = parseInt(a.seriesNumber || '999');
-      const numB = parseInt(b.seriesNumber || '999');
-      return numA - numB;
-    });
   }
 };
 
@@ -6549,20 +6910,20 @@ export const seriesResolver = {
 ### FICHIER : src/core/resolvers/entity.resolver.ts
 ################################################################################
 
-// src/resolvers/entity.resolver.ts
+// src/core/resolvers/entity.resolver.ts
 import { entityMapper } from './mapper';
-import type { RawBook } from '../types';
+import { entityHumanizer } from './humanizer';
+import type { RawBook, HumanizedBook } from '../types';
 
 const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
 
 export const entityResolver = {
   /**
-   * Recherche un livre par son ISBN et récupère systématiquement l'œuvre liée
+   * Maintenu pour la compatibilité stricte avec d'éventuels appels ISBN résiduels
    */
   async fromIsbn(isbn: string): Promise<RawBook | null> {
     try {
       const searchUri = `isbn:${isbn}`;
-      // On demande explicitement l'image et les claims pour ne rien rater
       const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(searchUri)}&attributes=info|labels|descriptions|claims|image`;
       
       const res = await fetch(url, {
@@ -6578,122 +6939,72 @@ export const entityResolver = {
         return null;
       }
 
-      // SONDE DEBUG : RAW DATA API
       console.log(`[DEBUG-RESOLVER] Données brutes de l'édition (${entityId}) :`, entityData);
       console.log(`[DEBUG-RESOLVER] Champ image présent sur édition ? :`, !!entityData.image);
 
-      // Extraction robuste de l'identifiant de l'œuvre (P629)
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       
-      let workData = null;
-
+      let workData = undefined;
       if (workUri) {
-        console.log(`[RESOLVER] Édition trouvée (${entityId}). Rebond sur l'œuvre : ${workUri}`);
-        const workUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`;
-        
-        const resWork = await fetch(workUrl, {
+        const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
           headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
         });
-        const dataWork = await resWork.json();
-        workData = dataWork.entities?.[workUri];
-
-        // SONDE DEBUG : RAW DATA OEUVRE
-        console.log(`[DEBUG-RESOLVER] Données brutes de l'œuvre (${workUri}) :`, workData);
-        console.log(`[DEBUG-RESOLVER] Champ image présent sur œuvre ? :`, !!workData?.image);
+        const wData = await wRes.json();
+        workData = wData.entities?.[workUri];
       }
 
       return entityMapper.mapResponse(entityId, entityData, workData);
     } catch (error) {
-      console.error("[ENTITY RESOLVER] Erreur ISBN:", error);
+      console.error(`[ENTITY RESOLVER] Erreur pour ISBN ${isbn}:`, error);
       return null;
     }
   },
 
   /**
-   * Recherche par URI (ex: wd:Q123) avec enrichissement par l'œuvre
+   * [NOUVEAU - V2] Spécialiste des éditions. Prend une URI Physique, résout le graphe,
+   * mappe et humanise la réponse d'un coup.
    */
-  async fromUri(uri: string): Promise<RawBook | null> {
+  async resolvePhysicalEntity(physicalUri: string): Promise<HumanizedBook | null> {
     try {
-      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}&attributes=info|labels|descriptions|claims|image`;
+      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(physicalUri)}&attributes=info|labels|descriptions|claims|image`;
+      
       const res = await fetch(url, {
         headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
       });
       const data = await res.json();
       
-      const entityData = data.entities?.[uri];
-      
-      if (!entityData) return null;
+      // CRITICAL FIX : L'API renvoie la vraie URI 'inv:...' même si on cherche par 'isbn:...'
+      // On doit donc récupérer la vraie clé de l'entité retournée.
+      const resolvedEntityId = Object.keys(data.entities || {})[0];
+      const entityData = data.entities?.[resolvedEntityId];
 
-      if (entityData.type === 'work') {
-        return entityMapper.mapResponse(uri, entityData);
+      if (!entityData) {
+        console.warn(`[ENTITY RESOLVER] Aucune entité trouvée pour la requête : ${physicalUri}`);
+        return null;
       }
 
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
-      let workData = null;
-
+      
+      let workData = undefined;
       if (workUri) {
-        const workUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`;
-        const resWork = await fetch(workUrl, {
-          headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+        const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
+           headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
         });
-        const dataWork = await resWork.json();
-        workData = dataWork.entities?.[workUri];
+        const wData = await wRes.json();
+        workData = wData.entities?.[workUri];
       }
 
-      return entityMapper.mapResponse(uri, entityData, workData);
+      // On s'assure d'utiliser le resolvedEntityId (inv:...) et non la requête (isbn:...)
+      const rawBook = entityMapper.mapResponse(resolvedEntityId, entityData, workData);
+      const humanizedBook = await entityHumanizer.humanize(rawBook);
+      
+      return humanizedBook;
     } catch (error) {
-      console.error(`[ENTITY RESOLVER] Erreur URI (${uri}):`, error);
+      console.error(`[ENTITY RESOLVER] Erreur résolution physique pour ${physicalUri}:`, error);
       return null;
     }
-  },
-
-  /**
-   * Résout un identifiant brut (ex: wd:Q42) en nom lisible
-   */
-  async resolveName(uri: string): Promise<string | undefined> {
-    if (!uri) return undefined;
-    
-    try {
-      const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(uri)}`, {
-        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
-      });
-      const data = await res.json();
-      const entity = data.entities?.[uri];
-      if (!entity) return undefined;
-
-      const label = entity.labels?.fr || entity.labels?.en || entity.label;
-      return label || undefined;
-    } catch (error) {
-      console.error(`[ENTITY RESOLVER] Impossible de résoudre le nom pour ${uri}:`, error);
-      return undefined;
-    }
-  },
-
-  /**
-   * Récupère la "meilleure" édition pour une œuvre donnée
-   */
-  async getBestEdition(workUri: string): Promise<string | null> {
-    try {
-      const res = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=P629&value=${workUri}`, {
-        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
-      });
-      const data = await res.json();
-      const uris = data.uris || [];
-      return uris.length > 0 ? uris[0] : null;
-    } catch (error) {
-      console.error(`[ENTITY RESOLVER] Erreur best edition pour ${workUri}:`, error);
-      return null;
-    }
-  },
-
-  /**
-   * Résout une liste d'œuvres en leurs meilleures éditions respectives
-   */
-  async resolveBestEditions(workUris: string[]): Promise<string[]> {
-    const results = await Promise.all(workUris.map(uri => this.getBestEdition(uri)));
-    return results.filter((uri): uri is string => uri !== null);
   }
 };
 
@@ -6704,6 +7015,7 @@ export const entityResolver = {
 
 // src/resolvers/mapper.ts
 import type { RawBook } from '../types';
+import { isbnUtil } from '../utils/isbn.util';
 
 export const entityMapper = {
   /**
@@ -6783,11 +7095,20 @@ export const entityMapper = {
       return Array.from(new Set([...fromEdition, ...fromWork]));
     };
 
+    // Extraction des chaînes brutes d'ISBN
+    const rawIsbn13 = getClaimValue(editionClaims, 'P212') || raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined);
+    const rawIsbn10 = getClaimValue(editionClaims, 'P957') || raw.isbn10;
+
     const mappedBook: RawBook = {
       uri: uri,
       workUri: workUri,
-      isbn13: raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined),
-      isbn10: raw.isbn10,
+      
+      // ====================================================================
+      // UTILISATION DE TON UTILITAIRE CENTRALISÉ POUR SÉCURISER L'INDEXATION
+      // ====================================================================
+      isbn13: rawIsbn13 ? isbnUtil.normalize(rawIsbn13) : undefined,
+      isbn10: rawIsbn10 ? isbnUtil.normalize(rawIsbn10) : undefined,
+      
       type: (raw.type as any) || 'unknown',
       title: title,
       subtitle: raw.subtitle || workRaw?.subtitle,
@@ -7025,10 +7346,9 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
-import { entityHumanizer } from '../resolvers/humanizer';
 import { seriesResolver } from '../resolvers/series.resolver';
-import { imageService } from '../services/image.service';
-import { syncOrchestrator } from './sync.orchestrator';
+import { workUriResolver } from '../resolvers/workUri.resolver';
+import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
 import type { SearchResponse, HumanizedBook } from '../types';
 
@@ -7038,10 +7358,8 @@ export const searchService = {
    * Local-First -> Network Fallback -> Double Check -> Série -> Paquet UI
    */
   async searchByIsbn(rawIsbn: string): Promise<SearchResponse | null> {
-    // Utilisation de l'utilitaire centralisé pour nettoyer l'entrée
     const isbn = isbnUtil.normalize(rawIsbn);
 
-    // Sécurité supplémentaire grâce à l'utilitaire
     if (!isbnUtil.isValidFormat(isbn)) {
       console.warn(`[SEARCH] Format ISBN invalide : ${isbn}`);
       return null;
@@ -7055,59 +7373,25 @@ export const searchService = {
 
     if (!book) {
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      const raw = await entityResolver.fromIsbn(isbn);
+      book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
       
-      if (!raw) {
-        console.warn("[SEARCH] Livre introuvable.");
+      if (!book) {
+        console.error(`[SEARCH] Échec de la résolution réseau pour : ${isbn}`);
         console.groupEnd();
         return null;
       }
       
-      // Humanisation (Traductions groupées ultra-rapides)
-      book = await entityHumanizer.humanize(raw);
-      
-      console.log(`[DEBUG-SEARCH] Livre humanisé, prêt pour le cache. coverUrl:`, book.coverUrl);
-
-      // Sauvegarde immédiate dans le cache (sans bloquer pour l'image locale)
-      await databaseService.saveBookToCache(book);
       source = 'network';
-
-      // ========================================================
-      // OPTIMISATION "FIRE AND FORGET" : Compression en arrière-plan
-      // ========================================================
-      if (book.coverUrl) {
-        console.log(`[SEARCH] Lancement de la tâche de fond pour l'image...`);
-        // Note : Pas de 'await'. L'orchestrateur n'attend pas la fin pour continuer.
-        imageService.compressAndEncode(book.coverUrl).then(async (base64) => {
-          if (base64) {
-            // Sécurité : On recharge le livre pour ne pas écraser d'éventuelles
-            // modifications de statut ('owned') faites entre-temps par l'utilisateur.
-            const currentBook = await databaseService.getBookFromCache(book!.uri);
-            if (currentBook) {
-              currentBook.localCover = base64;
-              await databaseService.saveBookToCache(currentBook);
-              console.log(`[BACKGROUND] Image WebP sauvegardée en silence pour ${book!.uri}`);
-            }
-          }
-        }).catch(e => console.error(`[BACKGROUND] Erreur compression:`, e));
-      }
+      await bookCacheService.saveAndProcessImage(book);
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
-      // Vérification du TTL (Time To Live = 30 jours)
-      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-      if (!book.updatedAt || (Date.now() - book.updatedAt > THIRTY_DAYS)) {
-        console.log(`[SEARCH] Cache périmé (TTL > 30j) pour ${isbn}. Rafraîchissement fantôme...`);
-        // Déclenchement de la mise à jour en tâche de fond (Fire and forget)
-        syncOrchestrator.refreshBookInBackground(isbn).catch(e => console.error(e));
-      }
     }
 
-    // 2. PHASE ANALYSE DE POSSESSION (Double Check)
+    // 2. PHASE ANALYSE D'APPARTENANCE
     const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
-    const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
-    
     let isWorkOwned = isEditionOwned;
-    let duplicateEdition: HumanizedBook | undefined = undefined;
+    const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
+    let duplicateEdition = undefined;
 
     if (!isEditionOwned && book.workUri) {
       const other = await databaseService.getOtherOwnedEdition(book.workUri, book.uri);
@@ -7127,7 +7411,33 @@ export const searchService = {
     let seriesContext = undefined;
     if (book.seriesId) {
       console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
-      const tomes = await seriesResolver.getFullSeries(book.seriesId);
+      
+      // CORRECTION DU TYPAGE : Forcer l'utilisation de l'interface HumanizedBook
+      let tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(book.seriesId);
+      
+      if (tomes && tomes.length > 0) {
+        console.log(`[SEARCH] Shunt local activé : ${tomes.length} tomes trouvés directement en base pour la série ${book.seriesId}`);
+      } else {
+        console.log(`[SEARCH] Aucun tome en cache locale, exécution du workflow complet de résolution V2...`);
+        const workUris = await seriesResolver.getSeriesWorks(book.seriesId);
+        const physicalUris = await workUriResolver.resolveBulk(workUris);
+        
+        tomes = []; // Réinitialisation propre
+        for (const uri of physicalUris) {
+          let tomeLivre = await databaseService.getBookFromCache(uri);
+          if (!tomeLivre) {
+            tomeLivre = await entityResolver.resolvePhysicalEntity(uri);
+            if (tomeLivre) {
+              await bookCacheService.saveAndProcessImage(tomeLivre);
+            }
+          }
+          if (tomeLivre) {
+            tomes.push(tomeLivre);
+          }
+        }
+      }
+      
+      tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
       const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
       
       seriesContext = {
@@ -7154,8 +7464,8 @@ export const searchService = {
       },
       series: seriesContext,
       loan: {
-        isLent: isLent,
-        details: loanDetails
+        isLent,
+        details: loanDetails || undefined
       },
       source
     };
@@ -7388,10 +7698,10 @@ describe('Search Orchestrator (TTL & Cache)', () => {
 
 // src/core/orchestrators/sync.orchestrator.ts
 import { databaseService } from '../database/database.service';
-import { entityHumanizer } from '../resolvers/humanizer';
-import { entityMapper } from '../resolvers/mapper';
 import { entityResolver } from '../resolvers/entity.resolver';
-import { imageService } from '../services/image.service';
+import { seriesResolver } from '../resolvers/series.resolver';
+import { workUriResolver } from '../resolvers/workUri.resolver';
+import { bookCacheService } from '../services/book-cache.service';
 
 export const syncOrchestrator = {
   
@@ -7401,22 +7711,9 @@ export const syncOrchestrator = {
   async refreshBookInBackground(isbn: string): Promise<void> {
     console.log(`[BACKGROUND] Rafraîchissement silencieux (TTL) de l'ISBN: ${isbn}`);
     try {
-      const raw = await entityResolver.fromIsbn(isbn);
-      if (raw) {
-        const book = await entityHumanizer.humanize(raw);
-        await databaseService.saveBookToCache(book);
-        
-        // Compression de la nouvelle couverture si elle a changé
-        if (book.coverUrl) {
-          const base64 = await imageService.compressAndEncode(book.coverUrl);
-          if (base64) {
-            const currentBook = await databaseService.getBookFromCache(book.uri);
-            if (currentBook) {
-              currentBook.localCover = base64;
-              await databaseService.saveBookToCache(currentBook);
-            }
-          }
-        }
+      const book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
+      if (book) {
+        await bookCacheService.saveAndProcessImage(book);
       }
     } catch (e) {
       console.error(`[BACKGROUND] Erreur lors du rafraîchissement de ${isbn}:`, e);
@@ -7424,152 +7721,110 @@ export const syncOrchestrator = {
   },
 
   /**
-   * AJOUT (WINDOWING) : Aspire les tomes manquants d'une série longue (Mega-Batching)
+   * TÂCHE DE FOND : Pré-charge l'ensemble des tomes d'une liste de manière séquentielle
+   * CORRECTION : Accepte désormais un objet incluant le statut de possession attendu
    */
-  async hydrateRemainingSeries(missingUris: string[]): Promise<void> {
-    console.group(`[BACKGROUND SERIES] Aspiration silencieuse de ${missingUris.length} tomes...`);
-    try {
-      let addedCount = 0;
-      const CHUNK_SIZE = 50;
-
-      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
-      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
-
-      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
-        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
-        console.log(`[BACKGROUND SERIES] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} tomes)...`);
-        
-        try {
-           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
-           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
-           const data = await res.json();
-           const entities = data.entities || {};
-
-           const humanizePromises = chunk.map(async (uri) => {
-              const entityData = entities[uri];
-              if (!entityData) return;
-              
-              // Simplification : on ne fait pas de double-rebond pour le fond, l'édition suffit généralement
-              const rawBook = entityMapper.mapResponse(uri, entityData, undefined);
-              const humanizedBook = await entityHumanizer.humanize(rawBook);
-              
-              if (inventoryUris.includes(uri)) humanizedBook.ownershipStatus = 'owned';
-              else if (wishlistUris.includes(uri)) humanizedBook.ownershipStatus = 'wish';
-              
-              await databaseService.saveBookToCache(humanizedBook);
-              addedCount++;
-           });
-
-           await Promise.all(humanizePromises);
-           
-        } catch (chunkError) {
-           console.error(`[BACKGROUND SERIES] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
+  async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[]): Promise<void> {
+    const CHUNK_SIZE = 50;
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE);
+      console.log(`[BACKGROUND] Aspiration du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} tomes)...`);
+      await Promise.all(chunk.map(async (item) => {
+        const humanizedBook = await entityResolver.resolvePhysicalEntity(item.uri);
+        if (humanizedBook) {
+          // Injection immédiate et forcée du statut correct à la création
+          await bookCacheService.saveAndProcessImage(humanizedBook, item.status);
         }
-      }
-      
-      console.log(`[BACKGROUND SERIES] Terminée. ${addedCount} tomes aspirés.`);
-    } catch (error) {
-      console.error("[BACKGROUND SERIES] Erreur globale :", error);
-    } finally {
-      console.groupEnd();
+      }));
     }
   },
 
+  /**
+   * TÂCHE GLOBALE (V2.1) : S'assure que le cache est synchronisé avec les registres
+   */
   async hydrateCacheInBackground(): Promise<void> {
-    console.group("[HYDRATATION] Démarrage de la tâche de fond (Mega-Batching)");
+    console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const inventoryUris = await databaseService.getAllRegistryUris('inventory');
-      const wishlistUris = await databaseService.getAllRegistryUris('wishlist');
+      // 1. Collecte des URIs Registres
+      const inventoryRaw = await databaseService.getAllRegistryUris('inventory');
+      const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
       
-      const allUris = Array.from(new Set([...inventoryUris, ...wishlistUris]));
-      console.log(`[HYDRATATION] ${allUris.length} URIs totales détectées.`);
+      // 2. CORRECTION CRITIQUE : On passe TOUT au crible du WorkResolver.
+      // L'inventaire peut contenir des 'wd:' si l'utilisateur a ajouté une oeuvre abstraite manuellement.
+      console.log(`[HYDRATATION] Filtrage sémantique de l'Inventaire (${inventoryRaw.length}) et Wishlist (${wishlistRaw.length})...`);
+      const inventoryPhysicalUris = await workUriResolver.resolveBulk(inventoryRaw);
+      const wishlistPhysicalUris = await workUriResolver.resolveBulk(wishlistRaw);
 
-      const missingUris: string[] = [];
-      
-      for (const uri of allUris) {
-        const existingBook = await databaseService.getBookFromCache(uri);
-        if (!existingBook) {
-          missingUris.push(uri);
-        } else {
-          let expectedStatus: 'owned' | 'wish' | 'none' = 'none';
-          if (inventoryUris.includes(uri)) expectedStatus = 'owned';
-          else if (wishlistUris.includes(uri)) expectedStatus = 'wish';
-          
-          if (existingBook.ownershipStatus !== expectedStatus) {
-             existingBook.ownershipStatus = expectedStatus;
-             await databaseService.saveBookToCache(existingBook);
-             console.log(`[HYDRATATION] Statut mis à jour en local pour : ${uri} (${expectedStatus})`);
-          }
+      const missingItems: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
+
+      // 3. Analyse du delta Local vs Inventaire
+      for (const uri of inventoryPhysicalUris) {
+        const livre = await databaseService.getBookFromCache(uri);
+        if (!livre) {
+          missingItems.push({ uri, status: 'owned' });
+        } else if (livre.ownershipStatus !== 'owned') {
+           await bookCacheService.saveAndProcessImage(livre, 'owned');
         }
       }
 
-      console.log(`[HYDRATATION] ${missingUris.length} nouvelles fiches à télécharger en batch.`);
+      // 4. Analyse du delta Local vs Wishlist
+      for (const uri of wishlistPhysicalUris) {
+         // Si c'est possédé, on ignore la wishlist
+         if (inventoryPhysicalUris.includes(uri)) continue;
 
-      let addedCount = 0;
-      const CHUNK_SIZE = 50;
+         const livre = await databaseService.getBookFromCache(uri);
+         if (!livre) {
+           missingItems.push({ uri, status: 'wish' });
+         } else if (livre.ownershipStatus !== 'wish') {
+           await bookCacheService.saveAndProcessImage(livre, 'wish');
+         }
+      }
 
-      for (let i = 0; i < missingUris.length; i += CHUNK_SIZE) {
-        const chunk = missingUris.slice(i, i + CHUNK_SIZE);
-        console.log(`[HYDRATATION] Traitement du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} URIs)...`);
-        
-        try {
-           const chunkUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
-           const res = await fetch(chunkUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
-           const data = await res.json();
-           const entities = data.entities || {};
+      // 5. Téléchargement des manquants
+      console.log(`[HYDRATATION] ${missingItems.length} nouvelles éditions physiques à télécharger...`);
+      if (missingItems.length > 0) {
+         await this.hydrateRemainingPhysicalEntities(missingItems);
+      }
 
-           const workUrisToFetch = new Set<string>();
-           for (const uri of chunk) {
-              const entityData = entities[uri];
-              if (entityData && entityData.type !== 'work') {
-                 const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
-                 const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
-                 if (workUri && !entities[workUri]) {
-                    workUrisToFetch.add(workUri);
-                 }
-              }
-           }
-
-           let workEntities: any = {};
-           if (workUrisToFetch.size > 0) {
-               const worksChunk = Array.from(workUrisToFetch);
-               const worksUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(worksChunk.join('|'))}&attributes=info|labels|descriptions|claims|image`;
-               const wRes = await fetch(worksUrl, { headers: { 'Accept': 'application/json', 'User-Agent': 'InventaireMobileOverlay/1.8' } });
-               const wData = await wRes.json();
-               workEntities = wData.entities || {};
-           }
-
-           const humanizePromises = chunk.map(async (uri) => {
-              const entityData = entities[uri];
-              if (!entityData) return;
-
-              const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
-              const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
-              const workData = workUri ? workEntities[workUri] : undefined;
-
-              const rawBook = entityMapper.mapResponse(uri, entityData, workData);
-              const humanizedBook = await entityHumanizer.humanize(rawBook);
-              
-              if (inventoryUris.includes(uri)) {
-                humanizedBook.ownershipStatus = 'owned';
-              } else if (wishlistUris.includes(uri)) {
-                humanizedBook.ownershipStatus = 'wish';
-              }
-              
-              await databaseService.saveBookToCache(humanizedBook);
-              addedCount++;
-           });
-
-           await Promise.all(humanizePromises);
-           
-        } catch (chunkError) {
-           console.error(`[HYDRATATION] 💥 Erreur fatale sur le lot ${Math.floor(i/CHUNK_SIZE) + 1}:`, chunkError);
+      // 6. Aspiration préventive des séries (Sagas)
+      console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
+      const localBooks = await databaseService.getAllBooksFromCache();
+      const seriesIds = new Set<string>();
+      
+      for (const book of localBooks) {
+        // book.ownershipStatus est désormais GARANTI d'être correct
+        if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
+          seriesIds.add(book.seriesId);
         }
       }
-      
-      console.log(`[HYDRATATION] Terminée. ${addedCount} nouvelles fiches complètes stockées.`);
+
+      if (seriesIds.size > 0) {
+        console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesIds.size} séries...`);
+        for (const seriesId of seriesIds) {
+          (async () => {
+             try {
+                const workUris = await seriesResolver.getSeriesWorks(seriesId);
+                const physicalUris = await workUriResolver.resolveBulk(workUris);
+                
+                const missingTomes: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
+                for (const uri of physicalUris) {
+                   if (!(await databaseService.getBookFromCache(uri))) {
+                       // Les tomes aspirés passivement ont le statut 'none'
+                       missingTomes.push({ uri, status: 'none' });
+                   }
+                }
+                if (missingTomes.length > 0) {
+                   await this.hydrateRemainingPhysicalEntities(missingTomes);
+                }
+             } catch (e) {
+                console.error(`[HYDRATATION] Erreur sur l'aspiration de la saga ${seriesId}`, e);
+             }
+          })();
+        }
+      }
+
     } catch (error) {
-      console.error("[HYDRATATION] Erreur durant la tâche de fond globale :", error);
+      console.error("[HYDRATATION] Erreur globale :", error);
     } finally {
       console.groupEnd();
     }
@@ -8130,6 +8385,61 @@ export const wishlistService = {
     } else {
       console.error("[WISHLIST REMOVE ERROR]", data);
       return false;
+    }
+  }
+};
+
+
+################################################################################
+### FICHIER : src/core/services/book-cache.service.ts
+################################################################################
+
+// src/core/services/book-cache.service.ts
+import { databaseService } from '../database/database.service';
+import { imageService } from './image.service';
+import type { HumanizedBook } from '../types';
+
+export const bookCacheService = {
+  /**
+   * Gère la sauvegarde d'un livre en base locale avec préservation des données 
+   * et déclenchement du worker de compression d'image.
+   */
+  async saveAndProcessImage(book: HumanizedBook, targetStatus?: 'owned' | 'wish' | 'none'): Promise<void> {
+    try {
+      // 1. Fusion pour préserver l'image Base64 si elle existe déjà
+      const existingBook = await databaseService.getBookFromCache(book.uri);
+      
+      if (existingBook && existingBook.localCover) {
+        book.localCover = existingBook.localCover;
+      }
+
+      // 2. Mise à jour de l'état de possession si demandé
+      if (targetStatus) {
+        book.ownershipStatus = targetStatus;
+      }
+
+      // 3. Sauvegarde principale
+      await databaseService.saveBookToCache(book);
+
+      // 4. Compression Asynchrone (Non-bloquant / Fire and Forget)
+      if (book.coverUrl && !book.localCover) {
+        setTimeout(async () => {
+          try {
+            const base64 = await imageService.compressAndEncode(book.coverUrl!);
+            if (base64) {
+              const updatedBook = await databaseService.getBookFromCache(book.uri);
+              if (updatedBook) {
+                updatedBook.localCover = base64;
+                await databaseService.saveBookToCache(updatedBook);
+              }
+            }
+          } catch (e) {
+            console.error(`[BOOK CACHE] Erreur compression image pour ${book.uri}`, e);
+          }
+        }, 0);
+      }
+    } catch (error) {
+      console.error(`[BOOK CACHE] Erreur lors de la sauvegarde de ${book.uri}`, error);
     }
   }
 };
