@@ -2,36 +2,57 @@
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BookMiniCard from '../components/BookMiniCard.vue';
-import BaseButton from '../components/BaseButton.vue';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
 
-// États de données de la collection
 const allOwnedBooks = ref<HumanizedBook[]>([]);
+const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
+const showLendModal = ref(false);
 
-// États des contrôles utilisateur
 const currentMode = ref<'books' | 'series' | 'oneshots'>('books');
 const selectedGenre = ref('all');
 const currentSort = ref('title');
 
+const isAllSelected = computed(() => {
+  const targets = currentSortBooks.value;
+  return targets.length > 0 && selectedIds.value.length === targets.length;
+});
+
 onMounted(async () => {
+  await fetchCatalogue();
+});
+
+const fetchCatalogue = async () => {
+  isLoading.value = true;
   try {
     const cached = await databaseService.getAllBooksFromCache();
-    // On ne retient que les livres marqués possédés
-    allOwnedBooks.value = cached.filter(b => b.ownershipStatus === 'owned');
+    const owned = cached.filter(b => b.ownershipStatus === 'owned');
+    
+    // HYDRATATION DES PRÊTS : On injecte les données de prêt locales dans chaque livre du catalogue
+    for (const livre of owned) {
+      const activeLoan = await databaseService.getLoan(livre.uri);
+      if (activeLoan) {
+        livre.loan = activeLoan;
+      }
+    }
+    
+    allOwnedBooks.value = owned;
+    selectedIds.value = [];
   } catch (e) {
-    console.error("[COLLECTION VIEW] Erreur au chargement du catalogue :", e);
+    console.error(e);
   } finally {
     isLoading.value = false;
   }
-});
-
-const goBack = () => {
-  router.push({ name: 'dashboard' });
 };
 
 const navigateToSeries = (seriesId: string) => {
@@ -40,7 +61,6 @@ const navigateToSeries = (seriesId: string) => {
   }
 };
 
-// 1. EXTRACTION DYNAMIQUE DES GENRES PRÉSENTS (Zéro texte en dur)
 const dynamicGenres = computed(() => {
   const genresSet = new Set<string>();
   allOwnedBooks.value.forEach(book => {
@@ -51,30 +71,20 @@ const dynamicGenres = computed(() => {
   return Array.from(genresSet).sort();
 });
 
-// 2. SEGMENTATION PAR MODE ET FILTRAGE PAR GENRE
 const processedBooks = computed(() => {
   let list = [...allOwnedBooks.value];
 
-  // Application du filtre de genre dynamique
   if (selectedGenre.value !== 'all') {
     list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
   }
 
-  // Application du filtre de mode structurel
   if (currentMode.value === 'oneshots') {
-    // Uniquement les livres n'appartenant à aucune série
     return list.filter(b => !b.seriesId && !b.series);
-  } else if (currentMode.value === 'books') {
-    // Tous les livres à plat
-    return list;
   }
-  
   return list;
 });
 
-// 3. LOGIQUE DE GROUPEMENT PAR SÉRIE (Tête de gondole)
 const seriesGondolas = computed(() => {
-  // On filtre pour ne garder que les livres qui possèdent une série
   let list = allOwnedBooks.value.filter(b => b.seriesId || b.series);
 
   if (selectedGenre.value !== 'all') {
@@ -96,23 +106,19 @@ const seriesGondolas = computed(() => {
   });
 
   const gondolas = Object.values(groups).map(g => {
-    // Tri interne des tomes pour trouver la couverture du tome le plus ancien possédé
     g.tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
     return {
       id: g.id,
       name: g.name,
       ownedCount: g.tomes.length,
-      coverUrl: g.tomes[0]?.coverUrl,
-      firstTitle: g.tomes[0]?.title || ''
+      coverUrl: g.tomes[0]?.coverUrl
     };
   });
 
-  // Tri alphabétique par défaut des têtes de gondole
   return gondolas.sort((a, b) => a.name.localeCompare(b.name));
 });
 
-// 4. LOGIQUE DE TRI ALPHABÉTIQUE / AUTEUR / CHRONOLOGIQUE
-const sortedBooks = computed(() => {
+const currentSortBooks = computed(() => {
   const list = [...processedBooks.value];
 
   if (currentSort.value === 'title') {
@@ -124,108 +130,150 @@ const sortedBooks = computed(() => {
       return authA.localeCompare(authB);
     });
   } else if (currentSort.value === 'date') {
-    // Tri antichronologique (Derniers mis à jour / ajoutés en haut)
     return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }
-
   return list;
 });
+
+const selectedBooks = computed(() => {
+  return allOwnedBooks.value.filter(b => selectedIds.value.includes(b.uri));
+});
+
+const hasLentSelected = computed(() => selectedBooks.value.some(b => !!b.loan));
+const hasAvailableSelected = computed(() => selectedBooks.value.some(b => !b.loan));
+const isSelectionMixed = computed(() => hasLentSelected.value && hasAvailableSelected.value);
+const batchContext = computed(() => hasLentSelected.value ? 'lent' : 'owned');
+
+const handleToggleAll = (checked: boolean) => {
+  if (!checked) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = currentSortBooks.value.map(b => b.uri);
+  }
+};
+
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+
+  if (action === 'LEND') {
+    showLendModal.value = true;
+    return;
+  }
+
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
+    }
+    await fetchCatalogue();
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+const confirmGroupLend = async (friendName: string) => {
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('LEND', uri, { friendName });
+    }
+    await fetchCatalogue();
+  } catch (e) {
+    console.error(e);
+  } finally {
+    showLendModal.value = false;
+  }
+};
+
+const resetSelection = () => {
+  selectedIds.value = [];
+};
 </script>
 
 <template>
   <div class="view-container">
-    
-    <div class="nav-header">
-      <BaseButton @click="goBack">
-        {{ TEXTS.seriesView.back }}
-      </BaseButton>
-      <h2>{{ TEXTS.collectionView.title }}</h2>
-    </div>
+    <BaseHeader :title="TEXTS.collectionView?.title" showBack />
 
     <div class="collection-modes-tabs">
-      <button 
-        :class="['tab-button', { active: currentMode === 'books' }]" 
-        @click="currentMode = 'books'"
-      >
-        {{ TEXTS.collectionView.modeBooks }}
+      <button :class="['tab-button', { active: currentMode === 'books' }]" @click="currentMode = 'books'; resetSelection()">
+        {{ TEXTS.collectionView?.modeBooks }}
       </button>
-      <button 
-        :class="['tab-button', { active: currentMode === 'series' }]" 
-        @click="currentMode = 'series'"
-      >
-        {{ TEXTS.collectionView.modeSeries }}
+      <button :class="['tab-button', { active: currentMode === 'series' }]" @click="currentMode = 'series'; resetSelection()">
+        {{ TEXTS.collectionView?.modeSeries }}
       </button>
-      <button 
-        :class="['tab-button', { active: currentMode === 'oneshots' }]" 
-        @click="currentMode = 'oneshots'"
-      >
-        {{ TEXTS.collectionView.modeOneShots }}
+      <button :class="['tab-button', { active: currentMode === 'oneshots' }]" @click="currentMode = 'oneshots'; resetSelection()">
+        {{ TEXTS.collectionView?.modeOneShots }}
       </button>
     </div>
 
-    <div class="collection-controls-bar">
+    <BatchActionBar 
+      v-if="!isLoading && currentMode !== 'series'"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="isSelectionMixed"
+      :context="batchContext"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
+
+    <div class="collection-controls-bar" v-if="!isLoading">
       <div class="control-group">
-        <label>{{ TEXTS.collectionView.filterGenreLabel }}</label>
-        <select v-model="selectedGenre" class="control-select">
-          <option value="all">{{ TEXTS.collectionView.filterGenreAll }}</option>
-          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">
-            {{ genre }}
-          </option>
+        <label>{{ TEXTS.collectionView?.filterGenreLabel }}</label>
+        <select v-model="selectedGenre" class="control-select" @change="resetSelection">
+          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
+          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
         </select>
       </div>
 
       <div class="control-group" v-if="currentMode !== 'series'">
-        <label>{{ TEXTS.collectionView.sortLabel }}</label>
+        <label>{{ TEXTS.collectionView?.sortLabel }}</label>
         <select v-model="currentSort" class="control-select">
-          <option value="title">{{ TEXTS.collectionView.sortByTitle }}</option>
-          <option value="author">{{ TEXTS.collectionView.sortByAuthor }}</option>
-          <option value="date">{{ TEXTS.collectionView.sortByDate }}</option>
+          <option value="title">{{ TEXTS.collectionView?.sortByTitle }}</option>
+          <option value="author">{{ TEXTS.collectionView?.sortByAuthor }}</option>
+          <option value="date">{{ TEXTS.collectionView?.sortByDate }}</option>
         </select>
       </div>
     </div>
 
-    <div v-if="isLoading" class="result-card">
-      <p>{{ TEXTS.seriesView.loading }}</p>
-    </div>
+    <BaseLoading v-if="isLoading" />
 
-    <div v-else class="series-list-container">
-      
+    <div class="series-list-container" v-else>
       <template v-if="currentMode === 'series'">
-        <div v-if="seriesGondolas.length === 0" class="result-card error">
-          <p>{{ TEXTS.collectionView.emptyCollection }}</p>
-        </div>
+        <BaseBanner v-if="seriesGondolas.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
         
-        <div 
-          v-for="saga in seriesGondolas" 
-          :key="saga.id" 
-          class="mini-card-row" 
-          @click="navigateToSeries(saga.id)"
-        >
+        <div v-for="saga in seriesGondolas" :key="saga.id" class="mini-card-row" @click="navigateToSeries(saga.id)">
           <div class="row-cover-container">
             <img v-if="saga.coverUrl" :src="saga.coverUrl" class="row-cover-image" />
-            <div v-else class="row-cover-fallback">
-              <span class="fallback-title">{{ saga.name }}</span>
-            </div>
+            <div v-else class="row-cover-fallback"><span class="fallback-title">{{ saga.name }}</span></div>
           </div>
           <div class="row-info-content">
             <p class="row-title">{{ saga.name }}</p>
-            <p class="row-series-meta">{{ saga.ownedCount }} {{ TEXTS.collectionView.tomesOwned }}</p>
+            <p class="row-series-meta">{{ saga.ownedCount }} {{ TEXTS.collectionView?.tomesOwned }}</p>
           </div>
         </div>
       </template>
 
       <template v-else>
-        <div v-if="sortedBooks.length === 0" class="result-card error">
-          <p>{{ TEXTS.collectionView.emptyCollection }}</p>
-        </div>
+        <BaseBanner v-if="currentSortBooks.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
         
         <BookMiniCard 
-          v-for="livre in sortedBooks" 
+          v-for="livre in currentSortBooks" 
           :key="livre.uri" 
           :book="livre"
+          :model-value="selectedIds.includes(livre.uri)"
+          @update:model-value="(val) => {
+            if(val) {
+              if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+            }
+            else selectedIds = selectedIds.filter(id => id !== livre.uri);
+          }"
         />
       </template>
-
     </div>
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="selectedIds.length"
+      @close="showLendModal = false"
+      @confirm="confirmGroupLend"
+    />
   </div>
 </template>

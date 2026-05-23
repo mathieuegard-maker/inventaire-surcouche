@@ -4,8 +4,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import LendModal from '../components/LendModal.vue';
+import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
@@ -61,10 +65,6 @@ onMounted(async () => {
     isLoading.value = false;
   }
 });
-
-const goBack = () => {
-  router.back();
-};
 
 const navigateToSeries = () => {
   if (seriesIdentifier.value) {
@@ -133,24 +133,18 @@ const handleReturn = async () => {
 
 <template>
   <div class="view-container detail-container">
-    <div class="nav-header">
-      <BaseButton @click="goBack">← Retour</BaseButton>
-      <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
-    </div>
+    <BaseHeader title="Détails de l'édition" showBack>
+      <template #actions>
+        <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
+      </template>
+    </BaseHeader>
 
-    <div v-if="isLoading" class="result-card">
-      <p>Chargement des spécifications de l'édition...</p>
-    </div>
+    <BaseLoading v-if="isLoading" />
 
-    <div v-else-if="errorMsg" class="result-card error">
-      <p>{{ errorMsg }}</p>
-      <BaseButton @click="goBack">Retourner à l'accueil</BaseButton>
-    </div>
+    <BaseBanner v-else-if="errorMsg" type="error" :message="errorMsg" />
 
     <div v-else-if="book" class="result-card success">
-      <div v-if="successMessage" class="success-banner">
-        <p>✅ {{ successMessage }}</p>
-      </div>
+      <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
 
       <div class="book-card-layout">
         <div v-if="!book.coverUrl" class="book-cover-placeholder">
@@ -211,9 +205,9 @@ const handleReturn = async () => {
           <div class="badge-container">
             <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
               {{ 
-                isLent ? `${TEXTS.bookStatus.lent || 'Prêté'} : ${book.loan?.friendName}` : 
-                (book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
-                (book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : TEXTS.bookStatus.none)) 
+                isLent ? `${TEXTS.bookStatus?.lent || 'Prêté'} : ${book.loan?.friendName}` : 
+                (book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
+                (book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : TEXTS.bookStatus?.none)) 
               }}
             </span>
           </div>
@@ -226,22 +220,14 @@ const handleReturn = async () => {
       </div>
 
       <div class="book-actions-layout">
-        <template v-if="!isOwned">
-          <BaseButton @click="handleAddInventory">
-            {{ TEXTS.bookCard.btnAddInventory }}
-          </BaseButton>
-          <BaseButton @click="handleAddWishlist">
-            {{ TEXTS.bookCard.btnAddWishlist }}
-          </BaseButton>
-        </template>
-        <template v-else>
-          <BaseButton v-if="isLent" @click="handleReturn">
-            {{ TEXTS.bookCard.btnReturn || 'Livre rendu' }}
-          </BaseButton>
-          <BaseButton v-else @click="handleLend">
-            {{ TEXTS.bookCard.btnLend }}
-          </BaseButton>
-        </template>
+        <BookActionButtons 
+          :ownership-status="book.ownershipStatus"
+          :is-lent="isLent"
+          @add-inventory="handleAddInventory"
+          @add-wishlist="handleAddWishlist"
+          @lend="handleLend"
+          @return="handleReturn"
+        />
       </div>
     </div>
 

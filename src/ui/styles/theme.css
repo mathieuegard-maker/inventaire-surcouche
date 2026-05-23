@@ -827,3 +827,32 @@ body {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Composant d'en-tête standardisé */
+.base-page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+}
+
+.base-page-header h2 {
+  margin: 0;
+  text-transform: uppercase;
+}
+
+/* Alignement standardisé des boutons unitaires */
+.book-actions-flex {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+@media (min-width: 600px) {
+  .book-actions-flex {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}

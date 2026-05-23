@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import BaseButton from './BaseButton.vue';
+import BookActionButtons from './BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { SearchResponse } from '../../core/types';
 
@@ -12,15 +13,15 @@ const emit = defineEmits<{
   (e: 'action-add-inventory', uri: string): void;
   (e: 'action-add-wishlist', uri: string): void;
   (e: 'action-lend', uri: string): void;
+  (e: 'action-return', uri: string): void;
   (e: 'action-view-series', seriesId: string): void;
 }>();
 
 const isOwned = computed(() => props.searchResult.ownership.isWorkOwned);
 const book = computed(() => props.searchResult.mainBook);
 const series = computed(() => props.searchResult.series);
+const isLent = computed(() => props.searchResult.loan.isLent);
 
-// Calcul robuste pour déterminer si le livre fait partie d'une série 
-// et extraire l'identifiant (ou le nom) à envoyer au Middle-End
 const seriesIdentifier = computed(() => {
   return series.value?.id || book.value.seriesId || series.value?.name || book.value.series;
 });
@@ -29,7 +30,7 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
 
 <template>
   <div class="result-card success">
-    <div class="result-title">{{ TEXTS.scanner.successDetected }}</div>
+    <div class="result-title">{{ TEXTS.scanner?.successDetected }}</div>
     
     <div class="book-card-layout">
       <img 
@@ -50,43 +51,43 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
 
         <div v-if="hasSeries" class="book-meta-group">
           <p class="book-meta-item">
-            <strong>{{ TEXTS.bookCard.series }} :</strong> 
+            <strong>{{ TEXTS.bookCard?.series }} :</strong> 
             {{ series?.name || book.series }}
-            <span v-if="book.seriesNumber"> ({{ TEXTS.bookCard.volume }} {{ book.seriesNumber }})</span>
+            <span v-if="book.seriesNumber"> ({{ TEXTS.bookCard?.volume }} {{ book.seriesNumber }})</span>
           </p>
         </div>
 
         <div class="book-meta-group" v-if="book.authors?.length || book.scriptwriters?.length || book.illustrators?.length">
           <p class="book-meta-item" v-if="book.authors?.length">
-            <strong>{{ TEXTS.bookCard.meta.authors }} :</strong> {{ book.authors.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.authors }} :</strong> {{ book.authors.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.scriptwriters?.length">
-            <strong>{{ TEXTS.bookCard.meta.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.illustrators?.length">
-            <strong>{{ TEXTS.bookCard.meta.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
           </p>
         </div>
 
         <div class="book-meta-group">
           <p class="book-meta-item" v-if="book.publisher">
-            <strong>{{ TEXTS.bookCard.meta.publisher }} :</strong> {{ book.publisher }} 
+            <strong>{{ TEXTS.bookCard?.meta?.publisher }} :</strong> {{ book.publisher }} 
             <span v-if="book.collection">[{{ book.collection }}]</span>
           </p>
           <p class="book-meta-item" v-if="book.genres?.length">
-            <strong>{{ TEXTS.bookCard.meta.genres }} :</strong> {{ book.genres.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.genres }} :</strong> {{ book.genres.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.publishDate">
-            <strong>{{ TEXTS.bookCard.meta.publishDate }} :</strong> {{ book.publishDate }}
+            <strong>{{ TEXTS.bookCard?.meta?.publishDate }} :</strong> {{ book.publishDate }}
           </p>
           <p class="book-meta-item" v-if="book.pageCount">
-            <strong>{{ TEXTS.bookCard.meta.pageCount }} :</strong> {{ book.pageCount }}
+            <strong>{{ TEXTS.bookCard?.meta?.pageCount }} :</strong> {{ book.pageCount }}
           </p>
           <p class="book-meta-item" v-if="book.format">
-            <strong>{{ TEXTS.bookCard.meta.format }} :</strong> {{ book.format }}
+            <strong>{{ TEXTS.bookCard?.meta?.format }} :</strong> {{ book.format }}
           </p>
           <p class="book-meta-item" v-if="book.language">
-            <strong>{{ TEXTS.bookCard.meta.language }} :</strong> {{ book.language }}
+            <strong>{{ TEXTS.bookCard?.meta?.language }} :</strong> {{ book.language }}
           </p>
           <p class="book-meta-item" v-if="book.isbn13">
             <strong>ISBN :</strong> {{ book.isbn13 }}
@@ -94,32 +95,25 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
         </div>
 
         <div class="badge-container">
-          <span class="badge" :class="isOwned ? 'owned' : 'missing'">
-            {{ isOwned ? TEXTS.bookCard.owned : TEXTS.bookCard.missing }}
+          <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
+            {{ isLent ? (TEXTS.bookStatus?.lent || 'Prêté') : (isOwned ? TEXTS.bookCard?.owned : TEXTS.bookCard?.missing) }}
           </span>
         </div>
       </div>
     </div>
 
     <div class="book-actions-layout">
-      <template v-if="!isOwned">
-        <BaseButton @click="emit('action-add-inventory', book.uri)">
-          {{ TEXTS.bookCard.btnAddInventory }}
-        </BaseButton>
-        
-        <BaseButton @click="emit('action-add-wishlist', book.uri)">
-          {{ TEXTS.bookCard.btnAddWishlist }}
-        </BaseButton>
-      </template>
-
-      <template v-else>
-        <BaseButton @click="emit('action-lend', book.uri)">
-          {{ TEXTS.bookCard.btnLend }}
-        </BaseButton>
-      </template>
+      <BookActionButtons 
+        :ownership-status="book.ownershipStatus"
+        :is-lent="isLent"
+        @add-inventory="emit('action-add-inventory', book.uri)"
+        @add-wishlist="emit('action-add-wishlist', book.uri)"
+        @lend="emit('action-lend', book.uri)"
+        @return="emit('action-return', book.uri)"
+      />
 
       <BaseButton v-if="hasSeries" @click="emit('action-view-series', seriesIdentifier)">
-        {{ TEXTS.bookCard.btnViewSeries }}
+        {{ TEXTS.bookCard?.btnViewSeries }}
       </BaseButton>
     </div>
   </div>

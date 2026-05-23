@@ -63,10 +63,10 @@ const handleZoneClick = () => {
     <div class="row-status-text-column">
       <span :class="['status-text-label', book.loan ? 'lent' : book.ownershipStatus]">
         {{ 
-          book.loan ? TEXTS.bookStatus.lent || 'Prêté' :
-          book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
-          book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : 
-          TEXTS.bookStatus.none 
+          book.loan ? TEXTS.bookStatus?.lent || 'Prêté' :
+          book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
+          book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : 
+          TEXTS.bookStatus?.none 
         }}
       </span>
     </div>
@@ -76,6 +76,7 @@ const handleZoneClick = () => {
         type="checkbox" 
         class="wireframe-checkbox item-checkbox"
         :checked="modelValue"
+        @click.stop
         @change.stop="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
       />
     </div>

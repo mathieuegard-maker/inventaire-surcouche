@@ -128,5 +128,15 @@ collectionView: {
   emptyCollection: "Aucun ouvrage trouvé dans votre collection actuelle.",
   tomesOwned: "tome(s) possédé(s) dans la bibliothèque",
   noAuthor: "Auteur non spécifié"
+},
+// À insérer sous la clé "seriesView" ou à la racine de l'objet TEXTS :
+batchActionBar: {
+  selectedCount: "sélectionné(s)",
+  emptySelection: "Aucun élément sélectionné",
+  mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
+  mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
+},
+baseLoading: {
+  message: "Chargement des données en cours..."
 }
 };
