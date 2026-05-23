@@ -57,7 +57,7 @@ function extractEntityTitle(entity: any): string {
 }
 
 /**
- * NOUVEAU : Vérifie si une édition est dans la langue souhaitée
+ * Vérifie si une édition est dans la langue souhaitée
  */
 function hasLanguage(entity: any, expectedWdId: string): boolean {
   if (!entity?.claims) return false;
@@ -76,7 +76,7 @@ function hasLanguage(entity: any, expectedWdId: string): boolean {
 
 export const workUriResolver = {
   /**
-   * Convertit une liste d'œuvres (wd:) en la meilleure liste d'éditions physiques (inv: ou isbn:)
+   * Convertit une liste d'œuvres en la meilleure liste d'éditions physiques correspondantes (inv: ou isbn:)
    */
   async resolveBulk(workUris: string[]): Promise<string[]> {
     console.group(`[WORK-URI RESOLVER] Concrétisation de ${workUris.length} œuvres...`);
@@ -85,16 +85,18 @@ export const workUriResolver = {
     
     const preferredLangWd = configService.getPreferredLanguageWdCode();
 
-    // 1. Barrière Locale (Cache-First)
+    // 1. Barrière Locale (Cache-First) adaptative
     for (const uri of workUris) {
-      if (!uri.startsWith('wd:')) {
-        physicalUris.push(uri); // C'est déjà une édition physique
+      if (uri.startsWith('isbn:')) {
+        physicalUris.push(uri); // C'est déjà une édition physique pure garantie
         continue;
       }
+      
       const editionLocal = await databaseService.getEditionByWorkFromCache(uri);
       if (editionLocal) {
         physicalUris.push(editionLocal.uri);
       } else {
+        // Les identifiants wd: ET inv: d'œuvres natives partent à la résolution réseau
         missingWorks.push(uri);
       }
     }
@@ -125,7 +127,8 @@ export const workUriResolver = {
     }));
 
     // 3. Récupération des données pour l'analyse sémantique
-    const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
+    // REGEX : Exclusion des intégrales et des intervalles de tomes génériques (ex: tomes 1-3)
+    const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation|tomes?\s*\d+\s*[-–至àa]\s*\d+|vols?\s*\d+\s*[-–至àa]\s*\d+/i;
     const editionDataMap: Record<string, any> = {};
     const urisArray = Array.from(allEditionUrisToFetch);
     const CHUNK_SIZE = 50;
@@ -151,18 +154,23 @@ export const workUriResolver = {
       } catch (e) {}
     }
 
-    // 4. Élection de l'édition canonique
+    // 4. Élection de l'édition canonique via l'algorithme séquentiel
     for (const workUri of missingWorks) {
       const editions = workToEditionsMap[workUri] || [];
-      if (editions.length === 0) continue; 
+      
+      // S'il n'y a aucune édition dépendante, cela signifie que cet identifiant inv:
+      // était en réalité déjà une édition physique finale autonome. On la conserve brute.
+      if (editions.length === 0) {
+        physicalUris.push(workUri);
+        continue;
+      }
 
-      // Fast-Path
       if (editions.length === 1) {
         physicalUris.push(editions[0]);
         continue;
       }
 
-      // Extraction du vrai titre
+      // Extraction du vrai titre de l'œuvre
       const workLabel = extractEntityTitle(workDataMap[workUri]);
 
       // CRITÈRE 0 : Barrière de la Langue (Priorité absolue)
@@ -180,32 +188,43 @@ export const workUriResolver = {
       // Si la regex a tout supprimé, on annule le filtre par sécurité
       targetEditions = validEditions.length > 0 ? validEditions : targetEditions;
 
-      // Critère 2 : Priorité stricte aux URIs natives (inv:)
-      const nativeEditions = targetEditions.filter(edUri => edUri.startsWith('inv:'));
-      if (nativeEditions.length > 0) {
-        targetEditions = nativeEditions;
+      // Structure intermédiaire de notation
+      interface EditionScore {
+        uri: string;
+        score: number;
+        isNative: boolean;
       }
 
-      // Re-Fast-Path après filtrages
-      if (targetEditions.length === 1) {
-        physicalUris.push(targetEditions[0]);
-        continue;
-      }
-
-      // Critère 3 : Scoring de similarité (Levenshtein) sur les titres réels
-      let bestUri = targetEditions[0];
-      let bestScore = Infinity;
-
-      for (const edUri of targetEditions) {
+      // Calcul des scores de distance de Levenshtein pour tous les candidats restants
+      const scoredEditions: EditionScore[] = targetEditions.map(edUri => {
         const edData = editionDataMap[edUri];
         const edLabel = extractEntityTitle(edData);
         const score = getEditDistance(workLabel, edLabel);
-        if (score < bestScore) {
-          bestScore = score;
-          bestUri = edUri;
+        return {
+          uri: edUri,
+          score,
+          isNative: edUri.startsWith('inv:')
+        };
+      });
+
+      // Tri par pertinence textuelle pure (ascendant)
+      scoredEditions.sort((a, b) => a.score - b.score);
+
+      // Algorithme de la petite boucle : on cherche la première édition native 'inv:' disponible dans l'ordre de pertinence
+      let chosenUri = '';
+      for (const candidate of scoredEditions) {
+        if (candidate.isNative) {
+          chosenUri = candidate.uri;
+          break; // Trouvé ! On casse immédiatement
         }
       }
-      physicalUris.push(bestUri);
+
+      // Si aucune édition native 'inv:' n'a été trouvée, on se replie sur le vainqueur textuel absolu
+      if (!chosenUri) {
+        chosenUri = scoredEditions[0].uri;
+      }
+
+      physicalUris.push(chosenUri);
     }
 
     console.groupEnd();
