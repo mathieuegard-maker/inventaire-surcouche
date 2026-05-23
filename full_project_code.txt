@@ -3,6 +3,50 @@ SÉCURITÉ : SYNTHÈSE DU DOSSIER /Users/mathieuegard/Dropbox/Mac/Desktop/script
 
 
 ################################################################################
+### FICHIER : lab-step1.ts
+################################################################################
+
+// lab-step1.ts
+const SERIES_ID = 'wd:Q1508136';
+const LOCAL_PROXY_URL = 'http://localhost:3000'; // Assure-toi que ton serveur local tourne sur ce port
+
+async function runStep1() {
+  console.log(`\n======================================================`);
+  console.log(`=== ÉTAPE 1 : LE COLLECTEUR (Simulation seriesResolver) ===`);
+  console.log(`======================================================\n`);
+  
+  console.log(`[ENTRÉE] Identifiant de la série : ${SERIES_ID}`);
+  
+  try {
+    const targetUrl = `${LOCAL_PROXY_URL}/api/gateway?action=series-list&seriesId=${encodeURIComponent(SERIES_ID)}`;
+    console.log(`[RÉSEAU] Interrogation de la gateway locale : ${targetUrl}\n`);
+    
+    const response = await fetch(targetUrl);
+    
+    if (!response.ok) {
+      throw new Error(`Erreur réseau HTTP ${response.status} : ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    const tomeUris = data.uris || data.tomes || [];
+    
+    console.log(`[SORTIE BRUTE] Données renvoyées par la Gateway :`);
+    console.log(JSON.stringify(data, null, 2));
+    
+    console.log(`\n[RÉSULTAT ÉTAPE 1]`);
+    console.log(`-> Nombre d'œuvres (tomes) identifiées : ${tomeUris.length}`);
+    console.log(`-> Liste des URIs :`, tomeUris);
+    console.log(`\n======================================================\n`);
+
+  } catch (error) {
+    console.error(`[ERREUR FATALE] Le test a échoué :`, error);
+  }
+}
+
+runStep1();
+
+
+################################################################################
 ### FICHIER : index.html
 ################################################################################
 
@@ -97,6 +141,32 @@ def generate_rounded_icon(size, text, filename):
 if __name__ == "__main__":
     generate_rounded_icon(512, "Inv", "512.png")
     generate_rounded_icon(192, "Inv", "192.png")
+
+
+################################################################################
+### FICHIER : lab-sonde.ts
+################################################################################
+
+// lab-sonde.ts
+async function runSonde() {
+  console.log("Recherche de la structure exacte du titre...");
+  const uri = 'inv:b4287eb063533479c35a81990e4e022a';
+  
+  try {
+    const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${uri}`);
+    const data = await res.json();
+    const entity = data.entities[uri];
+    
+    console.log("\n=== STRUCTURE INTERNE DE WDT:P1476 ===");
+    console.log(JSON.stringify(entity.claims['wdt:P1476'], null, 2));
+    console.log("======================================\n");
+  } catch (e) {
+    console.error("Erreur :", e);
+  }
+}
+
+runSonde();
+
 
 
 ################################################################################
@@ -237,6 +307,103 @@ full_project_code.txt
 
 
 ################################################################################
+### FICHIER : lab-cover.ts
+################################################################################
+
+// lab-cover.ts
+const TARGET_URI = 'inv:0888c0e93595f51c17f601eb6a95c1c3';
+
+// Le "passeport" pour ne pas se faire bloquer par le pare-feu d'Inventaire
+const REQUEST_OPTIONS = {
+  headers: {
+    'Accept': 'application/json',
+    'User-Agent': 'InventaireMobileOverlayLab/1.0 (mathieu.egard@gmail.com)'
+  }
+};
+
+async function runCoverLab() {
+  console.log(`\n🔍 ANALYSE DE COUVERTURE POUR : ${TARGET_URI}\n`);
+
+  try {
+    // 1. Analyse de l'édition elle-même
+    const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${TARGET_URI}&attributes=info|labels|claims|image`, REQUEST_OPTIONS);
+    const data = await res.json();
+    const entity = data.entities[TARGET_URI];
+
+    if (!entity) {
+      console.log(`❌ Entité introuvable sur l'API.`);
+      return;
+    }
+
+    console.log(`--- 1. DONNÉES DIRECTES DE L'ÉDITION ---`);
+    console.log(`Propriété 'image' native :`, entity.image || '❌ ABSENTE');
+    console.log(`Claim wdt:P18 (Image standard) :`, entity.claims?.['wdt:P18'] ? '✅ PRÉSENT' : '❌ ABSENT');
+    if (entity.claims?.['wdt:P18']) {
+       console.log(JSON.stringify(entity.claims['wdt:P18'], null, 2));
+    }
+
+    // 2. Recherche de l'oeuvre mère
+    const workClaim = entity.claims?.['wdt:P629']?.[0];
+    const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
+
+    console.log(`\n--- 2. ANALYSE DE L'OEUVRE MÈRE ---`);
+    if (!workUri) {
+      console.log(`❌ Aucune oeuvre mère liée (wdt:P629). Le pillage est impossible.`);
+      return;
+    }
+    console.log(`Oeuvre mère trouvée : ${workUri}`);
+
+    const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${workUri}&attributes=info|labels|claims|image`, REQUEST_OPTIONS);
+    const wData = await wRes.json();
+    const workEntity = wData.entities[workUri];
+
+    console.log(`Propriété 'image' sur l'oeuvre mère :`, workEntity?.image || '❌ ABSENTE');
+
+    // 3. Simulation du Pillage (Scavenging) exhaustif
+    console.log(`\n--- 3. TENTATIVE DE PILLAGE SUR LA FRATRIE ---`);
+    const sibRes = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`, REQUEST_OPTIONS);
+    const sibData = await sibRes.json();
+    const siblingUris = (sibData.uris || []).filter((u: string) => u !== TARGET_URI);
+
+    console.log(`Nombre total d'éditions soeurs : ${siblingUris.length}`);
+
+    if (siblingUris.length > 0) {
+      const imgRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(siblingUris.join('|'))}&attributes=image`, REQUEST_OPTIONS);
+      const imgData = await imgRes.json();
+
+      let foundCount = 0;
+      let firstFoundIndex = -1;
+
+      for (let i = 0; i < siblingUris.length; i++) {
+        const sUri = siblingUris[i];
+        if (imgData.entities?.[sUri]?.image) {
+          foundCount++;
+          if (firstFoundIndex === -1) firstFoundIndex = i;
+          console.log(`✅ [Soeur n°${i + 1}] ${sUri} POSSÈDE une couverture.`);
+        }
+      }
+      
+      if (foundCount === 0) {
+         console.log(`❌ AUCUNE soeur ne possède de couverture native.`);
+      } else {
+         console.log(`\n💡 BILAN DU PILLAGE : ${foundCount} couvertures disponibles sur ${siblingUris.length} soeurs.`);
+         if (firstFoundIndex >= 10) {
+             console.log(`⚠️ ALERTE : La première soeur avec une image est la n°${firstFoundIndex + 1}. Notre code actuel s'arrête à 10, voilà pourquoi il a échoué !`);
+         } else {
+             console.log(`✅ Le code actuel aurait dû trouver l'image sur la soeur n°${firstFoundIndex + 1}. Le problème vient d'ailleurs.`);
+         }
+      }
+    }
+
+  } catch (e) {
+    console.error("Erreur durant l'analyse :", e);
+  }
+}
+
+runCoverLab();
+
+
+################################################################################
 ### FICHIER : tsconfig.json
 ################################################################################
 
@@ -311,6 +478,159 @@ export default defineConfig({
     })
   ]
 });
+
+
+################################################################################
+### FICHIER : lab-step2.ts
+################################################################################
+
+// lab-step2-v2.ts
+const missingWorks = [
+  'wd:Q2877799',
+  'wd:Q3222978',
+  'wd:Q3222526',
+  'wd:Q2943496',
+  'wd:Q3225306',
+  'wd:Q3209391'
+];
+
+function getEditDistance(a: string, b: string): number {
+  if (!a) return b ? b.length : 0;
+  if (!b) return a ? a.length : 0;
+  const matrix: number[][] = [];
+  for (let i = 0; i <= a.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1].toLowerCase() === b[j - 1].toLowerCase() ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+function extractEntityTitle(entity: any, uri: string): string {
+  if (!entity) return 'SANS_TITRE_ENTITE_NULLE';
+  
+  let title = '';
+
+  // 1. Recherche dans les claims (Format Inventaire natif)
+  if (entity.claims && entity.claims['wdt:P1476']) {
+    const p1476 = entity.claims['wdt:P1476'][0];
+    // On fouille dans les différentes architectures possibles du JSON
+    title = p1476?.mainsnak?.datavalue?.value?.text || p1476?.datavalue?.value?.text || p1476?.value;
+    if (title && typeof title === 'string') return title;
+  }
+
+  // 2. Recherche dans les labels (Format Wikidata)
+  if (entity.labels) {
+    if (entity.labels.fr) title = typeof entity.labels.fr === 'string' ? entity.labels.fr : entity.labels.fr.value;
+    if (!title && entity.labels.en) title = typeof entity.labels.en === 'string' ? entity.labels.en : entity.labels.en.value;
+    if (title && typeof title === 'string') return title;
+  }
+  
+  if (entity.label) return entity.label;
+
+  // SONDE PROFONDE : Si on arrive ici, c'est qu'on n'a pas trouvé le titre
+  console.log(`\n    ⚠️ ATTENTION : Impossible de trouver le titre pour ${uri}. Voici la structure brute de ses claims :`);
+  console.log(`    ${JSON.stringify(entity.claims ? Object.keys(entity.claims) : 'Aucun claim', null, 2)}`);
+  
+  return 'SANS_TITRE';
+}
+
+async function runStep2() {
+  console.log(`\n======================================================`);
+  console.log(`=== ÉTAPE 2 (V2) : LE TAMIS (Avec extracteur de titres) ===`);
+  console.log(`======================================================\n`);
+
+  const physicalUris: string[] = [];
+  const workToEditionsMap: Record<string, string[]> = {};
+  const allEditionUrisToFetch = new Set<string>();
+
+  console.log(`[1/4] Récupération des éditions liées...`);
+  for (const workUri of missingWorks) {
+    try {
+      const res = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+      const data = await res.json();
+      const uris = data.uris || [];
+      workToEditionsMap[workUri] = uris;
+      uris.forEach((u: string) => allEditionUrisToFetch.add(u));
+    } catch (e) {
+      workToEditionsMap[workUri] = [];
+    }
+  }
+
+  console.log(`[2/4] Récupération des données complètes des ${allEditionUrisToFetch.size} éditions...`);
+  const editionDataMap: Record<string, any> = {};
+  const urisArray = Array.from(allEditionUrisToFetch);
+  for (let i = 0; i < urisArray.length; i += 50) {
+    const chunk = urisArray.slice(i, i + 50);
+    // ATTENTION : On a bien retiré &attributes=labels ici pour tout récupérer !
+    const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+    const data = await res.json();
+    Object.assign(editionDataMap, data.entities || {});
+  }
+
+  console.log(`[3/4] Récupération des données des ${missingWorks.length} oeuvres...`);
+  const workDataMap: Record<string, any> = {};
+  for (let i = 0; i < missingWorks.length; i += 50) {
+    const chunk = missingWorks.slice(i, i + 50);
+    const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+    const data = await res.json();
+    Object.assign(workDataMap, data.entities || {});
+  }
+
+  const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
+
+  console.log(`\n[4/4] ÉLECTION DE L'ÉDITION CANONIQUE\n`);
+  for (const workUri of missingWorks) {
+    console.log(`------------------------------------------------------`);
+    const workLabel = extractEntityTitle(workDataMap[workUri], workUri);
+    console.log(`Oeuvre analysée : ${workUri} ("${workLabel}")`);
+
+    const editions = workToEditionsMap[workUri] || [];
+    let validEditions = editions.filter(edUri => {
+      const edData = editionDataMap[edUri];
+      const edLabel = extractEntityTitle(edData, edUri);
+      return !JUNK_REGEX.test(edLabel);
+    });
+    
+    let targetEditions = validEditions.length > 0 ? validEditions : editions;
+    const nativeEditions = targetEditions.filter(edUri => edUri.startsWith('inv:'));
+    if (nativeEditions.length > 0) targetEditions = nativeEditions;
+
+    if (targetEditions.length === 1) {
+       console.log(`  ✅ FAST-PATH : 1 seul candidat -> ${targetEditions[0]}`);
+       physicalUris.push(targetEditions[0]);
+       continue;
+    }
+
+    let bestUri = targetEditions[0];
+    let bestScore = Infinity;
+    
+    console.log(`  Bataille Levenshtein :`);
+    for (const edUri of targetEditions) {
+      const edData = editionDataMap[edUri];
+      const edLabel = extractEntityTitle(edData, edUri);
+      const score = getEditDistance(workLabel, edLabel);
+      console.log(`    - ${edUri} ("${edLabel}") -> Score: ${score}`);
+      if (score < bestScore) {
+        bestScore = score;
+        bestUri = edUri;
+      }
+    }
+    
+    console.log(`  ✅ ÉLECTION : Meilleur score pour -> ${bestUri}`);
+    physicalUris.push(bestUri);
+  }
+
+  console.log(`\n======================================================`);
+  console.log(`[RÉSULTAT FINAL ÉTAPE 2 V2]`);
+  console.log(physicalUris);
+  console.log(`======================================================\n`);
+}
+
+runStep2();
 
 
 ################################################################################
@@ -4197,20 +4517,25 @@ define(['./workbox-f0c192c2'], (function (workbox) { 'use strict';
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 
 const isInitializing = ref(true);
 const router = useRouter(); 
+const route = useRoute(); // Permet de lire l'URL actuelle demandée
 
 onMounted(async () => {
   try {
     const isConnected = await connectionService.initializeApp();
     
     if (isConnected) {
-      router.push('/dashboard');
+      // On ne force le retour à l'accueil que si l'utilisateur arrive de la racine ou du login
+      if (route.path === '/login' || route.path === '/') {
+        router.push('/dashboard');
+      }
+      // Sinon, on le laisse tranquille sur sa page (ex: /debug, /series/...)
     } else {
       router.push('/login');
     }
@@ -4986,7 +5311,32 @@ export const TEXTS = {
       language: "Langue",
       format: "Format"
     }
+  },
+    bookStatus: {
+    owned: "Possédé",
+    wish: "À avoir",
+    none: "Non possédé"
+  },
+  seriesView: {
+    back: "Retour",
+    selectedCount: "sélectionnés",
+    emptySelection: "Aucun tome sélectionné",
+    loading: "Chargement des tomes...",
+    mixedSelectionError: "Sélection mixte impossible : vous avez coché des tomes possédés et non possédés à la fois.",
+    mixedSelectionAdvice: "Veuillez filtrer ou homogénéiser votre sélection pour appliquer une action groupée."
+  },
+  bookDetail: {
+    missingId: "Identifiant du livre manquant.",
+    cacheLog: "Non trouvé en cache, résolution réseau pour :",
+    fetchError: "Impossible de récupérer les détails de cette édition.",
+    loadError: "Une erreur est survenue lors de la récupération des données.",
+    btnBack: "← Retour",
+    btnSeries: "📚 Voir la saga",
+    loadingSpec: "Chargement des spécifications de l'édition...",
+    noCover: "Pas de couverture",
+    synopsis: "Synopsis"
   }
+
 };
 
 
@@ -5224,7 +5574,7 @@ body {
 }
 
 /* =========================================
-   FICHE LIVRE (BookResultCard) & METADONNEES
+   FICHE LIVRE & METADONNEES (BookDetailView)
 ========================================= */
 .result-card.success, .result-card.error {
   border: var(--border-width) solid var(--color-border);
@@ -5237,7 +5587,7 @@ body {
   background-color: var(--color-bg-alt);
 }
 
-.error-banner {
+.error-banner, .success-banner {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
   padding: var(--spacing-sm);
@@ -5314,7 +5664,6 @@ body {
   color: var(--color-text-muted);
 }
 
-/* Nouveaux blocs fil de fer pour structurer la donnée dense */
 .book-meta-group {
   border: var(--border-width) dashed var(--color-border);
   background-color: var(--color-bg-alt);
@@ -5371,6 +5720,144 @@ body {
 }
 
 /* =========================================
+   NAVIGATION (BookDetailView & SeriesView)
+========================================= */
+.nav-header, .series-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+}
+
+/* =========================================
+   GRILLE SÉRIES & MINI-CARTES
+========================================= */
+.series-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+
+
+.mini-card {
+  cursor: pointer;
+  width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+}
+
+.mini-card:hover {
+  background-color: var(--color-bg-alt);
+}
+
+.cover-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border-bottom: var(--border-width) solid var(--color-border);
+  background: var(--color-bg-alt);
+}
+
+.cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: var(--color-text-muted);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.fallback-title {
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.status-badge.owned {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+}
+
+.volume-number {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  padding: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.sticky-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: var(--color-bg-alt);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+@media (min-width: 600px) {
+  .sticky-action-bar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.selection-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.group-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+/* =========================================
    NOTIFICATIONS SYSTEME PWA (Toast)
 ========================================= */
 .pwa-toast {
@@ -5381,6 +5868,190 @@ body {
   z-index: 9999;
   max-width: 350px;
   width: calc(100% - 32px);
+}
+
+/* =========================================
+   NOUVELLE MISE EN PAGE : SÉRIES EN LISTE
+========================================= */
+
+.series-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+}
+
+.mini-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  cursor: pointer;
+  box-sizing: border-box;
+  padding-right: var(--spacing-md);
+}
+
+.mini-card-row:hover {
+  background-color: var(--color-bg-alt);
+}
+
+.row-cover-container {
+  flex-shrink: 0;
+  width: 60px;
+  height: 90px;
+  overflow: hidden;
+  border-right: var(--border-width) solid var(--color-border);
+  background: var(--color-bg-alt);
+  position: relative;
+}
+
+.row-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.row-cover-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  text-align: center;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.row-info-content {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.row-title {
+  font-size: 14px;
+  font-weight: bold;
+  margin: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-series-meta {
+  font-size: 12px;
+  color: var(--color-text-main);
+  margin: 0;
+}
+
+.row-authors {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
+.row-selection-area {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+}
+
+.row-cover-container .status-badge {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  top: 4px;
+  right: 4px;
+}
+
+.row-cover-container .volume-number {
+  padding: 2px;
+  font-size: 10px;
+}
+
+.item-checkbox {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  margin: 0;
+  accent-color: var(--color-border);
+}
+
+.row-status-text-column {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--spacing-sm);
+  min-width: 100px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.status-text-label {
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-text-label.owned {
+  color: var(--color-text-main);
+}
+
+.status-text-label.wish {
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.status-text-label.none {
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+/* src/ui/styles/theme.css */
+
+.mixed-error-container {
+  border: var(--border-width) dashed var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-sm) var(--spacing-md);
+  text-align: left;
+  width: 100%;
+}
+
+.error-text-line {
+  margin: 0 0 4px 0;
+  font-weight: bold;
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+.error-advice-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.row-selection-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;             /* Zone élargie à 50px pour le confort du pouce */
+  align-self: stretch;     /* S'étire sur TOUTE la hauteur de la ligne */
+  cursor: pointer;
+  background-color: rgba(0, 0, 0, 0.02); /* Légère délimitation tactile très subtile */
+  border-left: 1px dashed var(--color-border); /* Séparation visuelle claire */
+}
+
+.mini-card-row {
+  padding-right: 0px !important; /* On annule le padding pour que la zone cliquable aille jusqu'au bord droit */
 }
 
 
@@ -5404,6 +6075,93 @@ defineProps<{
   >
     <slot></slot>
   </button>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/components/BookMiniCard.vue
+################################################################################
+
+<script setup lang="ts">
+import { useRouter } from 'vue-router';
+import { TEXTS } from '../locales/fr';
+import type { HumanizedBook } from '../../core/types';
+
+const props = defineProps<{
+  book: HumanizedBook;
+  modelValue?: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: boolean): void;
+}>();
+
+const router = useRouter();
+
+const navigateToDetail = () => {
+  if (props.book.uri) {
+    router.push(`/book/${encodeURIComponent(props.book.uri)}`);
+  }
+};
+
+// Gestionnaire interne pour capter le clic sur toute la zone de droite
+const handleZoneClick = () => {
+  emit('update:modelValue', !props.modelValue);
+};
+</script>
+
+<template>
+  <div class="mini-card-row" @click="navigateToDetail">
+    
+    <div class="row-cover-container">
+      <img 
+        v-if="book.coverUrl" 
+        :src="book.coverUrl" 
+        :alt="book.title"
+        class="row-cover-image"
+      />
+      <div v-else class="row-cover-fallback">
+        <span class="fallback-title">{{ book.title }}</span>
+      </div>
+      
+      <div v-if="book.seriesNumber" class="volume-number">
+        T.{{ book.seriesNumber }}
+      </div>
+    </div>
+
+    <div class="row-info-content">
+      <p class="row-title">{{ book.title }}</p>
+      
+      <p v-if="book.series || book.seriesName" class="row-series-meta">
+        {{ book.series || book.seriesName }}
+        <span v-if="book.seriesNumber"> — Tome {{ book.seriesNumber }}</span>
+      </p>
+      
+      <p v-if="book.authors?.length" class="row-authors">
+        {{ book.authors.join(', ') }}
+      </p>
+    </div>
+
+    <div class="row-status-text-column">
+      <span :class="['status-text-label', book.ownershipStatus]">
+        {{ 
+          book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
+          book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : 
+          TEXTS.bookStatus.none 
+        }}
+      </span>
+    </div>
+
+    <div class="row-selection-area" @click.stop="handleZoneClick">
+      <input 
+        type="checkbox" 
+        class="wireframe-checkbox item-checkbox"
+        :checked="modelValue"
+        @change.stop="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
+      />
+    </div>
+
+  </div>
 </template>
 
 
@@ -5467,9 +6225,9 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'action-add-inventory', isbn: string): void;
-  (e: 'action-add-wishlist', isbn: string): void;
-  (e: 'action-lend', isbn: string): void;
+  (e: 'action-add-inventory', uri: string): void;
+  (e: 'action-add-wishlist', uri: string): void;
+  (e: 'action-lend', uri: string): void;
   (e: 'action-view-series', seriesId: string): void;
 }>();
 
@@ -5561,17 +6319,17 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
 
     <div class="book-actions-layout">
       <template v-if="!isOwned">
-        <BaseButton @click="emit('action-add-inventory', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-add-inventory', book.uri)">
           {{ TEXTS.bookCard.btnAddInventory }}
         </BaseButton>
         
-        <BaseButton @click="emit('action-add-wishlist', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-add-wishlist', book.uri)">
           {{ TEXTS.bookCard.btnAddWishlist }}
         </BaseButton>
       </template>
 
       <template v-else>
-        <BaseButton @click="emit('action-lend', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-lend', book.uri)">
           {{ TEXTS.bookCard.btnLend }}
         </BaseButton>
       </template>
@@ -5620,87 +6378,45 @@ defineEmits<{
 ################################################################################
 
 <script setup lang="ts">
-import { ref, watch, onMounted, nextTick } from 'vue';
-import { TEXTS } from '../locales/fr';
+import BookMiniCard from './BookMiniCard.vue';
 import type { HumanizedBook } from '../../core/types';
 
 const props = defineProps<{
   items: HumanizedBook[];
-  focusIdentifier?: string;
+  modelValue: string[]; // Reçoit le tableau des URIs sélectionnées
 }>();
 
 const emit = defineEmits<{
-  (e: 'update:selection', selectedIds: string[]): void;
+  (e: 'update:modelValue', selectedIds: string[]): void;
 }>();
 
-const selectedIds = ref<string[]>([]);
-
-watch(selectedIds, (newVal) => {
-  emit('update:selection', newVal);
-}, { deep: true });
-
-onMounted(async () => {
-  await nextTick();
-  if (props.focusIdentifier) {
-    const targetElement = document.getElementById(`book-item-${props.focusIdentifier}`);
-    if (targetElement) {
-      targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // La classe highlight-focus ajoutera un flash visuel noir (via CSS)
-      targetElement.classList.add('highlight-focus');
+// Gestion de la sélection individuelle d'une ligne
+const handleItemSelection = (uri: string, isSelected: boolean) => {
+  const currentSelection = [...props.modelValue];
+  if (isSelected) {
+    if (!currentSelection.includes(uri)) {
+      currentSelection.push(uri);
+    }
+  } else {
+    const index = currentSelection.indexOf(uri);
+    if (index > -1) {
+      currentSelection.splice(index, 1);
     }
   }
-});
-
-const toggleSelectAll = (selectAll: boolean) => {
-  if (selectAll) {
-    selectedIds.value = props.items.map(item => item.isbn13 || item.uri);
-  } else {
-    selectedIds.value = [];
-  }
+  // CRITICAL : On émet la nouvelle sélection pour mettre à jour le v-model du parent
+  emit('update:modelValue', currentSelection);
 };
-
-defineExpose({
-  toggleSelectAll,
-  selectedIds
-});
 </script>
 
 <template>
-  <div class="selectable-list-container">
-    <div 
+  <div class="series-list-container">
+    <BookMiniCard 
       v-for="item in items" 
-      :key="item.isbn13 || item.uri"
-      :id="`book-item-${item.isbn13 || item.uri}`"
-      class="list-item-card"
-    >
-      <div class="list-item-checkbox">
-        <input 
-          type="checkbox" 
-          class="wireframe-checkbox"
-          :value="item.isbn13 || item.uri" 
-          v-model="selectedIds"
-        />
-      </div>
-
-      <div class="list-item-thumbnail-wrapper">
-        <img v-if="item.coverUrl" :src="item.coverUrl" :alt="item.title" class="list-item-thumbnail" />
-        <div v-else class="list-item-thumbnail-placeholder">X</div>
-      </div>
-
-      <div class="list-item-info">
-        <p class="list-item-title">
-          <span v-if="item.seriesNumber">Tome {{ item.seriesNumber }} - </span>
-          {{ item.title }}
-        </p>
-        <p class="list-item-subtitle" v-if="item.subtitle">{{ item.subtitle }}</p>
-      </div>
-
-      <div class="list-item-badge">
-        <span class="badge" :class="item.ownershipStatus === 'owned' ? 'owned' : 'missing'">
-          {{ item.ownershipStatus === 'owned' ? TEXTS.bookCard.owned : TEXTS.bookCard.missing }}
-        </span>
-      </div>
-    </div>
+      :key="item.uri"
+      :book="item"
+      :modelValue="modelValue.includes(item.uri)"
+      @update:modelValue="(val) => handleItemSelection(item.uri, val)"
+    />
   </div>
 </template>
 
@@ -5748,6 +6464,305 @@ const closeToast = async () => {
       <button @click="closeToast" class="btn-pwa-close">
         {{ TEXTS.pwa.btnClose }}
       </button>
+    </div>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/views/DebugDbView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
+import { databaseService } from '../../core/database/database.service';
+import type { HumanizedBook } from '../../core/types';
+
+const allBooks = ref<HumanizedBook[]>([]);
+const searchQuery = ref('');
+const isLoading = ref(true);
+
+onMounted(async () => {
+  await loadDatabase();
+});
+
+const loadDatabase = async () => {
+  isLoading.value = true;
+  try {
+    allBooks.value = await databaseService.getAllBooksFromCache();
+  } catch (e) {
+    console.error("Erreur de chargement de la DB :", e);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const filteredBooks = computed(() => {
+  if (!searchQuery.value) return allBooks.value;
+  const q = searchQuery.value.toLowerCase();
+  return allBooks.value.filter(book => 
+    (book.title && book.title.toLowerCase().includes(q)) ||
+    (book.uri && book.uri.toLowerCase().includes(q)) ||
+    (book.workUri && book.workUri.toLowerCase().includes(q)) ||
+    (book.series && book.series.toLowerCase().includes(q))
+  );
+});
+
+const clearDatabase = async () => {
+  if (confirm('Vider intégralement le cache local ?')) {
+    await databaseService.cache_books.clear();
+    await loadDatabase();
+  }
+};
+</script>
+
+<template>
+  <div style="padding: 20px; font-family: monospace;">
+    <h2>🛠 Laboratoire Local (Dexie DB)</h2>
+    
+    <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+      <input 
+        v-model="searchQuery" 
+        placeholder="Rechercher par titre, URI, wd:..." 
+        style="padding: 8px; width: 300px; border: 1px solid #ccc;"
+      />
+      <button @click="loadDatabase" style="padding: 8px;">Rafraîchir</button>
+      <button @click="clearDatabase" style="padding: 8px; background: #e74c3c; color: white;">Vider le cache</button>
+    </div>
+
+    <div v-if="isLoading">Chargement de la base de données...</div>
+
+    <table v-else style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px;">
+      <thead>
+        <tr style="background: #eee;">
+          <th style="padding: 8px; border: 1px solid #ccc;">Couverture</th>
+          <th style="padding: 8px; border: 1px solid #ccc;">Titre</th>
+          <th style="padding: 8px; border: 1px solid #ccc;">Série & N°</th>
+          <th style="padding: 8px; border: 1px solid #ccc;">Édition (inv:)</th>
+          <th style="padding: 8px; border: 1px solid #ccc;">Œuvre (wd:)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="book in filteredBooks" :key="book.uri">
+          <td style="padding: 8px; border: 1px solid #ccc;">
+            <img v-if="book.coverUrl" :src="book.coverUrl" style="width: 40px; height: auto;" />
+            <span v-else>❌</span>
+          </td>
+          <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;">{{ book.title }}</td>
+          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.series || '-' }} (Tome {{ book.seriesNumber || '?' }})</td>
+          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.uri }}</td>
+          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.workUri || '-' }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top: 10px; color: #666;">Total en cache : {{ filteredBooks.length }} / {{ allBooks.length }}</p>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/views/BookDetailView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { databaseService } from '../../core/database/database.service';
+import { entityResolver } from '../../core/resolvers/entity.resolver';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BaseButton from '../components/BaseButton.vue';
+import { TEXTS } from '../locales/fr';
+import type { HumanizedBook } from '../../core/types';
+
+const route = useRoute();
+const router = useRouter();
+
+const book = ref<HumanizedBook | null>(null);
+const isLoading = ref(true);
+const errorMsg = ref('');
+const successMessage = ref('');
+
+const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
+const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series || !!book.value?.seriesName);
+const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || book.value?.seriesName || '');
+
+onMounted(async () => {
+  const uriParam = route.params.uri as string;
+  if (!uriParam) {
+    errorMsg.value = "Identifiant du livre manquant.";
+    isLoading.value = false;
+    return;
+  }
+
+  try {
+    const cached = await databaseService.getBookFromCache(uriParam);
+    if (cached) {
+      book.value = cached;
+      isLoading.value = false;
+      return;
+    }
+
+    console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
+    const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
+    if (resolved) {
+      book.value = resolved;
+    } else {
+      errorMsg.value = "Impossible de récupérer les détails de cette édition.";
+    }
+  } catch (e) {
+    console.error("[DETAIL VIEW] Erreur de chargement :", e);
+    errorMsg.value = "Une erreur est survenue lors de la récupération des données.";
+  } finally {
+    isLoading.value = false;
+  }
+});
+
+const goBack = () => {
+  router.back();
+};
+
+const navigateToSeries = () => {
+  if (seriesIdentifier.value) {
+    router.push({ name: 'SeriesView', params: { id: seriesIdentifier.value } });
+  }
+};
+
+const handleAddInventory = async () => {
+  if (!book.value?.uri) return;
+  errorMsg.value = '';
+  successMessage.value = '';
+  try {
+    book.value.ownershipStatus = 'owned';
+    successMessage.value = TEXTS.scanner?.addInventorySuccess || "Ajouté à l'inventaire";
+    await queueService.enqueueAction('ADD_INVENTORY', book.value.uri);
+  } catch (error) {
+    errorMsg.value = TEXTS.scanner?.errorQueue || "Erreur lors de l'ajout";
+  }
+};
+
+const handleAddWishlist = async () => {
+  if (!book.value?.uri) return;
+  errorMsg.value = '';
+  successMessage.value = '';
+  try {
+    book.value.ownershipStatus = 'wish';
+    successMessage.value = TEXTS.scanner?.addWishlistSuccess || "Ajouté à la wishlist";
+    await queueService.enqueueAction('ADD_WISHLIST', book.value.uri);
+  } catch (error) {
+    errorMsg.value = TEXTS.scanner?.errorQueue || "Erreur lors de l'ajout";
+  }
+};
+
+const handleLend = () => {
+  console.log("Ouverture du tunnel de prêt pour :", book.value?.uri);
+};
+</script>
+
+<template>
+  <div class="view-container detail-container">
+    <div class="nav-header">
+      <BaseButton @click="goBack">← Retour</BaseButton>
+      <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
+    </div>
+
+    <div v-if="isLoading" class="result-card">
+      <p>Chargement des spécifications de l'édition...</p>
+    </div>
+
+    <div v-else-if="errorMsg" class="result-card error">
+      <p>{{ errorMsg }}</p>
+      <BaseButton @click="goBack">Retourner à l'accueil</BaseButton>
+    </div>
+
+    <div v-else-if="book" class="result-card success">
+      <div v-if="successMessage" class="success-banner">
+        <p>✅ {{ successMessage }}</p>
+      </div>
+
+      <div class="book-card-layout">
+        <div v-if="!book.coverUrl" class="book-cover-placeholder">
+          Pas de<br>couverture
+        </div>
+        <img 
+          v-else 
+          :src="book.coverUrl" 
+          :alt="book.title" 
+          class="book-cover-image" 
+        />
+
+        <div class="book-info-layout">
+          <div>
+            <h3 class="book-title">{{ book.title }}</h3>
+            <h4 v-if="book.subtitle" class="book-subtitle">{{ book.subtitle }}</h4>
+          </div>
+
+          <div v-if="hasSeries" class="book-meta-group">
+            <p class="book-meta-item">
+              <strong>Série :</strong> 
+              {{ book.series || book.seriesName }}
+              <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
+            </p>
+          </div>
+
+          <div class="book-meta-group" v-if="book.authors?.length || book.scriptwriters?.length || book.illustrators?.length">
+            <p class="book-meta-item" v-if="book.authors?.length">
+              <strong>Auteur(s) :</strong> {{ book.authors.join(', ') }}
+            </p>
+            <p class="book-meta-item" v-if="book.scriptwriters?.length">
+              <strong>Scénariste(s) :</strong> {{ book.scriptwriters.join(', ') }}
+            </p>
+            <p class="book-meta-item" v-if="book.illustrators?.length">
+              <strong>Illustrateur(s) :</strong> {{ book.illustrators.join(', ') }}
+            </p>
+          </div>
+
+          <div class="book-meta-group">
+            <p class="book-meta-item" v-if="book.publisher">
+              <strong>Éditeur :</strong> {{ book.publisher }} 
+              <span v-if="book.collection">[{{ book.collection }}]</span>
+            </p>
+            <p class="book-meta-item" v-if="book.genres?.length">
+              <strong>Genres :</strong> {{ book.genres.join(', ') }}
+            </p>
+            <p class="book-meta-item" v-if="book.publishDate">
+              <strong>Parution :</strong> {{ book.publishDate }}
+            </p>
+            <p class="book-meta-item" v-if="book.pageCount">
+              <strong>Pages :</strong> {{ book.pageCount }}
+            </p>
+            <p class="book-meta-item" v-if="book.isbn13 || book.isbn">
+              <strong>ISBN :</strong> {{ book.isbn13 || book.isbn }}
+            </p>
+          </div>
+
+          <div class="badge-container">
+            <span class="badge" :class="isOwned ? 'owned' : 'missing'">
+              {{ isOwned ? 'Dans votre bibliothèque' : (book.ownershipStatus === 'wish' ? 'Dans votre liste d\'envies' : 'Non possédé') }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="book-description" v-if="book.description">
+        <h3 class="result-title">Synopsis</h3>
+        <p>{{ book.description }}</p>
+      </div>
+
+      <div class="book-actions-layout">
+        <template v-if="!isOwned">
+          <BaseButton @click="handleAddInventory">
+            Ajouter à l'inventaire
+          </BaseButton>
+          <BaseButton @click="handleAddWishlist">
+            Ajouter à la wishlist
+          </BaseButton>
+        </template>
+        <template v-else>
+          <BaseButton @click="handleLend">
+            Prêter
+          </BaseButton>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -5858,28 +6873,22 @@ import SelectableBookList from '../components/SelectableBookList.vue';
 import BaseButton from '../components/BaseButton.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
-
-// AJOUT CRUCIAL : Import de ton vrai resolver de série depuis le Middle-End
-import { seriesResolver } from '../../core/resolvers/series.resolver';
+import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
 const router = useRouter();
 
 const seriesId = computed(() => route.params.id as string);
-const focusIdentifier = computed(() => route.query.focus as string);
 
 const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 
-const bookListRef = ref<InstanceType<typeof SelectableBookList> | null>(null);
-
 const isAllSelected = computed(() => {
   return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
 });
 
-// Calcul intelligent du titre : on cherche le nom humain de la série dans le premier tome
 const seriesName = computed(() => {
   if (seriesTomes.value.length > 0) {
     return seriesTomes.value[0].series || seriesTomes.value[0].seriesName || seriesId.value;
@@ -5887,14 +6896,32 @@ const seriesName = computed(() => {
   return seriesId.value;
 });
 
+// Analyse sémantique de la sélection pour le message d'erreur guidé
+const selectedBooks = computed(() => {
+  return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
+});
+
+const hasOwnedSelected = computed(() => {
+  return selectedBooks.value.some(book => book.ownershipStatus === 'owned');
+});
+
+const hasUnownedSelected = computed(() => {
+  return selectedBooks.value.some(book => book.ownershipStatus !== 'owned');
+});
+
+const isSelectionMixed = computed(() => {
+  return hasOwnedSelected.value && hasUnownedSelected.value;
+});
+
 onMounted(async () => {
   isLoading.value = true;
   try {
-    // LE CÂBLAGE RÉEL : On appelle ton resolver qui va faire le "Windowing" (20 tomes urgents + background)
-    const tomes = await seriesResolver.getFullSeries(seriesId.value);
-    seriesTomes.value = tomes;
-  } catch (error) {
-    console.error("[VUE] Erreur lors du chargement de la série :", error);
+    const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+    if (context) {
+      seriesTomes.value = context.tomes;
+    }
+  } catch (e) {
+    console.error("Erreur lors du chargement sémantique de la saga :", e);
   } finally {
     isLoading.value = false;
   }
@@ -5905,37 +6932,45 @@ const handleBack = () => {
 };
 
 const toggleSelection = () => {
-  if (bookListRef.value) {
-    bookListRef.value.toggleSelectAll(!isAllSelected.value);
+  if (isAllSelected.value) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = seriesTomes.value.map(item => item.uri);
   }
-};
-
-const handleUpdateSelection = (ids: string[]) => {
-  selectedIds.value = ids;
 };
 
 const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
-  // Traitement optimiste pour la réactivité visuelle (Optimistic UI)
-  for (const id of selectedIds.value) {
-    await queueService.enqueueAction(action, id);
-    
-    // Mise à jour immédiate de la carte dans l'interface
-    const tome = seriesTomes.value.find(t => (t.isbn13 === id || t.uri === id));
-    if (tome) {
-      tome.ownershipStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
-    }
-  }
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
   
-  // Réinitialisation de la sélection une fois le travail envoyé en file d'attente
-  if (bookListRef.value) {
-     bookListRef.value.toggleSelectAll(false);
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
+    }
+    
+    seriesTomes.value = seriesTomes.value.map(tome => {
+      if (selectedIds.value.includes(tome.uri)) {
+        return {
+          ...tome,
+          ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish'
+        };
+      }
+      return tome;
+    });
+    
+    selectedIds.value = [];
+  } catch (error) {
+    console.error(`Erreur lors de l'exécution de l'action groupée ${action} :`, error);
   }
+};
+
+const handleGroupLend = () => {
+  if (isSelectionMixed.value) return;
+  console.log('Action de prêt groupée en cours de dev');
 };
 </script>
 
 <template>
-  <div class="series-view-container">
-    
+  <div class="view-container">
     <div class="series-header">
       <BaseButton @click="handleBack">
         {{ TEXTS.seriesView.back }}
@@ -5962,15 +6997,27 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
       </div>
 
       <div class="group-actions" v-if="selectedIds.length > 0">
-        <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
-          {{ TEXTS.bookCard.btnAddInventory }}
-        </BaseButton>
-        <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
-          {{ TEXTS.bookCard.btnAddWishlist }}
-        </BaseButton>
-        <BaseButton @click="console.log('Action de prêt groupée en cours de dev')">
-          {{ TEXTS.bookCard.btnLend }}
-        </BaseButton>
+        
+        <div v-if="isSelectionMixed" class="mixed-error-container">
+          <p class="error-text-line">⚠️ {{ TEXTS.seriesView.mixedSelectionError }}</p>
+          <p class="error-advice-line">{{ TEXTS.seriesView.mixedSelectionAdvice }}</p>
+        </div>
+
+        <template v-else-if="hasUnownedSelected">
+          <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
+            {{ TEXTS.bookCard.btnAddInventory }}
+          </BaseButton>
+          <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
+            {{ TEXTS.bookCard.btnAddWishlist }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="hasOwnedSelected">
+          <BaseButton @click="handleGroupLend">
+            {{ TEXTS.bookCard.btnLend }}
+          </BaseButton>
+        </template>
+        
       </div>
     </div>
 
@@ -5980,10 +7027,8 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
 
     <SelectableBookList 
       v-else
-      ref="bookListRef"
       :items="seriesTomes"
-      :focusIdentifier="focusIdentifier"
-      @update:selection="handleUpdateSelection"
+      v-model="selectedIds"
     />
   </div>
 </template>
@@ -5995,32 +7040,30 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
 
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { barcodeIsbnProvider } from '../../plugins/barcode/barcode-isbn.provider';
 import { manualIsbnProvider } from '../../plugins/manual/manual-isbn.provider';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
-import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BaseButton from '../components/BaseButton.vue';
-import BookResultCard from '../components/BookResultCard.vue';
 import { TEXTS } from '../locales/fr';
-import type { SearchResponse } from '../../core/types';
+
+const router = useRouter();
 
 const isScanningActive = ref(false);
 const isSearching = ref(false);
-
-const searchResult = ref<SearchResponse | null>(null);
 const errorMessage = ref<string | null>(null);
-const successMessage = ref<string | null>(null);
 
 const scannerId = 'barcode-scanner-viewport';
 const manualContainerId = 'manual-input-container';
 
 onMounted(() => {
   manualIsbnProvider.setup(manualContainerId, async (isbn) => {
-    resetStates();
+    errorMessage.value = null;
     try {
       const response = await searchService.searchByIsbn(isbn);
-      if (response) {
-        searchResult.value = response;
+      if (response && response.mainBook?.uri) {
+        // Redirection immédiate vers la vue de détail autonome
+        router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       } else {
         errorMessage.value = TEXTS.scanner.notFound;
       }
@@ -6030,14 +7073,8 @@ onMounted(() => {
   });
 });
 
-const resetStates = () => {
-  searchResult.value = null;
-  errorMessage.value = null;
-  successMessage.value = null;
-};
-
 const startScanningSequence = async () => {
-  resetStates();
+  errorMessage.value = null;
   isScanningActive.value = true;
   await nextTick();
 
@@ -6046,8 +7083,12 @@ const startScanningSequence = async () => {
     (response) => {
       isScanningActive.value = false;
       isSearching.value = false;
-      if (response) searchResult.value = response;
-      else errorMessage.value = TEXTS.scanner.notFound;
+      if (response && response.mainBook?.uri) {
+        // Redirection immédiate vers la vue de détail autonome
+        router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+      } else {
+        errorMessage.value = TEXTS.scanner.notFound;
+      }
     },
     (errorMsg) => {
       isScanningActive.value = false;
@@ -6067,43 +7108,6 @@ const stopScanningSequence = async () => {
 onUnmounted(async () => {
   await barcodeIsbnProvider.stopScanner();
 });
-
-const handleAddInventory = async (identifier: string) => {
-  errorMessage.value = null;
-  successMessage.value = null;
-  try {
-    if (searchResult.value) {
-      searchResult.value.ownership.isWorkOwned = true;
-      searchResult.value.ownership.isEditionOwned = true;
-    }
-    successMessage.value = TEXTS.scanner.addInventorySuccess;
-    await queueService.enqueueAction('ADD_INVENTORY', identifier);
-  } catch (error) {
-    errorMessage.value = TEXTS.scanner.errorQueue;
-  }
-};
-
-const handleAddWishlist = async (identifier: string) => {
-  errorMessage.value = null;
-  successMessage.value = null;
-  try {
-    if (searchResult.value) {
-      searchResult.value.ownership.isWished = true;
-    }
-    successMessage.value = TEXTS.scanner.addWishlistSuccess;
-    await queueService.enqueueAction('ADD_WISHLIST', identifier);
-  } catch (error) {
-    errorMessage.value = TEXTS.scanner.errorQueue;
-  }
-};
-
-const handleLend = (identifier: string) => {
-  console.log("Ouverture du tunnel de prêt pour :", identifier);
-};
-
-const handleViewSeries = (seriesId: string) => {
-  console.log("Recherche de la série :", seriesId);
-};
 </script>
 
 <template>
@@ -6134,19 +7138,6 @@ const handleViewSeries = (seriesId: string) => {
     <div v-if="errorMessage" class="error-banner">
       {{ errorMessage }}
     </div>
-    
-    <div v-if="successMessage" class="result-card success">
-      <p>✅ {{ successMessage }}</p>
-    </div>
-
-    <BookResultCard 
-      v-if="searchResult" 
-      :searchResult="searchResult" 
-      @action-add-inventory="handleAddInventory"
-      @action-add-wishlist="handleAddWishlist"
-      @action-lend="handleLend"
-      @action-view-series="handleViewSeries"
-    />
   </div>
 </template>
 
@@ -6564,6 +7555,7 @@ export const entityHumanizer = {
 
 // src/core/resolvers/workUri.resolver.ts
 import { databaseService } from '../database/database.service';
+import { configService } from '../services/config.service';
 
 /**
  * Calcule la distance de Levenshtein entre deux chaînes (Score de similarité)
@@ -6583,6 +7575,60 @@ function getEditDistance(a: string, b: string): number {
   return matrix[a.length][b.length];
 }
 
+/**
+ * Extrait intelligemment le titre d'une entité selon son format (Wikidata ou Inventaire natif)
+ */
+function extractEntityTitle(entity: any): string {
+  if (!entity) return '';
+  
+  // 1. Format Inventaire natif (révélé par la sonde) : un simple tableau de strings
+  if (entity.claims && entity.claims['wdt:P1476']) {
+    const titleClaim = entity.claims['wdt:P1476'][0];
+    
+    // Si la donnée est directement le texte (ex: ["Universal War One"])
+    if (typeof titleClaim === 'string') {
+      return titleClaim;
+    }
+    
+    // Au cas où ce serait le format complexe Wikidata standard
+    const complexTitle = titleClaim?.mainsnak?.datavalue?.value?.text || titleClaim?.datavalue?.value?.text || titleClaim?.value;
+    if (complexTitle && typeof complexTitle === 'string') {
+      return complexTitle;
+    }
+  }
+
+  // 2. Format classique Wikidata (dans le noeud labels)
+  if (entity.labels) {
+    if (entity.labels.fr) return typeof entity.labels.fr === 'string' ? entity.labels.fr : entity.labels.fr.value;
+    if (entity.labels.en) return typeof entity.labels.en === 'string' ? entity.labels.en : entity.labels.en.value;
+  }
+  
+  // 3. Dernier recours (fallback global)
+  if (entity.label && typeof entity.label === 'string') {
+    return entity.label;
+  }
+  
+  return '';
+}
+
+/**
+ * NOUVEAU : Vérifie si une édition est dans la langue souhaitée
+ */
+function hasLanguage(entity: any, expectedWdId: string): boolean {
+  if (!entity?.claims) return false;
+  // P407 = langue de l'œuvre, P364 = langue originale de l'œuvre
+  const langClaims = entity.claims['wdt:P407'] || entity.claims['wdt:P364']; 
+  if (!langClaims) return false;
+  
+  for (const claim of langClaims) {
+    if (typeof claim === 'string' && claim === expectedWdId) return true;
+    if (claim?.value === expectedWdId) return true;
+    if (claim?.mainsnak?.datavalue?.value?.id === expectedWdId) return true;
+    if (claim?.datavalue?.value?.id === expectedWdId) return true;
+  }
+  return false;
+}
+
 export const workUriResolver = {
   /**
    * Convertit une liste d'œuvres (wd:) en la meilleure liste d'éditions physiques (inv: ou isbn:)
@@ -6591,6 +7637,8 @@ export const workUriResolver = {
     console.group(`[WORK-URI RESOLVER] Concrétisation de ${workUris.length} œuvres...`);
     const physicalUris: string[] = [];
     const missingWorks: string[] = [];
+    
+    const preferredLangWd = configService.getPreferredLanguageWdCode();
 
     // 1. Barrière Locale (Cache-First)
     for (const uri of workUris) {
@@ -6631,7 +7679,7 @@ export const workUriResolver = {
       }
     }));
 
-    // 3. Récupération des Labels pour l'analyse sémantique (Mega-Batching)
+    // 3. Récupération des données pour l'analyse sémantique
     const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
     const editionDataMap: Record<string, any> = {};
     const urisArray = Array.from(allEditionUrisToFetch);
@@ -6640,11 +7688,11 @@ export const workUriResolver = {
     for (let i = 0; i < urisArray.length; i += CHUNK_SIZE) {
       const chunk = urisArray.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(editionDataMap, data.entities || {});
       } catch (e) {
-        console.error(`[WORK-URI RESOLVER] Erreur fetch labels éditions`, e);
+        console.error(`[WORK-URI RESOLVER] Erreur fetch données éditions`, e);
       }
     }
 
@@ -6652,7 +7700,7 @@ export const workUriResolver = {
     for (let i = 0; i < missingWorks.length; i += CHUNK_SIZE) {
       const chunk = missingWorks.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(workDataMap, data.entities || {});
       } catch (e) {}
@@ -6669,31 +7717,43 @@ export const workUriResolver = {
         continue;
       }
 
-      const workLabel = workDataMap[workUri]?.labels?.fr || workDataMap[workUri]?.labels?.en || workDataMap[workUri]?.label || '';
+      // Extraction du vrai titre
+      const workLabel = extractEntityTitle(workDataMap[workUri]);
 
-      // Filtrage par Regex
-      const validEditions = editions.filter(edUri => {
+      // CRITÈRE 0 : Barrière de la Langue (Priorité absolue)
+      const langEditions = editions.filter(edUri => hasLanguage(editionDataMap[edUri], preferredLangWd));
+      let targetEditions = langEditions.length > 0 ? langEditions : editions;
+
+      // Critère 1 : Filtrage par Regex (anti-bruit)
+      const validEditions = targetEditions.filter(edUri => {
         const edData = editionDataMap[edUri];
         if (!edData) return false;
-        const edLabel = edData.labels?.fr || edData.labels?.en || edData.label || '';
+        const edLabel = extractEntityTitle(edData);
         return !JUNK_REGEX.test(edLabel);
       });
 
       // Si la regex a tout supprimé, on annule le filtre par sécurité
-      const targetEditions = validEditions.length > 0 ? validEditions : editions;
+      targetEditions = validEditions.length > 0 ? validEditions : targetEditions;
 
+      // Critère 2 : Priorité stricte aux URIs natives (inv:)
+      const nativeEditions = targetEditions.filter(edUri => edUri.startsWith('inv:'));
+      if (nativeEditions.length > 0) {
+        targetEditions = nativeEditions;
+      }
+
+      // Re-Fast-Path après filtrages
       if (targetEditions.length === 1) {
         physicalUris.push(targetEditions[0]);
         continue;
       }
 
-      // Scoring de similarité (Levenshtein)
+      // Critère 3 : Scoring de similarité (Levenshtein) sur les titres réels
       let bestUri = targetEditions[0];
       let bestScore = Infinity;
 
       for (const edUri of targetEditions) {
         const edData = editionDataMap[edUri];
-        const edLabel = edData?.labels?.fr || edData?.labels?.en || edData?.label || '';
+        const edLabel = extractEntityTitle(edData);
         const score = getEditDistance(workLabel, edLabel);
         if (score < bestScore) {
           bestScore = score;
@@ -6803,74 +7863,6 @@ describe('Entity Humanizer', () => {
 
 
 ################################################################################
-### FICHIER : src/core/resolvers/series.resolver.test.ts
-################################################################################
-
-// src/core/resolvers/series.resolver.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { seriesResolver } from './series.resolver';
-import { databaseService } from '../database/database.service';
-import { syncOrchestrator } from '../orchestrators/sync.orchestrator';
-
-// --- MOCKING ---
-vi.mock('../database/database.service', () => ({
-  databaseService: {
-    getBookFromCache: vi.fn(),
-    getEditionByWorkFromCache: vi.fn(),
-    saveBookToCache: vi.fn()
-  }
-}));
-vi.mock('../services/inventory.service', () => ({
-  inventoryService: { isUriOwned: vi.fn() }
-}));
-vi.mock('../services/wishlist.service', () => ({
-  wishlistService: { isUriWished: vi.fn() }
-}));
-vi.mock('../orchestrators/sync.orchestrator', () => ({
-  syncOrchestrator: { hydrateRemainingSeries: vi.fn().mockResolvedValue(undefined) }
-}));
-
-globalThis.fetch = vi.fn();
-
-describe('Series Resolver (Windowing)', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('doit isoler 20 tomes urgents et envoyer le reste en arrière-plan', async () => {
-    const fakeUris = Array.from({length: 25}, (_, i) => `wd:Tome${i+1}`);
-    
-    vi.mocked(globalThis.fetch).mockImplementation(async (url: string | Request | URL) => {
-      const urlStr = url.toString();
-      if (urlStr.includes('action=series-list')) {
-        // CORRECTION : On s'aligne sur le nouveau Gateway qui renvoie 'uris'
-        return { json: async () => ({ uris: fakeUris }) } as any;
-      }
-      if (urlStr.includes('entities/by-uris')) {
-        const mockEntities: any = {};
-        fakeUris.forEach(uri => { mockEntities[uri] = { type: 'work', claims: {} }; });
-        return { json: async () => ({ entities: mockEntities }) } as any;
-      }
-      return { json: async () => ({}) } as any;
-    });
-
-    vi.mocked(databaseService.getBookFromCache).mockResolvedValue(undefined);
-    vi.mocked(databaseService.getEditionByWorkFromCache).mockResolvedValue(undefined);
-
-    await seriesResolver.getFullSeries('wd:SERIE_TEST');
-
-    expect(syncOrchestrator.hydrateRemainingSeries).toHaveBeenCalledTimes(1);
-    
-    const backgroundCallArg = vi.mocked(syncOrchestrator.hydrateRemainingSeries).mock.calls[0][0];
-    expect(backgroundCallArg.length).toBe(5);
-    
-    expect(backgroundCallArg).toContain('wd:Tome21');
-    expect(backgroundCallArg).toContain('wd:Tome25');
-  });
-});
-
-
-################################################################################
 ### FICHIER : src/core/resolvers/series.resolver.ts
 ################################################################################
 
@@ -6917,6 +7909,50 @@ import type { RawBook, HumanizedBook } from '../types';
 
 const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
 
+/**
+ * NOUVEAU : Fonction de "Scavenging" (Pillage).
+ * Si l'édition élue n'a pas de couverture, on emprunte celle d'une édition sœur.
+ */
+async function scavengeMissingImage(entityData: any, workUri: string, entityId: string): Promise<void> {
+  // Correction du bug `{}` : On vérifie que l'image existe ET qu'elle n'est pas un objet vide
+  const hasValidImage = entityData.image && (
+    typeof entityData.image === 'string' || 
+    (typeof entityData.image === 'object' && Object.keys(entityData.image).length > 0)
+  );
+
+  // Si on a déjà une vraie image ou si l'édition n'est reliée à aucune œuvre, on abandonne
+  if (hasValidImage || !workUri) return;
+
+  console.log(`[ENTITY RESOLVER] Couverture manquante (ou objet vide) pour ${entityId}. Début du pillage sur l'œuvre ${workUri}...`);
+  try {
+    const sibRes = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+    const sibData = await sibRes.json();
+    const siblingUris = (sibData.uris || []).filter((u: string) => u !== entityId);
+    
+    if (siblingUris.length === 0) return;
+
+    const topSiblings = siblingUris.slice(0, 10);
+    const imgRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(topSiblings.join('|'))}&attributes=image`);
+    const imgData = await imgRes.json();
+    
+    for (const sUri of topSiblings) {
+      const sisImage = imgData.entities?.[sUri]?.image;
+      const isValidSisImage = sisImage && (
+        typeof sisImage === 'string' || 
+        (typeof sisImage === 'object' && Object.keys(sisImage).length > 0)
+      );
+
+      if (isValidSisImage) {
+        console.log(`[ENTITY RESOLVER] ✅ Couverture trouvée chez la sœur : ${sUri}. Pillage réussi.`);
+        entityData.image = sisImage;
+        break;
+      }
+    }
+  } catch (e) {
+    console.warn(`[ENTITY RESOLVER] Échec du pillage de couverture :`, e);
+  }
+}
+
 export const entityResolver = {
   /**
    * Maintenu pour la compatibilité stricte avec d'éventuels appels ISBN résiduels
@@ -6945,6 +7981,8 @@ export const entityResolver = {
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       
+      await scavengeMissingImage(entityData, workUri, entityId);
+
       let workData = undefined;
       if (workUri) {
         const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
@@ -6987,6 +8025,8 @@ export const entityResolver = {
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       
+      await scavengeMissingImage(entityData, workUri, resolvedEntityId);
+
       let workData = undefined;
       if (workUri) {
         const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
@@ -7346,11 +8386,12 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
-import { seriesResolver } from '../resolvers/series.resolver';
-import { workUriResolver } from '../resolvers/workUri.resolver';
+//import { seriesResolver } from '../resolvers/series.resolver';
+//import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
-import type { SearchResponse, HumanizedBook } from '../types';
+import { seriesOrchestrator } from './series.orchestrator';
+import type { SearchResponse, /**HumanizedBook **/} from '../types';
 
 export const searchService = {
   /**
@@ -7410,43 +8451,9 @@ export const searchService = {
     // 4. PHASE EXPANSION : Contexte de Série
     let seriesContext = undefined;
     if (book.seriesId) {
-      console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
-      
-      // CORRECTION DU TYPAGE : Forcer l'utilisation de l'interface HumanizedBook
-      let tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(book.seriesId);
-      
-      if (tomes && tomes.length > 0) {
-        console.log(`[SEARCH] Shunt local activé : ${tomes.length} tomes trouvés directement en base pour la série ${book.seriesId}`);
-      } else {
-        console.log(`[SEARCH] Aucun tome en cache locale, exécution du workflow complet de résolution V2...`);
-        const workUris = await seriesResolver.getSeriesWorks(book.seriesId);
-        const physicalUris = await workUriResolver.resolveBulk(workUris);
-        
-        tomes = []; // Réinitialisation propre
-        for (const uri of physicalUris) {
-          let tomeLivre = await databaseService.getBookFromCache(uri);
-          if (!tomeLivre) {
-            tomeLivre = await entityResolver.resolvePhysicalEntity(uri);
-            if (tomeLivre) {
-              await bookCacheService.saveAndProcessImage(tomeLivre);
-            }
-          }
-          if (tomeLivre) {
-            tomes.push(tomeLivre);
-          }
-        }
-      }
-      
-      tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
-      const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
-      
-      seriesContext = {
-        id: book.seriesId,
-        name: book.series,
-        tomes: tomes,
-        ownedCount: ownedCount,
-        isComplete: tomes.length > 0 && ownedCount === tomes.length
-      };
+      console.log(`[SEARCH] Délégation de la série à seriesOrchestrator : ${book.seriesId}`);
+      // L'orchestrateur de série gère désormais le cache local ET le lancement de la synchro en fond
+      seriesContext = await seriesOrchestrator.getCompleteSeriesForUI(book.seriesId, book.series);
     }
 
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);
@@ -7474,6 +8481,64 @@ export const searchService = {
 
 
 ################################################################################
+### FICHIER : src/core/orchestrators/series.orchestrator.ts
+################################################################################
+
+// src/core/orchestrators/series.orchestrator.ts
+import { databaseService } from '../database/database.service';
+import { syncOrchestrator } from './sync.orchestrator';
+import type { SeriesContext, HumanizedBook } from '../types';
+
+export const seriesOrchestrator = {
+  /**
+   * Construit le contexte complet d'une série pour l'interface utilisateur.
+   * Récupère les données locales instantanément et déclenche une mise à jour en arrière-plan.
+   */
+  async getCompleteSeriesForUI(seriesId: string, seriesName?: string): Promise<SeriesContext | undefined> {
+    if (!seriesId) return undefined;
+
+    console.log(`[SERIES ORCHESTRATOR] Construction du paquet UI pour la série : ${seriesId}`);
+
+    // 1. Récupération instantanée depuis le cache local (Local-First)
+    const tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
+
+    // 2. CRITICAL FIX : On s'assure que le statut calculé correspond en temps réel aux registres locaux
+    for (const tome of tomes) {
+      const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri);
+      if (isInInventory) {
+        tome.ownershipStatus = 'owned';
+      } else {
+        const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri);
+        if (isInWishlist) {
+          tome.ownershipStatus = 'wish';
+        } else {
+          tome.ownershipStatus = 'none';
+        }
+      }
+    }
+
+    // 3. Fire & Forget : Aspiration des tomes manquants en arrière-plan
+    syncOrchestrator.hydrateSeriesInBackground(seriesId);
+
+    // 4. Tri des tomes par numéro
+    tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+    
+    // 5. Calcul des statistiques de possession
+    const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
+
+    // 6. Paquet "SeriesContext" standardisé et prêt à l'emploi pour le front
+    return {
+      id: seriesId,
+      name: seriesName,
+      tomes: tomes,
+      ownedCount: ownedCount,
+      isComplete: tomes.length > 0 && ownedCount === tomes.length
+    };
+  }
+};
+
+
+################################################################################
 ### FICHIER : src/core/orchestrators/queue.orchestrator.ts
 ################################################################################
 
@@ -7484,8 +8549,52 @@ import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import type { LendPayload, QueueActionPayload } from '../types';
 
+/**
+ * Utilitaire pour insérer une pause et éviter de surcharger l'API
+ */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const queueService = {
   isProcessing: false,
+
+  /**
+   * Applique instantanément les changements dans la base de données locale
+   * pour que le cache reste synchrone avec l'état de l'interface utilisateur.
+   */
+  async applyOptimisticUpdate(actionType: PendingAction['action'], uri: string): Promise<void> {
+    const cachedBook = await databaseService.getBookFromCache(uri);
+    
+    switch (actionType) {
+      case 'ADD_INVENTORY':
+        await databaseService.addRegistryEntry('inventory', uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'owned';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+      case 'ADD_WISHLIST':
+        await databaseService.addRegistryEntry('wishlist', uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'wish';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+      case 'REMOVE_INVENTORY':
+        await databaseService.removeRegistryEntry('inventory', uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'none';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+      case 'REMOVE_WISHLIST':
+        await databaseService.removeRegistryEntry('wishlist', uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'none';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+    }
+  },
 
   /**
    * Étape 1 de l'Optimistic UI : Enregistre une action en base locale pour libérer l'interface
@@ -7504,69 +8613,105 @@ export const queueService = {
 
     const actionId = await databaseService.savePendingAction(action);
     console.log(`[QUEUE] Trace sauvegardée localement (ID: ${actionId})`);
+    
+    await this.applyOptimisticUpdate(actionType, uri);
+    console.log(`[QUEUE] Mise à jour optimiste appliquée en base locale pour : ${uri}`);
+    
     console.groupEnd();
 
-    // Lancement "Fire and Forget" du traitement
+    // Lancement asynchrone du traitement groupé
     this.processQueue();
   },
 
   /**
-   * Étape 2 : Dépile et exécute séquentiellement les actions en attente vers le serveur
+   * Étape 2 : Dépile et exécute séquentiellement les actions en paquets (Batching)
    */
   async processQueue(): Promise<void> {
     if (this.isProcessing) return;
     this.isProcessing = true;
 
+    console.group(`[QUEUE] Démarrage du traitement par paquets (Anti-429)...`);
+
     try {
-      const actions = await databaseService.getPendingActions();
-      if (actions.length === 0) {
-        this.isProcessing = false;
-        return;
-      }
+      while (true) {
+        const actions = await databaseService.getPendingActions();
+        
+        if (actions.length === 0) {
+          console.log(`[QUEUE] 🎉 Toutes les actions groupées ont été transmises au serveur.`);
+          break;
+        }
 
-      console.group(`[QUEUE] Démarrage du traitement de ${actions.length} actions en attente...`);
+        const firstActionType = actions[0].action;
+        
+        // On extrait toutes les actions consécutives partageant exactement ce même type
+        const batch = actions.filter(a => a.action === firstActionType);
+        const urisToProcess = batch.map(a => a.uri);
+        const batchIds = batch.map(a => a.id).filter((id): id is number => id !== undefined);
 
-      for (const action of actions) {
-        if (!action.id) continue;
+        console.log(`[QUEUE] Création d'un paquet de type [${firstActionType}] contenant ${urisToProcess.length} éléments.`);
 
         try {
           let success = false;
 
-          // Aiguillage réseau selon le type d'action
-          switch (action.action) {
-            case 'LEND':
-              const lendPayload = action.payload as LendPayload;
-              success = await loanService.lend(action.uri, lendPayload?.friendName || 'Inconnu');
-              break;
-            case 'RETURN':
-              success = await loanService.returnBook(action.uri);
-              break;
+          // Aiguillage réseau vers les API d'Inventaire.io
+          switch (firstActionType) {
             case 'ADD_INVENTORY':
-              success = await inventoryService.addToLibrary(action.uri);
+              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToLibrary)
+              success = await inventoryService.addBulkToLibrary(urisToProcess);
               break;
             case 'ADD_WISHLIST':
-              success = await wishlistService.addToWishlist(action.uri);
+              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToWishlist)
+              success = await wishlistService.addBulkToWishlist(urisToProcess);
+              break;
+            case 'LEND':
+              const singleAction = batch[0];
+              const lendPayload = singleAction.payload as LendPayload;
+              success = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
+              if (success) {
+                await databaseService.deletePendingAction(singleAction.id!);
+              }
+              success = false;
+              break;
+            case 'RETURN':
+              const returnAction = batch[0];
+              success = await loanService.returnBook(returnAction.uri);
+              if (success) {
+                await databaseService.deletePendingAction(returnAction.id!);
+              }
+              success = false;
               break;
             default:
-              console.warn(`[QUEUE] Action non reconnue: ${action.action}`);
-              success = true; // Auto-validation pour purge
+              console.warn(`[QUEUE] Action non gérée en paquet : ${firstActionType}`);
+              success = true; 
           }
 
+          // Si le paquet réseau global est validé, on purge tous les tickets d'un coup
           if (success) {
-            console.log(`[QUEUE] ✅ Succès réseau pour ${action.action} sur ${action.uri}`);
-            await databaseService.deletePendingAction(action.id);
-          } else {
-            console.warn(`[QUEUE] ⚠️ Soft Fail pour ${action.action}. Mise en attente pour la prochaine synchronisation.`);
-            // Sortie de boucle immédiate en cas de perte de réseau pour ne pas bloquer les autres
+            console.log(`[QUEUE] ✅ Succès du paquet réseau [${firstActionType}]. Purge brute de ${batchIds.length} tickets localement.`);
+            for (const id of batchIds) {
+              await databaseService.deletePendingAction(id);
+            }
+            
+            // Temporisation de courtoisie de 500ms avant d'attaquer le paquet suivant
+            await sleep(500);
+          } else if (firstActionType !== 'LEND' && firstActionType !== 'RETURN') {
+            console.warn(`[QUEUE] ⚠️ Échec ou blocage du paquet [${firstActionType}]. Pause de la synchronisation.`);
             break; 
           }
 
         } catch (error: any) {
-           console.error(`[QUEUE] 💥 Hard Fail (Refus Serveur) pour ${action.action}:`, error);
-           await this.rollbackAction(action);
-           await databaseService.deletePendingAction(action.id);
+           console.error(`[QUEUE] 💥 Refus définitif du serveur pour le paquet [${firstActionType}]. Lancement des rollbacks individuels.`);
+           
+           for (const failedAction of batch) {
+             await this.rollbackAction(failedAction);
+             if (failedAction.id) {
+               await databaseService.deletePendingAction(failedAction.id);
+             }
+           }
         }
       }
+    } catch (queueError) {
+      console.error(`[QUEUE] Erreur critique dans la boucle de paquets :`, queueError);
     } finally {
       console.groupEnd();
       this.isProcessing = false;
@@ -7579,18 +8724,22 @@ export const queueService = {
   async rollbackAction(action: PendingAction): Promise<void> {
     console.warn(`[QUEUE] ⏪ Rollback local déclenché pour ${action.action} sur ${action.uri}`);
     
+    const cachedBook = await databaseService.getBookFromCache(action.uri);
+    if (cachedBook) {
+      cachedBook.ownershipStatus = 'none';
+      await databaseService.saveBookToCache(cachedBook);
+    }
+
     switch (action.action) {
       case 'LEND':
-        // Le serveur a refusé le prêt, on l'efface de notre carnet local
         await databaseService.deleteLoan(action.uri);
         break;
       case 'RETURN':
-        // Le retour a échoué, on reconstruit le prêt localement avec les bonnes données
         const restoredPayload = action.payload as LendPayload;
         await databaseService.saveLoan({
           uri: action.uri,
           friendName: restoredPayload?.friendName || 'Inconnu (Restauration)',
-          loanDate: action.createdAt // On utilise la date de l'action pour combler
+          loanDate: action.createdAt
         });
         break;
       case 'ADD_INVENTORY':
@@ -7600,10 +8749,6 @@ export const queueService = {
         await databaseService.removeRegistryEntry('wishlist', action.uri);
         break;
     }
-    
-    // NOTE ARCHITECTURE : 
-    // Plus tard, nous brancherons ici un EventBus (ou Pinia) pour pousser un "Toast" visuel
-    // à l'utilisateur : "La synchronisation du livre X a échoué."
   }
 };
 
@@ -7722,7 +8867,6 @@ export const syncOrchestrator = {
 
   /**
    * TÂCHE DE FOND : Pré-charge l'ensemble des tomes d'une liste de manière séquentielle
-   * CORRECTION : Accepte désormais un objet incluant le statut de possession attendu
    */
   async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[]): Promise<void> {
     const CHUNK_SIZE = 50;
@@ -7740,6 +8884,64 @@ export const syncOrchestrator = {
   },
 
   /**
+   * NOUVELLE MÉTHODE SÉCURISÉE : Aspire tous les tomes manquants d'une série en tâche de fond.
+   * Intègre un filtrage stricte en AMONT (Upstream Filtering) pour éviter les doublons 
+   * et économiser les appels réseaux inutiles.
+   */
+  async hydrateSeriesInBackground(seriesId: string): Promise<void> {
+    console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
+    try {
+      // 1. DRESSER LE BOUCLIER LOCAL
+      // On récupère instantanément ce qu'on a déjà pour cette série dans Dexie
+      const localTomes = await databaseService.getBooksBySeriesId(seriesId);
+      
+      // On crée un Set ultra-rapide contenant les URIs d'OEUVRES (wd:) déjà possédées
+      const localWorkUris = new Set<string>();
+      for (const tome of localTomes) {
+        if (tome.workUri) {
+          localWorkUris.add(tome.workUri);
+        }
+      }
+
+      console.log(`[BACKGROUND] ${localWorkUris.size} œuvres de la série sont déjà sécurisées en cache local.`);
+
+      // 2. RÉCUPÉRER LA LISTE CIBLE (Le collecteur)
+      const allSeriesWorks = await seriesResolver.getSeriesWorks(seriesId);
+
+      // 3. FILTRAGE EN AMONT (Le coupe-feu)
+      // On retire de la liste à traiter tout ce qu'on possède déjà.
+      const strictlyMissingWorks = allSeriesWorks.filter(workUri => !localWorkUris.has(workUri));
+
+      if (strictlyMissingWorks.length === 0) {
+        console.log(`[BACKGROUND] La série ${seriesId} est déjà intégralement en cache. Abandon de l'aspiration.`);
+        return;
+      }
+
+      console.log(`[BACKGROUND] ${strictlyMissingWorks.length} œuvres nécessitent réellement une résolution réseau...`);
+
+      // 4. RÉSOLUTION SÉMANTIQUE ALLÉGÉE
+      // On ne passe dans le goulot d'étranglement (Levenshtein) QUE les tomes manquants
+      const physicalUris = await workUriResolver.resolveBulk(strictlyMissingWorks);
+      
+      // 5. DOUBLE CHECK LOCAL ET PRÉPARATION À L'ASPIRATION
+      const missingTomes: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
+      for (const uri of physicalUris) {
+         if (!(await databaseService.getBookFromCache(uri))) {
+             // Les tomes aspirés passivement ont le statut 'none'
+             missingTomes.push({ uri, status: 'none' });
+         }
+      }
+      
+      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES
+      if (missingTomes.length > 0) {
+         await this.hydrateRemainingPhysicalEntities(missingTomes);
+      }
+    } catch (e) {
+      console.error(`[BACKGROUND] Erreur sur l'aspiration sécurisée de la saga ${seriesId}`, e);
+    }
+  },
+
+  /**
    * TÂCHE GLOBALE (V2.1) : S'assure que le cache est synchronisé avec les registres
    */
   async hydrateCacheInBackground(): Promise<void> {
@@ -7749,8 +8951,7 @@ export const syncOrchestrator = {
       const inventoryRaw = await databaseService.getAllRegistryUris('inventory');
       const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
       
-      // 2. CORRECTION CRITIQUE : On passe TOUT au crible du WorkResolver.
-      // L'inventaire peut contenir des 'wd:' si l'utilisateur a ajouté une oeuvre abstraite manuellement.
+      // 2. Filtrage sémantique
       console.log(`[HYDRATATION] Filtrage sémantique de l'Inventaire (${inventoryRaw.length}) et Wishlist (${wishlistRaw.length})...`);
       const inventoryPhysicalUris = await workUriResolver.resolveBulk(inventoryRaw);
       const wishlistPhysicalUris = await workUriResolver.resolveBulk(wishlistRaw);
@@ -7769,7 +8970,6 @@ export const syncOrchestrator = {
 
       // 4. Analyse du delta Local vs Wishlist
       for (const uri of wishlistPhysicalUris) {
-         // Si c'est possédé, on ignore la wishlist
          if (inventoryPhysicalUris.includes(uri)) continue;
 
          const livre = await databaseService.getBookFromCache(uri);
@@ -7792,7 +8992,6 @@ export const syncOrchestrator = {
       const seriesIds = new Set<string>();
       
       for (const book of localBooks) {
-        // book.ownershipStatus est désormais GARANTI d'être correct
         if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
           seriesIds.add(book.seriesId);
         }
@@ -7801,25 +9000,8 @@ export const syncOrchestrator = {
       if (seriesIds.size > 0) {
         console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesIds.size} séries...`);
         for (const seriesId of seriesIds) {
-          (async () => {
-             try {
-                const workUris = await seriesResolver.getSeriesWorks(seriesId);
-                const physicalUris = await workUriResolver.resolveBulk(workUris);
-                
-                const missingTomes: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
-                for (const uri of physicalUris) {
-                   if (!(await databaseService.getBookFromCache(uri))) {
-                       // Les tomes aspirés passivement ont le statut 'none'
-                       missingTomes.push({ uri, status: 'none' });
-                   }
-                }
-                if (missingTomes.length > 0) {
-                   await this.hydrateRemainingPhysicalEntities(missingTomes);
-                }
-             } catch (e) {
-                console.error(`[HYDRATATION] Erreur sur l'aspiration de la saga ${seriesId}`, e);
-             }
-          })();
+          // Appel de la version sécurisée
+          this.hydrateSeriesInBackground(seriesId);
         }
       }
 
@@ -8559,6 +9741,41 @@ export const imageService = {
 
 
 ################################################################################
+### FICHIER : src/core/services/config.service.ts
+################################################################################
+
+// src/core/services/config.service.ts
+
+export const configService = {
+  /**
+   * Détecte la langue de l'environnement et la convertit en Q-node Wikidata.
+   * Priorité : 1. Navigateur -> 2. Variable d'env (si existante) -> 3. Français
+   */
+  getPreferredLanguageWdCode(): string {
+    // 1. Récupération dynamique (sécurisée pour SSR / Web)
+    let langCode = 'fr';
+    if (typeof navigator !== 'undefined' && navigator.language) {
+      langCode = navigator.language.split('-')[0].toLowerCase(); // ex: "fr-FR" -> "fr"
+    }
+
+    // 2. Dictionnaire de traduction (Langue ISO -> Entité Wikidata)
+    const languageMap: Record<string, string> = {
+      'fr': 'wd:Q150',   // Français
+      'en': 'wd:Q1860',  // Anglais
+      'es': 'wd:Q1321',  // Espagnol
+      'de': 'wd:Q188',   // Allemand
+      'it': 'wd:Q1192',  // Italien
+      'ja': 'wd:Q5287',  // Japonais
+      'pt': 'wd:Q5146'   // Portugais
+    };
+
+    // 3. Fallback sur l'anglais si la langue système est inconnue
+    return languageMap[langCode] || languageMap['en'];
+  }
+};
+
+
+################################################################################
 ### FICHIER : src/plugins/manual/manual-isbn.provider.ts
 ################################################################################
 
@@ -8749,10 +9966,12 @@ export const sessionStore = {
 ### FICHIER : src/router/index.ts
 ################################################################################
 
-// src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
 import LoginView from '../ui/views/LoginView.vue';
 import DashboardView from '../ui/views/DashboardView.vue';
+import SeriesView from '../ui/views/SeriesView.vue';
+import DebugDbView from '../ui/views/DebugDbView.vue';
+import BookDetailView from '../ui/views/BookDetailView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -8767,11 +9986,32 @@ export const router = createRouter({
       name: 'dashboard',
       component: DashboardView
     },
-    // Redirection de sécurité : si on tape une URL qui n'existe pas
     {
+      path: '/series/:id',
+      name: 'SeriesView',
+      component: SeriesView
+    },
+    {
+      // La nouvelle route DOIT être déclarée ici, avant le catch-all
+      path: '/book/:uri',
+      name: 'BookDetail',
+      component: BookDetailView
+    },
+    {
+      path: '/debug',
+      name: 'debug',
+      component: DebugDbView
+    },
+    {
+      // Le filet de sécurité doit STRICTEMENT rester la dernière route du tableau
       path: '/:pathMatch(.*)*',
       redirect: '/login'
     }
   ]
+});
+
+router.beforeEach((to, from) => {
+  console.log(`[ROUTER] Navigation validée de '${from.path}' vers '${to.path}'`);
+  return true;
 });
 

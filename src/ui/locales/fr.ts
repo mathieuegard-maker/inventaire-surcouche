@@ -63,5 +63,30 @@ export const TEXTS = {
       language: "Langue",
       format: "Format"
     }
+  },
+    bookStatus: {
+    owned: "Possédé",
+    wish: "À avoir",
+    none: "Non possédé"
+  },
+  seriesView: {
+    back: "Retour",
+    selectedCount: "sélectionnés",
+    emptySelection: "Aucun tome sélectionné",
+    loading: "Chargement des tomes...",
+    mixedSelectionError: "Sélection mixte impossible : vous avez coché des tomes possédés et non possédés à la fois.",
+    mixedSelectionAdvice: "Veuillez filtrer ou homogénéiser votre sélection pour appliquer une action groupée."
+  },
+  bookDetail: {
+    missingId: "Identifiant du livre manquant.",
+    cacheLog: "Non trouvé en cache, résolution réseau pour :",
+    fetchError: "Impossible de récupérer les détails de cette édition.",
+    loadError: "Une erreur est survenue lors de la récupération des données.",
+    btnBack: "← Retour",
+    btnSeries: "📚 Voir la saga",
+    loadingSpec: "Chargement des spécifications de l'édition...",
+    noCover: "Pas de couverture",
+    synopsis: "Synopsis"
   }
+
 };

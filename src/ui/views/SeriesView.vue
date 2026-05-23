@@ -12,19 +12,15 @@ const route = useRoute();
 const router = useRouter();
 
 const seriesId = computed(() => route.params.id as string);
-const focusIdentifier = computed(() => route.query.focus as string);
 
 const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 
-const bookListRef = ref<InstanceType<typeof SelectableBookList> | null>(null);
-
 const isAllSelected = computed(() => {
   return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
 });
 
-// Calcul intelligent du titre : on cherche le nom humain de la série dans le premier tome
 const seriesName = computed(() => {
   if (seriesTomes.value.length > 0) {
     return seriesTomes.value[0].series || seriesTomes.value[0].seriesName || seriesId.value;
@@ -32,10 +28,26 @@ const seriesName = computed(() => {
   return seriesId.value;
 });
 
+// Analyse sémantique de la sélection pour le message d'erreur guidé
+const selectedBooks = computed(() => {
+  return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
+});
+
+const hasOwnedSelected = computed(() => {
+  return selectedBooks.value.some(book => book.ownershipStatus === 'owned');
+});
+
+const hasUnownedSelected = computed(() => {
+  return selectedBooks.value.some(book => book.ownershipStatus !== 'owned');
+});
+
+const isSelectionMixed = computed(() => {
+  return hasOwnedSelected.value && hasUnownedSelected.value;
+});
+
 onMounted(async () => {
   isLoading.value = true;
   try {
-    // Utilisation de notre orchestrateur réutilisable pour alimenter proprement l'interface
     const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
     if (context) {
       seriesTomes.value = context.tomes;
@@ -54,24 +66,19 @@ const handleBack = () => {
 const toggleSelection = () => {
   if (isAllSelected.value) {
     selectedIds.value = [];
-    bookListRef.value?.toggleSelectAll(false);
   } else {
-    // Sélection par URI pour être en phase complète avec le Middle-End
     selectedIds.value = seriesTomes.value.map(item => item.uri);
-    bookListRef.value?.toggleSelectAll(true);
   }
 };
 
 const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
-  if (selectedIds.value.length === 0) return;
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
   
   try {
-    // Envoi séquentiel des actions dans la file d'attente Optimistic UI
     for (const uri of selectedIds.value) {
       await queueService.enqueueAction(action, uri);
     }
     
-    // Rafraîchissement optimiste et réactif de l'UI locale
     seriesTomes.value = seriesTomes.value.map(tome => {
       if (selectedIds.value.includes(tome.uri)) {
         return {
@@ -82,18 +89,14 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
       return tome;
     });
     
-    // Réinitialisation des sélections
     selectedIds.value = [];
-    if (bookListRef.value) {
-      bookListRef.value.toggleSelectAll(false);
-    }
   } catch (error) {
     console.error(`Erreur lors de l'exécution de l'action groupée ${action} :`, error);
   }
 };
 
-// CORRECTION 1 : Déclaration d'une fonction valide pour le bouton Prêter
 const handleGroupLend = () => {
+  if (isSelectionMixed.value) return;
   console.log('Action de prêt groupée en cours de dev');
 };
 </script>
@@ -102,7 +105,7 @@ const handleGroupLend = () => {
   <div class="view-container">
     <div class="series-header">
       <BaseButton @click="handleBack">
-        {{ TEXTS.seriesView?.back || 'Retour' }}
+        {{ TEXTS.seriesView.back }}
       </BaseButton>
       <h2>{{ seriesName }}</h2>
       <p v-if="!isLoading">{{ seriesTomes.length }} tomes dans la série</p>
@@ -119,35 +122,45 @@ const handleGroupLend = () => {
         />
         <span>
           {{ selectedIds.length > 0 
-            ? `${selectedIds.length} ${TEXTS.seriesView?.selectedCount || 'sélectionnés'}` 
-            : (TEXTS.seriesView?.emptySelection || 'Aucun tome sélectionné') 
+            ? `${selectedIds.length} ${TEXTS.seriesView.selectedCount}` 
+            : TEXTS.seriesView.emptySelection 
           }}
         </span>
       </div>
 
       <div class="group-actions" v-if="selectedIds.length > 0">
-        <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
-          {{ TEXTS.bookCard?.btnAddInventory || 'Ajouter à l\'inventaire' }}
-        </BaseButton>
-        <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
-          {{ TEXTS.bookCard?.btnAddWishlist || 'Ajouter à la wishlist' }}
-        </BaseButton>
-        <BaseButton @click="handleGroupLend">
-          {{ TEXTS.bookCard?.btnLend || 'Prêter' }}
-        </BaseButton>
+        
+        <div v-if="isSelectionMixed" class="mixed-error-container">
+          <p class="error-text-line">⚠️ {{ TEXTS.seriesView.mixedSelectionError }}</p>
+          <p class="error-advice-line">{{ TEXTS.seriesView.mixedSelectionAdvice }}</p>
+        </div>
+
+        <template v-else-if="hasUnownedSelected">
+          <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
+            {{ TEXTS.bookCard.btnAddInventory }}
+          </BaseButton>
+          <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
+            {{ TEXTS.bookCard.btnAddWishlist }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="hasOwnedSelected">
+          <BaseButton @click="handleGroupLend">
+            {{ TEXTS.bookCard.btnLend }}
+          </BaseButton>
+        </template>
+        
       </div>
     </div>
 
     <div v-if="isLoading" class="result-card">
-      {{ TEXTS.seriesView?.loading || 'Chargement des tomes...' }}
+      {{ TEXTS.seriesView.loading }}
     </div>
 
     <SelectableBookList 
       v-else
-      ref="bookListRef"
       :items="seriesTomes"
-      :focusIdentifier="focusIdentifier"
-      @update:selection="selectedIds = $event"
+      v-model="selectedIds"
     />
   </div>
 </template>

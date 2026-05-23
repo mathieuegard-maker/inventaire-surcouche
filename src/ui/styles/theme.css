@@ -228,7 +228,7 @@ body {
 }
 
 /* =========================================
-   FICHE LIVRE (BookResultCard) & METADONNEES
+   FICHE LIVRE & METADONNEES (BookDetailView)
 ========================================= */
 .result-card.success, .result-card.error {
   border: var(--border-width) solid var(--color-border);
@@ -241,7 +241,7 @@ body {
   background-color: var(--color-bg-alt);
 }
 
-.error-banner {
+.error-banner, .success-banner {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
   padding: var(--spacing-sm);
@@ -318,7 +318,6 @@ body {
   color: var(--color-text-muted);
 }
 
-/* Nouveaux blocs fil de fer pour structurer la donnée dense */
 .book-meta-group {
   border: var(--border-width) dashed var(--color-border);
   background-color: var(--color-bg-alt);
@@ -375,6 +374,144 @@ body {
 }
 
 /* =========================================
+   NAVIGATION (BookDetailView & SeriesView)
+========================================= */
+.nav-header, .series-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+}
+
+/* =========================================
+   GRILLE SÉRIES & MINI-CARTES
+========================================= */
+.series-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+
+
+.mini-card {
+  cursor: pointer;
+  width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+}
+
+.mini-card:hover {
+  background-color: var(--color-bg-alt);
+}
+
+.cover-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  overflow: hidden;
+  border-bottom: var(--border-width) solid var(--color-border);
+  background: var(--color-bg-alt);
+}
+
+.cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cover-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: var(--color-text-muted);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.fallback-title {
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 24px;
+  height: 24px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.status-badge.owned {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+}
+
+.volume-number {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  padding: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.sticky-action-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background-color: var(--color-bg-alt);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+
+@media (min-width: 600px) {
+  .sticky-action-bar {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+.selection-status {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.group-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+/* =========================================
    NOTIFICATIONS SYSTEME PWA (Toast)
 ========================================= */
 .pwa-toast {
@@ -385,4 +522,188 @@ body {
   z-index: 9999;
   max-width: 350px;
   width: calc(100% - 32px);
+}
+
+/* =========================================
+   NOUVELLE MISE EN PAGE : SÉRIES EN LISTE
+========================================= */
+
+.series-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+}
+
+.mini-card-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  cursor: pointer;
+  box-sizing: border-box;
+  padding-right: var(--spacing-md);
+}
+
+.mini-card-row:hover {
+  background-color: var(--color-bg-alt);
+}
+
+.row-cover-container {
+  flex-shrink: 0;
+  width: 60px;
+  height: 90px;
+  overflow: hidden;
+  border-right: var(--border-width) solid var(--color-border);
+  background: var(--color-bg-alt);
+  position: relative;
+}
+
+.row-cover-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.row-cover-fallback {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 9px;
+  text-align: center;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.row-info-content {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.row-title {
+  font-size: 14px;
+  font-weight: bold;
+  margin: 0;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-series-meta {
+  font-size: 12px;
+  color: var(--color-text-main);
+  margin: 0;
+}
+
+.row-authors {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin: 0;
+  font-style: italic;
+}
+
+.row-selection-area {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+}
+
+.row-cover-container .status-badge {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+  top: 4px;
+  right: 4px;
+}
+
+.row-cover-container .volume-number {
+  padding: 2px;
+  font-size: 10px;
+}
+
+.item-checkbox {
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  margin: 0;
+  accent-color: var(--color-border);
+}
+
+.row-status-text-column {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 var(--spacing-sm);
+  min-width: 100px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.status-text-label {
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.status-text-label.owned {
+  color: var(--color-text-main);
+}
+
+.status-text-label.wish {
+  font-style: italic;
+  color: var(--color-text-muted);
+}
+
+.status-text-label.none {
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+/* src/ui/styles/theme.css */
+
+.mixed-error-container {
+  border: var(--border-width) dashed var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-sm) var(--spacing-md);
+  text-align: left;
+  width: 100%;
+}
+
+.error-text-line {
+  margin: 0 0 4px 0;
+  font-weight: bold;
+  font-size: 14px;
+  text-transform: uppercase;
+}
+
+.error-advice-line {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.row-selection-area {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50px;             /* Zone élargie à 50px pour le confort du pouce */
+  align-self: stretch;     /* S'étire sur TOUTE la hauteur de la ligne */
+  cursor: pointer;
+  background-color: rgba(0, 0, 0, 0.02); /* Légère délimitation tactile très subtile */
+  border-left: 1px dashed var(--color-border); /* Séparation visuelle claire */
+}
+
+.mini-card-row {
+  padding-right: 0px !important; /* On annule le padding pour que la zone cliquable aille jusqu'au bord droit */
 }
