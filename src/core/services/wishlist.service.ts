@@ -80,34 +80,57 @@ export const wishlistService = {
 
   async addToWishlist(editionUri: string): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
+    
+    // CRITICAL FIX : Extraction du workUri depuis le cache local car le serveur refuse les éditions physiques dans cette liste
+    const cachedBook = await databaseService.getBookFromCache(editionUri);
+    const targetUri = cachedBook?.workUri || editionUri;
+
     const res = await fetch('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: [editionUri] })
+      body: JSON.stringify({ id: this.wishlistId, uris: [targetUri] })
     });
     const data = await res.json();
     if (!res.ok) {
       console.error("[WISHLIST ADD ERROR]", data);
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
+    
+    // Double sauvegarde locale pour assurer la réactivité de la vue Série et la cohérence au rechargement
     await databaseService.addRegistryEntry('wishlist', editionUri);
+    if (cachedBook?.workUri) {
+      await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
+    }
     return true;
   },
 
   async addBulkToWishlist(editionUris: string[]): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
+    
+    // CRITICAL FIX : Résolution asynchrone groupée pour obtenir les identifiants d'œuvres correspondants
+    const targetUris = await Promise.all(editionUris.map(async (uri) => {
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      return cachedBook?.workUri || uri;
+    }));
+
     const res = await fetch('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: editionUris })
+      body: JSON.stringify({ id: this.wishlistId, uris: targetUris })
     });
     const data = await res.json();
     if (!res.ok) {
       console.error("[WISHLIST BULK ADD ERROR]", data);
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
+    
+    // Enregistrement des correspondances en base locale pour chaque tome traité
     for (const uri of editionUris) {
       await databaseService.addRegistryEntry('wishlist', uri);
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      if (cachedBook?.workUri) {
+        await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
+      }
     }
     return true;
   },
@@ -116,14 +139,24 @@ export const wishlistService = {
     if (!this.wishlistId) return false;
     if (uris.length === 0) return true;
 
+    // Pour le retrait, on nettoie les deux types d'URIs (œuvres et éditions) pour éviter tout résidu
+    const targetUris = new Set<string>();
+    for (const uri of uris) {
+      targetUris.add(uri);
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      if (cachedBook?.workUri) {
+        targetUris.add(cachedBook.workUri);
+      }
+    }
+
     const res = await fetch('/api/gateway?action=lists-remove-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: uris })
+      body: JSON.stringify({ id: this.wishlistId, uris: Array.from(targetUris) })
     });
     const data = await res.json();
     if (res.ok) {
-      for (const uri of uris) {
+      for (const uri of targetUris) {
          await databaseService.removeRegistryEntry('wishlist', uri);
       }
       return true;

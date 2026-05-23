@@ -23,6 +23,13 @@ export const queueService = {
     switch (actionType) {
       case 'ADD_INVENTORY':
         await databaseService.addRegistryEntry('inventory', uri);
+        
+        // CRITICAL CASCADE LOCALE : Suppression instantanée de la wishlist locale (édition + œuvre abstraite)
+        await databaseService.removeRegistryEntry('wishlist', uri);
+        if (cachedBook?.workUri) {
+          await databaseService.removeRegistryEntry('wishlist', cachedBook.workUri);
+        }
+        
         if (cachedBook) {
           cachedBook.ownershipStatus = 'owned';
           await databaseService.saveBookToCache(cachedBook);
@@ -112,11 +119,19 @@ export const queueService = {
           // Aiguillage réseau vers les API d'Inventaire.io
           switch (firstActionType) {
             case 'ADD_INVENTORY':
-              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToLibrary)
               success = await inventoryService.addBulkToLibrary(urisToProcess);
+              
+              // CRITICAL CASCADE DISTANTE : Si l'ajout à l'inventaire réussit, on nettoie en lot la Wishlist distante
+              if (success) {
+                try {
+                  console.log(`[QUEUE] Cascade Réseau : Nettoyage automatique de la Wishlist pour ${urisToProcess.length} éléments...`);
+                  await wishlistService.removeFromWishlist(urisToProcess);
+                } catch (wishCascadeError) {
+                  console.error(`[QUEUE] ⚠️ Échec non-bloquant du nettoyage de la Wishlist sur le serveur :`, wishCascadeError);
+                }
+              }
               break;
             case 'ADD_WISHLIST':
-              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToWishlist)
               success = await wishlistService.addBulkToWishlist(urisToProcess);
               break;
             case 'LEND':

@@ -16,13 +16,18 @@ export const seriesOrchestrator = {
     // 1. Récupération instantanée depuis le cache local (Local-First)
     const tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
 
-    // 2. CRITICAL FIX : On s'assure que le statut calculé correspond en temps réel aux registres locaux
+    // 2. CRITICAL FIX : Double-check sémantique (Édition + Œuvre) pour synchroniser l'inventaire et la Wishlist serveur
     for (const tome of tomes) {
-      const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri);
+      // Vérification de l'inventaire (soit l'édition physique, soit l'œuvre abstraite)
+      const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri) || 
+                            (tome.workUri ? await databaseService.isUriInRegistry('inventory', tome.workUri) : false);
+      
       if (isInInventory) {
         tome.ownershipStatus = 'owned';
       } else {
-        const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri);
+        // Vérification de la Wishlist (soit l'édition physique, soit l'œuvre abstraite de type workUri)
+        const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri) || 
+                             (tome.workUri ? await databaseService.isUriInRegistry('wishlist', tome.workUri) : false);
         if (isInWishlist) {
           tome.ownershipStatus = 'wish';
         } else {
