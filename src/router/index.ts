@@ -5,7 +5,8 @@ import DashboardView from '../ui/views/DashboardView.vue';
 import SeriesView from '../ui/views/SeriesView.vue';
 import DebugDbView from '../ui/views/DebugDbView.vue';
 import BookDetailView from '../ui/views/BookDetailView.vue';
-import CollectionView from '../ui/views/CollectionView.vue'; // AJOUT : Importation du catalogue
+import CollectionView from '../ui/views/CollectionView.vue';
+import WishlistView from '../ui/views/WishlistView.vue'; // AJOUT : Importation de la liste d'envies
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -29,6 +30,11 @@ export const router = createRouter({
       path: '/collection',
       name: 'CollectionView',
       component: CollectionView
+    },
+    {
+      path: '/wishlist',
+      name: 'WishlistView',
+      component: WishlistView
     },
     {
       path: '/book/:uri',

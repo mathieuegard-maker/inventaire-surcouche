@@ -22,7 +22,6 @@ onMounted(() => {
     try {
       const response = await searchService.searchByIsbn(isbn);
       if (response && response.mainBook?.uri) {
-        // Redirection immédiate vers la vue de détail autonome
         router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       } else {
         errorMessage.value = TEXTS.scanner.notFound;
@@ -44,7 +43,6 @@ const startScanningSequence = async () => {
       isScanningActive.value = false;
       isSearching.value = false;
       if (response && response.mainBook?.uri) {
-        // Redirection immédiate vers la vue de détail autonome
         router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       } else {
         errorMessage.value = TEXTS.scanner.notFound;
@@ -61,6 +59,10 @@ const startScanningSequence = async () => {
 
 const navigateToCollection = () => {
   router.push({ name: 'CollectionView' });
+};
+
+const navigateToWishlist = () => {
+  router.push({ name: 'WishlistView' });
 };
 
 const stopScanningSequence = async () => {
@@ -89,7 +91,13 @@ onUnmounted(async () => {
 
     <div class="action-section">
       <BaseButton @click="navigateToCollection">
-        {{ TEXTS.collectionView.title }}
+        {{ TEXTS.collectionView?.title }}
+      </BaseButton>
+    </div>
+
+    <div class="action-section">
+      <BaseButton @click="navigateToWishlist">
+        {{ TEXTS.wishlistView?.title }}
       </BaseButton>
     </div>
 

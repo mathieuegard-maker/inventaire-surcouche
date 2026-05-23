@@ -138,5 +138,14 @@ batchActionBar: {
 },
 baseLoading: {
   message: "Chargement des données en cours..."
+},
+// À insérer à la racine de l'objet TEXTS :
+wishlistView: {
+  title: "Ma Wishlist",
+  emptyWishlist: "Votre liste d'envies est actuellement vide.",
+  filterAuthorLabel: "Filtrer par auteur :",
+  filterAuthorAll: "Tous les auteurs",
+  independentBooks: "Ouvrages indépendants",
+  seriesSection: "Série : "
 }
 };

@@ -7,7 +7,7 @@ const props = defineProps<{
   modelValue: boolean; // État de la checkbox maîtresse (isAllSelected)
   selectedCount: number;
   isMixed: boolean;
-  context: 'unowned' | 'owned' | 'lent';
+  context: 'unowned' | 'owned' | 'lent' | 'wishlist'; // AJOUT : Type sémantique spécifique
 }>();
 
 const emit = defineEmits<{
@@ -51,6 +51,12 @@ const checkboxState = computed({
           </BaseButton>
           <BaseButton @click="emit('execute', 'ADD_WISHLIST')">
             {{ TEXTS.bookCard?.btnAddWishlist }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="context === 'wishlist'">
+          <BaseButton @click="emit('execute', 'ADD_INVENTORY')">
+            {{ TEXTS.bookCard?.btnAddInventory }}
           </BaseButton>
         </template>
 
