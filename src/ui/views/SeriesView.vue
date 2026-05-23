@@ -5,9 +5,7 @@ import SelectableBookList from '../components/SelectableBookList.vue';
 import BaseButton from '../components/BaseButton.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
-
-// AJOUT CRUCIAL : Import de ton vrai resolver de série depuis le Middle-End
-import { seriesResolver } from '../../core/resolvers/series.resolver';
+import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
@@ -37,11 +35,13 @@ const seriesName = computed(() => {
 onMounted(async () => {
   isLoading.value = true;
   try {
-    // LE CÂBLAGE RÉEL : On appelle ton resolver qui va faire le "Windowing" (20 tomes urgents + background)
-    const tomes = await seriesResolver.getFullSeries(seriesId.value);
-    seriesTomes.value = tomes;
-  } catch (error) {
-    console.error("[VUE] Erreur lors du chargement de la série :", error);
+    // Utilisation de notre orchestrateur réutilisable pour alimenter proprement l'interface
+    const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+    if (context) {
+      seriesTomes.value = context.tomes;
+    }
+  } catch (e) {
+    console.error("Erreur lors du chargement sémantique de la saga :", e);
   } finally {
     isLoading.value = false;
   }
@@ -52,40 +52,57 @@ const handleBack = () => {
 };
 
 const toggleSelection = () => {
-  if (bookListRef.value) {
-    bookListRef.value.toggleSelectAll(!isAllSelected.value);
+  if (isAllSelected.value) {
+    selectedIds.value = [];
+    bookListRef.value?.toggleSelectAll(false);
+  } else {
+    // Sélection par URI pour être en phase complète avec le Middle-End
+    selectedIds.value = seriesTomes.value.map(item => item.uri);
+    bookListRef.value?.toggleSelectAll(true);
   }
-};
-
-const handleUpdateSelection = (ids: string[]) => {
-  selectedIds.value = ids;
 };
 
 const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
-  // Traitement optimiste pour la réactivité visuelle (Optimistic UI)
-  for (const id of selectedIds.value) {
-    await queueService.enqueueAction(action, id);
-    
-    // Mise à jour immédiate de la carte dans l'interface
-    const tome = seriesTomes.value.find(t => (t.isbn13 === id || t.uri === id));
-    if (tome) {
-      tome.ownershipStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
-    }
-  }
+  if (selectedIds.value.length === 0) return;
   
-  // Réinitialisation de la sélection une fois le travail envoyé en file d'attente
-  if (bookListRef.value) {
-     bookListRef.value.toggleSelectAll(false);
+  try {
+    // Envoi séquentiel des actions dans la file d'attente Optimistic UI
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
+    }
+    
+    // Rafraîchissement optimiste et réactif de l'UI locale
+    seriesTomes.value = seriesTomes.value.map(tome => {
+      if (selectedIds.value.includes(tome.uri)) {
+        return {
+          ...tome,
+          ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish'
+        };
+      }
+      return tome;
+    });
+    
+    // Réinitialisation des sélections
+    selectedIds.value = [];
+    if (bookListRef.value) {
+      bookListRef.value.toggleSelectAll(false);
+    }
+  } catch (error) {
+    console.error(`Erreur lors de l'exécution de l'action groupée ${action} :`, error);
   }
+};
+
+// CORRECTION 1 : Déclaration d'une fonction valide pour le bouton Prêter
+const handleGroupLend = () => {
+  console.log('Action de prêt groupée en cours de dev');
 };
 </script>
 
 <template>
-  <div class="series-view-container">
-    
+  <div class="view-container">
     <div class="series-header">
       <BaseButton @click="handleBack">
-        {{ TEXTS.seriesView.back }}
+        {{ TEXTS.seriesView?.back || 'Retour' }}
       </BaseButton>
       <h2>{{ seriesName }}</h2>
       <p v-if="!isLoading">{{ seriesTomes.length }} tomes dans la série</p>
@@ -102,27 +119,27 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
         />
         <span>
           {{ selectedIds.length > 0 
-            ? `${selectedIds.length} ${TEXTS.seriesView.selectedCount}` 
-            : TEXTS.seriesView.emptySelection 
+            ? `${selectedIds.length} ${TEXTS.seriesView?.selectedCount || 'sélectionnés'}` 
+            : (TEXTS.seriesView?.emptySelection || 'Aucun tome sélectionné') 
           }}
         </span>
       </div>
 
       <div class="group-actions" v-if="selectedIds.length > 0">
         <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
-          {{ TEXTS.bookCard.btnAddInventory }}
+          {{ TEXTS.bookCard?.btnAddInventory || 'Ajouter à l\'inventaire' }}
         </BaseButton>
         <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
-          {{ TEXTS.bookCard.btnAddWishlist }}
+          {{ TEXTS.bookCard?.btnAddWishlist || 'Ajouter à la wishlist' }}
         </BaseButton>
-        <BaseButton @click="console.log('Action de prêt groupée en cours de dev')">
-          {{ TEXTS.bookCard.btnLend }}
+        <BaseButton @click="handleGroupLend">
+          {{ TEXTS.bookCard?.btnLend || 'Prêter' }}
         </BaseButton>
       </div>
     </div>
 
     <div v-if="isLoading" class="result-card">
-      {{ TEXTS.seriesView.loading }}
+      {{ TEXTS.seriesView?.loading || 'Chargement des tomes...' }}
     </div>
 
     <SelectableBookList 
@@ -130,7 +147,7 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
       ref="bookListRef"
       :items="seriesTomes"
       :focusIdentifier="focusIdentifier"
-      @update:selection="handleUpdateSelection"
+      @update:selection="selectedIds = $event"
     />
   </div>
 </template>

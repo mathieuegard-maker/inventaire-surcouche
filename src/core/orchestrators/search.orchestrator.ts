@@ -2,12 +2,12 @@
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
-import { seriesResolver } from '../resolvers/series.resolver';
-import { workUriResolver } from '../resolvers/workUri.resolver';
+//import { seriesResolver } from '../resolvers/series.resolver';
+//import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
-import { syncOrchestrator } from './sync.orchestrator';
-import type { SearchResponse, HumanizedBook } from '../types';
+import { seriesOrchestrator } from './series.orchestrator';
+import type { SearchResponse, /**HumanizedBook **/} from '../types';
 
 export const searchService = {
   /**
@@ -67,24 +67,9 @@ export const searchService = {
     // 4. PHASE EXPANSION : Contexte de Série
     let seriesContext = undefined;
     if (book.seriesId) {
-      console.log(`[SEARCH] Dépliage de la série : ${book.seriesId}`);
-      
-      // CORRECTION DU TYPAGE : Forcer l'utilisation de l'interface HumanizedBook
-      let tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(book.seriesId);
-      
-      // Lancement de l'aspiration en tâche de fond pour ne pas bloquer l'UI
-      syncOrchestrator.hydrateSeriesInBackground(book.seriesId);
-      
-      tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
-      const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
-      
-      seriesContext = {
-        id: book.seriesId,
-        name: book.series,
-        tomes: tomes,
-        ownedCount: ownedCount,
-        isComplete: tomes.length > 0 && ownedCount === tomes.length
-      };
+      console.log(`[SEARCH] Délégation de la série à seriesOrchestrator : ${book.seriesId}`);
+      // L'orchestrateur de série gère désormais le cache local ET le lancement de la synchro en fond
+      seriesContext = await seriesOrchestrator.getCompleteSeriesForUI(book.seriesId, book.series);
     }
 
     console.log(`[DEBUG-SEARCH] Objet final renvoyé. localCover présent ? :`, !!book.localCover);

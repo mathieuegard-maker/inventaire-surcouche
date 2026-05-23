@@ -5,6 +5,38 @@ import type { RawBook, HumanizedBook } from '../types';
 
 const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
 
+/**
+ * NOUVEAU : Fonction de "Scavenging" (Pillage).
+ * Si l'édition élue n'a pas de couverture, on emprunte celle d'une édition sœur.
+ */
+async function scavengeMissingImage(entityData: any, workUri: string, entityId: string): Promise<void> {
+  // Si on a déjà une image ou si l'édition n'est reliée à aucune œuvre, on abandonne
+  if (entityData.image || !workUri) return;
+
+  console.log(`[ENTITY RESOLVER] Couverture manquante pour ${entityId}. Début du pillage sur l'œuvre ${workUri}...`);
+  try {
+    const sibRes = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+    const sibData = await sibRes.json();
+    const siblingUris = (sibData.uris || []).filter((u: string) => u !== entityId);
+    
+    if (siblingUris.length === 0) return;
+
+    const topSiblings = siblingUris.slice(0, 10);
+    const imgRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(topSiblings.join('|'))}&attributes=image`);
+    const imgData = await imgRes.json();
+    
+    for (const sUri of topSiblings) {
+      if (imgData.entities?.[sUri]?.image) {
+        console.log(`[ENTITY RESOLVER] ✅ Couverture trouvée chez la sœur : ${sUri}. Pillage réussi.`);
+        entityData.image = imgData.entities[sUri].image;
+        break;
+      }
+    }
+  } catch (e) {
+    console.warn(`[ENTITY RESOLVER] Échec du pillage de couverture :`, e);
+  }
+}
+
 export const entityResolver = {
   /**
    * Maintenu pour la compatibilité stricte avec d'éventuels appels ISBN résiduels
@@ -33,6 +65,8 @@ export const entityResolver = {
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       
+      await scavengeMissingImage(entityData, workUri, entityId);
+
       let workData = undefined;
       if (workUri) {
         const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
@@ -75,6 +109,8 @@ export const entityResolver = {
       const workClaim = entityData.claims?.['wdt:P629']?.[0] || entityData.claims?.['P629']?.[0];
       const workUri = typeof workClaim === 'string' ? workClaim : workClaim?.value;
       
+      await scavengeMissingImage(entityData, workUri, resolvedEntityId);
+
       let workData = undefined;
       if (workUri) {
         const wRes = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {

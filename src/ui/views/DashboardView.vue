@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from 'vue';
+import { useRouter } from 'vue-router';
 import { barcodeIsbnProvider } from '../../plugins/barcode/barcode-isbn.provider';
 import { manualIsbnProvider } from '../../plugins/manual/manual-isbn.provider';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
@@ -8,6 +9,8 @@ import BaseButton from '../components/BaseButton.vue';
 import BookResultCard from '../components/BookResultCard.vue';
 import { TEXTS } from '../locales/fr';
 import type { SearchResponse } from '../../core/types';
+
+const router = useRouter();
 
 const isScanningActive = ref(false);
 const isSearching = ref(false);
@@ -106,8 +109,18 @@ const handleLend = (identifier: string) => {
   console.log("Ouverture du tunnel de prêt pour :", identifier);
 };
 
-const handleViewSeries = (seriesId: string) => {
-  console.log("Recherche de la série :", seriesId);
+const handleViewSeries = async (seriesId: string) => {
+  console.log("Navigation vers la page dédiée de la série :", seriesId);
+  try {
+    // Le "name" ciblé ici doit correspondre exactement au "name" déclaré dans src/router/index.ts
+    await router.push({ 
+      name: 'SeriesView', // <-- Remplace 'SeriesView' par 'series', 'Series' ou autre selon ton routeur.
+      params: { id: seriesId }, 
+      query: { focus: searchResult.value?.mainBook.uri } 
+    });
+  } catch (e: any) {
+    console.error("Erreur critique de navigation (Vérifie le 'name' de la route dans ton fichier router/index.ts) :", e);
+  }
 };
 </script>
 

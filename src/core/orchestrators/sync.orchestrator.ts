@@ -24,7 +24,6 @@ export const syncOrchestrator = {
 
   /**
    * TÂCHE DE FOND : Pré-charge l'ensemble des tomes d'une liste de manière séquentielle
-   * CORRECTION : Accepte désormais un objet incluant le statut de possession attendu
    */
   async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[]): Promise<void> {
     const CHUNK_SIZE = 50;
@@ -42,15 +41,46 @@ export const syncOrchestrator = {
   },
 
   /**
-   * NOUVELLE MÉTHODE : Extraite pour être appelable depuis search.orchestrator
-   * Aspire tous les tomes d'une série en tâche de fond.
+   * NOUVELLE MÉTHODE SÉCURISÉE : Aspire tous les tomes manquants d'une série en tâche de fond.
+   * Intègre un filtrage stricte en AMONT (Upstream Filtering) pour éviter les doublons 
+   * et économiser les appels réseaux inutiles.
    */
   async hydrateSeriesInBackground(seriesId: string): Promise<void> {
-    console.log(`[BACKGROUND] Amorçage du pré-chargement en arrière-plan pour la série ${seriesId}...`);
+    console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
-      const workUris = await seriesResolver.getSeriesWorks(seriesId);
-      const physicalUris = await workUriResolver.resolveBulk(workUris);
+      // 1. DRESSER LE BOUCLIER LOCAL
+      // On récupère instantanément ce qu'on a déjà pour cette série dans Dexie
+      const localTomes = await databaseService.getBooksBySeriesId(seriesId);
       
+      // On crée un Set ultra-rapide contenant les URIs d'OEUVRES (wd:) déjà possédées
+      const localWorkUris = new Set<string>();
+      for (const tome of localTomes) {
+        if (tome.workUri) {
+          localWorkUris.add(tome.workUri);
+        }
+      }
+
+      console.log(`[BACKGROUND] ${localWorkUris.size} œuvres de la série sont déjà sécurisées en cache local.`);
+
+      // 2. RÉCUPÉRER LA LISTE CIBLE (Le collecteur)
+      const allSeriesWorks = await seriesResolver.getSeriesWorks(seriesId);
+
+      // 3. FILTRAGE EN AMONT (Le coupe-feu)
+      // On retire de la liste à traiter tout ce qu'on possède déjà.
+      const strictlyMissingWorks = allSeriesWorks.filter(workUri => !localWorkUris.has(workUri));
+
+      if (strictlyMissingWorks.length === 0) {
+        console.log(`[BACKGROUND] La série ${seriesId} est déjà intégralement en cache. Abandon de l'aspiration.`);
+        return;
+      }
+
+      console.log(`[BACKGROUND] ${strictlyMissingWorks.length} œuvres nécessitent réellement une résolution réseau...`);
+
+      // 4. RÉSOLUTION SÉMANTIQUE ALLÉGÉE
+      // On ne passe dans le goulot d'étranglement (Levenshtein) QUE les tomes manquants
+      const physicalUris = await workUriResolver.resolveBulk(strictlyMissingWorks);
+      
+      // 5. DOUBLE CHECK LOCAL ET PRÉPARATION À L'ASPIRATION
       const missingTomes: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
       for (const uri of physicalUris) {
          if (!(await databaseService.getBookFromCache(uri))) {
@@ -58,11 +88,13 @@ export const syncOrchestrator = {
              missingTomes.push({ uri, status: 'none' });
          }
       }
+      
+      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES
       if (missingTomes.length > 0) {
          await this.hydrateRemainingPhysicalEntities(missingTomes);
       }
     } catch (e) {
-      console.error(`[BACKGROUND] Erreur sur l'aspiration de la saga ${seriesId}`, e);
+      console.error(`[BACKGROUND] Erreur sur l'aspiration sécurisée de la saga ${seriesId}`, e);
     }
   },
 
@@ -76,8 +108,7 @@ export const syncOrchestrator = {
       const inventoryRaw = await databaseService.getAllRegistryUris('inventory');
       const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
       
-      // 2. CORRECTION CRITIQUE : On passe TOUT au crible du WorkResolver.
-      // L'inventaire peut contenir des 'wd:' si l'utilisateur a ajouté une oeuvre abstraite manuellement.
+      // 2. Filtrage sémantique
       console.log(`[HYDRATATION] Filtrage sémantique de l'Inventaire (${inventoryRaw.length}) et Wishlist (${wishlistRaw.length})...`);
       const inventoryPhysicalUris = await workUriResolver.resolveBulk(inventoryRaw);
       const wishlistPhysicalUris = await workUriResolver.resolveBulk(wishlistRaw);
@@ -96,7 +127,6 @@ export const syncOrchestrator = {
 
       // 4. Analyse du delta Local vs Wishlist
       for (const uri of wishlistPhysicalUris) {
-         // Si c'est possédé, on ignore la wishlist
          if (inventoryPhysicalUris.includes(uri)) continue;
 
          const livre = await databaseService.getBookFromCache(uri);
@@ -119,7 +149,6 @@ export const syncOrchestrator = {
       const seriesIds = new Set<string>();
       
       for (const book of localBooks) {
-        // book.ownershipStatus est désormais GARANTI d'être correct
         if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
           seriesIds.add(book.seriesId);
         }
@@ -128,7 +157,7 @@ export const syncOrchestrator = {
       if (seriesIds.size > 0) {
         console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesIds.size} séries...`);
         for (const seriesId of seriesIds) {
-          // Remplacement de l'IIFE par un appel direct à la méthode extraite
+          // Appel de la version sécurisée
           this.hydrateSeriesInBackground(seriesId);
         }
       }

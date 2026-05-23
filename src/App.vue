@@ -1,19 +1,24 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 
 const isInitializing = ref(true);
 const router = useRouter(); 
+const route = useRoute(); // Permet de lire l'URL actuelle demandée
 
 onMounted(async () => {
   try {
     const isConnected = await connectionService.initializeApp();
     
     if (isConnected) {
-      router.push('/dashboard');
+      // On ne force le retour à l'accueil que si l'utilisateur arrive de la racine ou du login
+      if (route.path === '/login' || route.path === '/') {
+        router.push('/dashboard');
+      }
+      // Sinon, on le laisse tranquille sur sa page (ex: /debug, /series/...)
     } else {
       router.push('/login');
     }

@@ -1,5 +1,6 @@
 // src/core/resolvers/workUri.resolver.ts
 import { databaseService } from '../database/database.service';
+import { configService } from '../services/config.service';
 
 /**
  * Calcule la distance de Levenshtein entre deux chaînes (Score de similarité)
@@ -19,6 +20,60 @@ function getEditDistance(a: string, b: string): number {
   return matrix[a.length][b.length];
 }
 
+/**
+ * Extrait intelligemment le titre d'une entité selon son format (Wikidata ou Inventaire natif)
+ */
+function extractEntityTitle(entity: any): string {
+  if (!entity) return '';
+  
+  // 1. Format Inventaire natif (révélé par la sonde) : un simple tableau de strings
+  if (entity.claims && entity.claims['wdt:P1476']) {
+    const titleClaim = entity.claims['wdt:P1476'][0];
+    
+    // Si la donnée est directement le texte (ex: ["Universal War One"])
+    if (typeof titleClaim === 'string') {
+      return titleClaim;
+    }
+    
+    // Au cas où ce serait le format complexe Wikidata standard
+    const complexTitle = titleClaim?.mainsnak?.datavalue?.value?.text || titleClaim?.datavalue?.value?.text || titleClaim?.value;
+    if (complexTitle && typeof complexTitle === 'string') {
+      return complexTitle;
+    }
+  }
+
+  // 2. Format classique Wikidata (dans le noeud labels)
+  if (entity.labels) {
+    if (entity.labels.fr) return typeof entity.labels.fr === 'string' ? entity.labels.fr : entity.labels.fr.value;
+    if (entity.labels.en) return typeof entity.labels.en === 'string' ? entity.labels.en : entity.labels.en.value;
+  }
+  
+  // 3. Dernier recours (fallback global)
+  if (entity.label && typeof entity.label === 'string') {
+    return entity.label;
+  }
+  
+  return '';
+}
+
+/**
+ * NOUVEAU : Vérifie si une édition est dans la langue souhaitée
+ */
+function hasLanguage(entity: any, expectedWdId: string): boolean {
+  if (!entity?.claims) return false;
+  // P407 = langue de l'œuvre, P364 = langue originale de l'œuvre
+  const langClaims = entity.claims['wdt:P407'] || entity.claims['wdt:P364']; 
+  if (!langClaims) return false;
+  
+  for (const claim of langClaims) {
+    if (typeof claim === 'string' && claim === expectedWdId) return true;
+    if (claim?.value === expectedWdId) return true;
+    if (claim?.mainsnak?.datavalue?.value?.id === expectedWdId) return true;
+    if (claim?.datavalue?.value?.id === expectedWdId) return true;
+  }
+  return false;
+}
+
 export const workUriResolver = {
   /**
    * Convertit une liste d'œuvres (wd:) en la meilleure liste d'éditions physiques (inv: ou isbn:)
@@ -27,6 +82,8 @@ export const workUriResolver = {
     console.group(`[WORK-URI RESOLVER] Concrétisation de ${workUris.length} œuvres...`);
     const physicalUris: string[] = [];
     const missingWorks: string[] = [];
+    
+    const preferredLangWd = configService.getPreferredLanguageWdCode();
 
     // 1. Barrière Locale (Cache-First)
     for (const uri of workUris) {
@@ -67,7 +124,7 @@ export const workUriResolver = {
       }
     }));
 
-    // 3. Récupération des Labels pour l'analyse sémantique (Mega-Batching)
+    // 3. Récupération des données pour l'analyse sémantique
     const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
     const editionDataMap: Record<string, any> = {};
     const urisArray = Array.from(allEditionUrisToFetch);
@@ -76,11 +133,11 @@ export const workUriResolver = {
     for (let i = 0; i < urisArray.length; i += CHUNK_SIZE) {
       const chunk = urisArray.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(editionDataMap, data.entities || {});
       } catch (e) {
-        console.error(`[WORK-URI RESOLVER] Erreur fetch labels éditions`, e);
+        console.error(`[WORK-URI RESOLVER] Erreur fetch données éditions`, e);
       }
     }
 
@@ -88,7 +145,7 @@ export const workUriResolver = {
     for (let i = 0; i < missingWorks.length; i += CHUNK_SIZE) {
       const chunk = missingWorks.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=labels`);
+        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(workDataMap, data.entities || {});
       } catch (e) {}
@@ -105,23 +162,26 @@ export const workUriResolver = {
         continue;
       }
 
-      const workLabel = workDataMap[workUri]?.labels?.fr || workDataMap[workUri]?.labels?.en || workDataMap[workUri]?.label || '';
+      // Extraction du vrai titre
+      const workLabel = extractEntityTitle(workDataMap[workUri]);
+
+      // CRITÈRE 0 : Barrière de la Langue (Priorité absolue)
+      const langEditions = editions.filter(edUri => hasLanguage(editionDataMap[edUri], preferredLangWd));
+      let targetEditions = langEditions.length > 0 ? langEditions : editions;
 
       // Critère 1 : Filtrage par Regex (anti-bruit)
-      const validEditions = editions.filter(edUri => {
+      const validEditions = targetEditions.filter(edUri => {
         const edData = editionDataMap[edUri];
         if (!edData) return false;
-        const edLabel = edData.labels?.fr || edData.labels?.en || edData.label || '';
+        const edLabel = extractEntityTitle(edData);
         return !JUNK_REGEX.test(edLabel);
       });
 
       // Si la regex a tout supprimé, on annule le filtre par sécurité
-      let targetEditions = validEditions.length > 0 ? validEditions : editions;
+      targetEditions = validEditions.length > 0 ? validEditions : targetEditions;
 
-      // Critère 2 : Priorité stricte aux URIs natives (inv:) sur les entités génériques (wd:)
+      // Critère 2 : Priorité stricte aux URIs natives (inv:)
       const nativeEditions = targetEditions.filter(edUri => edUri.startsWith('inv:'));
-      
-      // Si on trouve au moins une édition "inv:", on évince définitivement les "wd:"
       if (nativeEditions.length > 0) {
         targetEditions = nativeEditions;
       }
@@ -132,13 +192,13 @@ export const workUriResolver = {
         continue;
       }
 
-      // Critère 3 : Scoring de similarité (Levenshtein) sur la liste finale restante
+      // Critère 3 : Scoring de similarité (Levenshtein) sur les titres réels
       let bestUri = targetEditions[0];
       let bestScore = Infinity;
 
       for (const edUri of targetEditions) {
         const edData = editionDataMap[edUri];
-        const edLabel = edData?.labels?.fr || edData?.labels?.en || edData?.label || '';
+        const edLabel = extractEntityTitle(edData);
         const score = getEditDistance(workLabel, edLabel);
         if (score < bestScore) {
           bestScore = score;

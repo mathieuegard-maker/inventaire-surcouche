@@ -9,9 +9,9 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'action-add-inventory', isbn: string): void;
-  (e: 'action-add-wishlist', isbn: string): void;
-  (e: 'action-lend', isbn: string): void;
+  (e: 'action-add-inventory', uri: string): void;
+  (e: 'action-add-wishlist', uri: string): void;
+  (e: 'action-lend', uri: string): void;
   (e: 'action-view-series', seriesId: string): void;
 }>();
 
@@ -103,17 +103,17 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
 
     <div class="book-actions-layout">
       <template v-if="!isOwned">
-        <BaseButton @click="emit('action-add-inventory', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-add-inventory', book.uri)">
           {{ TEXTS.bookCard.btnAddInventory }}
         </BaseButton>
         
-        <BaseButton @click="emit('action-add-wishlist', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-add-wishlist', book.uri)">
           {{ TEXTS.bookCard.btnAddWishlist }}
         </BaseButton>
       </template>
 
       <template v-else>
-        <BaseButton @click="emit('action-lend', book.isbn13 || book.uri)">
+        <BaseButton @click="emit('action-lend', book.uri)">
           {{ TEXTS.bookCard.btnLend }}
         </BaseButton>
       </template>
