@@ -6,7 +6,8 @@ import SeriesView from '../ui/views/SeriesView.vue';
 import DebugDbView from '../ui/views/DebugDbView.vue';
 import BookDetailView from '../ui/views/BookDetailView.vue';
 import CollectionView from '../ui/views/CollectionView.vue';
-import WishlistView from '../ui/views/WishlistView.vue'; // AJOUT : Importation de la liste d'envies
+import WishlistView from '../ui/views/WishlistView.vue';
+import LoansView from '../ui/views/LoansView.vue'; // AJOUT : Importation du carnet de prêts
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -35,6 +36,11 @@ export const router = createRouter({
       path: '/wishlist',
       name: 'WishlistView',
       component: WishlistView
+    },
+    {
+      path: '/loans',
+      name: 'LoansView',
+      component: LoansView
     },
     {
       path: '/book/:uri',

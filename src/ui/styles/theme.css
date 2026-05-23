@@ -868,3 +868,40 @@ body {
   font-size: 13px;
   font-family: var(--font-main);
 }
+
+/* Structure des panneaux accordéons monochromes pour les emprunteurs */
+.loan-borrower-card {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  margin-bottom: var(--spacing-sm);
+}
+
+.loan-borrower-header {
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-alt);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-family: var(--font-main);
+  font-size: 14px;
+}
+
+.loan-borrower-content {
+  padding: var(--spacing-md);
+  border-top: var(--border-width) solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+/* Encart d'information chronologique compact */
+.loan-chrono-meta {
+  font-size: 12px;
+  border-bottom: 1px dashed var(--color-border);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}

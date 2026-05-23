@@ -147,5 +147,15 @@ wishlistView: {
   filterAuthorAll: "Tous les auteurs",
   independentBooks: "Ouvrages indépendants",
   seriesSection: "Série : "
+},
+// À insérer à la racine de l'objet TEXTS :
+loansView: {
+  title: "Carnet de Prêts",
+  modeBorrower: "Par Emprunteur",
+  modeChronological: "Par Ancienneté",
+  emptyLoans: "Aucun livre n'est actuellement confié à un proche.",
+  borrowedCount: "livre(s) dehors",
+  sinceLabel: "Prêté le :",
+  friendLabel: "Emprunteur :"
 }
 };

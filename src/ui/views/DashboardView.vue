@@ -65,6 +65,10 @@ const navigateToWishlist = () => {
   router.push({ name: 'WishlistView' });
 };
 
+const navigateToLoans = () => {
+  router.push({ name: 'LoansView' });
+};
+
 const stopScanningSequence = async () => {
   await barcodeIsbnProvider.stopScanner();
   isScanningActive.value = false;
@@ -98,6 +102,12 @@ onUnmounted(async () => {
     <div class="action-section">
       <BaseButton @click="navigateToWishlist">
         {{ TEXTS.wishlistView?.title }}
+      </BaseButton>
+    </div>
+
+    <div class="action-section">
+      <BaseButton @click="navigateToLoans">
+        {{ TEXTS.loansView?.title }}
       </BaseButton>
     </div>
 
