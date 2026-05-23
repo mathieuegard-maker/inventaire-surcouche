@@ -767,3 +767,63 @@ body {
   background-color: #c0392b;
   color: var(--color-text-inverse);
 }
+
+/* Barre de navigation des modes du catalogue (Onglets monochromes) */
+.collection-modes-tabs {
+  display: block;
+  margin-bottom: var(--spacing-md);
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+}
+
+.tab-button {
+  display: inline-block;
+  padding: 8px 16px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  border: var(--border-width) solid var(--color-border);
+  margin-right: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+  font-family: var(--font-main);
+  font-size: 13px;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+}
+
+.tab-button.active {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+}
+
+/* Panneau de configuration du catalogue (Filtres et tris) */
+.collection-controls-bar {
+  display: block;
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  border: var(--border-width) dashed var(--color-border);
+  background-color: var(--color-bg-main);
+}
+
+.control-group {
+  margin-bottom: var(--spacing-sm);
+}
+
+.control-group label {
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.control-select {
+  padding: 8px;
+  border: var(--border-width) solid var(--color-border);
+  font-family: var(--font-main);
+  font-size: 14px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  width: 100%;
+  box-sizing: border-box;
+}

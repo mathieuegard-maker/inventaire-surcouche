@@ -1,9 +1,11 @@
+// src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
 import LoginView from '../ui/views/LoginView.vue';
 import DashboardView from '../ui/views/DashboardView.vue';
 import SeriesView from '../ui/views/SeriesView.vue';
 import DebugDbView from '../ui/views/DebugDbView.vue';
 import BookDetailView from '../ui/views/BookDetailView.vue';
+import CollectionView from '../ui/views/CollectionView.vue'; // AJOUT : Importation du catalogue
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -24,7 +26,11 @@ export const router = createRouter({
       component: SeriesView
     },
     {
-      // La nouvelle route DOIT être déclarée ici, avant le catch-all
+      path: '/collection',
+      name: 'CollectionView',
+      component: CollectionView
+    },
+    {
       path: '/book/:uri',
       name: 'BookDetail',
       component: BookDetailView
@@ -35,7 +41,6 @@ export const router = createRouter({
       component: DebugDbView
     },
     {
-      // Le filet de sécurité doit STRICTEMENT rester la dernière route du tableau
       path: '/:pathMatch(.*)*',
       redirect: '/login'
     }

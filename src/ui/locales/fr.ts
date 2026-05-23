@@ -112,5 +112,21 @@ export const TEXTS = {
   placeholder: "Nom de l'emprunteur...",
   cancel: "Annuler",
   confirm: "Confirmer le prêt"
-  }
+  },
+  // À insérer à la racine de l'objet TEXTS :
+collectionView: {
+  title: "Ma Collection",
+  modeBooks: "Tous les livres",
+  modeSeries: "Mes Séries",
+  modeOneShots: "Hors Série (One-Shots)",
+  filterGenreLabel: "Filtrer par genre :",
+  filterGenreAll: "Tous les genres",
+  sortLabel: "Trier par :",
+  sortByTitle: "Titre (A-Z)",
+  sortByAuthor: "Premier auteur (A-Z)",
+  sortByDate: "Derniers ajouts",
+  emptyCollection: "Aucun ouvrage trouvé dans votre collection actuelle.",
+  tomesOwned: "tome(s) possédé(s) dans la bibliothèque",
+  noAuthor: "Auteur non spécifié"
+}
 };

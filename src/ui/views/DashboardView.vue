@@ -59,6 +59,10 @@ const startScanningSequence = async () => {
   );
 };
 
+const navigateToCollection = () => {
+  router.push({ name: 'CollectionView' });
+};
+
 const stopScanningSequence = async () => {
   await barcodeIsbnProvider.stopScanner();
   isScanningActive.value = false;
@@ -80,6 +84,12 @@ onUnmounted(async () => {
         :variantClass="isScanningActive ? 'btn-danger' : 'btn-primary'"
       >
         {{ isScanningActive ? TEXTS.scanner.btnClose : TEXTS.scanner.btnOpen }}
+      </BaseButton>
+    </div>
+
+    <div class="action-section">
+      <BaseButton @click="navigateToCollection">
+        {{ TEXTS.collectionView.title }}
       </BaseButton>
     </div>
 

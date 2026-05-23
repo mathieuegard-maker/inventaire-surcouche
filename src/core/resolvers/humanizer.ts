@@ -1,5 +1,4 @@
 // src/core/resolvers/humanizer.ts
-//import { entityResolver } from './entity.resolver';
 import type { RawBook, HumanizedBook } from '../types';
 
 export const entityHumanizer = {
@@ -25,22 +24,25 @@ export const entityHumanizer = {
     const idArray = Array.from(allIds);
     const dictionary: Record<string, string> = {};
 
+    // Extraction dynamique de la langue du navigateur pour l'alignement international des filtres
+    const browserLang = typeof navigator !== 'undefined' && navigator.language ? navigator.language.split('-')[0].toLowerCase() : 'fr';
+
     // 2. MEGA-BATCHING : Une seule requête pour tout traduire d'un coup
     if (idArray.length > 0) {
       try {
         console.log(`[HUMANIZER] Traduction groupée de ${idArray.length} métadonnées...`);
-        // Découpage en paquets de 50 pour respecter la limite d'Inventaire.io
         for (let i = 0; i < idArray.length; i += 50) {
           const chunk = idArray.slice(i, i + 50);
           
-          // CORRECTION : Passage par le proxy Vercel pour centraliser le trafic et verrouiller les CORS
           const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
           const data = await res.json();
           const entities = data.entities || data;
 
           for (const [uri, entity] of Object.entries(entities)) {
             const e = entity as any;
-            if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
+            // Élection de la langue adaptative avec replis sécurisés
+            if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
+            else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
             else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
             else if (e.label) dictionary[uri] = e.label;
             else dictionary[uri] = uri;
@@ -51,7 +53,6 @@ export const entityHumanizer = {
       }
     }
 
-    // Utilitaire pour piocher dans le dictionnaire
     const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id]).filter(Boolean);
     const translateSingle = (id?: string) => id ? dictionary[id] : undefined;
 
@@ -69,7 +70,7 @@ export const entityHumanizer = {
       isbn13: rawBook.isbn13,
       isbn10: rawBook.isbn10,
       coverUrl: targetImageUrl,
-      localCover: undefined, // OPTIMISATION : L'image n'est plus traitée ici, l'UI est débloquée.
+      localCover: undefined,
       pageCount: rawBook.pageCount,
       publishDate: rawBook.publishDate,
       format: rawBook.format,
@@ -87,7 +88,7 @@ export const entityHumanizer = {
       ownershipStatus: 'none'
     };
 
-    console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Temps de blocage réduit à néant)`);
+    console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Alignement multilingue actif)`);
     return humanized;
   }
 };
