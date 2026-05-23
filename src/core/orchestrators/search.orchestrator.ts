@@ -2,12 +2,10 @@
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
-//import { seriesResolver } from '../resolvers/series.resolver';
-//import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { seriesOrchestrator } from './series.orchestrator';
-import type { SearchResponse, /**HumanizedBook **/} from '../types';
+import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
   /**
@@ -24,8 +22,8 @@ export const searchService = {
 
     console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
     
-    // 1. PHASE IDENTIFICATION : Local-First
-    let book = await databaseService.getBookByIsbn(isbn);
+    // 1. PHASE IDENTIFICATION : Local-First (Typage explicite élargi pour autoriser null et undefined)
+    let book: HumanizedBook | null | undefined = await databaseService.getBookByIsbn(isbn);
     let source: 'cache' | 'network' = 'cache';
 
     if (!book) {
@@ -68,7 +66,6 @@ export const searchService = {
     let seriesContext = undefined;
     if (book.seriesId) {
       console.log(`[SEARCH] Délégation de la série à seriesOrchestrator : ${book.seriesId}`);
-      // L'orchestrateur de série gère désormais le cache local ET le lancement de la synchro en fond
       seriesContext = await seriesOrchestrator.getCompleteSeriesForUI(book.seriesId, book.series);
     }
 
