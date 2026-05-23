@@ -17,8 +17,8 @@ const errorMsg = ref('');
 const successMessage = ref('');
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
-const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series || !!book.value?.seriesName);
-const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || book.value?.seriesName || '');
+const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
+const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
 
 onMounted(async () => {
   const uriParam = route.params.uri as string;
@@ -133,7 +133,7 @@ const handleLend = () => {
           <div v-if="hasSeries" class="book-meta-group">
             <p class="book-meta-item">
               <strong>Série :</strong> 
-              {{ book.series || book.seriesName }}
+              {{ book.series }}
               <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
             </p>
           </div>
@@ -164,8 +164,8 @@ const handleLend = () => {
             <p class="book-meta-item" v-if="book.pageCount">
               <strong>Pages :</strong> {{ book.pageCount }}
             </p>
-            <p class="book-meta-item" v-if="book.isbn13 || book.isbn">
-              <strong>ISBN :</strong> {{ book.isbn13 || book.isbn }}
+            <p class="book-meta-item" v-if="book.isbn13 || book.isbn10">
+              <strong>ISBN :</strong> {{ book.isbn13 || book.isbn10 }}
             </p>
           </div>
 

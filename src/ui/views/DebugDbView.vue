@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { databaseService } from '../../core/database/database.service';
+import { databaseService, db } from '../../core/database/database.service';
+import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
 const allBooks = ref<HumanizedBook[]>([]);
@@ -34,52 +35,52 @@ const filteredBooks = computed(() => {
 });
 
 const clearDatabase = async () => {
-  if (confirm('Vider intégralement le cache local ?')) {
-    await databaseService.cache_books.clear();
+  if (confirm(TEXTS.debugDbView.clearConfirm)) {
+    await db.cache_books.clear();
     await loadDatabase();
   }
 };
 </script>
 
 <template>
-  <div style="padding: 20px; font-family: monospace;">
-    <h2>🛠 Laboratoire Local (Dexie DB)</h2>
+  <div class="debug-view-container">
+    <h2>{{ TEXTS.debugDbView.title }}</h2>
     
-    <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+    <div class="debug-action-bar">
       <input 
         v-model="searchQuery" 
-        placeholder="Rechercher par titre, URI, wd:..." 
-        style="padding: 8px; width: 300px; border: 1px solid #ccc;"
+        :placeholder="TEXTS.debugDbView.placeholder" 
+        class="debug-search-input"
       />
-      <button @click="loadDatabase" style="padding: 8px;">Rafraîchir</button>
-      <button @click="clearDatabase" style="padding: 8px; background: #e74c3c; color: white;">Vider le cache</button>
+      <button @click="loadDatabase" class="btn-action">{{ TEXTS.debugDbView.btnRefresh }}</button>
+      <button @click="clearDatabase" class="btn-danger">{{ TEXTS.debugDbView.btnClear }}</button>
     </div>
 
-    <div v-if="isLoading">Chargement de la base de données...</div>
+    <div v-if="isLoading" class="result-card">{{ TEXTS.debugDbView.loading }}</div>
 
-    <table v-else style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px;">
+    <table v-else class="debug-table">
       <thead>
-        <tr style="background: #eee;">
-          <th style="padding: 8px; border: 1px solid #ccc;">Couverture</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Titre</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Série & N°</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Édition (inv:)</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Œuvre (wd:)</th>
+        <tr>
+          <th>{{ TEXTS.debugDbView.thCover }}</th>
+          <th>{{ TEXTS.debugDbView.thTitle }}</th>
+          <th>{{ TEXTS.debugDbView.thSeries }}</th>
+          <th>{{ TEXTS.debugDbView.thEdition }}</th>
+          <th>{{ TEXTS.debugDbView.thWork }}</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="book in filteredBooks" :key="book.uri">
-          <td style="padding: 8px; border: 1px solid #ccc;">
-            <img v-if="book.coverUrl" :src="book.coverUrl" style="width: 40px; height: auto;" />
+          <td>
+            <img v-if="book.coverUrl" :src="book.coverUrl" class="debug-cover-img" />
             <span v-else>❌</span>
           </td>
-          <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;">{{ book.title }}</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.series || '-' }} (Tome {{ book.seriesNumber || '?' }})</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.uri }}</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.workUri || '-' }}</td>
+          <td>{{ book.title }}</td>
+          <td>{{ book.series || '-' }} <span v-if="book.seriesNumber">(Tome {{ book.seriesNumber }})</span></td>
+          <td>{{ book.uri }}</td>
+          <td>{{ book.workUri || '-' }}</td>
         </tr>
       </tbody>
     </table>
-    <p style="margin-top: 10px; color: #666;">Total en cache : {{ filteredBooks.length }} / {{ allBooks.length }}</p>
+    <p class="debug-footer-text">{{ TEXTS.debugDbView.totalInCache }} {{ filteredBooks.length }} / {{ allBooks.length }}</p>
   </div>
 </template>

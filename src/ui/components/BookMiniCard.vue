@@ -48,8 +48,8 @@ const handleZoneClick = () => {
     <div class="row-info-content">
       <p class="row-title">{{ book.title }}</p>
       
-      <p v-if="book.series || book.seriesName" class="row-series-meta">
-        {{ book.series || book.seriesName }}
+      <p v-if="book.series" class="row-series-meta">
+        {{ book.series }}
         <span v-if="book.seriesNumber"> — Tome {{ book.seriesNumber }}</span>
       </p>
       

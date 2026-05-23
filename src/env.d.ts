@@ -1,4 +1,6 @@
+// src/env.d.ts
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/vue" />
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue';

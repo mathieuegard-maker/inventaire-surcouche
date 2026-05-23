@@ -395,8 +395,6 @@ body {
   margin-top: var(--spacing-md);
 }
 
-
-
 .mini-card {
   cursor: pointer;
   width: 100%;
@@ -527,7 +525,6 @@ body {
 /* =========================================
    NOUVELLE MISE EN PAGE : SÉRIES EN LISTE
 ========================================= */
-
 .series-list-container {
   display: flex;
   flex-direction: column;
@@ -670,8 +667,6 @@ body {
   opacity: 0.5;
 }
 
-/* src/ui/styles/theme.css */
-
 .mixed-error-container {
   border: var(--border-width) dashed var(--color-border);
   background-color: var(--color-bg-main);
@@ -706,4 +701,58 @@ body {
 
 .mini-card-row {
   padding-right: 0px !important; /* On annule le padding pour que la zone cliquable aille jusqu'au bord droit */
+}
+
+/* =========================================
+   LABORATOIRE LOCAL (DebugDbView)
+========================================= */
+.debug-view-container {
+  padding: var(--spacing-md);
+  font-family: var(--font-main);
+}
+
+.debug-action-bar {
+  margin-bottom: var(--spacing-md);
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.debug-search-input {
+  padding: var(--spacing-sm);
+  width: 300px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  font-family: var(--font-main);
+}
+
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 12px;
+}
+
+.debug-table th {
+  background-color: var(--color-bg-alt);
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.debug-table td {
+  padding: var(--spacing-sm);
+  border: 1px solid var(--color-border);
+}
+
+.debug-cover-img {
+  width: 40px;
+  height: auto;
+  border: 1px solid var(--color-border);
+}
+
+.debug-footer-text {
+  margin-top: var(--spacing-sm);
+  color: var(--color-text-muted);
 }

@@ -22,7 +22,7 @@ const series = computed(() => props.searchResult.series);
 // Calcul robuste pour déterminer si le livre fait partie d'une série 
 // et extraire l'identifiant (ou le nom) à envoyer au Middle-End
 const seriesIdentifier = computed(() => {
-  return series.value?.id || book.value.seriesId || series.value?.name || book.value.series || book.value.seriesName;
+  return series.value?.id || book.value.seriesId || series.value?.name || book.value.series;
 });
 const hasSeries = computed(() => !!seriesIdentifier.value);
 </script>
@@ -51,7 +51,7 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
         <div v-if="hasSeries" class="book-meta-group">
           <p class="book-meta-item">
             <strong>{{ TEXTS.bookCard.series }} :</strong> 
-            {{ series?.name || book.series || book.seriesName }}
+            {{ series?.name || book.series }}
             <span v-if="book.seriesNumber"> ({{ TEXTS.bookCard.volume }} {{ book.seriesNumber }})</span>
           </p>
         </div>

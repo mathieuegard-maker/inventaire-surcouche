@@ -64,7 +64,7 @@ export const TEXTS = {
       format: "Format"
     }
   },
-    bookStatus: {
+  bookStatus: {
     owned: "Possédé",
     wish: "À avoir",
     none: "Non possédé"
@@ -87,6 +87,19 @@ export const TEXTS = {
     loadingSpec: "Chargement des spécifications de l'édition...",
     noCover: "Pas de couverture",
     synopsis: "Synopsis"
+  },
+  debugDbView: {
+    title: "🛠 Laboratoire Local (Dexie DB)",
+    placeholder: "Rechercher par titre, URI, wd:...",
+    btnRefresh: "Rafraîchir",
+    btnClear: "Vider le cache",
+    loading: "Chargement de la base de données...",
+    thCover: "Couverture",
+    thTitle: "Titre",
+    thSeries: "Série & N°",
+    thEdition: "Édition (inv:)",
+    thWork: "Œuvre (wd:)",
+    totalInCache: "Total en cache :",
+    clearConfirm: "Vider intégralement le cache local ?"
   }
-
 };

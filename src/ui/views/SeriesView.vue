@@ -23,7 +23,7 @@ const isAllSelected = computed(() => {
 
 const seriesName = computed(() => {
   if (seriesTomes.value.length > 0) {
-    return seriesTomes.value[0].series || seriesTomes.value[0].seriesName || seriesId.value;
+    return seriesTomes.value[0].series || seriesId.value;
   }
   return seriesId.value;
 });
