@@ -16,7 +16,7 @@ export const seriesOrchestrator = {
     // 1. Récupération instantanée depuis le cache local (Local-First)
     const tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
 
-    // 2. CRITICAL FIX : Double-check sémantique (Édition + Œuvre) pour synchroniser l'inventaire et la Wishlist serveur
+    // 2. Double-check sémantique (Édition + Œuvre) pour synchroniser l'inventaire et la Wishlist serveur
     for (const tome of tomes) {
       // Vérification de l'inventaire (soit l'édition physique, soit l'œuvre abstraite)
       const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri) || 
@@ -24,6 +24,12 @@ export const seriesOrchestrator = {
       
       if (isInInventory) {
         tome.ownershipStatus = 'owned';
+        
+        // CORRECTION SÉMANTIQUE ACTIVE : On interroge IndexedDB pour attacher le prêt s'il existe
+        const activeLoan = await databaseService.getLoan(tome.uri);
+        if (activeLoan) {
+          tome.loan = activeLoan;
+        }
       } else {
         // Vérification de la Wishlist (soit l'édition physique, soit l'œuvre abstraite de type workUri)
         const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri) || 

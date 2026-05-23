@@ -47,9 +47,10 @@ export const TEXTS = {
     missing: "Absent",
     series: "Série",
     volume: "Tome",
+    btnLend: "Prêter ce livre",
+    btnReturn: "Livre rendu",
     btnAddInventory: "Ajouter à la collection",
     btnAddWishlist: "Ajouter à la liste d'envies",
-    btnLend: "Prêter ce livre",
     btnViewSeries: "Afficher toute la série",
     meta: {
       authors: "Auteur(s)",
@@ -67,11 +68,13 @@ export const TEXTS = {
   bookStatus: {
     owned: "Possédé",
     wish: "À avoir",
+    lent: "Prêté",
     none: "Non possédé"
   },
   seriesView: {
     back: "Retour",
     selectedCount: "sélectionnés",
+    btnReturnGroup: "Livre(s) rendu(s)",
     emptySelection: "Aucun tome sélectionné",
     loading: "Chargement des tomes...",
     mixedSelectionError: "Sélection mixte impossible : vous avez coché des tomes possédés et non possédés à la fois.",
@@ -101,5 +104,13 @@ export const TEXTS = {
     thWork: "Œuvre (wd:)",
     totalInCache: "Total en cache :",
     clearConfirm: "Vider intégralement le cache local ?"
+  },
+  lendModal: {
+  title: "📋 Prêter",
+  instructionSingular: "Indiquez le nom de la personne à qui vous confiez cet exemplaire :",
+  instructionPlural: "Indiquez le nom de la personne à qui vous confiez ces exemplaires :",
+  placeholder: "Nom de l'emprunteur...",
+  cancel: "Annuler",
+  confirm: "Confirmer le prêt"
   }
 };

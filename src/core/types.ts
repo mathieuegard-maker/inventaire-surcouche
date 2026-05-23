@@ -21,7 +21,7 @@ export interface BaseBook {
   pageCount?: number;
   publishDate?: string;
   format?: string;
-  updatedAt?: number; // AJOUT : Horodatage pour le système de péremption du cache (TTL)
+  updatedAt?: number; // Horodatage pour le système de péremption du cache (TTL)
 }
 
 export interface RawBook extends BaseBook {
@@ -46,6 +46,7 @@ export interface HumanizedBook extends BaseBook {
   genres: string[];
   collection?: string;
   ownershipStatus: 'owned' | 'wish' | 'none';
+  loan?: LoanRecord; // AJOUT : Attribut contextuel optionnel pour porter le prêt local
 }
 
 /**
@@ -55,7 +56,7 @@ export interface LoanRecord {
   uri: string;
   friendName: string;
   loanDate: number;
-  itemId?: string; // AJOUT : Sauvegarde de l'ID physique pour fiabiliser la synchro
+  itemId?: string; // Sauvegarde de l'ID physique pour fiabiliser la synchro
 }
 
 export interface InventoryItem {
@@ -96,7 +97,7 @@ export interface SearchResponse {
 }
 
 // ============================================================================
-// NOUVEAU : TYPES STRICTS POUR L'OPTIMISTIC UI (Remplacement des "any")
+// TYPES STRICTS POUR L'OPTIMISTIC UI (Remplacement des "any")
 // ============================================================================
 
 export interface LendPayload {

@@ -20,7 +20,6 @@ const navigateToDetail = () => {
   }
 };
 
-// Gestionnaire interne pour capter le clic sur toute la zone de droite
 const handleZoneClick = () => {
   emit('update:modelValue', !props.modelValue);
 };
@@ -48,19 +47,23 @@ const handleZoneClick = () => {
     <div class="row-info-content">
       <p class="row-title">{{ book.title }}</p>
       
-      <p v-if="book.series" class="row-series-meta">
+      <p v-if="book.loan?.friendName" class="row-authors">
+        👉 {{ book.loan.friendName }}
+      </p>
+      <p v-else-if="book.series" class="row-series-meta">
         {{ book.series }}
         <span v-if="book.seriesNumber"> — Tome {{ book.seriesNumber }}</span>
       </p>
       
-      <p v-if="book.authors?.length" class="row-authors">
+      <p v-if="book.authors?.length && !book.loan" class="row-authors">
         {{ book.authors.join(', ') }}
       </p>
     </div>
 
     <div class="row-status-text-column">
-      <span :class="['status-text-label', book.ownershipStatus]">
+      <span :class="['status-text-label', book.loan ? 'lent' : book.ownershipStatus]">
         {{ 
+          book.loan ? TEXTS.bookStatus.lent || 'Prêté' :
           book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
           book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : 
           TEXTS.bookStatus.none 

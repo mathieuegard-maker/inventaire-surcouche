@@ -17,19 +17,16 @@ export const queueService = {
    * Applique instantanément les changements dans la base de données locale
    * pour que le cache reste synchrone avec l'état de l'interface utilisateur.
    */
-  async applyOptimisticUpdate(actionType: PendingAction['action'], uri: string): Promise<void> {
+  async applyOptimisticUpdate(actionType: PendingAction['action'], uri: string, payload?: QueueActionPayload): Promise<void> {
     const cachedBook = await databaseService.getBookFromCache(uri);
     
     switch (actionType) {
       case 'ADD_INVENTORY':
         await databaseService.addRegistryEntry('inventory', uri);
-        
-        // CRITICAL CASCADE LOCALE : Suppression instantanée de la wishlist locale (édition + œuvre abstraite)
         await databaseService.removeRegistryEntry('wishlist', uri);
         if (cachedBook?.workUri) {
           await databaseService.removeRegistryEntry('wishlist', cachedBook.workUri);
         }
-        
         if (cachedBook) {
           cachedBook.ownershipStatus = 'owned';
           await databaseService.saveBookToCache(cachedBook);
@@ -56,6 +53,19 @@ export const queueService = {
           await databaseService.saveBookToCache(cachedBook);
         }
         break;
+      case 'LEND':
+        // OPTIMISTIC LOAN : Écriture instantanée du prêt localement
+        const lendData = payload as LendPayload;
+        await databaseService.saveLoan({
+          uri,
+          friendName: lendData?.friendName || 'Inconnu',
+          loanDate: Date.now()
+        });
+        break;
+      case 'RETURN':
+        // OPTIMISTIC RETURN : Retrait instantané du prêt localement
+        await databaseService.deleteLoan(uri);
+        break;
     }
   },
 
@@ -77,7 +87,7 @@ export const queueService = {
     const actionId = await databaseService.savePendingAction(action);
     console.log(`[QUEUE] Trace sauvegardée localement (ID: ${actionId})`);
     
-    await this.applyOptimisticUpdate(actionType, uri);
+    await this.applyOptimisticUpdate(actionType, uri, payload);
     console.log(`[QUEUE] Mise à jour optimiste appliquée en base locale pour : ${uri}`);
     
     console.groupEnd();
@@ -105,8 +115,6 @@ export const queueService = {
         }
 
         const firstActionType = actions[0].action;
-        
-        // On extrait toutes les actions consécutives partageant exactement ce même type
         const batch = actions.filter(a => a.action === firstActionType);
         const urisToProcess = batch.map(a => a.uri);
         const batchIds = batch.map(a => a.id).filter((id): id is number => id !== undefined);
@@ -116,12 +124,9 @@ export const queueService = {
         try {
           let success = false;
 
-          // Aiguillage réseau vers les API d'Inventaire.io
           switch (firstActionType) {
             case 'ADD_INVENTORY':
               success = await inventoryService.addBulkToLibrary(urisToProcess);
-              
-              // CRITICAL CASCADE DISTANTE : Si l'ajout à l'inventaire réussit, on nettoie en lot la Wishlist distante
               if (success) {
                 try {
                   console.log(`[QUEUE] Cascade Réseau : Nettoyage automatique de la Wishlist pour ${urisToProcess.length} éléments...`);
@@ -135,19 +140,23 @@ export const queueService = {
               success = await wishlistService.addBulkToWishlist(urisToProcess);
               break;
             case 'LEND':
-              const singleAction = batch[0];
-              const lendPayload = singleAction.payload as LendPayload;
-              success = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
-              if (success) {
-                await databaseService.deletePendingAction(singleAction.id!);
+              // TRAITEMENT UNITAIRE SECURISÉ DES PRÊTS (Évite la saturation d'étagère)
+              for (const singleAction of batch) {
+                const lendPayload = singleAction.payload as LendPayload;
+                const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
+                if (ok && singleAction.id) {
+                  await databaseService.deletePendingAction(singleAction.id);
+                }
               }
-              success = false;
+              success = false; // Forcer le re-calcul du ticket au tour de boucle suivant
               break;
             case 'RETURN':
-              const returnAction = batch[0];
-              success = await loanService.returnBook(returnAction.uri);
-              if (success) {
-                await databaseService.deletePendingAction(returnAction.id!);
+              // TRAITEMENT UNITAIRE SECURISÉ DES RETOURS
+              for (const singleAction of batch) {
+                const ok = await loanService.returnBook(singleAction.uri);
+                if (ok && singleAction.id) {
+                  await databaseService.deletePendingAction(singleAction.id);
+                }
               }
               success = false;
               break;
@@ -156,14 +165,11 @@ export const queueService = {
               success = true; 
           }
 
-          // Si le paquet réseau global est validé, on purge tous les tickets d'un coup
           if (success) {
             console.log(`[QUEUE] ✅ Succès du paquet réseau [${firstActionType}]. Purge brute de ${batchIds.length} tickets localement.`);
             for (const id of batchIds) {
               await databaseService.deletePendingAction(id);
             }
-            
-            // Temporisation de courtoisie de 500ms avant d'attaquer le paquet suivant
             await sleep(500);
           } else if (firstActionType !== 'LEND' && firstActionType !== 'RETURN') {
             console.warn(`[QUEUE] ⚠️ Échec ou blocage du paquet [${firstActionType}]. Pause de la synchronisation.`);
@@ -172,7 +178,6 @@ export const queueService = {
 
         } catch (error: any) {
            console.error(`[QUEUE] 💥 Refus définitif du serveur pour le paquet [${firstActionType}]. Lancement des rollbacks individuels.`);
-           
            for (const failedAction of batch) {
              await this.rollbackAction(failedAction);
              if (failedAction.id) {

@@ -5,6 +5,7 @@ import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BaseButton from '../components/BaseButton.vue';
+import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
@@ -15,15 +16,17 @@ const book = ref<HumanizedBook | null>(null);
 const isLoading = ref(true);
 const errorMsg = ref('');
 const successMessage = ref('');
+const showLendModal = ref(false);
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
+const isLent = computed(() => !!book.value?.loan);
 const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
 const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
 
 onMounted(async () => {
   const uriParam = route.params.uri as string;
   if (!uriParam) {
-    errorMsg.value = "Identifiant du livre manquant.";
+    errorMsg.value = TEXTS.bookDetail?.missingId || "Identifiant du livre manquant.";
     isLoading.value = false;
     return;
   }
@@ -31,6 +34,10 @@ onMounted(async () => {
   try {
     const cached = await databaseService.getBookFromCache(uriParam);
     if (cached) {
+      const activeLoan = await databaseService.getLoan(cached.uri);
+      if (activeLoan) {
+        cached.loan = activeLoan;
+      }
       book.value = cached;
       isLoading.value = false;
       return;
@@ -39,6 +46,10 @@ onMounted(async () => {
     console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
     const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
     if (resolved) {
+      const activeLoan = await databaseService.getLoan(resolved.uri);
+      if (activeLoan) {
+        resolved.loan = activeLoan;
+      }
       book.value = resolved;
     } else {
       errorMsg.value = "Impossible de récupérer les détails de cette édition.";
@@ -88,7 +99,35 @@ const handleAddWishlist = async () => {
 };
 
 const handleLend = () => {
-  console.log("Ouverture du tunnel de prêt pour :", book.value?.uri);
+  showLendModal.value = true;
+};
+
+const confirmLend = async (friendName: string) => {
+  if (!book.value?.uri) return;
+  try {
+    await queueService.enqueueAction('LEND', book.value.uri, { friendName });
+    book.value.loan = {
+      uri: book.value.uri,
+      friendName,
+      loanDate: Date.now()
+    };
+  } catch (e) {
+    console.error(e);
+  } finally {
+    showLendModal.value = false;
+  }
+};
+
+const handleReturn = async () => {
+  if (!book.value?.uri) return;
+  try {
+    await queueService.enqueueAction('RETURN', book.value.uri);
+    if (book.value.loan) {
+      delete book.value.loan;
+    }
+  } catch (e) {
+    console.error(e);
+  }
 };
 </script>
 
@@ -170,8 +209,12 @@ const handleLend = () => {
           </div>
 
           <div class="badge-container">
-            <span class="badge" :class="isOwned ? 'owned' : 'missing'">
-              {{ isOwned ? 'Dans votre bibliothèque' : (book.ownershipStatus === 'wish' ? 'Dans votre liste d\'envies' : 'Non possédé') }}
+            <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
+              {{ 
+                isLent ? `${TEXTS.bookStatus.lent || 'Prêté'} : ${book.loan?.friendName}` : 
+                (book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
+                (book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : TEXTS.bookStatus.none)) 
+              }}
             </span>
           </div>
         </div>
@@ -185,18 +228,28 @@ const handleLend = () => {
       <div class="book-actions-layout">
         <template v-if="!isOwned">
           <BaseButton @click="handleAddInventory">
-            Ajouter à l'inventaire
+            {{ TEXTS.bookCard.btnAddInventory }}
           </BaseButton>
           <BaseButton @click="handleAddWishlist">
-            Ajouter à la wishlist
+            {{ TEXTS.bookCard.btnAddWishlist }}
           </BaseButton>
         </template>
         <template v-else>
-          <BaseButton @click="handleLend">
-            Prêter
+          <BaseButton v-if="isLent" @click="handleReturn">
+            {{ TEXTS.bookCard.btnReturn || 'Livre rendu' }}
+          </BaseButton>
+          <BaseButton v-else @click="handleLend">
+            {{ TEXTS.bookCard.btnLend }}
           </BaseButton>
         </template>
       </div>
     </div>
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="1"
+      @close="showLendModal = false"
+      @confirm="confirmLend"
+    />
   </div>
 </template>

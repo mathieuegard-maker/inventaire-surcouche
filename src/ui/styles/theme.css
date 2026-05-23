@@ -756,3 +756,14 @@ body {
   margin-top: var(--spacing-sm);
   color: var(--color-text-muted);
 }
+
+/* Compléments pour le système de prêt & états visuels */
+.status-text-label.lent {
+  color: #c0392b;
+  font-weight: bold;
+}
+
+.badge.lent {
+  background-color: #c0392b;
+  color: var(--color-text-inverse);
+}

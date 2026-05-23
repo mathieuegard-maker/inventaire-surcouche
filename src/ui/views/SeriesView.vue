@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import SelectableBookList from '../components/SelectableBookList.vue';
 import BaseButton from '../components/BaseButton.vue';
+import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
@@ -16,6 +17,7 @@ const seriesId = computed(() => route.params.id as string);
 const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
+const showLendModal = ref(false);
 
 const isAllSelected = computed(() => {
   return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
@@ -28,13 +30,16 @@ const seriesName = computed(() => {
   return seriesId.value;
 });
 
-// Analyse sémantique de la sélection pour le message d'erreur guidé
 const selectedBooks = computed(() => {
   return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
 });
 
-const hasOwnedSelected = computed(() => {
-  return selectedBooks.value.some(book => book.ownershipStatus === 'owned');
+const hasLentSelected = computed(() => {
+  return selectedBooks.value.some(book => !!book.loan);
+});
+
+const hasAvailableOwnedSelected = computed(() => {
+  return selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan);
 });
 
 const hasUnownedSelected = computed(() => {
@@ -42,7 +47,11 @@ const hasUnownedSelected = computed(() => {
 });
 
 const isSelectionMixed = computed(() => {
-  return hasOwnedSelected.value && hasUnownedSelected.value;
+  let categories = 0;
+  if (hasUnownedSelected.value) categories++;
+  if (hasAvailableOwnedSelected.value) categories++;
+  if (hasLentSelected.value) categories++;
+  return categories > 1;
 });
 
 onMounted(async () => {
@@ -97,7 +106,59 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
 
 const handleGroupLend = () => {
   if (isSelectionMixed.value) return;
-  console.log('Action de prêt groupée en cours de dev');
+  showLendModal.value = true;
+};
+
+const confirmGroupLend = async (friendName: string) => {
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('LEND', uri, { friendName });
+    }
+    
+    seriesTomes.value = seriesTomes.value.map(tome => {
+      if (selectedIds.value.includes(tome.uri)) {
+        return {
+          ...tome,
+          loan: {
+            uri: tome.uri,
+            friendName,
+            loanDate: Date.now()
+          }
+        };
+      }
+      return tome;
+    });
+    
+    selectedIds.value = [];
+  } catch (error) {
+    console.error("Erreur lors du prêt groupé :", error);
+  } finally {
+    showLendModal.value = false;
+  }
+};
+
+const handleGroupReturn = async () => {
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+  
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('RETURN', uri);
+    }
+    
+    seriesTomes.value = seriesTomes.value.map(tome => {
+      if (selectedIds.value.includes(tome.uri)) {
+        const { loan, ...rest } = tome;
+        return rest;
+      }
+      return tome;
+    });
+    
+    selectedIds.value = [];
+  } catch (error) {
+    console.error("Erreur lors du retour groupé :", error);
+  }
 };
 </script>
 
@@ -144,9 +205,15 @@ const handleGroupLend = () => {
           </BaseButton>
         </template>
 
-        <template v-else-if="hasOwnedSelected">
+        <template v-else-if="hasAvailableOwnedSelected">
           <BaseButton @click="handleGroupLend">
             {{ TEXTS.bookCard.btnLend }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="hasLentSelected">
+          <BaseButton @click="handleGroupReturn">
+            {{ TEXTS.seriesView.btnReturnGroup || TEXTS.bookCard.btnReturn }}
           </BaseButton>
         </template>
         
@@ -161,6 +228,13 @@ const handleGroupLend = () => {
       v-else
       :items="seriesTomes"
       v-model="selectedIds"
+    />
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="selectedIds.length"
+      @close="showLendModal = false"
+      @confirm="confirmGroupLend"
     />
   </div>
 </template>
