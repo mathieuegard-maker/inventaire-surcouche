@@ -10,10 +10,16 @@ const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
  * Si l'édition élue n'a pas de couverture, on emprunte celle d'une édition sœur.
  */
 async function scavengeMissingImage(entityData: any, workUri: string, entityId: string): Promise<void> {
-  // Si on a déjà une image ou si l'édition n'est reliée à aucune œuvre, on abandonne
-  if (entityData.image || !workUri) return;
+  // Correction du bug `{}` : On vérifie que l'image existe ET qu'elle n'est pas un objet vide
+  const hasValidImage = entityData.image && (
+    typeof entityData.image === 'string' || 
+    (typeof entityData.image === 'object' && Object.keys(entityData.image).length > 0)
+  );
 
-  console.log(`[ENTITY RESOLVER] Couverture manquante pour ${entityId}. Début du pillage sur l'œuvre ${workUri}...`);
+  // Si on a déjà une vraie image ou si l'édition n'est reliée à aucune œuvre, on abandonne
+  if (hasValidImage || !workUri) return;
+
+  console.log(`[ENTITY RESOLVER] Couverture manquante (ou objet vide) pour ${entityId}. Début du pillage sur l'œuvre ${workUri}...`);
   try {
     const sibRes = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
     const sibData = await sibRes.json();
@@ -26,9 +32,15 @@ async function scavengeMissingImage(entityData: any, workUri: string, entityId: 
     const imgData = await imgRes.json();
     
     for (const sUri of topSiblings) {
-      if (imgData.entities?.[sUri]?.image) {
+      const sisImage = imgData.entities?.[sUri]?.image;
+      const isValidSisImage = sisImage && (
+        typeof sisImage === 'string' || 
+        (typeof sisImage === 'object' && Object.keys(sisImage).length > 0)
+      );
+
+      if (isValidSisImage) {
         console.log(`[ENTITY RESOLVER] ✅ Couverture trouvée chez la sœur : ${sUri}. Pillage réussi.`);
-        entityData.image = imgData.entities[sUri].image;
+        entityData.image = sisImage;
         break;
       }
     }
