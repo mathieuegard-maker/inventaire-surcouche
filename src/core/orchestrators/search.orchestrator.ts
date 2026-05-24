@@ -22,7 +22,7 @@ export const searchService = {
 
     console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
     
-    // 1. PHASE IDENTIFICATION : Local-First (Typage explicite élargi pour autoriser null et undefined)
+    // 1. PHASE IDENTIFICATION : Local-First
     let book: HumanizedBook | null | undefined = await databaseService.getBookByIsbn(isbn);
     let source: 'cache' | 'network' = 'cache';
 
@@ -66,6 +66,11 @@ export const searchService = {
     let seriesContext = undefined;
     if (book.seriesId) {
       console.log(`[SEARCH] Délégation de la série à seriesOrchestrator : ${book.seriesId}`);
+      
+      // SCÉNARIO ILLUMINÉ : Lancement asynchrone immédiat (Fire & Forget), aucune pause sur cet écran
+      seriesOrchestrator.startBackgroundHydration(book.seriesId);
+      
+      // Extraction instantanée de l'état du cache local pour libérer la vue de recherche
       seriesContext = await seriesOrchestrator.getCompleteSeriesForUI(book.seriesId, book.series);
     }
 

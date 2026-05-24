@@ -1,34 +1,43 @@
-/* src/ui/styles/theme.css */
+/* ==========================================================================
+   DOMAINE 1 : TOKENS & FONDATIONS (Le cœur du Wireframe Minimaliste)
+   ========================================================================== */
 
 :root {
-  /* Design Tokens : Mode "Wireframe" Strict (Monochrome & Angles droits) */
+  /* Nuancier Monochrome Apaisé - Tout Blanc Strict au repos */
   --color-bg-main: #ffffff;
-  --color-bg-alt: #f4f4f4;
+  --color-bg-alt: #f9f9f9;
   --color-border: #000000;
   --color-text-main: #000000;
   --color-text-muted: #666666;
   --color-text-inverse: #ffffff;
   --color-overlay: rgba(0, 0, 0, 0.8);
   
-  /* Structure brute (Zéro arrondi, zéro ombre) */
+  /* Géométrie Stricte (Zéro arrondi, alignement constant) */
   --border-width: 2px;
-  --radius-none: 0px;
   --spacing-sm: 8px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   
-  /* Typographie */
-  --font-main: monospace, sans-serif;
+  /* Typographie Unique */
+  --font-main: monospace;
 }
 
-/* =========================================
-   STYLES GLOBAUX & STRUCTURE
-========================================= */
+/* Forçage universel du box-sizing pour éliminer tout décalage de taille */
+*, *::before, *::after {
+  box-sizing: border-box !important;
+}
+
+/* Éradication absolue et définitive de TOUS les border-radius de l'application */
+button, input, select, textarea, div, span, img, canvas, video {
+  border-radius: 0px !important;
+}
+
 body {
   margin: 0;
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
   background-color: var(--color-bg-alt);
   color: var(--color-text-main);
+  -webkit-font-smoothing: antialiased;
 }
 
 .view-container {
@@ -41,331 +50,111 @@ body {
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
   margin-top: 0;
-  text-transform: uppercase;
-}
-
-/* =========================================
-   SPLASH SCREEN (App.vue)
-========================================= */
-.splash-screen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  text-align: center;
-  background-color: var(--color-bg-main);
-}
-
-.app-title {
-  color: var(--color-text-main);
-  text-transform: uppercase;
-  border: var(--border-width) solid var(--color-border);
-  padding: var(--spacing-sm) var(--spacing-md);
-}
-
-/* =========================================
-   BOUTONS & ELEMENTS D'INTERACTION
-========================================= */
-.btn-action, .btn-submit, .btn-close, .btn-pwa-update, .btn-link, .btn-primary, .btn-danger, .btn-pwa-close {
-  display: inline-block;
-  padding: 12px 24px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  box-shadow: none !important;
-  font-weight: bold;
-  font-family: var(--font-main);
-  font-size: 16px;
-  cursor: pointer;
-  text-align: center;
-  text-decoration: none;
-  box-sizing: border-box;
-  text-transform: uppercase;
-}
-
-.btn-action:hover, .btn-submit:hover, .btn-close:hover, .btn-pwa-update:hover, .btn-link:hover, .btn-primary:hover, .btn-danger:hover, .btn-pwa-close:hover {
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-}
-
-.btn-submit:disabled, .btn-action:disabled {
-  background-color: var(--color-bg-alt);
-  color: var(--color-text-muted);
-  border-style: dashed;
-  cursor: not-allowed;
-}
-
-/* =========================================
-   CHAMPS DE SAISIE (Inputs)
-========================================= */
-.form-input, .plugin-manual-input {
-  padding: 12px;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  font-family: var(--font-main);
-  font-size: 15px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  width: 100%;
-  box-sizing: border-box;
-  outline: none;
-  box-shadow: none !important;
-}
-
-.form-input:focus, .plugin-manual-input:focus {
-  background-color: var(--color-bg-alt);
-}
-
-/* =========================================
-   CONTENEURS (Modales, Cartes, Box)
-========================================= */
-.login-card, .scanner-box, .modal-box, .result-card, .pwa-toast {
-  background-color: var(--color-bg-main);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  box-shadow: none !important;
-  padding: var(--spacing-lg);
   margin-bottom: var(--spacing-lg);
-}
-
-.login-container {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  padding: var(--spacing-md);
-  box-sizing: border-box;
-  background-color: var(--color-bg-alt);
-}
-
-.login-card {
-  max-width: 400px;
-  width: 100%;
-}
-
-.login-form, .modal-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-/* =========================================
-   MODALE D'ONBOARDING (WelcomeModal)
-========================================= */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background-color: var(--color-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: var(--spacing-md);
-  box-sizing: border-box;
-}
-
-.modal-box {
-  max-width: 450px;
-  width: 100%;
-  text-align: center;
-}
-
-.modal-box h2 {
-  text-transform: uppercase;
-  margin-top: 0;
-}
-
-.modal-text {
-  font-size: 15px;
-  line-height: 1.6;
-  margin: var(--spacing-md) 0;
-}
-
-.modal-text.highlight {
-  border: var(--border-width) dashed var(--color-border);
-  padding: var(--spacing-md);
-  font-weight: bold;
-  background-color: var(--color-bg-alt);
-}
-
-/* =========================================
-   PLUGINS (Scanner & Manuel)
-========================================= */
-.scanner-viewport-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 500px;
-  margin: 0 auto;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-alt);
-}
-
-.scanner-viewport {
-  width: 100% !important;
-  border: none !important;
-}
-
-.plugin-manual-container {
-  border: var(--border-width) dashed var(--color-border);
-  padding: var(--spacing-md);
-  margin-top: var(--spacing-md);
-  background-color: var(--color-bg-main);
-}
-
-.plugin-manual-container h3 {
-  margin-top: 0;
-  text-transform: uppercase;
-}
-
-.plugin-manual-form {
-  display: flex;
-  gap: var(--spacing-sm);
-}
-
-/* =========================================
-   FICHE LIVRE & METADONNEES (BookDetailView)
-========================================= */
-.result-card.success, .result-card.error {
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  text-align: left;
-}
-
-.result-card.error {
-  border-style: dashed;
-  background-color: var(--color-bg-alt);
-}
-
-.error-banner, .success-banner {
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  padding: var(--spacing-sm);
-  margin-bottom: var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 18px;
   font-weight: bold;
   text-transform: uppercase;
+  letter-spacing: -0.5px;
 }
 
-.result-title {
-  margin: 0 0 var(--spacing-sm) 0;
-  font-weight: bold;
-  text-transform: uppercase;
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding-bottom: var(--spacing-sm);
-}
-
-.book-card-layout {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-@media (min-width: 600px) {
-  .book-card-layout {
-    flex-direction: row;
-    align-items: flex-start;
-  }
-}
-
-.book-cover-placeholder {
-  width: 120px;
-  height: 180px;
-  flex-shrink: 0;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-alt);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  font-size: 12px;
-  font-weight: bold;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-}
-
-.book-cover-image {
-  width: 120px;
-  height: auto;
-  flex-shrink: 0;
-  border: var(--border-width) solid var(--color-border);
-  object-fit: contain;
-  background-color: var(--color-bg-alt);
-}
-
-.book-info-layout {
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-}
-
-.book-title {
-  font-size: 20px;
-  font-weight: bold;
-  margin: 0;
-  text-transform: uppercase;
-}
-
-.book-subtitle {
+.view-container h3 {
+  font-family: var(--font-main) !important;
   font-size: 14px;
-  font-weight: normal;
-  margin: 0;
-  color: var(--color-text-muted);
-}
-
-.book-meta-group {
-  border: var(--border-width) dashed var(--color-border);
-  background-color: var(--color-bg-alt);
-  padding: var(--spacing-sm);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.book-meta-item {
-  margin: 0;
-  font-size: 14px;
-}
-
-.book-meta-item strong {
+  font-weight: bold;
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-sm);
   text-transform: uppercase;
 }
 
-.book-actions-layout {
+
+/* ==========================================================================
+   DOMAINE 2 : ATOMES & COMPOSANTS DE BASE (L'interaction unifiée)
+   ========================================================================== */
+
+/* Bouton Unique Universel - Tout Blanc au repos - Alignement vertical du texte */
+.wireframe-btn {
   display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  border-top: var(--border-width) solid var(--color-border);
-  padding-top: var(--spacing-md);
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 48px; /* Hauteur tactile fixe identique pour tous */
+  padding: 0 var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 14px;
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: pointer;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important; /* Force le centrage vertical exact de la police */
+  transition: background-color 0.1s ease;
 }
 
-@media (min-width: 600px) {
-  .book-actions-layout {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
+.wireframe-btn:active {
+  background-color: var(--color-bg-alt) !important;
 }
 
-/* Badges de possession */
+/* Variantes de boutons */
+.wireframe-btn.btn-primary {
+  background-color: var(--color-border) !important;
+  color: var(--color-text-inverse) !important;
+}
+
+.wireframe-btn.btn-primary:active {
+  background-color: var(--color-text-muted) !important;
+}
+
+.wireframe-btn.btn-danger {
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  border-style: solid !important;
+}
+
+.wireframe-btn.btn-danger:active {
+  background-color: #f0f0f0 !important;
+}
+
+/* Champs de saisie standardisés */
+.wireframe-input {
+  width: 100%;
+  height: 48px;
+  padding: 0 var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 14px;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important;
+}
+
+.wireframe-input:focus {
+  outline: none;
+  background-color: var(--color-bg-alt) !important;
+}
+
+.wireframe-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-border);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Badges */
 .badge-container {
   margin-top: var(--spacing-sm);
 }
 
-.badge, .badge.owned, .badge.missing {
+.badge {
   display: inline-block;
-  padding: 4px 8px;
-  border: var(--border-width) solid var(--color-border) !important;
-  border-radius: var(--radius-none) !important;
+  padding: 4px var(--spacing-sm);
+  font-family: var(--font-main) !important;
+  font-size: 11px;
   font-weight: bold;
   text-transform: uppercase;
-  font-size: 14px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
+  border: 1px solid var(--color-border);
 }
 
 .badge.owned {
@@ -373,189 +162,206 @@ body {
   color: var(--color-text-inverse);
 }
 
-/* =========================================
-   NAVIGATION (BookDetailView & SeriesView)
-========================================= */
-.nav-header, .series-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
+.badge.missing {
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+}
+
+
+/* ==========================================================================
+   DOMAINE 3 : STRUCTURATION GLOBALISÉE (Les Molécules partagées)
+   ========================================================================== */
+
+/* En-tête de page unifié (<BaseHeader>) */
+.base-page-header {
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
 }
 
-/* =========================================
-   GRILLE SÉRIES & MINI-CARTES
-========================================= */
-.series-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+.base-header-top-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--spacing-md);
-  margin-top: var(--spacing-md);
+  height: 40px;
 }
 
-.mini-card {
-  cursor: pointer;
-  width: 100%;
+.base-header-title {
+  margin: 0;
+  font-size: 16px;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.base-header-back-btn {
+  background: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
+  padding: 6px var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+  line-height: 1 !important;
 }
 
-.mini-card:hover {
+.base-header-back-btn:active {
   background-color: var(--color-bg-alt);
 }
 
-.cover-container {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 2 / 3;
-  overflow: hidden;
-  border-bottom: var(--border-width) solid var(--color-border);
-  background: var(--color-bg-alt);
-}
-
-.cover-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  color: var(--color-text-muted);
-  text-align: center;
-  box-sizing: border-box;
-}
-
-.fallback-title {
-  font-size: 11px;
-  font-weight: bold;
-  text-transform: uppercase;
-}
-
-.status-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
-}
-
-.status-badge.owned {
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-}
-
-.volume-number {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-  padding: 4px;
-  font-size: 12px;
-  font-weight: bold;
-  text-align: center;
-  text-transform: uppercase;
-}
-
+/* Barre d'action de lot collante (<BatchActionBar>) */
 .sticky-action-bar {
   position: sticky;
   top: 0;
-  z-index: 20;
-  background-color: var(--color-bg-alt);
+  z-index: 100;
+  background-color: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
-  padding: var(--spacing-sm);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
   margin-bottom: var(--spacing-md);
 }
 
-@media (min-width: 600px) {
-  .sticky-action-bar {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-}
-
-.selection-status {
+.action-bar-master-row {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md);
+  height: 30px;
+}
+
+.action-bar-status-text {
   font-weight: bold;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.mixed-error-container {
+  margin-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--spacing-sm);
+}
+
+.error-text-line {
+  color: var(--color-text-main);
+  font-weight: bold;
+  margin: 0 0 2px 0;
+  font-size: 12px;
   text-transform: uppercase;
 }
 
-.group-actions {
+.error-advice-line {
+  color: var(--color-text-muted);
+  margin: 0;
+  font-size: 11px;
+}
+
+.group-actions-grid {
+  margin-top: var(--spacing-md);
   display: flex;
+  flex-direction: column;
   gap: var(--spacing-sm);
-  flex-wrap: wrap;
 }
 
-/* =========================================
-   NOTIFICATIONS SYSTEME PWA (Toast)
-========================================= */
-.pwa-toast {
-  position: fixed;
-  right: 0;
-  bottom: 0;
-  margin: var(--spacing-md);
-  z-index: 9999;
-  max-width: 350px;
-  width: calc(100% - 32px);
+@media (min-width: 600px) {
+  .group-actions-grid {
+    flex-direction: row;
+  }
 }
 
-/* =========================================
-   NOUVELLE MISE EN PAGE : SÉRIES EN LISTE
-========================================= */
+/* Bandeaux de notification et d'alertes */
+.error-banner {
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+}
+
+.success-banner {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Onglets de navigation interne harmonisés (Tout Blanc par défaut) */
+.collection-modes-tabs {
+  display: flex;
+  border: var(--border-width) solid var(--color-border);
+  margin-bottom: var(--spacing-md);
+  background-color: var(--color-bg-main);
+}
+
+.tab-button {
+  flex: 1;
+  background: var(--color-bg-main) !important;
+  border: none;
+  height: 44px;
+  font-family: var(--font-main) !important;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  text-align: center;
+  transition: all 0.1s ease;
+  line-height: 1 !important;
+}
+
+.tab-button:not(:last-child) {
+  border-right: var(--border-width) solid var(--color-border);
+}
+
+.tab-button.active {
+  color: var(--color-text-main) !important;
+  background-color: var(--color-bg-alt) !important;
+}
+
+
+/* ==========================================================================
+   DOMAINE 4 : AFFICHAGE EN LISTES & CARTES (Le rendu géométrique des livres)
+   ========================================================================== */
+
 .series-list-container {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
-  margin-top: var(--spacing-md);
 }
 
+/* Ligne Livre unifiée */
 .mini-card-row {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  width: 100%;
-  border: var(--border-width) solid var(--color-border);
+  align-items: stretch;
   background-color: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
   cursor: pointer;
-  box-sizing: border-box;
-  padding-right: var(--spacing-md);
+  position: relative;
+  height: 80px; /* Hauteur fixe stricte pour un alignement parfait en liste */
 }
 
-.mini-card-row:hover {
+.mini-card-row:active {
   background-color: var(--color-bg-alt);
 }
 
+/* Conteneur image de gauche */
 .row-cover-container {
-  flex-shrink: 0;
-  width: 60px;
-  height: 90px;
-  overflow: hidden;
+  width: 54px;
+  min-width: 54px;
+  background-color: var(--color-bg-alt);
   border-right: var(--border-width) solid var(--color-border);
-  background: var(--color-bg-alt);
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 .row-cover-image {
@@ -565,286 +371,164 @@ body {
 }
 
 .row-cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-muted);
-  font-size: 9px;
+  padding: 4px;
   text-align: center;
-  text-transform: uppercase;
-  font-weight: bold;
 }
 
+.fallback-title {
+  font-size: 8px;
+  display: block;
+  word-break: break-all;
+  line-height: 9px;
+  text-transform: uppercase;
+}
+
+.volume-number {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  font-size: 9px;
+  font-weight: bold;
+  padding: 2px 4px;
+  text-transform: uppercase;
+}
+
+/* Zone texte centrale */
 .row-info-content {
-  flex-grow: 1;
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-md);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
+  justify-content: center;
+  min-width: 0; 
 }
 
 .row-title {
-  font-size: 14px;
-  font-weight: bold;
   margin: 0;
+  font-weight: bold;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+}
+
+.row-series-meta {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.row-authors {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.row-series-meta {
-  font-size: 12px;
-  color: var(--color-text-main);
-  margin: 0;
-}
-
-.row-authors {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin: 0;
-  font-style: italic;
-}
-
-.row-selection-area {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-}
-
-.row-cover-container .status-badge {
-  width: 18px;
-  height: 18px;
-  font-size: 10px;
-  top: 4px;
-  right: 4px;
-}
-
-.row-cover-container .volume-number {
-  padding: 2px;
-  font-size: 10px;
-}
-
-.item-checkbox {
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  margin: 0;
-  accent-color: var(--color-border);
-}
-
+/* Colonne état sémantique */
 .row-status-text-column {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   padding: 0 var(--spacing-sm);
-  min-width: 100px;
-  flex-shrink: 0;
-  text-align: right;
+  border-left: 1px solid var(--color-border);
+  min-width: 80px;
+  justify-content: center;
 }
 
 .status-text-label {
-  font-size: 13px;
+  font-size: 10px;
   font-weight: bold;
   text-transform: uppercase;
+  padding: 2px 6px;
 }
 
 .status-text-label.owned {
-  color: var(--color-text-main);
-}
-
-.status-text-label.wish {
-  font-style: italic;
-  color: var(--color-text-muted);
-}
-
-.status-text-label.none {
-  color: var(--color-text-muted);
-  opacity: 0.5;
-}
-
-.mixed-error-container {
-  border: var(--border-width) dashed var(--color-border);
-  background-color: var(--color-bg-main);
-  padding: var(--spacing-sm) var(--spacing-md);
-  text-align: left;
-  width: 100%;
-}
-
-.error-text-line {
-  margin: 0 0 4px 0;
-  font-weight: bold;
-  font-size: 14px;
-  text-transform: uppercase;
-}
-
-.error-advice-line {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-text-muted);
-}
-
-.row-selection-area {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 50px;             /* Zone élargie à 50px pour le confort du pouce */
-  align-self: stretch;     /* S'étire sur TOUTE la hauteur de la ligne */
-  cursor: pointer;
-  background-color: rgba(0, 0, 0, 0.02); /* Légère délimitation tactile très subtile */
-  border-left: 1px dashed var(--color-border); /* Séparation visuelle claire */
-}
-
-.mini-card-row {
-  padding-right: 0px !important; /* On annule le padding pour que la zone cliquable aille jusqu'au bord droit */
-}
-
-/* =========================================
-   LABORATOIRE LOCAL (DebugDbView)
-========================================= */
-.debug-view-container {
-  padding: var(--spacing-md);
-  font-family: var(--font-main);
-}
-
-.debug-action-bar {
-  margin-bottom: var(--spacing-md);
-  display: flex;
-  gap: var(--spacing-sm);
-}
-
-.debug-search-input {
-  padding: var(--spacing-sm);
-  width: 300px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  font-family: var(--font-main);
-}
-
-.debug-table {
-  width: 100%;
-  border-collapse: collapse;
-  text-align: left;
-  font-size: 12px;
-}
-
-.debug-table th {
-  background-color: var(--color-bg-alt);
-  padding: var(--spacing-sm);
-  border: 1px solid var(--color-border);
-  text-transform: uppercase;
-  font-weight: bold;
-}
-
-.debug-table td {
-  padding: var(--spacing-sm);
-  border: 1px solid var(--color-border);
-}
-
-.debug-cover-img {
-  width: 40px;
-  height: auto;
-  border: 1px solid var(--color-border);
-}
-
-.debug-footer-text {
-  margin-top: var(--spacing-sm);
-  color: var(--color-text-muted);
-}
-
-/* Compléments pour le système de prêt & états visuels */
-.status-text-label.lent {
-  color: #c0392b;
-  font-weight: bold;
-}
-
-.badge.lent {
-  background-color: #c0392b;
-  color: var(--color-text-inverse);
-}
-
-/* Barre de navigation des modes du catalogue (Onglets monochromes) */
-.collection-modes-tabs {
-  display: block;
-  margin-bottom: var(--spacing-md);
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding-bottom: var(--spacing-sm);
-}
-
-.tab-button {
-  display: inline-block;
-  padding: 8px 16px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  border: var(--border-width) solid var(--color-border);
-  margin-right: var(--spacing-sm);
-  margin-bottom: var(--spacing-sm);
-  font-family: var(--font-main);
-  font-size: 13px;
-  font-weight: bold;
-  cursor: pointer;
-  text-transform: uppercase;
-}
-
-.tab-button.active {
   background-color: var(--color-border);
   color: var(--color-text-inverse);
 }
 
-/* Panneau de configuration du catalogue (Filtres et tris) */
-.collection-controls-bar {
-  display: block;
-  margin-bottom: var(--spacing-lg);
-  padding: var(--spacing-md);
-  border: var(--border-width) dashed var(--color-border);
-  background-color: var(--color-bg-main);
-}
-
-.control-group {
-  margin-bottom: var(--spacing-sm);
-}
-
-.control-group label {
-  font-weight: bold;
-  text-transform: uppercase;
-  font-size: 12px;
-  display: block;
-  margin-bottom: 4px;
-}
-
-.control-select {
-  padding: 8px;
-  border: var(--border-width) solid var(--color-border);
-  font-family: var(--font-main);
-  font-size: 14px;
-  background-color: var(--color-bg-main);
+.status-text-label.wish {
+  border: 1px solid var(--color-border);
   color: var(--color-text-main);
-  width: 100%;
-  box-sizing: border-box;
+  background-color: var(--color-bg-main);
 }
 
-/* Composant d'en-tête standardisé */
-.base-page-header {
+.status-text-label.none {
+  color: var(--color-text-muted);
+}
+
+/* Zone tactile de sélection à droite */
+.row-selection-area {
+  width: 54px;
+  min-width: 54px;
+  border-left: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-alt);
   display: flex;
   align-items: center;
-  gap: var(--spacing-md);
+  justify-content: center;
+}
+
+/* Cartes complexes et fiches de détail */
+.result-card {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+.result-title {
+  font-weight: bold;
+  text-transform: uppercase;
   margin-bottom: var(--spacing-md);
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
+  font-size: 14px;
 }
 
-.base-page-header h2 {
-  margin: 0;
-  text-transform: uppercase;
+.book-card-layout {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: flex-start;
 }
 
-/* Alignement standardisé des boutons unitaires */
+.book-cover-detail {
+  width: 90px;
+  min-width: 90px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-alt);
+  object-fit: cover;
+}
+
+.book-meta-column {
+  flex: 1;
+}
+
+.book-meta-item {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.book-description {
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Grille d'actions des fiches */
 .book-actions-flex {
+  margin-top: var(--spacing-md);
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
@@ -855,21 +539,25 @@ body {
     flex-direction: row;
     flex-wrap: wrap;
   }
+  .book-actions-flex .wireframe-btn {
+    flex: 1;
+    min-width: 140px;
+  }
 }
-/* En-têtes des rubriques de regroupement sémantique de la Wishlist */
+
+/* Rubriques de la Wishlist */
 .wishlist-section-header {
   margin-top: var(--spacing-lg);
   margin-bottom: var(--spacing-sm);
-  padding: var(--spacing-sm);
-  background-color: var(--color-bg-alt);
-  border-left: 4px solid var(--color-border);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
   font-weight: bold;
   text-transform: uppercase;
-  font-size: 13px;
-  font-family: var(--font-main);
+  font-size: 12px;
 }
 
-/* Structure des panneaux accordéons monochromes pour les emprunteurs */
+/* Accordéons monochromes propres pour le Carnet de Prêts */
 .loan-borrower-card {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
@@ -885,8 +573,7 @@ body {
   align-items: center;
   font-weight: bold;
   text-transform: uppercase;
-  font-family: var(--font-main);
-  font-size: 14px;
+  font-size: 13px;
 }
 
 .loan-borrower-content {
@@ -895,13 +582,245 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
+  background-color: var(--color-bg-main);
 }
 
-/* Encart d'information chronologique compact */
 .loan-chrono-meta {
-  font-size: 12px;
-  border-bottom: 1px dashed var(--color-border);
+  font-size: 11px;
+  font-weight: bold;
+  border-bottom: 1px solid var(--color-border);
   padding-bottom: 4px;
-  margin-bottom: 4px;
+  margin-bottom: var(--spacing-sm);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+
+/* ==========================================================================
+   DOMAINE 5 : LABORATOIRES & VUES SPÉCIFIQUES (Mire, Caméra & Alignement Capture)
+   ========================================================================== */
+
+/* 1. RE-CONCEPTION DU BLOC D'ACQUISITION MANUELLE (ISBN) - ALIGNEMENT PARFAIT PHOTO */
+#manual-input-container {
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  width: 100% !important;
+}
+
+#manual-input-container form {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: stretch !important; /* Force l'input et le bouton à faire la même hauteur exacte */
+  justify-content: flex-start !important;
+  width: 100% !important;
+  gap: 0 !important; /* Supprime l'espace d'écartement vu sur la capture */
+}
+
+/* Forçage de l'input textuel */
+#manual-input-container input[type="text"],
+#manual-input-container input:not([type="submit"]) {
+  flex: 1 !important;
+  height: 48px !important;
+  padding: 0 var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-right: none !important; /* Supprime la double-bordure centrale */
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 48px !important;
+  margin: 0 !important;
+}
+
+/* Forçage du bouton de validation */
+#manual-input-container button, 
+#manual-input-container input[type="submit"] {
+  width: auto !important;
+  height: 48px !important;
+  padding: 0 var(--spacing-lg) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important;
+  margin: 0 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+#manual-input-container button:active,
+#manual-input-container input[type="submit"]:active {
+  background-color: var(--color-bg-alt) !important;
+}
+
+/* 2. MISE EN PAGE STRICTEDU DASHBOARD (FORÇAGE DES BLOCS EN LARGEUR ABSOLUE) */
+.action-section {
+  margin-bottom: var(--spacing-md);
+  width: 100% !important; /* Élimine le flottement de largeur de la capture */
+  display: block !important;
+}
+
+/* Application uniforme du bouton universel sur les blocs du dashboard */
+.action-section .wireframe-btn {
+  width: 100% !important;
+}
+
+/* 3. Mire de connexion */
+.login-card {
+  background-color: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-lg);
+  margin-top: 80px;
+}
+
+.form-group {
+  margin-bottom: var(--spacing-md);
+}
+
+.form-group label {
+  display: block;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: var(--spacing-sm);
+  font-size: 12px;
+}
+
+/* 4. Section Scanner / Caméra hardware */
+.scanner-box {
+  margin-top: var(--spacing-lg);
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+}
+
+.scanner-viewport-wrapper {
+  position: relative;
+  width: 100%;
+  background-color: #000000;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: var(--border-width) solid var(--color-border);
+}
+
+.scanner-viewport video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanner-viewport canvas.drawingBuffer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.scanner-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+  padding: var(--spacing-md);
+}
+
+/* 5. Toast d'alerte PWA */
+.pwa-toast {
+  position: fixed;
+  right: var(--spacing-md);
+  bottom: var(--spacing-md);
+  padding: var(--spacing-md);
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  z-index: 2000;
+  max-width: 300px;
+}
+
+.pwa-message {
+  margin-bottom: var(--spacing-md);
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.pwa-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.pwa-actions .wireframe-btn {
+  height: 36px;
+  font-size: 11px;
+}
+
+/* Composant de Barre de Progression Monochrome (Wireframe Minimaliste) */
+.progress-container {
+  margin: var(--spacing-lg) 0;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+}
+
+.progress-text-summary {
+  font-family: var(--font-main) !important;
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: var(--spacing-sm);
+}
+
+.progress-track-wrapper {
+  width: 100%;
+  height: 24px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-alt);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-fill-bar {
+  height: 100%;
+  background-color: var(--color-border);
+  transition: width 0.2s linear;
+}
+
+.progress-percentage-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-main) !important;
+  font-size: 11px;
+  font-weight: bold;
+  mix-blend-mode: difference; /* Assure la lisibilité du texte noir/blanc au passage de la barre */
+  color: #ffffff; 
+}
+
+.progress-pedagogic-notice {
+  font-family: var(--font-main) !important;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  margin-top: var(--spacing-sm);
   text-transform: uppercase;
 }

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import SelectableBookList from '../components/SelectableBookList.vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
+import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import type { HumanizedBook } from '../../core/types';
@@ -18,6 +19,14 @@ const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
+
+// Consommation de l'état réactif de la tâche de fond
+const progressState = seriesOrchestrator.getProgress(seriesId.value);
+
+const progressPercentage = computed(() => {
+  if (!progressState.value.total) return 0;
+  return Math.round((progressState.value.current / progressState.value.total) * 100);
+});
 
 const isAllSelected = computed(() => {
   return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
@@ -34,17 +43,9 @@ const selectedBooks = computed(() => {
   return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
 });
 
-const hasLentSelected = computed(() => {
-  return selectedBooks.value.some(book => !!book.loan);
-});
-
-const hasAvailableOwnedSelected = computed(() => {
-  return selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan);
-});
-
-const hasUnownedSelected = computed(() => {
-  return selectedBooks.value.some(book => book.ownershipStatus !== 'owned');
-});
+const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
+const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
+const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
 
 const isSelectionMixed = computed(() => {
   let categories = 0;
@@ -54,26 +55,38 @@ const isSelectionMixed = computed(() => {
   return categories > 1;
 });
 
-// Déduction sémantique automatique du contexte pour la BatchActionBar
 const batchContext = computed(() => {
   if (hasUnownedSelected.value) return 'unowned';
   if (hasLentSelected.value) return 'lent';
   return 'owned';
 });
 
+const loadLocalData = async () => {
+  const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+  if (context) {
+    seriesTomes.value = context.tomes;
+  }
+};
+
 onMounted(async () => {
   isLoading.value = true;
   try {
-    const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
-    if (context) {
-      seriesTomes.value = context.tomes;
-    }
+    await loadLocalData();
   } catch (e) {
     console.error("Erreur lors du chargement sémantique de la saga :", e);
   } finally {
     isLoading.value = false;
   }
 });
+
+// Rafraîchissement réactif en temps réel : si l'utilisateur reste sur cette page,
+// chaque tome qui s'enregistre dans Dexie provoque une mise à jour fluide de l'affichage.
+watch(
+  () => [progressState.value.current, progressState.value.isActive],
+  async () => {
+    await loadLocalData();
+  }
+);
 
 const handleToggleAll = (checked: boolean) => {
   if (!checked) {
@@ -145,7 +158,7 @@ const confirmGroupLend = async (friendName: string) => {
   <div class="view-container">
     <BaseHeader :title="seriesName" showBack>
       <template #actions>
-        <p v-if="!isLoading">{{ seriesTomes.length }} tomes dans la série</p>
+        <p v-if="!isLoading">{{ seriesTomes.length }} tomes</p>
       </template>
     </BaseHeader>
 
@@ -158,6 +171,19 @@ const confirmGroupLend = async (friendName: string) => {
       @update:model-value="handleToggleAll"
       @execute="dispatchBatchAction"
     />
+
+    <div v-if="progressState.isActive" class="progress-container">
+      <div class="progress-text-summary">
+        {{ TEXTS.seriesProgress?.loadingTitle || 'Téléchargement de la saga' }} : {{ progressState.current }} / {{ progressState.total }}
+      </div>
+      <div class="progress-track-wrapper">
+        <div class="progress-fill-bar" :style="{ width: progressPercentage + '%' }"></div>
+        <div class="progress-percentage-label">{{ progressPercentage }}%</div>
+      </div>
+      <p class="progress-pedagogic-notice">
+        {{ TEXTS.seriesProgress?.pedagogicNotice || "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages." }}
+      </p>
+    </div>
 
     <BaseLoading v-if="isLoading" />
 

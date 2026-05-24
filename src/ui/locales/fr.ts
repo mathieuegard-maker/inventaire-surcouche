@@ -137,7 +137,8 @@ batchActionBar: {
   mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
 },
 baseLoading: {
-  message: "Chargement des données en cours..."
+  message: "Chargement des données en cours...",
+  seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le serveur sémantique..."
 },
 // À insérer à la racine de l'objet TEXTS :
 wishlistView: {
@@ -157,5 +158,12 @@ loansView: {
   borrowedCount: "livre(s) dehors",
   sinceLabel: "Prêté le :",
   friendLabel: "Emprunteur :"
+},
+// À insérer ou remplacer dans l'objet TEXTS :
+seriesProgress: {
+  loadingTitle: "Téléchargement de la saga",
+  statusLabel: "Statut :",
+  pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
+  completeSuccess: "Téléchargement terminé."
 }
 };

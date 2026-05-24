@@ -24,9 +24,11 @@ export const syncOrchestrator = {
 
   /**
    * TÂCHE DE FOND : Pré-charge l'ensemble des tomes d'une liste de manière séquentielle
+   * AJOUT : Paramètre optionnel onProgress pour piloter le suivi de l'interface graphique
    */
-  async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[]): Promise<void> {
+  async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[], onProgress?: (current: number, total: number) => void): Promise<void> {
     const CHUNK_SIZE = 50;
+    let completedCount = 0;
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
       console.log(`[BACKGROUND] Aspiration du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} tomes)...`);
@@ -36,6 +38,8 @@ export const syncOrchestrator = {
           // Injection immédiate et forcée du statut correct à la création
           await bookCacheService.saveAndProcessImage(humanizedBook, item.status);
         }
+        completedCount++;
+        onProgress?.(completedCount, items.length);
       }));
     }
   },
@@ -44,8 +48,9 @@ export const syncOrchestrator = {
    * NOUVELLE MÉTHODE SÉCURISÉE : Aspire tous les tomes manquants d'une série en tâche de fond.
    * Intègre un filtrage stricte en AMONT (Upstream Filtering) pour éviter les doublons 
    * et économiser les appels réseaux inutiles.
+   * AJOUT : Prise en charge du callback onProgress pour alimenter la barre de progression réactive
    */
-  async hydrateSeriesInBackground(seriesId: string): Promise<void> {
+  async hydrateSeriesInBackground(seriesId: string, onProgress?: (current: number, total: number) => void): Promise<void> {
     console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
       // 1. DRESSER LE BOUCLIER LOCAL
@@ -89,9 +94,10 @@ export const syncOrchestrator = {
          }
       }
       
-      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES
+      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES AVEC ÉMISSION DE PROGRESSION
       if (missingTomes.length > 0) {
-         await this.hydrateRemainingPhysicalEntities(missingTomes);
+         onProgress?.(0, missingTomes.length); // Initialisation de la barre à 0%
+         await this.hydrateRemainingPhysicalEntities(missingTomes, onProgress);
       }
     } catch (e) {
       console.error(`[BACKGROUND] Erreur sur l'aspiration sécurisée de la saga ${seriesId}`, e);
