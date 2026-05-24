@@ -3,9 +3,9 @@
    ========================================================================== */
 
 :root {
-  /* Nuancier Monochrome Apaisé - Tout Blanc Strict au repos */
-  --color-bg-main: #ffffff;
-  --color-bg-alt: #f9f9f9;
+  /* Nuancier Monochrome Apaisé - Unification sur un blanc cassé unique partout */
+  --color-bg-main: #fafafa;
+  --color-bg-alt: #fafafa;
   --color-border: #000000;
   --color-text-main: #000000;
   --color-text-muted: #666666;
@@ -18,11 +18,14 @@
   --spacing-md: 16px;
   --spacing-lg: 24px;
   
+  /* CONSIGNE GÉNÉRALE DE HAUTEUR : Modifiable en un seul coup de cuillère à pot */
+  --row-height-base: 48px;
+  
   /* Typographie Unique */
   --font-main: monospace;
 }
 
-/* Force le calcul calcul strict pour empêcher tout débordement horizontal */
+/* Force le calcul strict pour empêcher tout débordement horizontal */
 *, *::before, *::after {
   box-sizing: border-box !important;
 }
@@ -38,6 +41,21 @@ body {
   background-color: var(--color-bg-alt);
   color: var(--color-text-main);
   -webkit-font-smoothing: antialiased;
+}
+
+/* FIX TYPOGRAPHIQUE RADICAL : Élimine les dérives des polices natives des navigateurs */
+input, select, textarea, button, option {
+  font-family: var(--font-main) !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+}
+
+/* FIX SÉMANTIQUE : Force les indications de saisie à respecter la charte graphique */
+input::placeholder {
+  font-family: var(--font-main) !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  color: var(--color-text-muted) !important;
 }
 
 .view-container {
@@ -72,13 +90,13 @@ body {
    DOMAINE 2 : ATOMES & COMPOSANTS DE BASE (L'interaction unifiée)
    ========================================================================== */
 
-/* Bouton Unique Universel - Tout Blanc au repos */
+/* Bouton Unique Universel - Hérite de la hauteur générale */
 .wireframe-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 48px;
+  height: var(--row-height-base); /* Liaison à la consigne générale */
   padding: 0 var(--spacing-md);
   font-family: var(--font-main) !important;
   font-size: 14px;
@@ -103,7 +121,7 @@ body {
 }
 
 .wireframe-btn.btn-primary:active {
-  background-color: var(--color-text-muted) !important;
+  background-color: var(--text-muted) !important;
 }
 
 .wireframe-btn.btn-danger {
@@ -116,10 +134,10 @@ body {
   background-color: #f0f0f0 !important;
 }
 
-/* Champs de saisie standardisés */
+/* Champs de saisie standardisés - Héritent de la hauteur générale */
 .wireframe-input {
   width: 100%;
-  height: 48px;
+  height: var(--row-height-base); /* Liaison à la consigne générale */
   padding: 0 var(--spacing-md);
   font-family: var(--font-main) !important;
   font-size: 14px;
@@ -210,28 +228,35 @@ body {
   background-color: var(--color-bg-alt);
 }
 
-/* Barre d'action de lot collante (<BatchActionBar>) */
+/* Barre d'action de lot collante (<BatchActionBar>) 
+   FIX GEOMETRIQUE : Alignement, hauteur de ligne héritée et espace à gauche
+*/
 .sticky-action-bar {
   position: sticky;
   top: 0;
   z-index: 100;
   background-color: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
-  padding: var(--spacing-md);
+  padding: 0 !important; /* On vide les marges internes pour caler la hauteur sur la variable */
   margin-bottom: var(--spacing-md);
+  height: var(--row-height-base); /* Liaison à la consigne générale */
 }
 
 .action-bar-master-row {
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
-  height: 30px;
+  height: 100%;
+  padding-left: var(--spacing-md); /* Crée la respiration au début pour la case à cocher */
 }
 
 .action-bar-status-text {
   font-weight: bold;
   text-transform: uppercase;
   font-size: 13px;
+  display: flex;
+  align-items: center;
+  height: 100%; /* Force le centrage vertical parfait face au texte */
 }
 
 .mixed-error-container {
@@ -292,7 +317,7 @@ body {
   text-align: center;
 }
 
-/* Onglets de navigation interne harmonisés */
+/* Onglets de navigation interne harmonisés - Héritent de la hauteur générale */
 .collection-modes-tabs {
   display: flex;
   border: var(--border-width) solid var(--color-border);
@@ -304,7 +329,7 @@ body {
   flex: 1;
   background: var(--color-bg-main) !important;
   border: none;
-  height: 44px;
+  height: var(--row-height-base); /* Liaison à la consigne générale */
   font-family: var(--font-main) !important;
   font-size: 12px;
   font-weight: bold;
@@ -336,6 +361,7 @@ body {
   gap: var(--spacing-sm);
 }
 
+/* Ligne Livre unifiée - Ajustable localement si surcharge voulue */
 .mini-card-row {
   display: flex;
   align-items: stretch;
@@ -343,7 +369,7 @@ body {
   border: var(--border-width) solid var(--color-border);
   cursor: pointer;
   position: relative;
-  height: 80px;
+  height: 80px; /* Consigne de hauteur spécifique pour le format carte-liste */
 }
 
 .mini-card-row:active {
@@ -627,7 +653,7 @@ body {
 
 #manual-input-container input[type="text"] {
   flex: 1 !important;
-  height: 48px !important;
+  height: var(--row-height-base) !important;
   padding: 0 var(--spacing-md) !important;
   font-family: var(--font-main) !important;
   font-size: 14px !important;
@@ -638,7 +664,7 @@ body {
 #manual-input-container button, 
 #manual-input-container input[type="submit"] {
   width: auto !important;
-  height: 48px !important;
+  height: var(--row-height-base) !important;
   padding: 0 var(--spacing-lg) !important;
   font-family: var(--font-main) !important;
   font-size: 14px !important;
@@ -787,7 +813,7 @@ body {
   border-bottom: var(--border-width) solid var(--color-border) !important;
   text-align: center;
   background-color: var(--color-bg-main);
-  color: var(--color-text-main);
+  color: var(--text-main);
 }
 
 h2.wireframe-title {
@@ -819,13 +845,12 @@ h3.wireframe-title {
   border-right: none !important;
 }
 
-/* FIX : Neutralisation complète du moteur de rendu mobile sur l'input textuel */
 .smart-search-row .elastic-search-input {
   flex: 1 !important;
   display: block !important;
   margin: 0 !important;
-  height: 48px !important;
-  line-height: 48px !important;
+  height: var(--row-height-base) !important;
+  line-height: var(--row-height-base) !important;
   padding: 0 var(--spacing-md) !important;
   font-family: var(--font-main) !important;
   font-size: 14px !important;
@@ -834,8 +859,8 @@ h3.wireframe-title {
   background-color: var(--color-bg-main) !important;
   color: var(--color-text-main) !important;
   outline: none;
-  -webkit-appearance: none !important; /* Neutralise le tassement iOS */
-  appearance: none !important;         /* Neutralise le tassement Android */
+  -webkit-appearance: none !important;
+  appearance: none !important;
 }
 
 .smart-search-row .btn-search-side {
@@ -867,7 +892,7 @@ h3.wireframe-title {
 
 .global-header .header-nav-btn {
   flex: 1 !important;
-  height: 48px !important;
+  height: var(--row-height-base) !important;
   border: none !important;
   border-right: var(--border-width) solid var(--color-border) !important;
   background-color: var(--color-bg-main) !important;
@@ -888,13 +913,130 @@ h3.wireframe-title {
   border-right: none !important;
 }
 
+/* 4. La Barre de Contrôles Unifiée (<CollectionControls>) */
+.collection-controls-bar {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: flex-end !important;
+  gap: var(--spacing-md) !important;
+  margin-bottom: var(--spacing-lg) !important;
+  width: 100% !important;
+}
+
+.collection-controls-bar .control-group {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.collection-controls-bar .control-label {
+  font-family: var(--font-main) !important;
+  font-size: 11px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  margin-bottom: var(--spacing-sm) !important;
+  color: var(--color-text-main) !important;
+}
+
+.collection-controls-bar .control-select {
+  cursor: pointer !important;
+  background-color: var(--color-bg-main) !important;
+}
+
+/* SECTION PAGINATION ET SÉLECTION COMPACTE HYDROFUGE */
+.pagination-orchestrator {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: var(--spacing-sm) !important;
+  margin-bottom: var(--spacing-lg) !important;
+  width: 100% !important;
+}
+
+.search-keyword-row {
+  width: 100% !important;
+}
+
+.search-keyword-input {
+  text-transform: uppercase !important;
+}
+
+.pagination-controls-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: var(--spacing-md) !important;
+  width: 100% !important;
+}
+
+.pagination-upper-controls {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: var(--spacing-md) !important;
+  flex: 1 !important;
+}
+
+/* FIX CADRE DE SELECTION : Devient un conteneur filaire rigide identique aux inputs */
+.pagination-select-all-zone {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--spacing-sm) !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  height: var(--row-height-base) !important;
+  padding: 0 var(--spacing-md) !important;
+  flex: 1 !important;
+}
+
+.pagination-select-all-label {
+  font-family: var(--font-main) !important;
+  font-size: 13px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
+.page-size-selector-box {
+  width: 160px !important;
+}
+
+.page-size-selector-box .size-select {
+  cursor: pointer !important;
+  font-weight: bold !important;
+}
+
+.page-navigation-buttons {
+  display: flex !important;
+  align-items: center !important;
+  gap: var(--spacing-sm) !important;
+}
+
+.page-navigation-buttons .nav-arrow-btn {
+  width: auto !important;
+  padding: 0 var(--spacing-sm) !important;
+}
+
+.page-navigation-buttons .nav-arrow-btn:disabled {
+  opacity: 0.4 !important;
+  cursor: not-allowed !important;
+}
+
+.pagination-counter-label {
+  font-family: var(--font-main) !important;
+  font-size: 12px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  white-space: nowrap !important;
+}
+
 
 /* ==========================================================================
    DOMAINE 7 : RUPTURES ERGONOMIQUES REACTIVES (ÉCRANS INFERIEURS A 600PX)
    ========================================================================== */
 
 @media screen and (max-width: 600px) {
-  /* 1. SEUIL ACQUISITION : Empilement vertical strict de la ligne ISBN */
+  /* 1. SEUIL ACQUISITION : Empilement de la ligne ISBN */
   .smart-search-row {
     flex-direction: column !important;
     gap: var(--spacing-sm) !important;
@@ -903,15 +1045,14 @@ h3.wireframe-title {
   .smart-search-row .btn-scan-side,
   .smart-search-row .btn-search-side {
     width: 100% !important;
-    height: 48px !important;
+    height: var(--row-height-base) !important;
     border: var(--border-width) solid var(--color-border) !important;
   }
   
-  /* FIX MOBILE : Alignement absolu de la boîte de saisie sur la hauteur 48px des boutons frères */
   .smart-search-row .elastic-search-input {
     width: 100% !important;
-    height: 48px !important;
-    line-height: 48px !important; /* Force le texte à se caler pile au centre vertical */
+    height: var(--row-height-base) !important;
+    line-height: var(--row-height-base) !important;
     border: var(--border-width) solid var(--color-border) !important;
   }
 
@@ -926,13 +1067,12 @@ h3.wireframe-title {
     width: 100% !important;
   }
   
-  /* Bouton d'activation [ MENU ] / [ FERMER ] */
   .global-header .menu-trigger-btn {
     position: relative !important;
     z-index: 100000 !important;
     pointer-events: auto !important;
     width: 100% !important;
-    height: 48px !important;
+    height: var(--row-height-base) !important;
     border: var(--border-width) solid var(--color-border) !important;
     background-color: var(--color-bg-main) !important;
     color: var(--color-text-main) !important;
@@ -943,7 +1083,6 @@ h3.wireframe-title {
     cursor: pointer !important;
   }
   
-  /* Tiroir accordéon */
   .global-header .menu-accordion-drawer {
     display: flex !important;
     flex-direction: column !important;
@@ -955,10 +1094,9 @@ h3.wireframe-title {
     z-index: 100000 !important;
   }
   
-  /* Les cases d'actions empilées à 100% de largeur tactile */
   .global-header .menu-drawer-item {
     width: 100% !important;
-    height: 48px !important;
+    height: var(--row-height-base) !important;
     border: none !important;
     border-bottom: var(--border-width) solid var(--color-border) !important;
     background-color: var(--color-bg-main) !important;
@@ -968,12 +1106,58 @@ h3.wireframe-title {
     font-weight: bold !important;
     text-transform: uppercase !important;
     cursor: pointer !important;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
   }
   
   .global-header .menu-drawer-item:last-child {
     border-bottom: none !important;
+  }
+
+  /* 3. SEUIL CONTROLES : Empilement des filtres et tris */
+  .collection-controls-bar {
+    flex-direction: column !important;
+    gap: var(--spacing-md) !important;
+  }
+  
+  .collection-controls-bar .control-group {
+    width: 100% !important;
+  }
+  
+  .collection-controls-bar .wireframe-input {
+    width: 100% !important;
+    height: var(--row-height-base) !important;
+  }
+
+  /* RECONFIGURATION MACRO PAGINATION MOBILE : Économise une ligne complète */
+  .pagination-controls-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: var(--spacing-sm) !important;
+  }
+
+  .pagination-upper-controls {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: var(--spacing-sm) !important;
+    width: 100% !important;
+  }
+
+  .pagination-select-all-zone {
+    flex: 1 !important;
+  }
+
+  .page-size-selector-box {
+    width: auto !important;
+    flex: 1 !important;
+  }
+
+  .page-navigation-buttons {
+    width: 100% !important;
+    justify-content: space-between !important;
+  }
+  
+  .page-navigation-buttons .nav-arrow-btn {
+    flex: 1 !important;
   }
 }

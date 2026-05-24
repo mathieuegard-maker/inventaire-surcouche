@@ -130,7 +130,7 @@ export const TEXTS = {
   },
   batchActionBar: {
     selectedCount: "sélectionné(s)",
-    emptySelection: "Aucun élément sélectionné",
+    emptySelection: "Tout sélectionner", /* FIX : Message explicite pour guider l'utilisateur au repos */
     mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
     mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
   },

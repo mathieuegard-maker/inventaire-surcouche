@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, onMounted, computed, watch } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
+import BaseTitle from '../components/BaseTitle.vue';
+import CollectionControls from '../components/CollectionControls.vue';
+import SeriesMiniCard from '../components/SeriesMiniCard.vue';
+import WireframeTable from '../components/WireframeTable.vue';
+import WireframePagination from '../components/WireframePagination.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
@@ -13,19 +18,29 @@ import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
+const route = useRoute();
 
 const allOwnedBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
 
-const currentMode = ref<'books' | 'series' | 'oneshots'>('books');
+// COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante si elle existe
+const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || 'books');
 const selectedGenre = ref('all');
 const currentSort = ref('title');
+
+const displayedBooks = ref<HumanizedBook[]>([]);
+const displayedSeries = ref<any[]>([]);
 
 const isAllSelected = computed(() => {
   const targets = currentSortBooks.value;
   return targets.length > 0 && selectedIds.value.length === targets.length;
+});
+
+// COHÉRENCE ROUTAGE : Met à jour l'URL de manière transparente dès que l'utilisateur change d'onglet
+watch(currentMode, (newMode) => {
+  router.replace({ query: { ...route.query, mode: newMode } });
 });
 
 onMounted(async () => {
@@ -38,7 +53,6 @@ const fetchCatalogue = async () => {
     const cached = await databaseService.getAllBooksFromCache();
     const owned = cached.filter(b => b.ownershipStatus === 'owned');
     
-    // HYDRATATION DES PRÊTS : On injecte les données de prêt locales dans chaque livre du catalogue
     for (const livre of owned) {
       const activeLoan = await databaseService.getLoan(livre.uri);
       if (activeLoan) {
@@ -55,9 +69,14 @@ const fetchCatalogue = async () => {
   }
 };
 
+// COHÉRENCE ROUTAGE : Injection du mode actuel dans l'URL lors du départ vers la fiche série
 const navigateToSeries = (seriesId: string) => {
   if (seriesId) {
-    router.push({ name: 'SeriesView', params: { id: seriesId } });
+    router.push({ 
+      name: 'SeriesView', 
+      params: { id: seriesId },
+      query: { fromMode: currentMode.value }
+    });
   }
 };
 
@@ -115,14 +134,22 @@ const seriesGondolas = computed(() => {
     };
   });
 
-  return gondolas.sort((a, b) => a.name.localeCompare(b.name));
+  return gondolas.sort((a, b) => {
+    const cleanA = a.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+    const cleanB = b.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+    return cleanA.localeCompare(cleanB);
+  });
 });
 
 const currentSortBooks = computed(() => {
   const list = [...processedBooks.value];
 
   if (currentSort.value === 'title') {
-    return list.sort((a, b) => a.title.localeCompare(b.title));
+    return list.sort((a, b) => {
+      const cleanA = a.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+      const cleanB = b.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+      return cleanA.localeCompare(cleanB);
+    });
   } else if (currentSort.value === 'author') {
     return list.sort((a, b) => {
       const authA = a.authors && a.authors[0] ? a.authors[0] : '';
@@ -190,7 +217,8 @@ const resetSelection = () => {
 
 <template>
   <div class="view-container">
-    <BaseHeader :title="TEXTS.collectionView?.title" showBack />
+    <BaseHeader />
+    <BaseTitle :text="TEXTS.collectionView?.title" level="h2" />
 
     <div class="collection-modes-tabs">
       <button :class="['tab-button', { active: currentMode === 'books' }]" @click="currentMode = 'books'; resetSelection()">
@@ -204,70 +232,83 @@ const resetSelection = () => {
       </button>
     </div>
 
+    <CollectionControls
+      v-if="!isLoading"
+      :genres="dynamicGenres"
+      :currentMode="currentMode"
+      :genreValue="selectedGenre"
+      :sortValue="currentSort"
+      @update:genreValue="(val) => { selectedGenre = val; resetSelection(); }"
+      @update:sortValue="(val) => currentSort = val"
+    />
+
+    <WireframePagination
+      v-if="!isLoading && currentMode === 'series'"
+      :items="seriesGondolas"
+      :searchKeys="['name']"
+      :hasSelectAll="false"
+      @update:processedItems="(val) => displayedSeries = val"
+    />
+
+    <WireframePagination
+      v-if="!isLoading && currentMode !== 'series'"
+      :items="currentSortBooks"
+      :searchKeys="['title']"
+      :hasSelectAll="true"
+      :selectAllValue="isAllSelected"
+      :selectedCount="selectedIds.length"
+      @update:selectAllValue="handleToggleAll"
+      @update:processedItems="(val) => displayedBooks = val"
+    />
+
     <BatchActionBar 
       v-if="!isLoading && currentMode !== 'series'"
-      :model-value="isAllSelected"
       :selected-count="selectedIds.length"
       :is-mixed="isSelectionMixed"
       :context="batchContext"
-      @update:model-value="handleToggleAll"
       @execute="dispatchBatchAction"
     />
 
-    <div class="collection-controls-bar" v-if="!isLoading">
-      <div class="control-group">
-        <label>{{ TEXTS.collectionView?.filterGenreLabel }}</label>
-        <select v-model="selectedGenre" class="control-select" @change="resetSelection">
-          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
-          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
-        </select>
-      </div>
-
-      <div class="control-group" v-if="currentMode !== 'series'">
-        <label>{{ TEXTS.collectionView?.sortLabel }}</label>
-        <select v-model="currentSort" class="control-select">
-          <option value="title">{{ TEXTS.collectionView?.sortByTitle }}</option>
-          <option value="author">{{ TEXTS.collectionView?.sortByAuthor }}</option>
-          <option value="date">{{ TEXTS.collectionView?.sortByDate }}</option>
-        </select>
-      </div>
-    </div>
-
     <BaseLoading v-if="isLoading" />
 
-    <div class="series-list-container" v-else>
-      <template v-if="currentMode === 'series'">
-        <BaseBanner v-if="seriesGondolas.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
-        
-        <div v-for="saga in seriesGondolas" :key="saga.id" class="mini-card-row" @click="navigateToSeries(saga.id)">
-          <div class="row-cover-container">
-            <img v-if="saga.coverUrl" :src="saga.coverUrl" class="row-cover-image" />
-            <div v-else class="row-cover-fallback"><span class="fallback-title">{{ saga.name }}</span></div>
-          </div>
-          <div class="row-info-content">
-            <p class="row-title">{{ saga.name }}</p>
-            <p class="row-series-meta">{{ saga.ownedCount }} {{ TEXTS.collectionView?.tomesOwned }}</p>
-          </div>
-        </div>
-      </template>
+    <template v-else>
+      <div v-if="currentMode === 'series' && displayedSeries.length === 0">
+        <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+      </div>
+      <div v-else-if="currentMode !== 'series' && displayedBooks.length === 0">
+        <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+      </div>
 
-      <template v-else>
-        <BaseBanner v-if="currentSortBooks.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
-        
-        <BookMiniCard 
-          v-for="livre in currentSortBooks" 
-          :key="livre.uri" 
-          :book="livre"
-          :model-value="selectedIds.includes(livre.uri)"
-          @update:model-value="(val) => {
-            if(val) {
-              if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-            }
-            else selectedIds = selectedIds.filter(id => id !== livre.uri);
-          }"
-        />
-      </template>
-    </div>
+      <WireframeTable v-else>
+        <template v-if="currentMode === 'series'">
+          <SeriesMiniCard
+            v-for="saga in displayedSeries"
+            :key="saga.id"
+            :name="saga.name"
+            :ownedCount="saga.ownedCount"
+            :coverUrl="saga.coverUrl"
+            @click="navigateToSeries(saga.id)"
+          />
+        </template>
+
+        <template v-else>
+          <BookMiniCard 
+            v-for="livre in displayedBooks" 
+            :key="livre.uri" 
+            :book="livre"
+            :model-value="selectedIds.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if (val) {
+                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+              } else {
+                const idx = selectedIds.indexOf(livre.uri);
+                if (idx > -1) selectedIds.splice(idx, 1);
+              }
+            }"
+          />
+        </template>
+      </WireframeTable>
+    </template>
 
     <LendModal
       :show="showLendModal"

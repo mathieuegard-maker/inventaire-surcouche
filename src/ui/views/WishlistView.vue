@@ -4,9 +4,12 @@ import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
+import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
+import WireframeTable from '../components/WireframeTable.vue';
+import WireframePagination from '../components/WireframePagination.vue'; // AJOUT : Import du paginateur intelligent
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
@@ -16,6 +19,9 @@ const isLoading = ref(true);
 
 const selectedGenre = ref('all');
 const selectedAuthor = ref('all');
+
+// Référence locale destinée à stocker la tranche de livres actuellement visible
+const displayedWishBooks = ref<HumanizedBook[]>([]);
 
 const isAllSelected = computed(() => {
   const targets = filteredBooks.value;
@@ -73,10 +79,13 @@ const filteredBooks = computed(() => {
   return list;
 });
 
-const groupedWishlist = computed(() => {
-  const list = filteredBooks.value;
+/**
+ * CONTRÔLE DE GROUPEMENT PAGINÉ : Construit les groupes sémantiques basés EXCLUSIVEMENT
+ * sur la tranche de 20, 50 ou 100 livres actuellement visible sur la page active.
+ */
+const sortedSeriesGroups = computed(() => {
+  const list = displayedWishBooks.value;
   const seriesGroups: Record<string, HumanizedBook[]> = {};
-  const independents: HumanizedBook[] = [];
 
   list.forEach(book => {
     if (book.series || book.seriesId) {
@@ -85,8 +94,6 @@ const groupedWishlist = computed(() => {
         seriesGroups[key] = [];
       }
       seriesGroups[key].push(book);
-    } else {
-      independents.push(book);
     }
   });
 
@@ -94,12 +101,19 @@ const groupedWishlist = computed(() => {
     seriesGroups[key].sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
   }
 
-  independents.sort((a, b) => a.title.localeCompare(b.title));
+  return Object.keys(seriesGroups)
+    .map(name => ({ name, tomes: seriesGroups[name] }))
+    .sort((a, b) => {
+      const cleanA = a.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+      const cleanB = b.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
+      return cleanA.localeCompare(cleanB);
+    });
+});
 
-  return {
-    series: seriesGroups,
-    independents
-  };
+const independentBooksSorted = computed(() => {
+  return displayedWishBooks.value
+    .filter(b => !b.series && !b.seriesId)
+    .sort((a, b) => a.title.localeCompare(b.title));
 });
 
 const handleToggleAll = (checked: boolean) => {
@@ -130,7 +144,26 @@ const resetFilters = () => {
 
 <template>
   <div class="view-container">
-    <BaseHeader :title="TEXTS.wishlistView?.title" showBack />
+    <BaseHeader />
+    <BaseTitle :text="TEXTS.wishlistView?.title" level="h2" />
+
+    <div class="collection-controls-bar" v-if="!isLoading">
+      <div class="control-group">
+        <label class="control-label">{{ TEXTS.collectionView?.filterGenreLabel }}</label>
+        <select v-model="selectedGenre" class="wireframe-input control-select" @change="resetFilters">
+          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
+          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label class="control-label">{{ TEXTS.wishlistView?.filterAuthorLabel }}</label>
+        <select v-model="selectedAuthor" class="wireframe-input control-select" @change="resetFilters">
+          <option value="all">{{ TEXTS.wishlistView?.filterAuthorAll }}</option>
+          <option v-for="author in dynamicAuthors" :key="author" :value="author">{{ author }}</option>
+        </select>
+      </div>
+    </div>
 
     <BatchActionBar 
       v-if="!isLoading"
@@ -142,64 +175,61 @@ const resetFilters = () => {
       @execute="dispatchBatchAction"
     />
 
-    <div class="collection-controls-bar" v-if="!isLoading">
-      <div class="control-group">
-        <label>{{ TEXTS.collectionView?.filterGenreLabel }}</label>
-        <select v-model="selectedGenre" class="control-select" @change="resetFilters">
-          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
-          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
-        </select>
-      </div>
-
-      <div class="control-group">
-        <label>{{ TEXTS.wishlistView?.filterAuthorLabel }}</label>
-        <select v-model="selectedAuthor" class="control-select" @change="resetFilters">
-          <option value="all">{{ TEXTS.wishlistView?.filterAuthorAll }}</option>
-          <option v-for="author in dynamicAuthors" :key="author" :value="author">{{ author }}</option>
-        </select>
-      </div>
-    </div>
+    <WireframePagination
+      v-if="!isLoading"
+      :items="filteredBooks"
+      :searchKeys="['title']"
+      @update:processedItems="(val) => displayedWishBooks = val"
+    />
 
     <BaseLoading v-if="isLoading" />
 
-    <div class="series-list-container" v-else>
-      <BaseBanner v-if="filteredBooks.length === 0" type="error" :message="TEXTS.wishlistView?.emptyWishlist" />
+    <div class="main-content-wrapper" v-else>
+      <BaseBanner v-if="displayedWishBooks.length === 0" type="error" :message="TEXTS.wishlistView?.emptyWishlist" />
 
       <template v-else>
-        <div v-for="(tomes, seriesName) in groupedWishlist.series" :key="seriesName">
+        <div v-for="group in sortedSeriesGroups" :key="group.name">
           <div class="wishlist-section-header">
-            {{ TEXTS.wishlistView?.seriesSection }}{{ seriesName }}
+            {{ TEXTS.wishlistView?.seriesSection }}{{ group.name }}
           </div>
-          <BookMiniCard 
-            v-for="livre in tomes" 
-            :key="livre.uri" 
-            :book="livre"
-            :model-value="selectedIds.includes(livre.uri)"
-            @update:model-value="(val) => {
-              if(val) {
-                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-              }
-              else selectedIds = selectedIds.filter(id => id !== livre.uri);
-            }"
-          />
+          <WireframeTable>
+            <BookMiniCard 
+              v-for="livre in group.tomes" 
+              :key="livre.uri" 
+              :book="livre"
+              :model-value="selectedIds.includes(livre.uri)"
+              @update:model-value="(val) => {
+                if (val) {
+                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                } else {
+                  const idx = selectedIds.indexOf(livre.uri);
+                  if (idx > -1) selectedIds.splice(idx, 1);
+                }
+              }"
+            />
+          </WireframeTable>
         </div>
 
-        <div v-if="groupedWishlist.independents.length > 0">
+        <div v-if="independentBooksSorted.length > 0">
           <div class="wishlist-section-header">
             ✨ {{ TEXTS.wishlistView?.independentBooks }}
           </div>
-          <BookMiniCard 
-            v-for="livre in groupedWishlist.independents" 
-            :key="livre.uri" 
-            :book="livre"
-            :model-value="selectedIds.includes(livre.uri)"
-            @update:model-value="(val) => {
-              if(val) {
-                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-              }
-              else selectedIds = selectedIds.filter(id => id !== livre.uri);
-            }"
-          />
+          <WireframeTable>
+            <BookMiniCard 
+              v-for="livre in independentBooksSorted" 
+              :key="livre.uri" 
+              :book="livre"
+              :model-value="selectedIds.includes(livre.uri)"
+              @update:model-value="(val) => {
+                if (val) {
+                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                } else {
+                  const idx = selectedIds.indexOf(livre.uri);
+                  if (idx > -1) selectedIds.splice(idx, 1);
+                }
+              }"
+            />
+          </WireframeTable>
         </div>
       </template>
     </div>

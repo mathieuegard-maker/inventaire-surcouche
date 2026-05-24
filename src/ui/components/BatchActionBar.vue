@@ -1,78 +1,45 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import BaseButton from './BaseButton.vue';
-import { TEXTS } from '../locales/fr';
-
-const props = defineProps<{
-  modelValue: boolean; // État de la checkbox maîtresse (isAllSelected)
+defineProps<{
   selectedCount: number;
   isMixed: boolean;
-  context: 'unowned' | 'owned' | 'lent' | 'wishlist'; // AJOUT : Type sémantique spécifique
+  context: 'owned' | 'lent' | 'wishlist' | 'unowned';
 }>();
 
 const emit = defineEmits<{
-  (e: 'update:modelValue', value: boolean): void;
   (e: 'execute', action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN'): void;
 }>();
-
-const checkboxState = computed({
-  get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val)
-});
 </script>
 
 <template>
-  <div class="sticky-action-bar">
-    <div class="selection-status">
-      <input 
-        type="checkbox" 
-        class="wireframe-checkbox"
-        v-model="checkboxState"
-      />
-      <span>
-        {{ selectedCount > 0 
-          ? `${selectedCount} ${TEXTS.batchActionBar?.selectedCount}` 
-          : TEXTS.batchActionBar?.emptySelection 
-        }}
-      </span>
-    </div>
+  <div class="sticky-actions-wrapper" v-if="selectedCount > 0" style="margin-bottom: var(--spacing-md); width: 100%;">
+    <div class="group-actions-grid" style="margin-top: 0;">
+      <template v-if="isMixed">
+        <div class="error-banner">
+          <p class="error-text-line">Sélection mixte invalide</p>
+          <p class="error-advice-line">Veuillez homogénéiser votre sélection pour appliquer une action groupée.</p>
+        </div>
+      </template>
 
-    <div class="group-actions" v-if="selectedCount > 0">
-      
-      <div v-if="isMixed" class="mixed-error-container">
-        <p class="error-text-line">⚠️ {{ TEXTS.batchActionBar?.mixedSelectionError }}</p>
-        <p class="error-advice-line">{{ TEXTS.batchActionBar?.mixedSelectionAdvice }}</p>
-      </div>
+      <template v-else-if="context === 'lent'">
+        <button class="wireframe-btn btn-primary" @click="emit('execute', 'RETURN')">
+          Confirmer le Retour de Lot
+        </button>
+      </template>
+
+      <template v-else-if="context === 'wishlist' || context === 'unowned'">
+        <button class="wireframe-btn btn-primary" @click="emit('execute', 'ADD_INVENTORY')">
+          Ajouter le Lot à ma Collection
+        </button>
+      </template>
 
       <template v-else>
-        <template v-if="context === 'unowned'">
-          <BaseButton @click="emit('execute', 'ADD_INVENTORY')">
-            {{ TEXTS.bookCard?.btnAddInventory }}
-          </BaseButton>
-          <BaseButton @click="emit('execute', 'ADD_WISHLIST')">
-            {{ TEXTS.bookCard?.btnAddWishlist }}
-          </BaseButton>
-        </template>
-
-        <template v-else-if="context === 'wishlist'">
-          <BaseButton @click="emit('execute', 'ADD_INVENTORY')">
-            {{ TEXTS.bookCard?.btnAddInventory }}
-          </BaseButton>
-        </template>
-
-        <template v-else-if="context === 'owned'">
-          <BaseButton @click="emit('execute', 'LEND')">
-            {{ TEXTS.bookCard?.btnLend }}
-          </BaseButton>
-        </template>
-
-        <template v-else-if="context === 'lent'">
-          <BaseButton @click="emit('execute', 'RETURN')">
-            {{ TEXTS.seriesView?.btnReturnGroup || TEXTS.bookCard?.btnReturn || 'Livre rendu' }}
-          </BaseButton>
-        </template>
+        <button class="wireframe-btn btn-primary" @click="emit('execute', 'LEND')">
+          Prêter le Lot Sélectionné
+        </button>
+        <button class="wireframe-btn btn-danger" @click="emit('execute', 'ADD_WISHLIST')">
+          Basculer vers la Wishlist
+        </button>
       </template>
-      
     </div>
   </div>
 </template>

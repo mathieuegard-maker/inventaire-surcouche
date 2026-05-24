@@ -3,6 +3,7 @@ import { ref, onMounted, computed, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import SelectableBookList from '../components/SelectableBookList.vue';
 import BaseHeader from '../components/BaseHeader.vue';
+import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
@@ -20,7 +21,6 @@ const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
 
-// Consommation de l'état réactif de la tâche de fond
 const progressState = seriesOrchestrator.getProgress(seriesId.value);
 
 const progressPercentage = computed(() => {
@@ -79,8 +79,6 @@ onMounted(async () => {
   }
 });
 
-// Rafraîchissement réactif en temps réel : si l'utilisateur reste sur cette page,
-// chaque tome qui s'enregistre dans Dexie provoque une mise à jour fluide de l'affichage.
 watch(
   () => [progressState.value.current, progressState.value.isActive],
   async () => {
@@ -156,21 +154,8 @@ const confirmGroupLend = async (friendName: string) => {
 
 <template>
   <div class="view-container">
-    <BaseHeader :title="seriesName" showBack>
-      <template #actions>
-        <p v-if="!isLoading">{{ seriesTomes.length }} tomes</p>
-      </template>
-    </BaseHeader>
-
-    <BatchActionBar 
-      v-if="!isLoading"
-      :model-value="isAllSelected"
-      :selected-count="selectedIds.length"
-      :is-mixed="isSelectionMixed"
-      :context="batchContext"
-      @update:model-value="handleToggleAll"
-      @execute="dispatchBatchAction"
-    />
+    <BaseHeader />
+    <BaseTitle :text="seriesName" level="h2" />
 
     <div v-if="progressState.isActive" class="progress-container">
       <div class="progress-text-summary">
@@ -184,6 +169,16 @@ const confirmGroupLend = async (friendName: string) => {
         {{ TEXTS.seriesProgress?.pedagogicNotice || "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages." }}
       </p>
     </div>
+
+    <BatchActionBar 
+      v-if="!isLoading"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="isSelectionMixed"
+      :context="batchContext"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
 
     <BaseLoading v-if="isLoading" />
 
