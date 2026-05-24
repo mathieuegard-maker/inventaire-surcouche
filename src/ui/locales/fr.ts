@@ -25,8 +25,8 @@ export const TEXTS = {
   },
   scanner: {
     title: "Scanner le code-barres d'un livre",
-    btnOpen: "📸 Scanner un livre",
-    btnClose: "❌ Fermer le scanner",
+    btnOpen: "Scanner un livre",
+    btnClose: "Fermer le scanner",
     searching: "Analyse du code en cours...",
     errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
     successDetected: "Recherche terminée",
@@ -85,14 +85,14 @@ export const TEXTS = {
     cacheLog: "Non trouvé en cache, résolution réseau pour :",
     fetchError: "Impossible de récupérer les détails de cette édition.",
     loadError: "Une erreur est survenue lors de la récupération des données.",
-    btnBack: "← Retour",
-    btnSeries: "📚 Voir la saga",
+    btnBack: "Retour",
+    btnSeries: "Voir la saga",
     loadingSpec: "Chargement des spécifications de l'édition...",
     noCover: "Pas de couverture",
     synopsis: "Synopsis"
   },
   debugDbView: {
-    title: "🛠 Laboratoire Local (Dexie DB)",
+    title: "Laboratoire Local (Dexie DB)",
     placeholder: "Rechercher par titre, URI, wd:...",
     btnRefresh: "Rafraîchir",
     btnClear: "Vider le cache",
@@ -106,64 +106,62 @@ export const TEXTS = {
     clearConfirm: "Vider intégralement le cache local ?"
   },
   lendModal: {
-  title: "📋 Prêter",
-  instructionSingular: "Indiquez le nom de la personne à qui vous confiez cet exemplaire :",
-  instructionPlural: "Indiquez le nom de la personne à qui vous confiez ces exemplaires :",
-  placeholder: "Nom de l'emprunteur...",
-  cancel: "Annuler",
-  confirm: "Confirmer le prêt"
+    title: "Prêter",
+    instructionSingular: "Indiquez le nom de la personne à qui vous confiez cet exemplaire :",
+    instructionPlural: "Indiquez le nom de la personne à qui vous confiez ces exemplaires :",
+    placeholder: "Nom de l'emprunteur...",
+    cancel: "Annuler",
+    confirm: "Confirmer le prêt"
   },
-  // À insérer à la racine de l'objet TEXTS :
-collectionView: {
-  title: "Ma Collection",
-  modeBooks: "Tous les livres",
-  modeSeries: "Mes Séries",
-  modeOneShots: "Hors Série (One-Shots)",
-  filterGenreLabel: "Filtrer par genre :",
-  filterGenreAll: "Tous les genres",
-  sortLabel: "Trier par :",
-  sortByTitle: "Titre (A-Z)",
-  sortByAuthor: "Premier auteur (A-Z)",
-  sortByDate: "Derniers ajouts",
-  emptyCollection: "Aucun ouvrage trouvé dans votre collection actuelle.",
-  tomesOwned: "tome(s) possédé(s) dans la bibliothèque",
-  noAuthor: "Auteur non spécifié"
-},
-// À insérer sous la clé "seriesView" ou à la racine de l'objet TEXTS :
-batchActionBar: {
-  selectedCount: "sélectionné(s)",
-  emptySelection: "Aucun élément sélectionné",
-  mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
-  mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
-},
-baseLoading: {
-  message: "Chargement des données en cours...",
-  seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le serveur sémantique..."
-},
-// À insérer à la racine de l'objet TEXTS :
-wishlistView: {
-  title: "Ma Wishlist",
-  emptyWishlist: "Votre liste d'envies est actuellement vide.",
-  filterAuthorLabel: "Filtrer par auteur :",
-  filterAuthorAll: "Tous les auteurs",
-  independentBooks: "Ouvrages indépendants",
-  seriesSection: "Série : "
-},
-// À insérer à la racine de l'objet TEXTS :
-loansView: {
-  title: "Carnet de Prêts",
-  modeBorrower: "Par Emprunteur",
-  modeChronological: "Par Ancienneté",
-  emptyLoans: "Aucun livre n'est actuellement confié à un proche.",
-  borrowedCount: "livre(s) dehors",
-  sinceLabel: "Prêté le :",
-  friendLabel: "Emprunteur :"
-},
-// À insérer ou remplacer dans l'objet TEXTS :
-seriesProgress: {
-  loadingTitle: "Téléchargement de la saga",
-  statusLabel: "Statut :",
-  pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
-  completeSuccess: "Téléchargement terminé."
-}
+  collectionView: {
+    title: "Ma Collection",
+    modeBooks: "Tous les livres",
+    modeSeries: "Mes Séries",
+    modeOneShots: "Hors Série (One-Shots)",
+    filterGenreLabel: "Filtrer par genre :",
+    filterGenreAll: "Tous les genres",
+    sortLabel: "Trier par :",
+    sortByTitle: "Titre (A-Z)",
+    sortByAuthor: "Premier auteur (A-Z)",
+    sortByDate: "Derniers ajouts",
+    emptyCollection: "Aucun ouvrage trouvé dans votre collection actuelle.",
+    tomesOwned: "tome(s) possédé(s) dans la bibliothèque",
+    noAuthor: "Auteur non spécifié"
+  },
+  batchActionBar: {
+    selectedCount: "sélectionné(s)",
+    emptySelection: "Aucun élément sélectionné",
+    mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
+    mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
+  },
+  baseLoading: {
+    message: "Chargement des données en cours...",
+    seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le serveur sémantique..."
+  },
+  wishlistView: {
+    title: "Ma Wishlist",
+    emptyWishlist: "Votre liste d'envies est actuellement vide.",
+    filterAuthorLabel: "Filtrer par auteur :",
+    filterAuthorAll: "Tous les auteurs",
+    independentBooks: "Ouvrages indépendants",
+    seriesSection: "Série : "
+  },
+  loansView: {
+    title: "Carnet de Prêts",
+    modeBorrower: "Par Emprunteur",
+    modeChronological: "Par Ancienneté",
+    emptyLoans: "Aucun livre n'est actuellement confié à un proche.",
+    borrowedCount: "livre(s) dehors",
+    sinceLabel: "Prêté le :",
+    friendLabel: "Emprunteur :"
+  },
+  seriesProgress: {
+    loadingTitle: "Téléchargement de la saga",
+    statusLabel: "Statut :",
+    pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
+    completeSuccess: "Téléchargement terminé."
+  },
+  home: {
+    title: "Nom de l'application - Accueil"
+  }
 };

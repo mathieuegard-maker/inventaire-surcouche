@@ -2,7 +2,6 @@
 defineProps<{
   type?: 'button' | 'submit';
   disabled?: boolean;
-  variantClass?: string;
 }>();
 </script>
 
@@ -10,7 +9,7 @@ defineProps<{
   <button
     :type="type || 'button'"
     :disabled="disabled"
-    :class="variantClass || 'btn-action'"
+    class="wireframe-btn"
   >
     <slot></slot>
   </button>

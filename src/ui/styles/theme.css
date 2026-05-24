@@ -22,7 +22,7 @@
   --font-main: monospace;
 }
 
-/* Forçage universel du box-sizing pour éliminer tout décalage de taille */
+/* Force le calcul calcul strict pour empêcher tout débordement horizontal */
 *, *::before, *::after {
   box-sizing: border-box !important;
 }
@@ -72,13 +72,13 @@ body {
    DOMAINE 2 : ATOMES & COMPOSANTS DE BASE (L'interaction unifiée)
    ========================================================================== */
 
-/* Bouton Unique Universel - Tout Blanc au repos - Alignement vertical du texte */
+/* Bouton Unique Universel - Tout Blanc au repos */
 .wireframe-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 48px; /* Hauteur tactile fixe identique pour tous */
+  height: 48px;
   padding: 0 var(--spacing-md);
   font-family: var(--font-main) !important;
   font-size: 14px;
@@ -88,7 +88,7 @@ body {
   border: var(--border-width) solid var(--color-border) !important;
   background-color: var(--color-bg-main) !important;
   color: var(--color-text-main) !important;
-  line-height: 1 !important; /* Force le centrage vertical exact de la police */
+  line-height: 1 !important;
   transition: background-color 0.1s ease;
 }
 
@@ -172,7 +172,7 @@ body {
    DOMAINE 3 : STRUCTURATION GLOBALISÉE (Les Molécules partagées)
    ========================================================================== */
 
-/* En-tête de page unifié (<BaseHeader>) */
+/* En-tête de page unifié (<BaseHeader> historique) */
 .base-page-header {
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
@@ -292,7 +292,7 @@ body {
   text-align: center;
 }
 
-/* Onglets de navigation interne harmonisés (Tout Blanc par défaut) */
+/* Onglets de navigation interne harmonisés */
 .collection-modes-tabs {
   display: flex;
   border: var(--border-width) solid var(--color-border);
@@ -336,7 +336,6 @@ body {
   gap: var(--spacing-sm);
 }
 
-/* Ligne Livre unifiée */
 .mini-card-row {
   display: flex;
   align-items: stretch;
@@ -344,14 +343,13 @@ body {
   border: var(--border-width) solid var(--color-border);
   cursor: pointer;
   position: relative;
-  height: 80px; /* Hauteur fixe stricte pour un alignement parfait en liste */
+  height: 80px;
 }
 
 .mini-card-row:active {
   background-color: var(--color-bg-alt);
 }
 
-/* Conteneur image de gauche */
 .row-cover-container {
   width: 54px;
   min-width: 54px;
@@ -395,7 +393,6 @@ body {
   text-transform: uppercase;
 }
 
-/* Zone texte centrale */
 .row-info-content {
   flex: 1;
   padding: var(--spacing-sm) var(--spacing-md);
@@ -434,7 +431,6 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Colonne état sémantique */
 .row-status-text-column {
   display: flex;
   align-items: center;
@@ -466,7 +462,6 @@ body {
   color: var(--color-text-muted);
 }
 
-/* Zone tactile de sélection à droite */
 .row-selection-area {
   width: 54px;
   min-width: 54px;
@@ -477,7 +472,6 @@ body {
   justify-content: center;
 }
 
-/* Cartes complexes et fiches de détail */
 .result-card {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
@@ -526,7 +520,6 @@ body {
   line-height: 1.5;
 }
 
-/* Grille d'actions des fiches */
 .book-actions-flex {
   margin-top: var(--spacing-md);
   display: flex;
@@ -545,7 +538,6 @@ body {
   }
 }
 
-/* Rubriques de la Wishlist */
 .wishlist-section-header {
   margin-top: var(--spacing-lg);
   margin-bottom: var(--spacing-sm);
@@ -557,7 +549,6 @@ body {
   font-size: 12px;
 }
 
-/* Accordéons monochromes propres pour le Carnet de Prêts */
 .loan-borrower-card {
   border: var(--border-width) solid var(--color-border);
   background-color: var(--color-bg-main);
@@ -595,82 +586,6 @@ body {
   color: var(--color-text-muted);
 }
 
-
-/* ==========================================================================
-   DOMAINE 5 : LABORATOIRES & VUES SPÉCIFIQUES (Mire, Caméra & Alignement Capture)
-   ========================================================================== */
-
-/* 1. RE-CONCEPTION DU BLOC D'ACQUISITION MANUELLE (ISBN) - ALIGNEMENT PARFAIT PHOTO */
-#manual-input-container {
-  margin-top: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  width: 100% !important;
-}
-
-#manual-input-container form {
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: stretch !important; /* Force l'input et le bouton à faire la même hauteur exacte */
-  justify-content: flex-start !important;
-  width: 100% !important;
-  gap: 0 !important; /* Supprime l'espace d'écartement vu sur la capture */
-}
-
-/* Forçage de l'input textuel */
-#manual-input-container input[type="text"],
-#manual-input-container input:not([type="submit"]) {
-  flex: 1 !important;
-  height: 48px !important;
-  padding: 0 var(--spacing-md) !important;
-  font-family: var(--font-main) !important;
-  font-size: 14px !important;
-  border: var(--border-width) solid var(--color-border) !important;
-  border-right: none !important; /* Supprime la double-bordure centrale */
-  background-color: var(--color-bg-main) !important;
-  color: var(--color-text-main) !important;
-  line-height: 48px !important;
-  margin: 0 !important;
-}
-
-/* Forçage du bouton de validation */
-#manual-input-container button, 
-#manual-input-container input[type="submit"] {
-  width: auto !important;
-  height: 48px !important;
-  padding: 0 var(--spacing-lg) !important;
-  font-family: var(--font-main) !important;
-  font-size: 14px !important;
-  font-weight: bold !important;
-  text-transform: uppercase !important;
-  cursor: pointer !important;
-  border: var(--border-width) solid var(--color-border) !important;
-  background-color: var(--color-bg-main) !important;
-  color: var(--color-text-main) !important;
-  line-height: 1 !important;
-  margin: 0 !important;
-  display: inline-flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-}
-
-#manual-input-container button:active,
-#manual-input-container input[type="submit"]:active {
-  background-color: var(--color-bg-alt) !important;
-}
-
-/* 2. MISE EN PAGE STRICTEDU DASHBOARD (FORÇAGE DES BLOCS EN LARGEUR ABSOLUE) */
-.action-section {
-  margin-bottom: var(--spacing-md);
-  width: 100% !important; /* Élimine le flottement de largeur de la capture */
-  display: block !important;
-}
-
-/* Application uniforme du bouton universel sur les blocs du dashboard */
-.action-section .wireframe-btn {
-  width: 100% !important;
-}
-
-/* 3. Mire de connexion */
 .login-card {
   background-color: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
@@ -690,7 +605,49 @@ body {
   font-size: 12px;
 }
 
-/* 4. Section Scanner / Caméra hardware */
+
+/* ==========================================================================
+   DOMAINE 5 : INTÉGRATION ANCIENNE & MATÉRIEL CAMÉRA
+   ========================================================================== */
+
+#manual-input-container {
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  width: 100% !important;
+}
+
+#manual-input-container form {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: stretch !important;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  gap: 0 !important;
+}
+
+#manual-input-container input[type="text"] {
+  flex: 1 !important;
+  height: 48px !important;
+  padding: 0 var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-right: none !important;
+}
+
+#manual-input-container button, 
+#manual-input-container input[type="submit"] {
+  width: auto !important;
+  height: 48px !important;
+  padding: 0 var(--spacing-lg) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+}
+
 .scanner-box {
   margin-top: var(--spacing-lg);
   border: var(--border-width) solid var(--color-border);
@@ -713,15 +670,6 @@ body {
   object-fit: cover;
 }
 
-.scanner-viewport canvas.drawingBuffer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-
 .scanner-placeholder {
   position: absolute;
   top: 0;
@@ -740,7 +688,6 @@ body {
   padding: var(--spacing-md);
 }
 
-/* 5. Toast d'alerte PWA */
 .pwa-toast {
   position: fixed;
   right: var(--spacing-md);
@@ -769,7 +716,6 @@ body {
   font-size: 11px;
 }
 
-/* Composant de Barre de Progression Monochrome (Wireframe Minimaliste) */
 .progress-container {
   margin: var(--spacing-lg) 0;
   border: var(--border-width) solid var(--color-border);
@@ -812,7 +758,7 @@ body {
   font-family: var(--font-main) !important;
   font-size: 11px;
   font-weight: bold;
-  mix-blend-mode: difference; /* Assure la lisibilité du texte noir/blanc au passage de la barre */
+  mix-blend-mode: difference;
   color: #ffffff; 
 }
 
@@ -823,4 +769,211 @@ body {
   color: var(--color-text-muted);
   margin-top: var(--spacing-sm);
   text-transform: uppercase;
+}
+
+
+/* ==========================================================================
+   DOMAINE 6 : SKINS DE SURFACE DE L'INFRASTRUCTURE DE COMPOSANTS UNIFIÉS
+   ========================================================================== */
+
+/* 1. Le Cartouche Titre Sandwich Universel (<BaseTitle>) */
+.wireframe-title {
+  font-family: var(--font-main) !important;
+  text-transform: uppercase;
+  font-weight: bold;
+  margin: 0 0 var(--spacing-lg) 0;
+  padding: var(--spacing-sm) 0;
+  border-top: var(--border-width) solid var(--color-border) !important;
+  border-bottom: var(--border-width) solid var(--color-border) !important;
+  text-align: center;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+}
+
+h2.wireframe-title {
+  font-size: 16px;
+  letter-spacing: -0.5px;
+}
+
+h3.wireframe-title {
+  font-size: 13px;
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+}
+
+/* 2. Rendu Bureau de la Barre de Recherche (<SmartSearchBar>) */
+.smart-search-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  width: 100%;
+  gap: 0;
+  margin-bottom: var(--spacing-lg);
+  background-color: var(--color-bg-main);
+}
+
+.smart-search-row .btn-scan-side {
+  flex-shrink: 0 !important;
+  width: max-content !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-right: none !important;
+}
+
+/* FIX : Neutralisation complète du moteur de rendu mobile sur l'input textuel */
+.smart-search-row .elastic-search-input {
+  flex: 1 !important;
+  display: block !important;
+  margin: 0 !important;
+  height: 48px !important;
+  line-height: 48px !important;
+  padding: 0 var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-right: none !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  outline: none;
+  -webkit-appearance: none !important; /* Neutralise le tassement iOS */
+  appearance: none !important;         /* Neutralise le tassement Android */
+}
+
+.smart-search-row .btn-search-side {
+  flex-shrink: 0 !important;
+  width: max-content !important;
+  border: var(--border-width) solid var(--color-border) !important;
+}
+
+/* 3. Rendu Bureau de l'En-tête Tripartite (<BaseHeader>) */
+.global-header {
+  position: relative !important;
+  z-index: 99999 !important;
+  width: 100% !important;
+  margin-bottom: var(--spacing-lg) !important;
+  background-color: var(--color-bg-main) !important;
+}
+
+.global-header .nav-desktop {
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+  border: var(--border-width) solid var(--color-border) !important;
+}
+
+.global-header .nav-mobile {
+  display: none !important;
+  width: 100% !important;
+}
+
+.global-header .header-nav-btn {
+  flex: 1 !important;
+  height: 48px !important;
+  border: none !important;
+  border-right: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  font-family: var(--font-main) !important;
+  font-size: 11px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 var(--spacing-sm) !important;
+  margin: 0 !important;
+}
+
+.global-header .header-nav-btn:last-child {
+  border-right: none !important;
+}
+
+
+/* ==========================================================================
+   DOMAINE 7 : RUPTURES ERGONOMIQUES REACTIVES (ÉCRANS INFERIEURS A 600PX)
+   ========================================================================== */
+
+@media screen and (max-width: 600px) {
+  /* 1. SEUIL ACQUISITION : Empilement vertical strict de la ligne ISBN */
+  .smart-search-row {
+    flex-direction: column !important;
+    gap: var(--spacing-sm) !important;
+  }
+  
+  .smart-search-row .btn-scan-side,
+  .smart-search-row .btn-search-side {
+    width: 100% !important;
+    height: 48px !important;
+    border: var(--border-width) solid var(--color-border) !important;
+  }
+  
+  /* FIX MOBILE : Alignement absolu de la boîte de saisie sur la hauteur 48px des boutons frères */
+  .smart-search-row .elastic-search-input {
+    width: 100% !important;
+    height: 48px !important;
+    line-height: 48px !important; /* Force le texte à se caler pile au centre vertical */
+    border: var(--border-width) solid var(--color-border) !important;
+  }
+
+  /* 2. SEUIL NAV: Pivot réactif vers le bouton unique Menu */
+  .global-header .nav-desktop {
+    display: none !important;
+  }
+  
+  .global-header .nav-mobile {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+  }
+  
+  /* Bouton d'activation [ MENU ] / [ FERMER ] */
+  .global-header .menu-trigger-btn {
+    position: relative !important;
+    z-index: 100000 !important;
+    pointer-events: auto !important;
+    width: 100% !important;
+    height: 48px !important;
+    border: var(--border-width) solid var(--color-border) !important;
+    background-color: var(--color-bg-main) !important;
+    color: var(--color-text-main) !important;
+    font-family: var(--font-main) !important;
+    font-size: 14px !important;
+    font-weight: bold !important;
+    text-transform: uppercase !important;
+    cursor: pointer !important;
+  }
+  
+  /* Tiroir accordéon */
+  .global-header .menu-accordion-drawer {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    border: var(--border-width) solid var(--color-border) !important;
+    border-top: none !important;
+    background-color: var(--color-bg-main) !important;
+    position: relative !important;
+    z-index: 100000 !important;
+  }
+  
+  /* Les cases d'actions empilées à 100% de largeur tactile */
+  .global-header .menu-drawer-item {
+    width: 100% !important;
+    height: 48px !important;
+    border: none !important;
+    border-bottom: var(--border-width) solid var(--color-border) !important;
+    background-color: var(--color-bg-main) !important;
+    color: var(--color-text-main) !important;
+    font-family: var(--font-main) !important;
+    font-size: 13px !important;
+    font-weight: bold !important;
+    text-transform: uppercase !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+  
+  .global-header .menu-drawer-item:last-child {
+    border-bottom: none !important;
+  }
 }

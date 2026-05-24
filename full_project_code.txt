@@ -4601,7 +4601,9 @@ app.mount('#app');
 ### FICHIER : src/env.d.ts
 ################################################################################
 
+// src/env.d.ts
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/vue" />
 
 declare module '*.vue' {
   import type { DefineComponent } from 'vue';
@@ -5273,8 +5275,8 @@ export const TEXTS = {
   },
   scanner: {
     title: "Scanner le code-barres d'un livre",
-    btnOpen: "📸 Scanner un livre",
-    btnClose: "❌ Fermer le scanner",
+    btnOpen: "Scanner un livre",
+    btnClose: "Fermer le scanner",
     searching: "Analyse du code en cours...",
     errorPermission: "Impossible d'accéder à la caméra. Veuillez autoriser l'accès.",
     successDetected: "Recherche terminée",
@@ -5295,9 +5297,10 @@ export const TEXTS = {
     missing: "Absent",
     series: "Série",
     volume: "Tome",
+    btnLend: "Prêter ce livre",
+    btnReturn: "Livre rendu",
     btnAddInventory: "Ajouter à la collection",
     btnAddWishlist: "Ajouter à la liste d'envies",
-    btnLend: "Prêter ce livre",
     btnViewSeries: "Afficher toute la série",
     meta: {
       authors: "Auteur(s)",
@@ -5312,14 +5315,16 @@ export const TEXTS = {
       format: "Format"
     }
   },
-    bookStatus: {
+  bookStatus: {
     owned: "Possédé",
     wish: "À avoir",
+    lent: "Prêté",
     none: "Non possédé"
   },
   seriesView: {
     back: "Retour",
     selectedCount: "sélectionnés",
+    btnReturnGroup: "Livre(s) rendu(s)",
     emptySelection: "Aucun tome sélectionné",
     loading: "Chargement des tomes...",
     mixedSelectionError: "Sélection mixte impossible : vous avez coché des tomes possédés et non possédés à la fois.",
@@ -5330,13 +5335,85 @@ export const TEXTS = {
     cacheLog: "Non trouvé en cache, résolution réseau pour :",
     fetchError: "Impossible de récupérer les détails de cette édition.",
     loadError: "Une erreur est survenue lors de la récupération des données.",
-    btnBack: "← Retour",
-    btnSeries: "📚 Voir la saga",
+    btnBack: "Retour",
+    btnSeries: "Voir la saga",
     loadingSpec: "Chargement des spécifications de l'édition...",
     noCover: "Pas de couverture",
     synopsis: "Synopsis"
+  },
+  debugDbView: {
+    title: "Laboratoire Local (Dexie DB)",
+    placeholder: "Rechercher par titre, URI, wd:...",
+    btnRefresh: "Rafraîchir",
+    btnClear: "Vider le cache",
+    loading: "Chargement de la base de données...",
+    thCover: "Couverture",
+    thTitle: "Titre",
+    thSeries: "Série & N°",
+    thEdition: "Édition (inv:)",
+    thWork: "Œuvre (wd:)",
+    totalInCache: "Total en cache :",
+    clearConfirm: "Vider intégralement le cache local ?"
+  },
+  lendModal: {
+    title: "Prêter",
+    instructionSingular: "Indiquez le nom de la personne à qui vous confiez cet exemplaire :",
+    instructionPlural: "Indiquez le nom de la personne à qui vous confiez ces exemplaires :",
+    placeholder: "Nom de l'emprunteur...",
+    cancel: "Annuler",
+    confirm: "Confirmer le prêt"
+  },
+  collectionView: {
+    title: "Ma Collection",
+    modeBooks: "Tous les livres",
+    modeSeries: "Mes Séries",
+    modeOneShots: "Hors Série (One-Shots)",
+    filterGenreLabel: "Filtrer par genre :",
+    filterGenreAll: "Tous les genres",
+    sortLabel: "Trier par :",
+    sortByTitle: "Titre (A-Z)",
+    sortByAuthor: "Premier auteur (A-Z)",
+    sortByDate: "Derniers ajouts",
+    emptyCollection: "Aucun ouvrage trouvé dans votre collection actuelle.",
+    tomesOwned: "tome(s) possédé(s) dans la bibliothèque",
+    noAuthor: "Auteur non spécifié"
+  },
+  batchActionBar: {
+    selectedCount: "sélectionné(s)",
+    emptySelection: "Aucun élément sélectionné",
+    mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
+    mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
+  },
+  baseLoading: {
+    message: "Chargement des données en cours...",
+    seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le serveur sémantique..."
+  },
+  wishlistView: {
+    title: "Ma Wishlist",
+    emptyWishlist: "Votre liste d'envies est actuellement vide.",
+    filterAuthorLabel: "Filtrer par auteur :",
+    filterAuthorAll: "Tous les auteurs",
+    independentBooks: "Ouvrages indépendants",
+    seriesSection: "Série : "
+  },
+  loansView: {
+    title: "Carnet de Prêts",
+    modeBorrower: "Par Emprunteur",
+    modeChronological: "Par Ancienneté",
+    emptyLoans: "Aucun livre n'est actuellement confié à un proche.",
+    borrowedCount: "livre(s) dehors",
+    sinceLabel: "Prêté le :",
+    friendLabel: "Emprunteur :"
+  },
+  seriesProgress: {
+    loadingTitle: "Téléchargement de la saga",
+    statusLabel: "Statut :",
+    pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
+    completeSuccess: "Téléchargement terminé."
+  },
+  home: {
+    title: "Nom de l'application - Accueil"
   }
-
 };
 
 
@@ -5344,37 +5421,47 @@ export const TEXTS = {
 ### FICHIER : src/ui/styles/theme.css
 ################################################################################
 
-/* src/ui/styles/theme.css */
+/* ==========================================================================
+   DOMAINE 1 : TOKENS & FONDATIONS (Le cœur du Wireframe Minimaliste)
+   ========================================================================== */
 
 :root {
-  /* Design Tokens : Mode "Wireframe" Strict (Monochrome & Angles droits) */
+  /* Nuancier Monochrome Radical - Tout Blanc Pur et Lumineux au repos */
   --color-bg-main: #ffffff;
-  --color-bg-alt: #f4f4f4;
+  --color-bg-alt: #ffffff;
   --color-border: #000000;
   --color-text-main: #000000;
-  --color-text-muted: #666666;
+  --color-text-muted: #555555;
   --color-text-inverse: #ffffff;
-  --color-overlay: rgba(0, 0, 0, 0.8);
+  --color-overlay: rgba(0, 0, 0, 0.85);
   
-  /* Structure brute (Zéro arrondi, zéro ombre) */
+  /* Géométrie Stricte (Zéro arrondi, alignement constant) */
   --border-width: 2px;
-  --radius-none: 0px;
   --spacing-sm: 8px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   
-  /* Typographie */
-  --font-main: monospace, sans-serif;
+  /* Typographie Unique Monospace Obligatoire */
+  --font-main: monospace;
 }
 
-/* =========================================
-   STYLES GLOBAUX & STRUCTURE
-========================================= */
+/* Forçage universel du box-sizing pour éliminer tout décalage de taille horizontal */
+*, *::before, *::after {
+  box-sizing: border-box !important;
+}
+
+/* Éradication absolue et définitive de TOUS les border-radius de l'application */
+button, input, select, textarea, div, span, img, canvas, video {
+  border-radius: 0px !important;
+}
+
 body {
   margin: 0;
-  font-family: var(--font-main);
-  background-color: var(--color-bg-alt);
+  padding: 0;
+  font-family: var(--font-main) !important;
+  background-color: var(--color-bg-main);
   color: var(--color-text-main);
+  -webkit-font-smoothing: antialiased;
 }
 
 .view-container {
@@ -5387,331 +5474,105 @@ body {
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
   margin-top: 0;
-  text-transform: uppercase;
-}
-
-/* =========================================
-   SPLASH SCREEN (App.vue)
-========================================= */
-.splash-screen {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  text-align: center;
-  background-color: var(--color-bg-main);
-}
-
-.app-title {
-  color: var(--color-text-main);
-  text-transform: uppercase;
-  border: var(--border-width) solid var(--color-border);
-  padding: var(--spacing-sm) var(--spacing-md);
-}
-
-/* =========================================
-   BOUTONS & ELEMENTS D'INTERACTION
-========================================= */
-.btn-action, .btn-submit, .btn-close, .btn-pwa-update, .btn-link, .btn-primary, .btn-danger, .btn-pwa-close {
-  display: inline-block;
-  padding: 12px 24px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  box-shadow: none !important;
-  font-weight: bold;
-  font-family: var(--font-main);
-  font-size: 16px;
-  cursor: pointer;
-  text-align: center;
-  text-decoration: none;
-  box-sizing: border-box;
-  text-transform: uppercase;
-}
-
-.btn-action:hover, .btn-submit:hover, .btn-close:hover, .btn-pwa-update:hover, .btn-link:hover, .btn-primary:hover, .btn-danger:hover, .btn-pwa-close:hover {
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-}
-
-.btn-submit:disabled, .btn-action:disabled {
-  background-color: var(--color-bg-alt);
-  color: var(--color-text-muted);
-  border-style: dashed;
-  cursor: not-allowed;
-}
-
-/* =========================================
-   CHAMPS DE SAISIE (Inputs)
-========================================= */
-.form-input, .plugin-manual-input {
-  padding: 12px;
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  font-family: var(--font-main);
-  font-size: 15px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  width: 100%;
-  box-sizing: border-box;
-  outline: none;
-  box-shadow: none !important;
-}
-
-.form-input:focus, .plugin-manual-input:focus {
-  background-color: var(--color-bg-alt);
-}
-
-/* =========================================
-   CONTENEURS (Modales, Cartes, Box)
-========================================= */
-.login-card, .scanner-box, .modal-box, .result-card, .pwa-toast {
-  background-color: var(--color-bg-main);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-none) !important;
-  box-shadow: none !important;
-  padding: var(--spacing-lg);
   margin-bottom: var(--spacing-lg);
-}
-
-.login-container {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  padding: var(--spacing-md);
-  box-sizing: border-box;
-  background-color: var(--color-bg-alt);
-}
-
-.login-card {
-  max-width: 400px;
-  width: 100%;
-}
-
-.login-form, .modal-actions {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-}
-
-/* =========================================
-   MODALE D'ONBOARDING (WelcomeModal)
-========================================= */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  background-color: var(--color-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: var(--spacing-md);
-  box-sizing: border-box;
-}
-
-.modal-box {
-  max-width: 450px;
-  width: 100%;
-  text-align: center;
-}
-
-.modal-box h2 {
-  text-transform: uppercase;
-  margin-top: 0;
-}
-
-.modal-text {
-  font-size: 15px;
-  line-height: 1.6;
-  margin: var(--spacing-md) 0;
-}
-
-.modal-text.highlight {
-  border: var(--border-width) dashed var(--color-border);
-  padding: var(--spacing-md);
-  font-weight: bold;
-  background-color: var(--color-bg-alt);
-}
-
-/* =========================================
-   PLUGINS (Scanner & Manuel)
-========================================= */
-.scanner-viewport-wrapper {
-  position: relative;
-  width: 100%;
-  max-width: 500px;
-  margin: 0 auto;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-alt);
-}
-
-.scanner-viewport {
-  width: 100% !important;
-  border: none !important;
-}
-
-.plugin-manual-container {
-  border: var(--border-width) dashed var(--color-border);
-  padding: var(--spacing-md);
-  margin-top: var(--spacing-md);
-  background-color: var(--color-bg-main);
-}
-
-.plugin-manual-container h3 {
-  margin-top: 0;
-  text-transform: uppercase;
-}
-
-.plugin-manual-form {
-  display: flex;
-  gap: var(--spacing-sm);
-}
-
-/* =========================================
-   FICHE LIVRE & METADONNEES (BookDetailView)
-========================================= */
-.result-card.success, .result-card.error {
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  text-align: left;
-}
-
-.result-card.error {
-  border-style: dashed;
-  background-color: var(--color-bg-alt);
-}
-
-.error-banner, .success-banner {
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  padding: var(--spacing-sm);
-  margin-bottom: var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 18px;
   font-weight: bold;
   text-transform: uppercase;
+  letter-spacing: -0.5px;
 }
 
-.result-title {
-  margin: 0 0 var(--spacing-sm) 0;
-  font-weight: bold;
-  text-transform: uppercase;
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding-bottom: var(--spacing-sm);
-}
-
-.book-card-layout {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-
-@media (min-width: 600px) {
-  .book-card-layout {
-    flex-direction: row;
-    align-items: flex-start;
-  }
-}
-
-.book-cover-placeholder {
-  width: 120px;
-  height: 180px;
-  flex-shrink: 0;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-alt);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  font-size: 12px;
-  font-weight: bold;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-}
-
-.book-cover-image {
-  width: 120px;
-  height: auto;
-  flex-shrink: 0;
-  border: var(--border-width) solid var(--color-border);
-  object-fit: contain;
-  background-color: var(--color-bg-alt);
-}
-
-.book-info-layout {
-  flex-grow: 1;
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-}
-
-.book-title {
-  font-size: 20px;
-  font-weight: bold;
-  margin: 0;
-  text-transform: uppercase;
-}
-
-.book-subtitle {
+.view-container h3 {
+  font-family: var(--font-main) !important;
   font-size: 14px;
-  font-weight: normal;
-  margin: 0;
-  color: var(--color-text-muted);
-}
-
-.book-meta-group {
-  border: var(--border-width) dashed var(--color-border);
-  background-color: var(--color-bg-alt);
-  padding: var(--spacing-sm);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.book-meta-item {
-  margin: 0;
-  font-size: 14px;
-}
-
-.book-meta-item strong {
+  font-weight: bold;
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-sm);
   text-transform: uppercase;
 }
 
-.book-actions-layout {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
-  border-top: var(--border-width) solid var(--color-border);
-  padding-top: var(--spacing-md);
+
+/* ==========================================================================
+   DOMAINE 2 : ATOMES & COMPOSANTS DE BASE (L'interaction unifiée)
+   ========================================================================== */
+
+/* Bouton Unique Universel - Tout Blanc au repos - Alignement et proportions au texte */
+button,
+.wireframe-btn,
+.btn-action,
+.btn-primary,
+.btn-danger {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: max-content !important; /* La largeur s'ajuste dynamiquement à la taille du texte */
+  height: 50px !important; /* Hauteur tactile fixe identique pour tous */
+  padding: 0 var(--spacing-lg) !important; /* Espace constant entre le texte et le pourtour */
+  font-family: var(--font-main) !important;
+  font-size: 13px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important;
+  margin: 0;
+  white-space: nowrap !important;
+  transition: background-color 0.1s ease;
 }
 
-@media (min-width: 600px) {
-  .book-actions-layout {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
+/* Retour tactile net lors du clic sur mobile */
+button:active,
+.wireframe-btn:active,
+.btn-action:active {
+  background-color: #eeeeee !important;
 }
 
-/* Badges de possession */
+/* Surcharges de sécurité pour l'état d'affichage natif */
+.btn-primary {
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+}
+
+/* Champs de saisie standardisés */
+input[type="text"],
+input[type="search"],
+.wireframe-input {
+  width: 100%;
+  height: 50px !important; /* Hauteur rigoureusement alignée sur les boutons */
+  padding: 0 var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 13px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 50px !important;
+  outline: none !important;
+  margin: 0;
+}
+
+.wireframe-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-border);
+  cursor: pointer;
+  margin: 0;
+}
+
+/* Badges */
 .badge-container {
   margin-top: var(--spacing-sm);
 }
 
-.badge, .badge.owned, .badge.missing {
+.badge {
   display: inline-block;
-  padding: 4px 8px;
-  border: var(--border-width) solid var(--color-border) !important;
-  border-radius: var(--radius-none) !important;
+  padding: 4px var(--spacing-sm);
+  font-family: var(--font-main) !important;
+  font-size: 11px;
   font-weight: bold;
   text-transform: uppercase;
-  font-size: 14px;
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
+  border: 1px solid var(--color-border);
 }
 
 .badge.owned {
@@ -5719,192 +5580,204 @@ body {
   color: var(--color-text-inverse);
 }
 
-/* =========================================
-   NAVIGATION (BookDetailView & SeriesView)
-========================================= */
-.nav-header, .series-header {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  border-bottom: var(--border-width) solid var(--color-border);
-  padding-bottom: var(--spacing-sm);
-}
-
-/* =========================================
-   GRILLE SÉRIES & MINI-CARTES
-========================================= */
-.series-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: var(--spacing-md);
-  margin-top: var(--spacing-md);
-}
-
-
-
-.mini-card {
-  cursor: pointer;
-  width: 100%;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-}
-
-.mini-card:hover {
-  background-color: var(--color-bg-alt);
-}
-
-.cover-container {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 2 / 3;
-  overflow: hidden;
-  border-bottom: var(--border-width) solid var(--color-border);
-  background: var(--color-bg-alt);
-}
-
-.cover-image {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 8px;
-  color: var(--color-text-muted);
-  text-align: center;
-  box-sizing: border-box;
-}
-
-.fallback-title {
-  font-size: 11px;
-  font-weight: bold;
-  text-transform: uppercase;
-}
-
-.status-badge {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 24px;
-  height: 24px;
-  border: var(--border-width) solid var(--color-border);
+.badge.missing {
   background-color: var(--color-bg-main);
   color: var(--color-text-main);
+}
+
+
+/* ==========================================================================
+   DOMAINE 3 : STRUCTURATION GLOBALISÉE (Les Molécules partagées)
+   ========================================================================== */
+
+/* En-tête de page unifié (<BaseHeader>) */
+.base-page-header {
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+}
+
+.base-header-top-row {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: bold;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  height: 40px;
 }
 
-.status-badge.owned {
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-}
-
-.volume-number {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  background-color: var(--color-border);
-  color: var(--color-text-inverse);
-  padding: 4px;
-  font-size: 12px;
-  font-weight: bold;
-  text-align: center;
+.base-header-title {
+  margin: 0;
+  font-size: 16px;
   text-transform: uppercase;
+  font-weight: bold;
 }
 
+.base-header-back-btn {
+  background: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
+  padding: 6px var(--spacing-md);
+  font-family: var(--font-main) !important;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  text-transform: uppercase;
+  line-height: 1 !important;
+}
+
+.base-header-back-btn:active {
+  background-color: #eeeeee;
+}
+
+/* Barre d'action de lot collante (<BatchActionBar>) */
 .sticky-action-bar {
   position: sticky;
   top: 0;
-  z-index: 20;
-  background-color: var(--color-bg-alt);
+  z-index: 100;
+  background-color: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
-  padding: var(--spacing-sm);
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
   margin-bottom: var(--spacing-md);
 }
 
-@media (min-width: 600px) {
-  .sticky-action-bar {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-}
-
-.selection-status {
+.action-bar-master-row {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md);
+  height: 30px;
+}
+
+.action-bar-status-text {
   font-weight: bold;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.mixed-error-container {
+  margin-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--spacing-sm);
+}
+
+.error-text-line {
+  color: var(--color-text-main);
+  font-weight: bold;
+  margin: 0 0 2px 0;
+  font-size: 12px;
   text-transform: uppercase;
 }
 
-.group-actions {
+.error-advice-line {
+  color: var(--color-text-muted);
+  margin: 0;
+  font-size: 11px;
+}
+
+.group-actions-grid {
+  margin-top: var(--spacing-md);
   display: flex;
+  flex-direction: column;
   gap: var(--spacing-sm);
-  flex-wrap: wrap;
 }
 
-/* =========================================
-   NOTIFICATIONS SYSTEME PWA (Toast)
-========================================= */
-.pwa-toast {
-  position: fixed;
-  right: 0;
-  bottom: 0;
-  margin: var(--spacing-md);
-  z-index: 9999;
-  max-width: 350px;
-  width: calc(100% - 32px);
+@media (min-width: 600px) {
+  .group-actions-grid {
+    flex-direction: row;
+  }
 }
 
-/* =========================================
-   NOUVELLE MISE EN PAGE : SÉRIES EN LISTE
-========================================= */
+/* Bandeaux de notification et d'alertes */
+.error-banner {
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+}
+
+.success-banner {
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Onglets de navigation interne harmonisés */
+.collection-modes-tabs {
+  display: flex;
+  border: var(--border-width) solid var(--color-border);
+  margin-bottom: var(--spacing-md);
+  background-color: var(--color-bg-main);
+}
+
+.tab-button {
+  flex: 1;
+  background: var(--color-bg-main) !important;
+  border: none;
+  height: 44px;
+  font-family: var(--font-main) !important;
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  text-align: center;
+  transition: all 0.1s ease;
+  line-height: 1 !important;
+}
+
+.tab-button:not(:last-child) {
+  border-right: var(--border-width) solid var(--color-border);
+}
+
+.tab-button.active {
+  color: var(--color-text-main) !important;
+  background-color: #eeeeee !important;
+}
+
+
+/* ==========================================================================
+   DOMAINE 4 : AFFICHAGE EN LISTES & CARTES (Le rendu géométrique des livres)
+   ========================================================================== */
 
 .series-list-container {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-sm);
-  margin-top: var(--spacing-md);
 }
 
 .mini-card-row {
   display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  width: 100%;
-  border: var(--border-width) solid var(--color-border);
+  align-items: stretch;
   background-color: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
   cursor: pointer;
-  box-sizing: border-box;
-  padding-right: var(--spacing-md);
+  position: relative;
+  height: 80px;
 }
 
-.mini-card-row:hover {
-  background-color: var(--color-bg-alt);
+.mini-card-row:active {
+  background-color: #eeeeee;
 }
 
 .row-cover-container {
-  flex-shrink: 0;
-  width: 60px;
-  height: 90px;
-  overflow: hidden;
+  width: 54px;
+  min-width: 54px;
+  background-color: var(--color-bg-main);
   border-right: var(--border-width) solid var(--color-border);
-  background: var(--color-bg-alt);
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 
 .row-cover-image {
@@ -5914,144 +5787,485 @@ body {
 }
 
 .row-cover-fallback {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-muted);
-  font-size: 9px;
+  padding: 4px;
   text-align: center;
+}
+
+.fallback-title {
+  font-size: 8px;
+  display: block;
+  word-break: break-all;
+  line-height: 9px;
   text-transform: uppercase;
+}
+
+.volume-number {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  font-size: 9px;
   font-weight: bold;
+  padding: 2px 4px;
+  text-transform: uppercase;
 }
 
 .row-info-content {
-  flex-grow: 1;
+  flex: 1;
+  padding: var(--spacing-sm) var(--spacing-md);
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
+  justify-content: center;
+  min-width: 0; 
 }
 
 .row-title {
-  font-size: 14px;
-  font-weight: bold;
   margin: 0;
+  font-weight: bold;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+}
+
+.row-series-meta {
+  margin: 4px 0 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+
+.row-authors {
+  margin: 2px 0 0 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.row-series-meta {
-  font-size: 12px;
-  color: var(--color-text-main);
-  margin: 0;
-}
-
-.row-authors {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  margin: 0;
-  font-style: italic;
-}
-
-.row-selection-area {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-}
-
-.row-cover-container .status-badge {
-  width: 18px;
-  height: 18px;
-  font-size: 10px;
-  top: 4px;
-  right: 4px;
-}
-
-.row-cover-container .volume-number {
-  padding: 2px;
-  font-size: 10px;
-}
-
-.item-checkbox {
-  width: 24px;
-  height: 24px;
-  cursor: pointer;
-  margin: 0;
-  accent-color: var(--color-border);
-}
-
 .row-status-text-column {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   padding: 0 var(--spacing-sm);
-  min-width: 100px;
-  flex-shrink: 0;
-  text-align: right;
+  border-left: 1px solid var(--color-border);
+  min-width: 80px;
+  justify-content: center;
 }
 
 .status-text-label {
-  font-size: 13px;
+  font-size: 10px;
   font-weight: bold;
   text-transform: uppercase;
+  padding: 2px 6px;
 }
 
 .status-text-label.owned {
-  color: var(--color-text-main);
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
 }
 
 .status-text-label.wish {
-  font-style: italic;
-  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-main);
+  background-color: var(--color-bg-main);
 }
 
 .status-text-label.none {
   color: var(--color-text-muted);
-  opacity: 0.5;
-}
-
-/* src/ui/styles/theme.css */
-
-.mixed-error-container {
-  border: var(--border-width) dashed var(--color-border);
-  background-color: var(--color-bg-main);
-  padding: var(--spacing-sm) var(--spacing-md);
-  text-align: left;
-  width: 100%;
-}
-
-.error-text-line {
-  margin: 0 0 4px 0;
-  font-weight: bold;
-  font-size: 14px;
-  text-transform: uppercase;
-}
-
-.error-advice-line {
-  margin: 0;
-  font-size: 12px;
-  color: var(--color-text-muted);
 }
 
 .row-selection-area {
+  width: 54px;
+  min-width: 54px;
+  border-left: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 50px;             /* Zone élargie à 50px pour le confort du pouce */
-  align-self: stretch;     /* S'étire sur TOUTE la hauteur de la ligne */
-  cursor: pointer;
-  background-color: rgba(0, 0, 0, 0.02); /* Légère délimitation tactile très subtile */
-  border-left: 1px dashed var(--color-border); /* Séparation visuelle claire */
 }
 
-.mini-card-row {
-  padding-right: 0px !important; /* On annule le padding pour que la zone cliquable aille jusqu'au bord droit */
+.result-card {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+  margin-top: var(--spacing-md);
+}
+
+.result-title {
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: var(--spacing-md);
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+  font-size: 14px;
+}
+
+.book-card-layout {
+  display: flex;
+  gap: var(--spacing-md);
+  align-items: flex-start;
+}
+
+.book-cover-detail {
+  width: 90px;
+  min-width: 90px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  object-fit: cover;
+}
+
+.book-meta-column {
+  flex: 1;
+}
+
+.book-meta-item {
+  margin: 0 0 6px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.book-description {
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.book-actions-flex {
+  margin-top: var(--spacing-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+@media (min-width: 600px) {
+  .book-actions-flex {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .book-actions-flex button {
+    flex: 1;
+    min-width: 140px;
+  }
+}
+
+.wishlist-section-header {
+  margin-top: var(--spacing-lg);
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-md);
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+
+.loan-borrower-card {
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  margin-bottom: var(--spacing-sm);
+}
+
+.loan-borrower-header {
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-main);
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.loan-borrower-content {
+  padding: var(--spacing-md);
+  border-top: var(--border-width) solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+  background-color: var(--color-bg-main);
+}
+
+.loan-chrono-meta {
+  font-size: 11px;
+  font-weight: bold;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+  margin-bottom: var(--spacing-sm);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.login-card {
+  background-color: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-lg);
+  margin-top: 80px;
+}
+
+.form-group {
+  margin-bottom: var(--spacing-md);
+}
+
+.form-group label {
+  display: block;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: var(--spacing-sm);
+  font-size: 12px;
+}
+
+.scanner-box {
+  margin-top: var(--spacing-lg);
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+}
+
+.scanner-viewport-wrapper {
+  position: relative;
+  width: 100%;
+  background-color: #000000;
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border: var(--border-width) solid var(--color-border);
+}
+
+.scanner-viewport video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanner-viewport canvas.drawingBuffer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.scanner-placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
+  text-align: center;
+  padding: var(--spacing-md);
+}
+
+.pwa-toast {
+  position: fixed;
+  right: var(--spacing-md);
+  bottom: var(--spacing-md);
+  padding: var(--spacing-md);
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  z-index: 2000;
+  max-width: 300px;
+}
+
+.pwa-message {
+  margin-bottom: var(--spacing-md);
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.pwa-actions {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.pwa-actions button {
+  height: 36px !important;
+  font-size: 11px !important;
+}
+
+.progress-container {
+  margin: var(--spacing-lg) 0;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  padding: var(--spacing-md);
+}
+
+.progress-text-summary {
+  font-family: var(--font-main) !important;
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin-bottom: var(--spacing-sm);
+}
+
+.progress-track-wrapper {
+  width: 100%;
+  height: 24px;
+  border: var(--border-width) solid var(--color-border);
+  background-color: var(--color-bg-main);
+  position: relative;
+  overflow: hidden;
+}
+
+.progress-fill-bar {
+  height: 100%;
+  background-color: var(--color-border);
+  transition: width 0.2s linear;
+}
+
+.progress-percentage-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-main) !important;
+  font-size: 11px;
+  font-weight: bold;
+  mix-blend-mode: difference;
+  color: #ffffff; 
+}
+
+.progress-pedagogic-notice {
+  font-family: var(--font-main) !important;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  margin-top: var(--spacing-sm);
+  text-transform: uppercase;
+}
+
+
+/* ==========================================================================
+   DOMAINE 5 : AMÉNAGEMENT EXPERT & OBSESSIONNEL DU DASHBOARD (COMPOSANTS SOUDES)
+   ========================================================================== */
+
+/* Établissement d'un Grid de surface sur le Dashboard pour aligner les blocs frères distants */
+.view-container:has(#manual-input-container) {
+  display: grid !important;
+  grid-template-columns: repeat(3, max-content) !important;
+  justify-content: center !important;
+  gap: var(--spacing-md) !important;
+  position: relative !important;
+}
+
+/* Forçage du titre h2 à occuper l'intégralité supérieure de la grille */
+.view-container:has(#manual-input-container) > h2 {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
+  margin-bottom: 85px !important; /* Crée la niche d'incrustation exacte pour la ligne supérieure */
+}
+
+/* 1. SOUDURE CRITIQUE DE LA LIGNE HAUTE : [SCANNER UN LIVRE] | [INPUT] | [RECHERCHER] */
+
+/* Isolation et extraction du flux du premier bouton d'action (Bouton de Scan) */
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(1) {
+  position: absolute !important;
+  top: 65px !important;
+  left: var(--spacing-lg) !important;
+  z-index: 10 !important;
+  height: 50px !important;
+  width: max-content !important;
+}
+
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(1) button {
+  width: 160px !important; /* Largeur stable calculée pour le texte "SCANNER LE LIVRE" / "FERMER" */
+  height: 50px !important;
+  border-right: none !important; /* Disparaît pour s'imbriquer sans double ligne dans le flanc gauche du champ de texte */
+}
+
+/* Isolation et déploiement horizontal élastique du bloc d'ISBN manuel */
+.view-container:has(#manual-input-container) > #manual-input-container {
+  position: absolute !important;
+  top: 65px !important;
+  left: var(--spacing-lg) !important;
+  right: var(--spacing-lg) !important;
+  height: 50px !important;
+  z-index: 5 !important;
+}
+
+#manual-input-container .plugin-manual-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Suppression définitive du titre du plugin injecté qui perturbait la géométrie */
+#manual-input-container .plugin-manual-container > h3 {
+  display: none !important;
+}
+
+/* Alignement flex en ligne pur des composants internes de saisie */
+#manual-input-container .plugin-manual-form {
+  display: flex !important;
+  flex-direction: row !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding-left: 160px !important; /* Laisse la place exacte à gauche pour caler le bouton de Scan frère */
+}
+
+/* Le champ de recherche central encaisse l'élasticité de l'écran du téléphone */
+#manual-input-container .plugin-manual-input {
+  flex: 1 !important; /* S'étire dynamiquement selon la taille du mobile en maintenant les deux boutons stables */
+  height: 50px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  border-right: none !important; /* Fusion parfaite sans double ligne avec le flanc gauche du bouton Rechercher */
+}
+
+/* Le bouton Rechercher final reste à dimension stable proportionnelle à son texte */
+#manual-input-container .btn-action {
+  flex-shrink: 0 !important;
+  width: max-content !important;
+  height: 50px !important;
+  border: var(--border-width) solid var(--color-border) !important; /* Conserve son contour droit de fermeture hermétique */
+}
+
+
+/* 2. SOUDURE DU TRIPTYQUE DE NAVIGATION CENTRÉ : [MA COLLECTION] [WISHLIST] [CARNET DE PRÊT] */
+
+/* Les 3 wrappers s'alignent côte à côte dans les 3 colonnes du Grid sur la même ligne horizontale */
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(2),
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(3),
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(4) {
+  grid-column: auto !important;
+  width: max-content !important;
+  margin: 0 !important;
+}
+
+/* Forçage de la dimension proportionnelle au contenu textuel (Les marges latérales de la grille absorbent le vide) */
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(2) button,
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(3) button,
+.view-container:has(#manual-input-container) > .action-section:nth-of-type(4) button {
+  width: max-content !important;
+}
+
+
+/* 3. VERROUS DE SÉCURITÉ DES BOUTES LOGICIELLES SUBJACENTES */
+
+/* Forçage des éléments de contrôle secondaires (Caméra, alertes) à occuper une rangée entière isolée */
+.view-container:has(#manual-input-container) > .scanner-box,
+.view-container:has(#manual-input-container) > .error-banner {
+  grid-column: 1 / -1 !important;
+  width: 100% !important;
 }
 
 
@@ -6104,7 +6318,6 @@ const navigateToDetail = () => {
   }
 };
 
-// Gestionnaire interne pour capter le clic sur toute la zone de droite
 const handleZoneClick = () => {
   emit('update:modelValue', !props.modelValue);
 };
@@ -6132,22 +6345,26 @@ const handleZoneClick = () => {
     <div class="row-info-content">
       <p class="row-title">{{ book.title }}</p>
       
-      <p v-if="book.series || book.seriesName" class="row-series-meta">
-        {{ book.series || book.seriesName }}
+      <p v-if="book.loan?.friendName" class="row-authors">
+        👉 {{ book.loan.friendName }}
+      </p>
+      <p v-else-if="book.series" class="row-series-meta">
+        {{ book.series }}
         <span v-if="book.seriesNumber"> — Tome {{ book.seriesNumber }}</span>
       </p>
       
-      <p v-if="book.authors?.length" class="row-authors">
+      <p v-if="book.authors?.length && !book.loan" class="row-authors">
         {{ book.authors.join(', ') }}
       </p>
     </div>
 
     <div class="row-status-text-column">
-      <span :class="['status-text-label', book.ownershipStatus]">
+      <span :class="['status-text-label', book.loan ? 'lent' : book.ownershipStatus]">
         {{ 
-          book.ownershipStatus === 'owned' ? TEXTS.bookStatus.owned : 
-          book.ownershipStatus === 'wish' ? TEXTS.bookStatus.wish : 
-          TEXTS.bookStatus.none 
+          book.loan ? TEXTS.bookStatus?.lent || 'Prêté' :
+          book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
+          book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : 
+          TEXTS.bookStatus?.none 
         }}
       </span>
     </div>
@@ -6157,10 +6374,57 @@ const handleZoneClick = () => {
         type="checkbox" 
         class="wireframe-checkbox item-checkbox"
         :checked="modelValue"
+        @click.stop
         @change.stop="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
       />
     </div>
 
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/components/BookActionButtons.vue
+################################################################################
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import BaseButton from './BaseButton.vue';
+import { TEXTS } from '../locales/fr';
+
+const props = defineProps<{
+  ownershipStatus: 'owned' | 'wish' | 'none';
+  isLent: boolean;
+}>();
+
+const emit = defineEmits<{
+  (e: 'add-inventory'): void;
+  (e: 'add-wishlist'): void;
+  (e: 'lend'): void;
+  (e: 'return'): void;
+}>();
+
+const isOwned = computed(() => props.ownershipStatus === 'owned');
+</script>
+
+<template>
+  <div class="book-actions-flex">
+    <template v-if="!isOwned">
+      <BaseButton @click="emit('add-inventory')">
+        {{ TEXTS.bookCard?.btnAddInventory }}
+      </BaseButton>
+      <BaseButton @click="emit('add-wishlist')">
+        {{ TEXTS.bookCard?.btnAddWishlist }}
+      </BaseButton>
+    </template>
+    <template v-else>
+      <BaseButton v-if="isLent" @click="emit('return')">
+        {{ TEXTS.bookCard?.btnReturn || 'Livre rendu' }}
+      </BaseButton>
+      <BaseButton v-else @click="emit('lend')">
+        {{ TEXTS.bookCard?.btnLend }}
+      </BaseButton>
+    </template>
   </div>
 </template>
 
@@ -6211,12 +6475,144 @@ const emit = defineEmits<{
 
 
 ################################################################################
+### FICHIER : src/ui/components/BaseHeader.vue
+################################################################################
+
+<script setup lang="ts">
+import { useRouter } from 'vue-router';
+import BaseButton from './BaseButton.vue';
+import { TEXTS } from '../locales/fr';
+
+defineProps<{
+  title: string;
+  showBack?: boolean;
+}>();
+
+const router = useRouter();
+
+const handleBack = () => {
+  router.back();
+};
+</script>
+
+<template>
+  <div class="base-page-header">
+    <BaseButton v-if="showBack" @click="handleBack">
+      {{ TEXTS.seriesView?.back || '← Retour' }}
+    </BaseButton>
+    <h2>{{ title }}</h2>
+    <slot name="actions"></slot>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/components/BaseLoading.vue
+################################################################################
+
+<script setup lang="ts">
+import { TEXTS } from '../locales/fr';
+</script>
+
+<template>
+  <div class="result-card">
+    <p>{{ TEXTS.baseLoading?.message || 'Chargement en cours...' }}</p>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/components/BatchActionBar.vue
+################################################################################
+
+<script setup lang="ts">
+import { computed } from 'vue';
+import BaseButton from './BaseButton.vue';
+import { TEXTS } from '../locales/fr';
+
+const props = defineProps<{
+  modelValue: boolean; // État de la checkbox maîtresse (isAllSelected)
+  selectedCount: number;
+  isMixed: boolean;
+  context: 'unowned' | 'owned' | 'lent' | 'wishlist'; // AJOUT : Type sémantique spécifique
+}>();
+
+const emit = defineEmits<{
+  (e: 'update:modelValue', value: boolean): void;
+  (e: 'execute', action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN'): void;
+}>();
+
+const checkboxState = computed({
+  get: () => props.modelValue,
+  set: (val) => emit('update:modelValue', val)
+});
+</script>
+
+<template>
+  <div class="sticky-action-bar">
+    <div class="selection-status">
+      <input 
+        type="checkbox" 
+        class="wireframe-checkbox"
+        v-model="checkboxState"
+      />
+      <span>
+        {{ selectedCount > 0 
+          ? `${selectedCount} ${TEXTS.batchActionBar?.selectedCount}` 
+          : TEXTS.batchActionBar?.emptySelection 
+        }}
+      </span>
+    </div>
+
+    <div class="group-actions" v-if="selectedCount > 0">
+      
+      <div v-if="isMixed" class="mixed-error-container">
+        <p class="error-text-line">⚠️ {{ TEXTS.batchActionBar?.mixedSelectionError }}</p>
+        <p class="error-advice-line">{{ TEXTS.batchActionBar?.mixedSelectionAdvice }}</p>
+      </div>
+
+      <template v-else>
+        <template v-if="context === 'unowned'">
+          <BaseButton @click="emit('execute', 'ADD_INVENTORY')">
+            {{ TEXTS.bookCard?.btnAddInventory }}
+          </BaseButton>
+          <BaseButton @click="emit('execute', 'ADD_WISHLIST')">
+            {{ TEXTS.bookCard?.btnAddWishlist }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="context === 'wishlist'">
+          <BaseButton @click="emit('execute', 'ADD_INVENTORY')">
+            {{ TEXTS.bookCard?.btnAddInventory }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="context === 'owned'">
+          <BaseButton @click="emit('execute', 'LEND')">
+            {{ TEXTS.bookCard?.btnLend }}
+          </BaseButton>
+        </template>
+
+        <template v-else-if="context === 'lent'">
+          <BaseButton @click="emit('execute', 'RETURN')">
+            {{ TEXTS.seriesView?.btnReturnGroup || TEXTS.bookCard?.btnReturn || 'Livre rendu' }}
+          </BaseButton>
+        </template>
+      </template>
+      
+    </div>
+  </div>
+</template>
+
+
+################################################################################
 ### FICHIER : src/ui/components/BookResultCard.vue
 ################################################################################
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import BaseButton from './BaseButton.vue';
+import BookActionButtons from './BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { SearchResponse } from '../../core/types';
 
@@ -6228,24 +6624,24 @@ const emit = defineEmits<{
   (e: 'action-add-inventory', uri: string): void;
   (e: 'action-add-wishlist', uri: string): void;
   (e: 'action-lend', uri: string): void;
+  (e: 'action-return', uri: string): void;
   (e: 'action-view-series', seriesId: string): void;
 }>();
 
 const isOwned = computed(() => props.searchResult.ownership.isWorkOwned);
 const book = computed(() => props.searchResult.mainBook);
 const series = computed(() => props.searchResult.series);
+const isLent = computed(() => props.searchResult.loan.isLent);
 
-// Calcul robuste pour déterminer si le livre fait partie d'une série 
-// et extraire l'identifiant (ou le nom) à envoyer au Middle-End
 const seriesIdentifier = computed(() => {
-  return series.value?.id || book.value.seriesId || series.value?.name || book.value.series || book.value.seriesName;
+  return series.value?.id || book.value.seriesId || series.value?.name || book.value.series;
 });
 const hasSeries = computed(() => !!seriesIdentifier.value);
 </script>
 
 <template>
   <div class="result-card success">
-    <div class="result-title">{{ TEXTS.scanner.successDetected }}</div>
+    <div class="result-title">{{ TEXTS.scanner?.successDetected }}</div>
     
     <div class="book-card-layout">
       <img 
@@ -6266,43 +6662,43 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
 
         <div v-if="hasSeries" class="book-meta-group">
           <p class="book-meta-item">
-            <strong>{{ TEXTS.bookCard.series }} :</strong> 
-            {{ series?.name || book.series || book.seriesName }}
-            <span v-if="book.seriesNumber"> ({{ TEXTS.bookCard.volume }} {{ book.seriesNumber }})</span>
+            <strong>{{ TEXTS.bookCard?.series }} :</strong> 
+            {{ series?.name || book.series }}
+            <span v-if="book.seriesNumber"> ({{ TEXTS.bookCard?.volume }} {{ book.seriesNumber }})</span>
           </p>
         </div>
 
         <div class="book-meta-group" v-if="book.authors?.length || book.scriptwriters?.length || book.illustrators?.length">
           <p class="book-meta-item" v-if="book.authors?.length">
-            <strong>{{ TEXTS.bookCard.meta.authors }} :</strong> {{ book.authors.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.authors }} :</strong> {{ book.authors.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.scriptwriters?.length">
-            <strong>{{ TEXTS.bookCard.meta.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.illustrators?.length">
-            <strong>{{ TEXTS.bookCard.meta.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
           </p>
         </div>
 
         <div class="book-meta-group">
           <p class="book-meta-item" v-if="book.publisher">
-            <strong>{{ TEXTS.bookCard.meta.publisher }} :</strong> {{ book.publisher }} 
+            <strong>{{ TEXTS.bookCard?.meta?.publisher }} :</strong> {{ book.publisher }} 
             <span v-if="book.collection">[{{ book.collection }}]</span>
           </p>
           <p class="book-meta-item" v-if="book.genres?.length">
-            <strong>{{ TEXTS.bookCard.meta.genres }} :</strong> {{ book.genres.join(', ') }}
+            <strong>{{ TEXTS.bookCard?.meta?.genres }} :</strong> {{ book.genres.join(', ') }}
           </p>
           <p class="book-meta-item" v-if="book.publishDate">
-            <strong>{{ TEXTS.bookCard.meta.publishDate }} :</strong> {{ book.publishDate }}
+            <strong>{{ TEXTS.bookCard?.meta?.publishDate }} :</strong> {{ book.publishDate }}
           </p>
           <p class="book-meta-item" v-if="book.pageCount">
-            <strong>{{ TEXTS.bookCard.meta.pageCount }} :</strong> {{ book.pageCount }}
+            <strong>{{ TEXTS.bookCard?.meta?.pageCount }} :</strong> {{ book.pageCount }}
           </p>
           <p class="book-meta-item" v-if="book.format">
-            <strong>{{ TEXTS.bookCard.meta.format }} :</strong> {{ book.format }}
+            <strong>{{ TEXTS.bookCard?.meta?.format }} :</strong> {{ book.format }}
           </p>
           <p class="book-meta-item" v-if="book.language">
-            <strong>{{ TEXTS.bookCard.meta.language }} :</strong> {{ book.language }}
+            <strong>{{ TEXTS.bookCard?.meta?.language }} :</strong> {{ book.language }}
           </p>
           <p class="book-meta-item" v-if="book.isbn13">
             <strong>ISBN :</strong> {{ book.isbn13 }}
@@ -6310,32 +6706,25 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
         </div>
 
         <div class="badge-container">
-          <span class="badge" :class="isOwned ? 'owned' : 'missing'">
-            {{ isOwned ? TEXTS.bookCard.owned : TEXTS.bookCard.missing }}
+          <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
+            {{ isLent ? (TEXTS.bookStatus?.lent || 'Prêté') : (isOwned ? TEXTS.bookCard?.owned : TEXTS.bookCard?.missing) }}
           </span>
         </div>
       </div>
     </div>
 
     <div class="book-actions-layout">
-      <template v-if="!isOwned">
-        <BaseButton @click="emit('action-add-inventory', book.uri)">
-          {{ TEXTS.bookCard.btnAddInventory }}
-        </BaseButton>
-        
-        <BaseButton @click="emit('action-add-wishlist', book.uri)">
-          {{ TEXTS.bookCard.btnAddWishlist }}
-        </BaseButton>
-      </template>
-
-      <template v-else>
-        <BaseButton @click="emit('action-lend', book.uri)">
-          {{ TEXTS.bookCard.btnLend }}
-        </BaseButton>
-      </template>
+      <BookActionButtons 
+        :ownership-status="book.ownershipStatus"
+        :is-lent="isLent"
+        @add-inventory="emit('action-add-inventory', book.uri)"
+        @add-wishlist="emit('action-add-wishlist', book.uri)"
+        @lend="emit('action-lend', book.uri)"
+        @return="emit('action-return', book.uri)"
+      />
 
       <BaseButton v-if="hasSeries" @click="emit('action-view-series', seriesIdentifier)">
-        {{ TEXTS.bookCard.btnViewSeries }}
+        {{ TEXTS.bookCard?.btnViewSeries }}
       </BaseButton>
     </div>
   </div>
@@ -6370,6 +6759,72 @@ defineEmits<{
     :required="required"
     class="form-input"
   />
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/components/LendModal.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref } from 'vue';
+import { TEXTS } from '../locales/fr';
+
+const props = defineProps<{
+  show: boolean;
+  bookCount: number;
+}>();
+
+const emit = defineEmits<{
+  (e: 'close'): void;
+  (e: 'confirm', friendName: string): void;
+}>();
+
+const friendName = ref('');
+
+const handleConfirm = () => {
+  if (!friendName.value.trim()) return;
+  emit('confirm', friendName.value.trim());
+  friendName.value = '';
+};
+
+const handleClose = () => {
+  emit('close');
+  friendName.value = '';
+};
+</script>
+
+<template>
+  <div v-if="show" class="modal-overlay" @click.self="handleClose">
+    <div class="modal-box">
+      <h2>{{ TEXTS.lendModal.title }}</h2>
+      <p class="modal-text">
+        {{ bookCount > 1 ? TEXTS.lendModal.instructionPlural : TEXTS.lendModal.instructionSingular }}
+      </p>
+      
+      <div class="modal-actions">
+        <input 
+          v-model="friendName" 
+          type="text" 
+          :placeholder="TEXTS.lendModal.placeholder" 
+          class="form-input"
+          @keyup.enter="handleConfirm"
+        />
+        
+        <button 
+          :disabled="!friendName.trim()" 
+          @click="handleConfirm" 
+          class="btn-action"
+        >
+          {{ TEXTS.lendModal.confirm }}
+        </button>
+        
+        <button @click="handleClose" class="btn-close">
+          {{ TEXTS.lendModal.cancel }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 
@@ -6470,12 +6925,451 @@ const closeToast = async () => {
 
 
 ################################################################################
+### FICHIER : src/ui/components/BaseBanner.vue
+################################################################################
+
+<script setup lang="ts">
+defineProps<{
+  type: 'success' | 'error';
+  message: string;
+}>();
+</script>
+
+<template>
+  <div :class="['result-card', type]">
+    <p v-if="type === 'success'">✅ {{ message }}</p>
+    <p v-else>⚠️ {{ message }}</p>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/views/LoansView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { databaseService } from '../../core/database/database.service';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BookMiniCard from '../components/BookMiniCard.vue';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import { TEXTS } from '../locales/fr';
+import type { LoanRecord, HumanizedBook } from '../../core/types';
+
+interface HydratedLoan {
+  loan: LoanRecord;
+  book: HumanizedBook;
+}
+
+const hydratedLoans = ref<HydratedLoan[]>([]);
+const selectedIds = ref<string[]>([]);
+const isLoading = ref(true);
+
+const currentMode = ref<'borrower' | 'chrono'>('borrower');
+const expandedBorrowers = ref<Record<string, boolean>>({});
+
+const isAllSelected = computed(() => {
+  const targets = hydratedLoans.value;
+  return targets.length > 0 && selectedIds.value.length === targets.length;
+});
+
+onMounted(async () => {
+  await fetchLoansRecords();
+});
+
+const fetchLoansRecords = async () => {
+  isLoading.value = true;
+  try {
+    const localLoans = await databaseService.getAllLoans();
+    const temp: HydratedLoan[] = [];
+
+    for (const loan of localLoans) {
+      const bookCached = await databaseService.getBookFromCache(loan.uri);
+      if (bookCached) {
+        bookCached.loan = loan;
+        temp.push({
+          loan,
+          book: bookCached
+        });
+      }
+    }
+
+    hydratedLoans.value = temp;
+    selectedIds.value = [];
+  } catch (e) {
+    console.error("[LOANS VIEW] Échec d'hydratation du carnet :", e);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+// 1. AGRÉGATION INSENSIBLE À LA CASSE, AUX ESPACES ET AUX ACCENTS
+const loansByBorrower = computed(() => {
+  const groups: Record<string, { friendName: string; list: HydratedLoan[] }> = {};
+
+  hydratedLoans.value.forEach(item => {
+    // FIX ACCENTS & MAJUSCULES : Décomposition NFD + purge des diacritiques combinés
+    const key = item.loan.friendName
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    
+    if (!groups[key]) {
+      groups[key] = {
+        friendName: item.loan.friendName,
+        list: []
+      };
+    }
+    groups[key].list.push(item);
+  });
+
+  return Object.values(groups).sort((a, b) => a.friendName.localeCompare(b.friendName));
+});
+
+// 2. LOGIQUE CHRONOLOGIQUE
+const chronologicalLoans = computed(() => {
+  return [...hydratedLoans.value].sort((a, b) => a.loan.loanDate - b.loan.loanDate);
+});
+
+const toggleBorrowerSection = (borrowerKey: string) => {
+  expandedBorrowers.value[borrowerKey] = !expandedBorrowers.value[borrowerKey];
+};
+
+const handleToggleAll = (checked: boolean) => {
+  if (!checked) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = hydratedLoans.value.map(item => item.loan.uri);
+  }
+};
+
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+  if (selectedIds.value.length === 0 || action !== 'RETURN') return;
+
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('RETURN', uri);
+    }
+    await fetchLoansRecords();
+  } catch (e) {
+    console.error("[LOANS BATCH ERROR]", e);
+  }
+};
+
+const formatDate = (timestamp: number) => {
+  return new Date(timestamp).toLocaleDateString();
+};
+
+const resetSelection = () => {
+  selectedIds.value = [];
+};
+</script>
+
+<template>
+  <div class="view-container">
+    <BaseHeader :title="TEXTS.loansView?.title" showBack />
+
+    <BatchActionBar 
+      v-if="!isLoading"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="false"
+      context="lent"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
+
+    <div class="collection-modes-tabs" v-if="!isLoading">
+      <button :class="['tab-button', { active: currentMode === 'borrower' }]" @click="currentMode = 'borrower'; resetSelection()">
+        {{ TEXTS.loansView?.modeBorrower }}
+      </button>
+      <button :class="['tab-button', { active: currentMode === 'chrono' }]" @click="currentMode = 'chrono'; resetSelection()">
+        {{ TEXTS.loansView?.modeChronological }}
+      </button>
+    </div>
+
+    <BaseLoading v-if="isLoading" />
+
+    <div class="series-list-container" v-else>
+      <BaseBanner v-if="hydratedLoans.length === 0" type="error" :message="TEXTS.loansView?.emptyLoans" />
+
+      <template v-else>
+        <template v-if="currentMode === 'borrower'">
+          <div 
+            v-for="group in loansByBorrower" 
+            :key="group.friendName" 
+            class="loan-borrower-card"
+          >
+            <div class="loan-borrower-header" @click="toggleBorrowerSection(group.friendName.toLowerCase())">
+              <span>👤 {{ group.friendName }}</span>
+              <span>{{ group.list.length }} {{ TEXTS.loansView?.borrowedCount }} {{ expandedBorrowers[group.friendName.toLowerCase()] ? '▲' : '▼' }}</span>
+            </div>
+
+            <div class="loan-borrower-content" v-if="expandedBorrowers[group.friendName.toLowerCase()]">
+              <div v-for="item in group.list" :key="item.loan.uri">
+                <div class="loan-chrono-meta">
+                  {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+                </div>
+                <BookMiniCard 
+                  :book="item.book"
+                  :model-value="selectedIds.includes(item.loan.uri)"
+                  @update:model-value="(val) => {
+                    if(val) { if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri); }
+                    else selectedIds = selectedIds.filter(id => id !== item.loan.uri);
+                  }"
+                />
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
+          <div v-for="item in chronologicalLoans" :key="item.loan.uri">
+            <div class="loan-chrono-meta">
+              ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ item.loan.friendName }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+            </div>
+            <BookMiniCard 
+              :book="item.book"
+              :model-value="selectedIds.includes(item.loan.uri)"
+              @update:model-value="(val) => {
+                if(val) { if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri); }
+                else selectedIds = selectedIds.filter(id => id !== item.loan.uri);
+              }"
+            />
+          </div>
+        </template>
+      </template>
+
+    </div>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/views/WishlistView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { databaseService } from '../../core/database/database.service';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BookMiniCard from '../components/BookMiniCard.vue';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import { TEXTS } from '../locales/fr';
+import type { HumanizedBook } from '../../core/types';
+
+const allWishBooks = ref<HumanizedBook[]>([]);
+const selectedIds = ref<string[]>([]);
+const isLoading = ref(true);
+
+const selectedGenre = ref('all');
+const selectedAuthor = ref('all');
+
+const isAllSelected = computed(() => {
+  const targets = filteredBooks.value;
+  return targets.length > 0 && selectedIds.value.length === targets.length;
+});
+
+onMounted(async () => {
+  await fetchWishlist();
+});
+
+const fetchWishlist = async () => {
+  isLoading.value = true;
+  try {
+    const cached = await databaseService.getAllBooksFromCache();
+    allWishBooks.value = cached.filter(b => b.ownershipStatus === 'wish');
+    selectedIds.value = [];
+  } catch (e) {
+    console.error("[WISHLIST VIEW] Échec de lecture du cache :", e);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const dynamicGenres = computed(() => {
+  const genresSet = new Set<string>();
+  allWishBooks.value.forEach(book => {
+    if (book.genres && Array.isArray(book.genres)) {
+      book.genres.forEach(g => genresSet.add(g));
+    }
+  });
+  return Array.from(genresSet).sort();
+});
+
+const dynamicAuthors = computed(() => {
+  const authorsSet = new Set<string>();
+  allWishBooks.value.forEach(book => {
+    if (book.authors && Array.isArray(book.authors)) {
+      book.authors.forEach(a => authorsSet.add(a));
+    }
+  });
+  return Array.from(authorsSet).sort();
+});
+
+const filteredBooks = computed(() => {
+  let list = [...allWishBooks.value];
+
+  if (selectedGenre.value !== 'all') {
+    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  }
+
+  if (selectedAuthor.value !== 'all') {
+    list = list.filter(b => b.authors && b.authors.includes(selectedAuthor.value));
+  }
+
+  return list;
+});
+
+const groupedWishlist = computed(() => {
+  const list = filteredBooks.value;
+  const seriesGroups: Record<string, HumanizedBook[]> = {};
+  const independents: HumanizedBook[] = [];
+
+  list.forEach(book => {
+    if (book.series || book.seriesId) {
+      const key = book.series || book.seriesId || 'unknown';
+      if (!seriesGroups[key]) {
+        seriesGroups[key] = [];
+      }
+      seriesGroups[key].push(book);
+    } else {
+      independents.push(book);
+    }
+  });
+
+  for (const key in seriesGroups) {
+    seriesGroups[key].sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+  }
+
+  independents.sort((a, b) => a.title.localeCompare(b.title));
+
+  return {
+    series: seriesGroups,
+    independents
+  };
+});
+
+const handleToggleAll = (checked: boolean) => {
+  if (!checked) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = filteredBooks.value.map(b => b.uri);
+  }
+};
+
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+  if (selectedIds.value.length === 0) return;
+
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
+    }
+    await fetchWishlist();
+  } catch (e) {
+    console.error("[WISHLIST BATCH ERROR]", e);
+  }
+};
+
+const resetFilters = () => {
+  selectedIds.value = [];
+};
+</script>
+
+<template>
+  <div class="view-container">
+    <BaseHeader :title="TEXTS.wishlistView?.title" showBack />
+
+    <BatchActionBar 
+      v-if="!isLoading"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="false"
+      context="wishlist"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
+
+    <div class="collection-controls-bar" v-if="!isLoading">
+      <div class="control-group">
+        <label>{{ TEXTS.collectionView?.filterGenreLabel }}</label>
+        <select v-model="selectedGenre" class="control-select" @change="resetFilters">
+          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
+          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label>{{ TEXTS.wishlistView?.filterAuthorLabel }}</label>
+        <select v-model="selectedAuthor" class="control-select" @change="resetFilters">
+          <option value="all">{{ TEXTS.wishlistView?.filterAuthorAll }}</option>
+          <option v-for="author in dynamicAuthors" :key="author" :value="author">{{ author }}</option>
+        </select>
+      </div>
+    </div>
+
+    <BaseLoading v-if="isLoading" />
+
+    <div class="series-list-container" v-else>
+      <BaseBanner v-if="filteredBooks.length === 0" type="error" :message="TEXTS.wishlistView?.emptyWishlist" />
+
+      <template v-else>
+        <div v-for="(tomes, seriesName) in groupedWishlist.series" :key="seriesName">
+          <div class="wishlist-section-header">
+            {{ TEXTS.wishlistView?.seriesSection }}{{ seriesName }}
+          </div>
+          <BookMiniCard 
+            v-for="livre in tomes" 
+            :key="livre.uri" 
+            :book="livre"
+            :model-value="selectedIds.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if(val) {
+                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+              }
+              else selectedIds = selectedIds.filter(id => id !== livre.uri);
+            }"
+          />
+        </div>
+
+        <div v-if="groupedWishlist.independents.length > 0">
+          <div class="wishlist-section-header">
+            ✨ {{ TEXTS.wishlistView?.independentBooks }}
+          </div>
+          <BookMiniCard 
+            v-for="livre in groupedWishlist.independents" 
+            :key="livre.uri" 
+            :book="livre"
+            :model-value="selectedIds.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if(val) {
+                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+              }
+              else selectedIds = selectedIds.filter(id => id !== livre.uri);
+            }"
+          />
+        </div>
+      </template>
+    </div>
+  </div>
+</template>
+
+
+################################################################################
 ### FICHIER : src/ui/views/DebugDbView.vue
 ################################################################################
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { databaseService } from '../../core/database/database.service';
+import { databaseService, db } from '../../core/database/database.service';
+import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
 const allBooks = ref<HumanizedBook[]>([]);
@@ -6509,53 +7403,53 @@ const filteredBooks = computed(() => {
 });
 
 const clearDatabase = async () => {
-  if (confirm('Vider intégralement le cache local ?')) {
-    await databaseService.cache_books.clear();
+  if (confirm(TEXTS.debugDbView.clearConfirm)) {
+    await db.cache_books.clear();
     await loadDatabase();
   }
 };
 </script>
 
 <template>
-  <div style="padding: 20px; font-family: monospace;">
-    <h2>🛠 Laboratoire Local (Dexie DB)</h2>
+  <div class="debug-view-container">
+    <h2>{{ TEXTS.debugDbView.title }}</h2>
     
-    <div style="margin-bottom: 20px; display: flex; gap: 10px;">
+    <div class="debug-action-bar">
       <input 
         v-model="searchQuery" 
-        placeholder="Rechercher par titre, URI, wd:..." 
-        style="padding: 8px; width: 300px; border: 1px solid #ccc;"
+        :placeholder="TEXTS.debugDbView.placeholder" 
+        class="debug-search-input"
       />
-      <button @click="loadDatabase" style="padding: 8px;">Rafraîchir</button>
-      <button @click="clearDatabase" style="padding: 8px; background: #e74c3c; color: white;">Vider le cache</button>
+      <button @click="loadDatabase" class="btn-action">{{ TEXTS.debugDbView.btnRefresh }}</button>
+      <button @click="clearDatabase" class="btn-danger">{{ TEXTS.debugDbView.btnClear }}</button>
     </div>
 
-    <div v-if="isLoading">Chargement de la base de données...</div>
+    <div v-if="isLoading" class="result-card">{{ TEXTS.debugDbView.loading }}</div>
 
-    <table v-else style="width: 100%; border-collapse: collapse; text-align: left; font-size: 12px;">
+    <table v-else class="debug-table">
       <thead>
-        <tr style="background: #eee;">
-          <th style="padding: 8px; border: 1px solid #ccc;">Couverture</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Titre</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Série & N°</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Édition (inv:)</th>
-          <th style="padding: 8px; border: 1px solid #ccc;">Œuvre (wd:)</th>
+        <tr>
+          <th>{{ TEXTS.debugDbView.thCover }}</th>
+          <th>{{ TEXTS.debugDbView.thTitle }}</th>
+          <th>{{ TEXTS.debugDbView.thSeries }}</th>
+          <th>{{ TEXTS.debugDbView.thEdition }}</th>
+          <th>{{ TEXTS.debugDbView.thWork }}</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="book in filteredBooks" :key="book.uri">
-          <td style="padding: 8px; border: 1px solid #ccc;">
-            <img v-if="book.coverUrl" :src="book.coverUrl" style="width: 40px; height: auto;" />
+          <td>
+            <img v-if="book.coverUrl" :src="book.coverUrl" class="debug-cover-img" />
             <span v-else>❌</span>
           </td>
-          <td style="padding: 8px; border: 1px solid #ccc; font-weight: bold;">{{ book.title }}</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.series || '-' }} (Tome {{ book.seriesNumber || '?' }})</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.uri }}</td>
-          <td style="padding: 8px; border: 1px solid #ccc;">{{ book.workUri || '-' }}</td>
+          <td>{{ book.title }}</td>
+          <td>{{ book.series || '-' }} <span v-if="book.seriesNumber">(Tome {{ book.seriesNumber }})</span></td>
+          <td>{{ book.uri }}</td>
+          <td>{{ book.workUri || '-' }}</td>
         </tr>
       </tbody>
     </table>
-    <p style="margin-top: 10px; color: #666;">Total en cache : {{ filteredBooks.length }} / {{ allBooks.length }}</p>
+    <p class="debug-footer-text">{{ TEXTS.debugDbView.totalInCache }} {{ filteredBooks.length }} / {{ allBooks.length }}</p>
   </div>
 </template>
 
@@ -6570,7 +7464,12 @@ import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
+import LendModal from '../components/LendModal.vue';
+import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
@@ -6581,15 +7480,17 @@ const book = ref<HumanizedBook | null>(null);
 const isLoading = ref(true);
 const errorMsg = ref('');
 const successMessage = ref('');
+const showLendModal = ref(false);
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
-const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series || !!book.value?.seriesName);
-const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || book.value?.seriesName || '');
+const isLent = computed(() => !!book.value?.loan);
+const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
+const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
 
 onMounted(async () => {
   const uriParam = route.params.uri as string;
   if (!uriParam) {
-    errorMsg.value = "Identifiant du livre manquant.";
+    errorMsg.value = TEXTS.bookDetail?.missingId || "Identifiant du livre manquant.";
     isLoading.value = false;
     return;
   }
@@ -6597,6 +7498,10 @@ onMounted(async () => {
   try {
     const cached = await databaseService.getBookFromCache(uriParam);
     if (cached) {
+      const activeLoan = await databaseService.getLoan(cached.uri);
+      if (activeLoan) {
+        cached.loan = activeLoan;
+      }
       book.value = cached;
       isLoading.value = false;
       return;
@@ -6605,6 +7510,10 @@ onMounted(async () => {
     console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
     const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
     if (resolved) {
+      const activeLoan = await databaseService.getLoan(resolved.uri);
+      if (activeLoan) {
+        resolved.loan = activeLoan;
+      }
       book.value = resolved;
     } else {
       errorMsg.value = "Impossible de récupérer les détails de cette édition.";
@@ -6616,10 +7525,6 @@ onMounted(async () => {
     isLoading.value = false;
   }
 });
-
-const goBack = () => {
-  router.back();
-};
 
 const navigateToSeries = () => {
   if (seriesIdentifier.value) {
@@ -6654,30 +7559,52 @@ const handleAddWishlist = async () => {
 };
 
 const handleLend = () => {
-  console.log("Ouverture du tunnel de prêt pour :", book.value?.uri);
+  showLendModal.value = true;
+};
+
+const confirmLend = async (friendName: string) => {
+  if (!book.value?.uri) return;
+  try {
+    await queueService.enqueueAction('LEND', book.value.uri, { friendName });
+    book.value.loan = {
+      uri: book.value.uri,
+      friendName,
+      loanDate: Date.now()
+    };
+  } catch (e) {
+    console.error(e);
+  } finally {
+    showLendModal.value = false;
+  }
+};
+
+const handleReturn = async () => {
+  if (!book.value?.uri) return;
+  try {
+    await queueService.enqueueAction('RETURN', book.value.uri);
+    if (book.value.loan) {
+      delete book.value.loan;
+    }
+  } catch (e) {
+    console.error(e);
+  }
 };
 </script>
 
 <template>
   <div class="view-container detail-container">
-    <div class="nav-header">
-      <BaseButton @click="goBack">← Retour</BaseButton>
-      <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
-    </div>
+    <BaseHeader title="Détails de l'édition" showBack>
+      <template #actions>
+        <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
+      </template>
+    </BaseHeader>
 
-    <div v-if="isLoading" class="result-card">
-      <p>Chargement des spécifications de l'édition...</p>
-    </div>
+    <BaseLoading v-if="isLoading" />
 
-    <div v-else-if="errorMsg" class="result-card error">
-      <p>{{ errorMsg }}</p>
-      <BaseButton @click="goBack">Retourner à l'accueil</BaseButton>
-    </div>
+    <BaseBanner v-else-if="errorMsg" type="error" :message="errorMsg" />
 
     <div v-else-if="book" class="result-card success">
-      <div v-if="successMessage" class="success-banner">
-        <p>✅ {{ successMessage }}</p>
-      </div>
+      <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
 
       <div class="book-card-layout">
         <div v-if="!book.coverUrl" class="book-cover-placeholder">
@@ -6699,7 +7626,7 @@ const handleLend = () => {
           <div v-if="hasSeries" class="book-meta-group">
             <p class="book-meta-item">
               <strong>Série :</strong> 
-              {{ book.series || book.seriesName }}
+              {{ book.series }}
               <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
             </p>
           </div>
@@ -6730,14 +7657,18 @@ const handleLend = () => {
             <p class="book-meta-item" v-if="book.pageCount">
               <strong>Pages :</strong> {{ book.pageCount }}
             </p>
-            <p class="book-meta-item" v-if="book.isbn13 || book.isbn">
-              <strong>ISBN :</strong> {{ book.isbn13 || book.isbn }}
+            <p class="book-meta-item" v-if="book.isbn13 || book.isbn10">
+              <strong>ISBN :</strong> {{ book.isbn13 || book.isbn10 }}
             </p>
           </div>
 
           <div class="badge-container">
-            <span class="badge" :class="isOwned ? 'owned' : 'missing'">
-              {{ isOwned ? 'Dans votre bibliothèque' : (book.ownershipStatus === 'wish' ? 'Dans votre liste d\'envies' : 'Non possédé') }}
+            <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
+              {{ 
+                isLent ? `${TEXTS.bookStatus?.lent || 'Prêté'} : ${book.loan?.friendName}` : 
+                (book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
+                (book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : TEXTS.bookStatus?.none)) 
+              }}
             </span>
           </div>
         </div>
@@ -6749,21 +7680,23 @@ const handleLend = () => {
       </div>
 
       <div class="book-actions-layout">
-        <template v-if="!isOwned">
-          <BaseButton @click="handleAddInventory">
-            Ajouter à l'inventaire
-          </BaseButton>
-          <BaseButton @click="handleAddWishlist">
-            Ajouter à la wishlist
-          </BaseButton>
-        </template>
-        <template v-else>
-          <BaseButton @click="handleLend">
-            Prêter
-          </BaseButton>
-        </template>
+        <BookActionButtons 
+          :ownership-status="book.ownershipStatus"
+          :is-lent="isLent"
+          @add-inventory="handleAddInventory"
+          @add-wishlist="handleAddWishlist"
+          @lend="handleLend"
+          @return="handleReturn"
+        />
       </div>
     </div>
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="1"
+      @close="showLendModal = false"
+      @confirm="confirmLend"
+    />
   </div>
 </template>
 
@@ -6867,23 +7800,34 @@ const handleLogin = async () => {
 ################################################################################
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { ref, onMounted, computed, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import SelectableBookList from '../components/SelectableBookList.vue';
-import BaseButton from '../components/BaseButton.vue';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
-const router = useRouter();
 
 const seriesId = computed(() => route.params.id as string);
 
 const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
+const showLendModal = ref(false);
+
+// Consommation de l'état réactif de la tâche de fond
+const progressState = seriesOrchestrator.getProgress(seriesId.value);
+
+const progressPercentage = computed(() => {
+  if (!progressState.value.total) return 0;
+  return Math.round((progressState.value.current / progressState.value.total) * 100);
+});
 
 const isAllSelected = computed(() => {
   return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
@@ -6891,35 +7835,44 @@ const isAllSelected = computed(() => {
 
 const seriesName = computed(() => {
   if (seriesTomes.value.length > 0) {
-    return seriesTomes.value[0].series || seriesTomes.value[0].seriesName || seriesId.value;
+    return seriesTomes.value[0].series || seriesId.value;
   }
   return seriesId.value;
 });
 
-// Analyse sémantique de la sélection pour le message d'erreur guidé
 const selectedBooks = computed(() => {
   return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
 });
 
-const hasOwnedSelected = computed(() => {
-  return selectedBooks.value.some(book => book.ownershipStatus === 'owned');
-});
-
-const hasUnownedSelected = computed(() => {
-  return selectedBooks.value.some(book => book.ownershipStatus !== 'owned');
-});
+const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
+const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
+const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
 
 const isSelectionMixed = computed(() => {
-  return hasOwnedSelected.value && hasUnownedSelected.value;
+  let categories = 0;
+  if (hasUnownedSelected.value) categories++;
+  if (hasAvailableOwnedSelected.value) categories++;
+  if (hasLentSelected.value) categories++;
+  return categories > 1;
 });
+
+const batchContext = computed(() => {
+  if (hasUnownedSelected.value) return 'unowned';
+  if (hasLentSelected.value) return 'lent';
+  return 'owned';
+});
+
+const loadLocalData = async () => {
+  const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+  if (context) {
+    seriesTomes.value = context.tomes;
+  }
+};
 
 onMounted(async () => {
   isLoading.value = true;
   try {
-    const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
-    if (context) {
-      seriesTomes.value = context.tomes;
-    }
+    await loadLocalData();
   } catch (e) {
     console.error("Erreur lors du chargement sémantique de la saga :", e);
   } finally {
@@ -6927,28 +7880,42 @@ onMounted(async () => {
   }
 });
 
-const handleBack = () => {
-  router.back();
-};
+// Rafraîchissement réactif en temps réel : si l'utilisateur reste sur cette page,
+// chaque tome qui s'enregistre dans Dexie provoque une mise à jour fluide de l'affichage.
+watch(
+  () => [progressState.value.current, progressState.value.isActive],
+  async () => {
+    await loadLocalData();
+  }
+);
 
-const toggleSelection = () => {
-  if (isAllSelected.value) {
+const handleToggleAll = (checked: boolean) => {
+  if (!checked) {
     selectedIds.value = [];
   } else {
     selectedIds.value = seriesTomes.value.map(item => item.uri);
   }
 };
 
-const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
   if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
-  
+
+  if (action === 'LEND') {
+    showLendModal.value = true;
+    return;
+  }
+
   try {
     for (const uri of selectedIds.value) {
       await queueService.enqueueAction(action, uri);
     }
-    
+
     seriesTomes.value = seriesTomes.value.map(tome => {
       if (selectedIds.value.includes(tome.uri)) {
+        if (action === 'RETURN') {
+          const { loan, ...rest } = tome;
+          return rest;
+        }
         return {
           ...tome,
           ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish'
@@ -6956,79 +7923,82 @@ const executeGroupAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST') => {
       }
       return tome;
     });
-    
+
     selectedIds.value = [];
   } catch (error) {
-    console.error(`Erreur lors de l'exécution de l'action groupée ${action} :`, error);
+    console.error(error);
   }
 };
 
-const handleGroupLend = () => {
-  if (isSelectionMixed.value) return;
-  console.log('Action de prêt groupée en cours de dev');
+const confirmGroupLend = async (friendName: string) => {
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('LEND', uri, { friendName });
+    }
+    
+    seriesTomes.value = seriesTomes.value.map(tome => {
+      if (selectedIds.value.includes(tome.uri)) {
+        return {
+          ...tome,
+          loan: { uri: tome.uri, friendName, loanDate: Date.now() }
+        };
+      }
+      return tome;
+    });
+    
+    selectedIds.value = [];
+  } catch (error) {
+    console.error(error);
+  } finally {
+    showLendModal.value = false;
+  }
 };
 </script>
 
 <template>
   <div class="view-container">
-    <div class="series-header">
-      <BaseButton @click="handleBack">
-        {{ TEXTS.seriesView.back }}
-      </BaseButton>
-      <h2>{{ seriesName }}</h2>
-      <p v-if="!isLoading">{{ seriesTomes.length }} tomes dans la série</p>
-    </div>
+    <BaseHeader :title="seriesName" showBack>
+      <template #actions>
+        <p v-if="!isLoading">{{ seriesTomes.length }} tomes</p>
+      </template>
+    </BaseHeader>
 
-    <div class="sticky-action-bar">
-      <div class="selection-status">
-        <input 
-          type="checkbox" 
-          class="wireframe-checkbox"
-          :checked="isAllSelected" 
-          @change="toggleSelection" 
-          :disabled="isLoading"
-        />
-        <span>
-          {{ selectedIds.length > 0 
-            ? `${selectedIds.length} ${TEXTS.seriesView.selectedCount}` 
-            : TEXTS.seriesView.emptySelection 
-          }}
-        </span>
+    <BatchActionBar 
+      v-if="!isLoading"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="isSelectionMixed"
+      :context="batchContext"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
+
+    <div v-if="progressState.isActive" class="progress-container">
+      <div class="progress-text-summary">
+        {{ TEXTS.seriesProgress?.loadingTitle || 'Téléchargement de la saga' }} : {{ progressState.current }} / {{ progressState.total }}
       </div>
-
-      <div class="group-actions" v-if="selectedIds.length > 0">
-        
-        <div v-if="isSelectionMixed" class="mixed-error-container">
-          <p class="error-text-line">⚠️ {{ TEXTS.seriesView.mixedSelectionError }}</p>
-          <p class="error-advice-line">{{ TEXTS.seriesView.mixedSelectionAdvice }}</p>
-        </div>
-
-        <template v-else-if="hasUnownedSelected">
-          <BaseButton @click="executeGroupAction('ADD_INVENTORY')">
-            {{ TEXTS.bookCard.btnAddInventory }}
-          </BaseButton>
-          <BaseButton @click="executeGroupAction('ADD_WISHLIST')">
-            {{ TEXTS.bookCard.btnAddWishlist }}
-          </BaseButton>
-        </template>
-
-        <template v-else-if="hasOwnedSelected">
-          <BaseButton @click="handleGroupLend">
-            {{ TEXTS.bookCard.btnLend }}
-          </BaseButton>
-        </template>
-        
+      <div class="progress-track-wrapper">
+        <div class="progress-fill-bar" :style="{ width: progressPercentage + '%' }"></div>
+        <div class="progress-percentage-label">{{ progressPercentage }}%</div>
       </div>
+      <p class="progress-pedagogic-notice">
+        {{ TEXTS.seriesProgress?.pedagogicNotice || "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages." }}
+      </p>
     </div>
 
-    <div v-if="isLoading" class="result-card">
-      {{ TEXTS.seriesView.loading }}
-    </div>
+    <BaseLoading v-if="isLoading" />
 
     <SelectableBookList 
       v-else
       :items="seriesTomes"
       v-model="selectedIds"
+    />
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="selectedIds.length"
+      @close="showLendModal = false"
+      @confirm="confirmGroupLend"
     />
   </div>
 </template>
@@ -7062,7 +8032,6 @@ onMounted(() => {
     try {
       const response = await searchService.searchByIsbn(isbn);
       if (response && response.mainBook?.uri) {
-        // Redirection immédiate vers la vue de détail autonome
         router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       } else {
         errorMessage.value = TEXTS.scanner.notFound;
@@ -7084,7 +8053,6 @@ const startScanningSequence = async () => {
       isScanningActive.value = false;
       isSearching.value = false;
       if (response && response.mainBook?.uri) {
-        // Redirection immédiate vers la vue de détail autonome
         router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       } else {
         errorMessage.value = TEXTS.scanner.notFound;
@@ -7097,6 +8065,18 @@ const startScanningSequence = async () => {
     },
     () => { isSearching.value = true; }
   );
+};
+
+const navigateToCollection = () => {
+  router.push({ name: 'CollectionView' });
+};
+
+const navigateToWishlist = () => {
+  router.push({ name: 'WishlistView' });
+};
+
+const navigateToLoans = () => {
+  router.push({ name: 'LoansView' });
 };
 
 const stopScanningSequence = async () => {
@@ -7123,6 +8103,24 @@ onUnmounted(async () => {
       </BaseButton>
     </div>
 
+    <div class="action-section">
+      <BaseButton @click="navigateToCollection">
+        {{ TEXTS.collectionView?.title }}
+      </BaseButton>
+    </div>
+
+    <div class="action-section">
+      <BaseButton @click="navigateToWishlist">
+        {{ TEXTS.wishlistView?.title }}
+      </BaseButton>
+    </div>
+
+    <div class="action-section">
+      <BaseButton @click="navigateToLoans">
+        {{ TEXTS.loansView?.title }}
+      </BaseButton>
+    </div>
+
     <div v-show="isScanningActive" class="scanner-box">
       <h3>{{ TEXTS.scanner.title }}</h3>
       <div class="scanner-viewport-wrapper">
@@ -7138,6 +8136,291 @@ onUnmounted(async () => {
     <div v-if="errorMessage" class="error-banner">
       {{ errorMessage }}
     </div>
+  </div>
+</template>
+
+
+################################################################################
+### FICHIER : src/ui/views/CollectionView.vue
+################################################################################
+
+<script setup lang="ts">
+import { ref, onMounted, computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { databaseService } from '../../core/database/database.service';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import BookMiniCard from '../components/BookMiniCard.vue';
+import BaseHeader from '../components/BaseHeader.vue';
+import BaseLoading from '../components/BaseLoading.vue';
+import BaseBanner from '../components/BaseBanner.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import LendModal from '../components/LendModal.vue';
+import { TEXTS } from '../locales/fr';
+import type { HumanizedBook } from '../../core/types';
+
+const router = useRouter();
+
+const allOwnedBooks = ref<HumanizedBook[]>([]);
+const selectedIds = ref<string[]>([]);
+const isLoading = ref(true);
+const showLendModal = ref(false);
+
+const currentMode = ref<'books' | 'series' | 'oneshots'>('books');
+const selectedGenre = ref('all');
+const currentSort = ref('title');
+
+const isAllSelected = computed(() => {
+  const targets = currentSortBooks.value;
+  return targets.length > 0 && selectedIds.value.length === targets.length;
+});
+
+onMounted(async () => {
+  await fetchCatalogue();
+});
+
+const fetchCatalogue = async () => {
+  isLoading.value = true;
+  try {
+    const cached = await databaseService.getAllBooksFromCache();
+    const owned = cached.filter(b => b.ownershipStatus === 'owned');
+    
+    // HYDRATATION DES PRÊTS : On injecte les données de prêt locales dans chaque livre du catalogue
+    for (const livre of owned) {
+      const activeLoan = await databaseService.getLoan(livre.uri);
+      if (activeLoan) {
+        livre.loan = activeLoan;
+      }
+    }
+    
+    allOwnedBooks.value = owned;
+    selectedIds.value = [];
+  } catch (e) {
+    console.error(e);
+  } finally {
+    isLoading.value = false;
+  }
+};
+
+const navigateToSeries = (seriesId: string) => {
+  if (seriesId) {
+    router.push({ name: 'SeriesView', params: { id: seriesId } });
+  }
+};
+
+const dynamicGenres = computed(() => {
+  const genresSet = new Set<string>();
+  allOwnedBooks.value.forEach(book => {
+    if (book.genres && Array.isArray(book.genres)) {
+      book.genres.forEach(g => genresSet.add(g));
+    }
+  });
+  return Array.from(genresSet).sort();
+});
+
+const processedBooks = computed(() => {
+  let list = [...allOwnedBooks.value];
+
+  if (selectedGenre.value !== 'all') {
+    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  }
+
+  if (currentMode.value === 'oneshots') {
+    return list.filter(b => !b.seriesId && !b.series);
+  }
+  return list;
+});
+
+const seriesGondolas = computed(() => {
+  let list = allOwnedBooks.value.filter(b => b.seriesId || b.series);
+
+  if (selectedGenre.value !== 'all') {
+    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  }
+
+  const groups: Record<string, { id: string; name: string; tomes: HumanizedBook[] }> = {};
+
+  list.forEach(book => {
+    const key = book.seriesId || book.series || 'unknown';
+    if (!groups[key]) {
+      groups[key] = {
+        id: book.seriesId || book.series || '',
+        name: book.series || book.seriesId || '',
+        tomes: []
+      };
+    }
+    groups[key].tomes.push(book);
+  });
+
+  const gondolas = Object.values(groups).map(g => {
+    g.tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+    return {
+      id: g.id,
+      name: g.name,
+      ownedCount: g.tomes.length,
+      coverUrl: g.tomes[0]?.coverUrl
+    };
+  });
+
+  return gondolas.sort((a, b) => a.name.localeCompare(b.name));
+});
+
+const currentSortBooks = computed(() => {
+  const list = [...processedBooks.value];
+
+  if (currentSort.value === 'title') {
+    return list.sort((a, b) => a.title.localeCompare(b.title));
+  } else if (currentSort.value === 'author') {
+    return list.sort((a, b) => {
+      const authA = a.authors && a.authors[0] ? a.authors[0] : '';
+      const authB = b.authors && b.authors[0] ? b.authors[0] : '';
+      return authA.localeCompare(authB);
+    });
+  } else if (currentSort.value === 'date') {
+    return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+  return list;
+});
+
+const selectedBooks = computed(() => {
+  return allOwnedBooks.value.filter(b => selectedIds.value.includes(b.uri));
+});
+
+const hasLentSelected = computed(() => selectedBooks.value.some(b => !!b.loan));
+const hasAvailableSelected = computed(() => selectedBooks.value.some(b => !b.loan));
+const isSelectionMixed = computed(() => hasLentSelected.value && hasAvailableSelected.value);
+const batchContext = computed(() => hasLentSelected.value ? 'lent' : 'owned');
+
+const handleToggleAll = (checked: boolean) => {
+  if (!checked) {
+    selectedIds.value = [];
+  } else {
+    selectedIds.value = currentSortBooks.value.map(b => b.uri);
+  }
+};
+
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+
+  if (action === 'LEND') {
+    showLendModal.value = true;
+    return;
+  }
+
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
+    }
+    await fetchCatalogue();
+  } catch (e) {
+    console.error(e);
+  }
+};
+
+const confirmGroupLend = async (friendName: string) => {
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('LEND', uri, { friendName });
+    }
+    await fetchCatalogue();
+  } catch (e) {
+    console.error(e);
+  } finally {
+    showLendModal.value = false;
+  }
+};
+
+const resetSelection = () => {
+  selectedIds.value = [];
+};
+</script>
+
+<template>
+  <div class="view-container">
+    <BaseHeader :title="TEXTS.collectionView?.title" showBack />
+
+    <div class="collection-modes-tabs">
+      <button :class="['tab-button', { active: currentMode === 'books' }]" @click="currentMode = 'books'; resetSelection()">
+        {{ TEXTS.collectionView?.modeBooks }}
+      </button>
+      <button :class="['tab-button', { active: currentMode === 'series' }]" @click="currentMode = 'series'; resetSelection()">
+        {{ TEXTS.collectionView?.modeSeries }}
+      </button>
+      <button :class="['tab-button', { active: currentMode === 'oneshots' }]" @click="currentMode = 'oneshots'; resetSelection()">
+        {{ TEXTS.collectionView?.modeOneShots }}
+      </button>
+    </div>
+
+    <BatchActionBar 
+      v-if="!isLoading && currentMode !== 'series'"
+      :model-value="isAllSelected"
+      :selected-count="selectedIds.length"
+      :is-mixed="isSelectionMixed"
+      :context="batchContext"
+      @update:model-value="handleToggleAll"
+      @execute="dispatchBatchAction"
+    />
+
+    <div class="collection-controls-bar" v-if="!isLoading">
+      <div class="control-group">
+        <label>{{ TEXTS.collectionView?.filterGenreLabel }}</label>
+        <select v-model="selectedGenre" class="control-select" @change="resetSelection">
+          <option value="all">{{ TEXTS.collectionView?.filterGenreAll }}</option>
+          <option v-for="genre in dynamicGenres" :key="genre" :value="genre">{{ genre }}</option>
+        </select>
+      </div>
+
+      <div class="control-group" v-if="currentMode !== 'series'">
+        <label>{{ TEXTS.collectionView?.sortLabel }}</label>
+        <select v-model="currentSort" class="control-select">
+          <option value="title">{{ TEXTS.collectionView?.sortByTitle }}</option>
+          <option value="author">{{ TEXTS.collectionView?.sortByAuthor }}</option>
+          <option value="date">{{ TEXTS.collectionView?.sortByDate }}</option>
+        </select>
+      </div>
+    </div>
+
+    <BaseLoading v-if="isLoading" />
+
+    <div class="series-list-container" v-else>
+      <template v-if="currentMode === 'series'">
+        <BaseBanner v-if="seriesGondolas.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
+        
+        <div v-for="saga in seriesGondolas" :key="saga.id" class="mini-card-row" @click="navigateToSeries(saga.id)">
+          <div class="row-cover-container">
+            <img v-if="saga.coverUrl" :src="saga.coverUrl" class="row-cover-image" />
+            <div v-else class="row-cover-fallback"><span class="fallback-title">{{ saga.name }}</span></div>
+          </div>
+          <div class="row-info-content">
+            <p class="row-title">{{ saga.name }}</p>
+            <p class="row-series-meta">{{ saga.ownedCount }} {{ TEXTS.collectionView?.tomesOwned }}</p>
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <BaseBanner v-if="currentSortBooks.length === 0" type="error" :message="TEXTS.collectionView?.emptyCollection" />
+        
+        <BookMiniCard 
+          v-for="livre in currentSortBooks" 
+          :key="livre.uri" 
+          :book="livre"
+          :model-value="selectedIds.includes(livre.uri)"
+          @update:model-value="(val) => {
+            if(val) {
+              if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+            }
+            else selectedIds = selectedIds.filter(id => id !== livre.uri);
+          }"
+        />
+      </template>
+    </div>
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="selectedIds.length"
+      @close="showLendModal = false"
+      @confirm="confirmGroupLend"
+    />
   </div>
 </template>
 
@@ -7169,7 +8452,7 @@ export interface BaseBook {
   pageCount?: number;
   publishDate?: string;
   format?: string;
-  updatedAt?: number; // AJOUT : Horodatage pour le système de péremption du cache (TTL)
+  updatedAt?: number; // Horodatage pour le système de péremption du cache (TTL)
 }
 
 export interface RawBook extends BaseBook {
@@ -7194,6 +8477,7 @@ export interface HumanizedBook extends BaseBook {
   genres: string[];
   collection?: string;
   ownershipStatus: 'owned' | 'wish' | 'none';
+  loan?: LoanRecord; // AJOUT : Attribut contextuel optionnel pour porter le prêt local
 }
 
 /**
@@ -7203,7 +8487,7 @@ export interface LoanRecord {
   uri: string;
   friendName: string;
   loanDate: number;
-  itemId?: string; // AJOUT : Sauvegarde de l'ID physique pour fiabiliser la synchro
+  itemId?: string; // Sauvegarde de l'ID physique pour fiabiliser la synchro
 }
 
 export interface InventoryItem {
@@ -7244,7 +8528,7 @@ export interface SearchResponse {
 }
 
 // ============================================================================
-// NOUVEAU : TYPES STRICTS POUR L'OPTIMISTIC UI (Remplacement des "any")
+// TYPES STRICTS POUR L'OPTIMISTIC UI (Remplacement des "any")
 // ============================================================================
 
 export interface LendPayload {
@@ -7455,7 +8739,6 @@ export const isbnUtil = {
 ################################################################################
 
 // src/core/resolvers/humanizer.ts
-//import { entityResolver } from './entity.resolver';
 import type { RawBook, HumanizedBook } from '../types';
 
 export const entityHumanizer = {
@@ -7481,22 +8764,25 @@ export const entityHumanizer = {
     const idArray = Array.from(allIds);
     const dictionary: Record<string, string> = {};
 
+    // Extraction dynamique de la langue du navigateur pour l'alignement international des filtres
+    const browserLang = typeof navigator !== 'undefined' && navigator.language ? navigator.language.split('-')[0].toLowerCase() : 'fr';
+
     // 2. MEGA-BATCHING : Une seule requête pour tout traduire d'un coup
     if (idArray.length > 0) {
       try {
         console.log(`[HUMANIZER] Traduction groupée de ${idArray.length} métadonnées...`);
-        // Découpage en paquets de 50 pour respecter la limite d'Inventaire.io
         for (let i = 0; i < idArray.length; i += 50) {
           const chunk = idArray.slice(i, i + 50);
           
-          // CORRECTION : Passage par le proxy Vercel pour centraliser le trafic et verrouiller les CORS
           const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
           const data = await res.json();
           const entities = data.entities || data;
 
           for (const [uri, entity] of Object.entries(entities)) {
             const e = entity as any;
-            if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
+            // Élection de la langue adaptative avec replis sécurisés
+            if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
+            else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
             else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
             else if (e.label) dictionary[uri] = e.label;
             else dictionary[uri] = uri;
@@ -7507,7 +8793,6 @@ export const entityHumanizer = {
       }
     }
 
-    // Utilitaire pour piocher dans le dictionnaire
     const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id]).filter(Boolean);
     const translateSingle = (id?: string) => id ? dictionary[id] : undefined;
 
@@ -7525,7 +8810,7 @@ export const entityHumanizer = {
       isbn13: rawBook.isbn13,
       isbn10: rawBook.isbn10,
       coverUrl: targetImageUrl,
-      localCover: undefined, // OPTIMISATION : L'image n'est plus traitée ici, l'UI est débloquée.
+      localCover: undefined,
       pageCount: rawBook.pageCount,
       publishDate: rawBook.publishDate,
       format: rawBook.format,
@@ -7543,7 +8828,7 @@ export const entityHumanizer = {
       ownershipStatus: 'none'
     };
 
-    console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Temps de blocage réduit à néant)`);
+    console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Alignement multilingue actif)`);
     return humanized;
   }
 };
@@ -7612,7 +8897,7 @@ function extractEntityTitle(entity: any): string {
 }
 
 /**
- * NOUVEAU : Vérifie si une édition est dans la langue souhaitée
+ * Vérifie si une édition est dans la langue souhaitée
  */
 function hasLanguage(entity: any, expectedWdId: string): boolean {
   if (!entity?.claims) return false;
@@ -7631,7 +8916,7 @@ function hasLanguage(entity: any, expectedWdId: string): boolean {
 
 export const workUriResolver = {
   /**
-   * Convertit une liste d'œuvres (wd:) en la meilleure liste d'éditions physiques (inv: ou isbn:)
+   * Convertit une liste d'œuvres en la meilleure liste d'éditions physiques correspondantes (inv: ou isbn:)
    */
   async resolveBulk(workUris: string[]): Promise<string[]> {
     console.group(`[WORK-URI RESOLVER] Concrétisation de ${workUris.length} œuvres...`);
@@ -7640,16 +8925,18 @@ export const workUriResolver = {
     
     const preferredLangWd = configService.getPreferredLanguageWdCode();
 
-    // 1. Barrière Locale (Cache-First)
+    // 1. Barrière Locale (Cache-First) adaptative
     for (const uri of workUris) {
-      if (!uri.startsWith('wd:')) {
-        physicalUris.push(uri); // C'est déjà une édition physique
+      if (uri.startsWith('isbn:')) {
+        physicalUris.push(uri); // C'est déjà une édition physique pure garantie
         continue;
       }
+      
       const editionLocal = await databaseService.getEditionByWorkFromCache(uri);
       if (editionLocal) {
         physicalUris.push(editionLocal.uri);
       } else {
+        // Les identifiants wd: ET inv: d'œuvres natives partent à la résolution réseau
         missingWorks.push(uri);
       }
     }
@@ -7680,7 +8967,8 @@ export const workUriResolver = {
     }));
 
     // 3. Récupération des données pour l'analyse sémantique
-    const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation/i;
+    // REGEX : Exclusion des intégrales et des intervalles de tomes génériques (ex: tomes 1-3)
+    const JUNK_REGEX = /intégrale|coffret|box\s*set|pack|compilation|tomes?\s*\d+\s*[-–至àa]\s*\d+|vols?\s*\d+\s*[-–至àa]\s*\d+/i;
     const editionDataMap: Record<string, any> = {};
     const urisArray = Array.from(allEditionUrisToFetch);
     const CHUNK_SIZE = 50;
@@ -7706,18 +8994,23 @@ export const workUriResolver = {
       } catch (e) {}
     }
 
-    // 4. Élection de l'édition canonique
+    // 4. Élection de l'édition canonique via l'algorithme séquentiel
     for (const workUri of missingWorks) {
       const editions = workToEditionsMap[workUri] || [];
-      if (editions.length === 0) continue; 
+      
+      // S'il n'y a aucune édition dépendante, cela signifie que cet identifiant inv:
+      // était en réalité déjà une édition physique finale autonome. On la conserve brute.
+      if (editions.length === 0) {
+        physicalUris.push(workUri);
+        continue;
+      }
 
-      // Fast-Path
       if (editions.length === 1) {
         physicalUris.push(editions[0]);
         continue;
       }
 
-      // Extraction du vrai titre
+      // Extraction du vrai titre de l'œuvre
       const workLabel = extractEntityTitle(workDataMap[workUri]);
 
       // CRITÈRE 0 : Barrière de la Langue (Priorité absolue)
@@ -7735,32 +9028,43 @@ export const workUriResolver = {
       // Si la regex a tout supprimé, on annule le filtre par sécurité
       targetEditions = validEditions.length > 0 ? validEditions : targetEditions;
 
-      // Critère 2 : Priorité stricte aux URIs natives (inv:)
-      const nativeEditions = targetEditions.filter(edUri => edUri.startsWith('inv:'));
-      if (nativeEditions.length > 0) {
-        targetEditions = nativeEditions;
+      // Structure intermédiaire de notation
+      interface EditionScore {
+        uri: string;
+        score: number;
+        isNative: boolean;
       }
 
-      // Re-Fast-Path après filtrages
-      if (targetEditions.length === 1) {
-        physicalUris.push(targetEditions[0]);
-        continue;
-      }
-
-      // Critère 3 : Scoring de similarité (Levenshtein) sur les titres réels
-      let bestUri = targetEditions[0];
-      let bestScore = Infinity;
-
-      for (const edUri of targetEditions) {
+      // Calcul des scores de distance de Levenshtein pour tous les candidats restants
+      const scoredEditions: EditionScore[] = targetEditions.map(edUri => {
         const edData = editionDataMap[edUri];
         const edLabel = extractEntityTitle(edData);
         const score = getEditDistance(workLabel, edLabel);
-        if (score < bestScore) {
-          bestScore = score;
-          bestUri = edUri;
+        return {
+          uri: edUri,
+          score,
+          isNative: edUri.startsWith('inv:')
+        };
+      });
+
+      // Tri par pertinence textuelle pure (ascendant)
+      scoredEditions.sort((a, b) => a.score - b.score);
+
+      // Algorithme de la petite boucle : on cherche la première édition native 'inv:' disponible dans l'ordre de pertinence
+      let chosenUri = '';
+      for (const candidate of scoredEditions) {
+        if (candidate.isNative) {
+          chosenUri = candidate.uri;
+          break; // Trouvé ! On casse immédiatement
         }
       }
-      physicalUris.push(bestUri);
+
+      // Si aucune édition native 'inv:' n'a été trouvée, on se replie sur le vainqueur textuel absolu
+      if (!chosenUri) {
+        chosenUri = scoredEditions[0].uri;
+      }
+
+      physicalUris.push(chosenUri);
     }
 
     console.groupEnd();
@@ -8386,12 +9690,10 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
 import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
-//import { seriesResolver } from '../resolvers/series.resolver';
-//import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { seriesOrchestrator } from './series.orchestrator';
-import type { SearchResponse, /**HumanizedBook **/} from '../types';
+import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
   /**
@@ -8409,7 +9711,7 @@ export const searchService = {
     console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
     
     // 1. PHASE IDENTIFICATION : Local-First
-    let book = await databaseService.getBookByIsbn(isbn);
+    let book: HumanizedBook | null | undefined = await databaseService.getBookByIsbn(isbn);
     let source: 'cache' | 'network' = 'cache';
 
     if (!book) {
@@ -8452,7 +9754,11 @@ export const searchService = {
     let seriesContext = undefined;
     if (book.seriesId) {
       console.log(`[SEARCH] Délégation de la série à seriesOrchestrator : ${book.seriesId}`);
-      // L'orchestrateur de série gère désormais le cache local ET le lancement de la synchro en fond
+      
+      // SCÉNARIO ILLUMINÉ : Lancement asynchrone immédiat (Fire & Forget), aucune pause sur cet écran
+      seriesOrchestrator.startBackgroundHydration(book.seriesId);
+      
+      // Extraction instantanée de l'état du cache local pour libérer la vue de recherche
       seriesContext = await seriesOrchestrator.getCompleteSeriesForUI(book.seriesId, book.series);
     }
 
@@ -8485,30 +9791,87 @@ export const searchService = {
 ################################################################################
 
 // src/core/orchestrators/series.orchestrator.ts
+import { ref, computed } from 'vue';
 import { databaseService } from '../database/database.service';
 import { syncOrchestrator } from './sync.orchestrator';
 import type { SeriesContext, HumanizedBook } from '../types';
 
+export interface HydrationProgress {
+  current: number;
+  total: number;
+  isActive: boolean;
+}
+
+// Registre réactif global partagé pour suivre la progression à travers les vues
+const progressRegistry = ref<Record<string, HydrationProgress>>({});
+
 export const seriesOrchestrator = {
   /**
+   * Fournit l'accès à l'état réactif de téléchargement d'une saga pour l'UI
+   */
+  getProgress(seriesId: string) {
+    if (!progressRegistry.value[seriesId]) {
+      progressRegistry.value[seriesId] = { current: 0, total: 0, isActive: false };
+    }
+    return computed(() => progressRegistry.value[seriesId]);
+  },
+
+  /**
+   * Déclenche le téléchargement de fond asynchrone de manière étanche
+   */
+  startBackgroundHydration(seriesId: string): void {
+    if (!seriesId) return;
+    if (progressRegistry.value[seriesId]?.isActive) return;
+
+    progressRegistry.value[seriesId] = { current: 0, total: 0, isActive: true };
+    console.log(`[SERIES ORCHESTRATOR] 🚀 Aspiration asynchrone lancée pour la série : ${seriesId}`);
+
+    // Transmission sécurisée du callback bi-argument résolu au niveau de syncOrchestrator
+    syncOrchestrator.hydrateSeriesInBackground(seriesId, (current: number, total: number) => {
+      if (progressRegistry.value[seriesId]) {
+        progressRegistry.value[seriesId].current = current;
+        progressRegistry.value[seriesId].total = total;
+      }
+    }).then(() => {
+      if (progressRegistry.value[seriesId]) {
+        progressRegistry.value[seriesId].isActive = false;
+        console.log(`[SERIES ORCHESTRATOR] ✅ Tâche de fond complétée pour ${seriesId}`);
+      }
+    }).catch((err) => {
+      console.error(`[SERIES ORCHESTRATOR] 💥 Échec tâche de fond pour ${seriesId} :`, err);
+      if (progressRegistry.value[seriesId]) {
+        progressRegistry.value[seriesId].isActive = false;
+      }
+    });
+  },
+
+  /**
    * Construit le contexte complet d'une série pour l'interface utilisateur.
-   * Récupère les données locales instantanément et déclenche une mise à jour en arrière-plan.
+   * Nettoyé de tout blocage synchrone pour du Local-First pur et instantané.
    */
   async getCompleteSeriesForUI(seriesId: string, seriesName?: string): Promise<SeriesContext | undefined> {
     if (!seriesId) return undefined;
 
-    console.log(`[SERIES ORCHESTRATOR] Construction du paquet UI pour la série : ${seriesId}`);
+    console.group(`[SERIES ORCHESTRATOR] Analyse de la saga : ${seriesId}`);
 
-    // 1. Récupération instantanée depuis le cache local (Local-First)
+    // 1. Extraction rapide depuis le cache local (Local-First)
     const tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
+    console.log(`[SERIES ORCHESTRATOR] Tomes trouvés en cache local : ${tomes.length}`);
 
-    // 2. CRITICAL FIX : On s'assure que le statut calculé correspond en temps réel aux registres locaux
+    // 2. Couplage des registres (Inventaire, Wishlist, Prêts)
     for (const tome of tomes) {
-      const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri);
+      const isInInventory = await databaseService.isUriInRegistry('inventory', tome.uri) || 
+                            (tome.workUri ? await databaseService.isUriInRegistry('inventory', tome.workUri) : false);
+      
       if (isInInventory) {
         tome.ownershipStatus = 'owned';
+        const activeLoan = await databaseService.getLoan(tome.uri);
+        if (activeLoan) {
+          tome.loan = activeLoan;
+        }
       } else {
-        const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri);
+        const isInWishlist = await databaseService.isUriInRegistry('wishlist', tome.uri) || 
+                             (tome.workUri ? await databaseService.isUriInRegistry('wishlist', tome.workUri) : false);
         if (isInWishlist) {
           tome.ownershipStatus = 'wish';
         } else {
@@ -8517,19 +9880,18 @@ export const seriesOrchestrator = {
       }
     }
 
-    // 3. Fire & Forget : Aspiration des tomes manquants en arrière-plan
-    syncOrchestrator.hydrateSeriesInBackground(seriesId);
-
-    // 4. Tri des tomes par numéro
+    // 3. Tri numérique strict par numéro de volume
     tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
     
-    // 5. Calcul des statistiques de possession
+    // 4. Calcul des métadonnées de possession
     const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
 
-    // 6. Paquet "SeriesContext" standardisé et prêt à l'emploi pour le front
+    console.groupEnd();
+
+    // 5. Envoi du paquet complet standardisé à la vue
     return {
       id: seriesId,
-      name: seriesName,
+      name: seriesName || (tomes.length > 0 ? tomes[0].series : undefined),
       tomes: tomes,
       ownedCount: ownedCount,
       isComplete: tomes.length > 0 && ownedCount === tomes.length
@@ -8561,12 +9923,16 @@ export const queueService = {
    * Applique instantanément les changements dans la base de données locale
    * pour que le cache reste synchrone avec l'état de l'interface utilisateur.
    */
-  async applyOptimisticUpdate(actionType: PendingAction['action'], uri: string): Promise<void> {
+  async applyOptimisticUpdate(actionType: PendingAction['action'], uri: string, payload?: QueueActionPayload): Promise<void> {
     const cachedBook = await databaseService.getBookFromCache(uri);
     
     switch (actionType) {
       case 'ADD_INVENTORY':
         await databaseService.addRegistryEntry('inventory', uri);
+        await databaseService.removeRegistryEntry('wishlist', uri);
+        if (cachedBook?.workUri) {
+          await databaseService.removeRegistryEntry('wishlist', cachedBook.workUri);
+        }
         if (cachedBook) {
           cachedBook.ownershipStatus = 'owned';
           await databaseService.saveBookToCache(cachedBook);
@@ -8593,6 +9959,19 @@ export const queueService = {
           await databaseService.saveBookToCache(cachedBook);
         }
         break;
+      case 'LEND':
+        // OPTIMISTIC LOAN : Écriture instantanée du prêt localement
+        const lendData = payload as LendPayload;
+        await databaseService.saveLoan({
+          uri,
+          friendName: lendData?.friendName || 'Inconnu',
+          loanDate: Date.now()
+        });
+        break;
+      case 'RETURN':
+        // OPTIMISTIC RETURN : Retrait instantané du prêt localement
+        await databaseService.deleteLoan(uri);
+        break;
     }
   },
 
@@ -8614,7 +9993,7 @@ export const queueService = {
     const actionId = await databaseService.savePendingAction(action);
     console.log(`[QUEUE] Trace sauvegardée localement (ID: ${actionId})`);
     
-    await this.applyOptimisticUpdate(actionType, uri);
+    await this.applyOptimisticUpdate(actionType, uri, payload);
     console.log(`[QUEUE] Mise à jour optimiste appliquée en base locale pour : ${uri}`);
     
     console.groupEnd();
@@ -8642,8 +10021,6 @@ export const queueService = {
         }
 
         const firstActionType = actions[0].action;
-        
-        // On extrait toutes les actions consécutives partageant exactement ce même type
         const batch = actions.filter(a => a.action === firstActionType);
         const urisToProcess = batch.map(a => a.uri);
         const batchIds = batch.map(a => a.id).filter((id): id is number => id !== undefined);
@@ -8653,30 +10030,39 @@ export const queueService = {
         try {
           let success = false;
 
-          // Aiguillage réseau vers les API d'Inventaire.io
           switch (firstActionType) {
             case 'ADD_INVENTORY':
-              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToLibrary)
               success = await inventoryService.addBulkToLibrary(urisToProcess);
+              if (success) {
+                try {
+                  console.log(`[QUEUE] Cascade Réseau : Nettoyage automatique de la Wishlist pour ${urisToProcess.length} éléments...`);
+                  await wishlistService.removeFromWishlist(urisToProcess);
+                } catch (wishCascadeError) {
+                  console.error(`[QUEUE] ⚠️ Échec non-bloquant du nettoyage de la Wishlist sur le serveur :`, wishCascadeError);
+                }
+              }
               break;
             case 'ADD_WISHLIST':
-              // CRITICAL FIX : Utilisation de la méthode de traitement par lot (addBulkToWishlist)
               success = await wishlistService.addBulkToWishlist(urisToProcess);
               break;
             case 'LEND':
-              const singleAction = batch[0];
-              const lendPayload = singleAction.payload as LendPayload;
-              success = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
-              if (success) {
-                await databaseService.deletePendingAction(singleAction.id!);
+              // TRAITEMENT UNITAIRE SECURISÉ DES PRÊTS (Évite la saturation d'étagère)
+              for (const singleAction of batch) {
+                const lendPayload = singleAction.payload as LendPayload;
+                const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
+                if (ok && singleAction.id) {
+                  await databaseService.deletePendingAction(singleAction.id);
+                }
               }
-              success = false;
+              success = false; // Forcer le re-calcul du ticket au tour de boucle suivant
               break;
             case 'RETURN':
-              const returnAction = batch[0];
-              success = await loanService.returnBook(returnAction.uri);
-              if (success) {
-                await databaseService.deletePendingAction(returnAction.id!);
+              // TRAITEMENT UNITAIRE SECURISÉ DES RETOURS
+              for (const singleAction of batch) {
+                const ok = await loanService.returnBook(singleAction.uri);
+                if (ok && singleAction.id) {
+                  await databaseService.deletePendingAction(singleAction.id);
+                }
               }
               success = false;
               break;
@@ -8685,14 +10071,11 @@ export const queueService = {
               success = true; 
           }
 
-          // Si le paquet réseau global est validé, on purge tous les tickets d'un coup
           if (success) {
             console.log(`[QUEUE] ✅ Succès du paquet réseau [${firstActionType}]. Purge brute de ${batchIds.length} tickets localement.`);
             for (const id of batchIds) {
               await databaseService.deletePendingAction(id);
             }
-            
-            // Temporisation de courtoisie de 500ms avant d'attaquer le paquet suivant
             await sleep(500);
           } else if (firstActionType !== 'LEND' && firstActionType !== 'RETURN') {
             console.warn(`[QUEUE] ⚠️ Échec ou blocage du paquet [${firstActionType}]. Pause de la synchronisation.`);
@@ -8701,7 +10084,6 @@ export const queueService = {
 
         } catch (error: any) {
            console.error(`[QUEUE] 💥 Refus définitif du serveur pour le paquet [${firstActionType}]. Lancement des rollbacks individuels.`);
-           
            for (const failedAction of batch) {
              await this.rollbackAction(failedAction);
              if (failedAction.id) {
@@ -8867,9 +10249,11 @@ export const syncOrchestrator = {
 
   /**
    * TÂCHE DE FOND : Pré-charge l'ensemble des tomes d'une liste de manière séquentielle
+   * AJOUT : Paramètre optionnel onProgress pour piloter le suivi de l'interface graphique
    */
-  async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[]): Promise<void> {
+  async hydrateRemainingPhysicalEntities(items: {uri: string, status: 'owned'|'wish'|'none'}[], onProgress?: (current: number, total: number) => void): Promise<void> {
     const CHUNK_SIZE = 50;
+    let completedCount = 0;
     for (let i = 0; i < items.length; i += CHUNK_SIZE) {
       const chunk = items.slice(i, i + CHUNK_SIZE);
       console.log(`[BACKGROUND] Aspiration du lot ${Math.floor(i/CHUNK_SIZE) + 1} (${chunk.length} tomes)...`);
@@ -8879,6 +10263,8 @@ export const syncOrchestrator = {
           // Injection immédiate et forcée du statut correct à la création
           await bookCacheService.saveAndProcessImage(humanizedBook, item.status);
         }
+        completedCount++;
+        onProgress?.(completedCount, items.length);
       }));
     }
   },
@@ -8887,8 +10273,9 @@ export const syncOrchestrator = {
    * NOUVELLE MÉTHODE SÉCURISÉE : Aspire tous les tomes manquants d'une série en tâche de fond.
    * Intègre un filtrage stricte en AMONT (Upstream Filtering) pour éviter les doublons 
    * et économiser les appels réseaux inutiles.
+   * AJOUT : Prise en charge du callback onProgress pour alimenter la barre de progression réactive
    */
-  async hydrateSeriesInBackground(seriesId: string): Promise<void> {
+  async hydrateSeriesInBackground(seriesId: string, onProgress?: (current: number, total: number) => void): Promise<void> {
     console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
       // 1. DRESSER LE BOUCLIER LOCAL
@@ -8932,9 +10319,10 @@ export const syncOrchestrator = {
          }
       }
       
-      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES
+      // 6. TÉLÉCHARGEMENT FINAL DES DONNÉES MANQUANTES AVEC ÉMISSION DE PROGRESSION
       if (missingTomes.length > 0) {
-         await this.hydrateRemainingPhysicalEntities(missingTomes);
+         onProgress?.(0, missingTomes.length); // Initialisation de la barre à 0%
+         await this.hydrateRemainingPhysicalEntities(missingTomes, onProgress);
       }
     } catch (e) {
       console.error(`[BACKGROUND] Erreur sur l'aspiration sécurisée de la saga ${seriesId}`, e);
@@ -9517,34 +10905,57 @@ export const wishlistService = {
 
   async addToWishlist(editionUri: string): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
+    
+    // CRITICAL FIX : Extraction du workUri depuis le cache local car le serveur refuse les éditions physiques dans cette liste
+    const cachedBook = await databaseService.getBookFromCache(editionUri);
+    const targetUri = cachedBook?.workUri || editionUri;
+
     const res = await fetch('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: [editionUri] })
+      body: JSON.stringify({ id: this.wishlistId, uris: [targetUri] })
     });
     const data = await res.json();
     if (!res.ok) {
       console.error("[WISHLIST ADD ERROR]", data);
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
+    
+    // Double sauvegarde locale pour assurer la réactivité de la vue Série et la cohérence au rechargement
     await databaseService.addRegistryEntry('wishlist', editionUri);
+    if (cachedBook?.workUri) {
+      await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
+    }
     return true;
   },
 
   async addBulkToWishlist(editionUris: string[]): Promise<boolean> {
     if (!this.wishlistId) throw new Error("La Wishlist n'est pas initialisée.");
+    
+    // CRITICAL FIX : Résolution asynchrone groupée pour obtenir les identifiants d'œuvres correspondants
+    const targetUris = await Promise.all(editionUris.map(async (uri) => {
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      return cachedBook?.workUri || uri;
+    }));
+
     const res = await fetch('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: editionUris })
+      body: JSON.stringify({ id: this.wishlistId, uris: targetUris })
     });
     const data = await res.json();
     if (!res.ok) {
       console.error("[WISHLIST BULK ADD ERROR]", data);
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
+    
+    // Enregistrement des correspondances en base locale pour chaque tome traité
     for (const uri of editionUris) {
       await databaseService.addRegistryEntry('wishlist', uri);
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      if (cachedBook?.workUri) {
+        await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
+      }
     }
     return true;
   },
@@ -9553,14 +10964,24 @@ export const wishlistService = {
     if (!this.wishlistId) return false;
     if (uris.length === 0) return true;
 
+    // Pour le retrait, on nettoie les deux types d'URIs (œuvres et éditions) pour éviter tout résidu
+    const targetUris = new Set<string>();
+    for (const uri of uris) {
+      targetUris.add(uri);
+      const cachedBook = await databaseService.getBookFromCache(uri);
+      if (cachedBook?.workUri) {
+        targetUris.add(cachedBook.workUri);
+      }
+    }
+
     const res = await fetch('/api/gateway?action=lists-remove-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: this.wishlistId, uris: uris })
+      body: JSON.stringify({ id: this.wishlistId, uris: Array.from(targetUris) })
     });
     const data = await res.json();
     if (res.ok) {
-      for (const uri of uris) {
+      for (const uri of targetUris) {
          await databaseService.removeRegistryEntry('wishlist', uri);
       }
       return true;
@@ -9966,12 +11387,16 @@ export const sessionStore = {
 ### FICHIER : src/router/index.ts
 ################################################################################
 
+// src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
 import LoginView from '../ui/views/LoginView.vue';
 import DashboardView from '../ui/views/DashboardView.vue';
 import SeriesView from '../ui/views/SeriesView.vue';
 import DebugDbView from '../ui/views/DebugDbView.vue';
 import BookDetailView from '../ui/views/BookDetailView.vue';
+import CollectionView from '../ui/views/CollectionView.vue';
+import WishlistView from '../ui/views/WishlistView.vue';
+import LoansView from '../ui/views/LoansView.vue'; // AJOUT : Importation du carnet de prêts
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -9992,7 +11417,21 @@ export const router = createRouter({
       component: SeriesView
     },
     {
-      // La nouvelle route DOIT être déclarée ici, avant le catch-all
+      path: '/collection',
+      name: 'CollectionView',
+      component: CollectionView
+    },
+    {
+      path: '/wishlist',
+      name: 'WishlistView',
+      component: WishlistView
+    },
+    {
+      path: '/loans',
+      name: 'LoansView',
+      component: LoansView
+    },
+    {
       path: '/book/:uri',
       name: 'BookDetail',
       component: BookDetailView
@@ -10003,7 +11442,6 @@ export const router = createRouter({
       component: DebugDbView
     },
     {
-      // Le filet de sécurité doit STRICTEMENT rester la dernière route du tableau
       path: '/:pathMatch(.*)*',
       redirect: '/login'
     }
