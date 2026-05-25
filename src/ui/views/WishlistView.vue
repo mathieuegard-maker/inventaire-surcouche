@@ -9,7 +9,7 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import WireframeTable from '../components/WireframeTable.vue';
-import WireframePagination from '../components/WireframePagination.vue'; // AJOUT : Import du paginateur intelligent
+import WireframePagination from '../components/WireframePagination.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 
@@ -20,7 +20,6 @@ const isLoading = ref(true);
 const selectedGenre = ref('all');
 const selectedAuthor = ref('all');
 
-// Référence locale destinée à stocker la tranche de livres actuellement visible
 const displayedWishBooks = ref<HumanizedBook[]>([]);
 
 const isAllSelected = computed(() => {
@@ -79,10 +78,6 @@ const filteredBooks = computed(() => {
   return list;
 });
 
-/**
- * CONTRÔLE DE GROUPEMENT PAGINÉ : Construit les groupes sémantiques basés EXCLUSIVEMENT
- * sur la tranche de 20, 50 ou 100 livres actuellement visible sur la page active.
- */
 const sortedSeriesGroups = computed(() => {
   const list = displayedWishBooks.value;
   const seriesGroups: Record<string, HumanizedBook[]> = {};
@@ -165,21 +160,23 @@ const resetFilters = () => {
       </div>
     </div>
 
-    <BatchActionBar 
-      v-if="!isLoading"
-      :model-value="isAllSelected"
-      :selected-count="selectedIds.length"
-      :is-mixed="false"
-      context="wishlist"
-      @update:model-value="handleToggleAll"
-      @execute="dispatchBatchAction"
-    />
-
     <WireframePagination
       v-if="!isLoading"
       :items="filteredBooks"
       :searchKeys="['title']"
+      :hasSelectAll="true"
+      :selectAllValue="isAllSelected"
+      :selectedCount="selectedIds.length"
+      @update:selectAllValue="handleToggleAll"
       @update:processedItems="(val) => displayedWishBooks = val"
+    />
+
+    <BatchActionBar 
+      v-if="!isLoading"
+      :selected-count="selectedIds.length"
+      :is-mixed="false"
+      context="wishlist"
+      @execute="dispatchBatchAction"
     />
 
     <BaseLoading v-if="isLoading" />

@@ -1,9 +1,12 @@
-<script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+ <script setup lang="ts">
+import { ref, onMounted, computed, watch } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
+import BaseTitle from '../components/BaseTitle.vue';
+import WireframeTable from '../components/WireframeTable.vue';
+import WireframePagination from '../components/WireframePagination.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
@@ -22,8 +25,11 @@ const isLoading = ref(true);
 const currentMode = ref<'borrower' | 'chrono'>('borrower');
 const expandedBorrowers = ref<Record<string, boolean>>({});
 
+// Liste segmentée et filtrée en temps réel par le paginateur
+const displayedLoans = ref<any[]>([]);
+
 const isAllSelected = computed(() => {
-  const targets = hydratedLoans.value;
+  const targets = filteredLoansSource.value;
   return targets.length > 0 && selectedIds.value.length === targets.length;
 });
 
@@ -40,79 +46,101 @@ const fetchLoansRecords = async () => {
     for (const loan of localLoans) {
       const bookCached = await databaseService.getBookFromCache(loan.uri);
       if (bookCached) {
-        bookCached.loan = loan;
-        temp.push({
-          loan,
-          book: bookCached
-        });
+        temp.push({ loan, book: bookCached });
       }
     }
-
     hydratedLoans.value = temp;
     selectedIds.value = [];
+    
+    // Initialise l'ouverture automatique des volets d'emprunteurs au démarrage
+    const initialExpanded: Record<string, boolean> = {};
+    temp.forEach(item => {
+      if (item.loan.friendName) {
+        initialExpanded[item.loan.friendName] = true;
+      }
+    });
+    expandedBorrowers.value = initialExpanded;
   } catch (e) {
-    console.error("[LOANS VIEW] Échec d'hydratation du carnet :", e);
+    console.error("[LOANS VIEW ERROR] Échec de rafraîchissement :", e);
   } finally {
     isLoading.value = false;
   }
 };
 
-// 1. AGRÉGATION INSENSIBLE À LA CASSE, AUX ESPACES ET AUX ACCENTS
-const loansByBorrower = computed(() => {
-  const groups: Record<string, { friendName: string; list: HydratedLoan[] }> = {};
+/**
+ * SOURCE DES PRÊTS TRIÉE : Alimentation brute du paginateur selon le mode
+ */
+const filteredLoansSource = computed(() => {
+  const list = [...hydratedLoans.value];
+  if (currentMode.value === 'chrono') {
+    return list.sort((a, b) => (b.loan.loanDate || 0) - (a.loan.loanDate || 0));
+  }
+  return list.sort((a, b) => (a.loan.friendName || '').localeCompare(b.loan.friendName || ''));
+});
 
-  hydratedLoans.value.forEach(item => {
-    // FIX ACCENTS & MAJUSCULES : Décomposition NFD + purge des diacritiques combinés
-    const key = item.loan.friendName
-      .trim()
-      .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "");
-    
-    if (!groups[key]) {
-      groups[key] = {
-        friendName: item.loan.friendName,
-        list: []
-      };
-    }
-    groups[key].list.push(item);
+/**
+ * ADAPTATION SÉMANTIQUE POUR LE COMPOSANT PAGINATION
+ * Enrichit temporairement l'objet pour permettre une recherche simultanée
+ * sur le nom de l'emprunteur ET sur le titre de l'album.
+ */
+const enrichLoansForPagination = computed(() => {
+  return filteredLoansSource.value.map(item => ({
+    ...item,
+    searchTitle: item.book.title || '',
+    searchFriend: item.loan.friendName || ''
+  }));
+});
+
+/**
+ * RE-GROUPEMENT POST-PAGINATION (Mode Emprunteur)
+ * Reconstruit les fiches d'amis uniquement sur la tranche visible à l'écran
+ */
+const borrowerGroups = computed(() => {
+  const groups: Record<string, any[]> = {};
+  
+  displayedLoans.value.forEach(item => {
+    const name = item.loan.friendName || 'Inconnu';
+    if (!groups[name]) groups[name] = [];
+    groups[name].push(item);
   });
-
-  return Object.values(groups).sort((a, b) => a.friendName.localeCompare(b.friendName));
+  
+  return Object.keys(groups).map(name => ({
+    friendName: name,
+    list: groups[name]
+  })).sort((a, b) => a.friendName.localeCompare(b.friendName));
 });
-
-// 2. LOGIQUE CHRONOLOGIQUE
-const chronologicalLoans = computed(() => {
-  return [...hydratedLoans.value].sort((a, b) => a.loan.loanDate - b.loan.loanDate);
-});
-
-const toggleBorrowerSection = (borrowerKey: string) => {
-  expandedBorrowers.value[borrowerKey] = !expandedBorrowers.value[borrowerKey];
-};
 
 const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = hydratedLoans.value.map(item => item.loan.uri);
+    selectedIds.value = filteredLoansSource.value.map(item => item.loan.uri);
   }
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
-  if (selectedIds.value.length === 0 || action !== 'RETURN') return;
-
+  if (selectedIds.value.length === 0) return;
   try {
     for (const uri of selectedIds.value) {
-      await queueService.enqueueAction('RETURN', uri);
+      await queueService.enqueueAction(action, uri);
     }
     await fetchLoansRecords();
   } catch (e) {
-    console.error("[LOANS BATCH ERROR]", e);
+    console.error(e);
   }
 };
 
-const formatDate = (timestamp: number) => {
-  return new Date(timestamp).toLocaleDateString();
+const toggleBorrower = (name: string) => {
+  expandedBorrowers.value[name] = !expandedBorrowers.value[name];
+};
+
+const formatDate = (timestamp?: number): string => {
+  if (!timestamp) return '—';
+  return new Date(timestamp).toLocaleDateString('fr-FR', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
 };
 
 const resetSelection = () => {
@@ -122,19 +150,10 @@ const resetSelection = () => {
 
 <template>
   <div class="view-container">
-    <BaseHeader :title="TEXTS.loansView?.title" showBack />
+    <BaseHeader />
+    <BaseTitle :text="TEXTS.loansView?.title" level="h2" />
 
-    <BatchActionBar 
-      v-if="!isLoading"
-      :model-value="isAllSelected"
-      :selected-count="selectedIds.length"
-      :is-mixed="false"
-      context="lent"
-      @update:model-value="handleToggleAll"
-      @execute="dispatchBatchAction"
-    />
-
-    <div class="collection-modes-tabs" v-if="!isLoading">
+    <div class="collection-modes-tabs">
       <button :class="['tab-button', { active: currentMode === 'borrower' }]" @click="currentMode = 'borrower'; resetSelection()">
         {{ TEXTS.loansView?.modeBorrower }}
       </button>
@@ -143,58 +162,86 @@ const resetSelection = () => {
       </button>
     </div>
 
+    <WireframePagination
+      v-if="!isLoading"
+      :items="enrichLoansForPagination"
+      :searchKeys="['searchTitle', 'searchFriend']"
+      :hasSelectAll="true"
+      :selectAllValue="isAllSelected"
+      :selectedCount="selectedIds.length"
+      @update:selectAllValue="handleToggleAll"
+      @update:processedItems="(val) => displayedLoans = val"
+    />
+
+    <BatchActionBar 
+      v-if="!isLoading"
+      :selected-count="selectedIds.length"
+      :is-mixed="false"
+      context="lent"
+      @execute="dispatchBatchAction"
+    />
+
     <BaseLoading v-if="isLoading" />
 
-    <div class="series-list-container" v-else>
+    <div class="main-content-wrapper" v-else>
       <BaseBanner v-if="hydratedLoans.length === 0" type="error" :message="TEXTS.loansView?.emptyLoans" />
 
       <template v-else>
         <template v-if="currentMode === 'borrower'">
-          <div 
-            v-for="group in loansByBorrower" 
-            :key="group.friendName" 
-            class="loan-borrower-card"
-          >
-            <div class="loan-borrower-header" @click="toggleBorrowerSection(group.friendName.toLowerCase())">
+          <div v-for="group in borrowerGroups" :key="group.friendName" class="loan-borrower-card">
+            <div class="loan-borrower-header" @click="toggleBorrower(group.friendName)">
               <span>👤 {{ group.friendName }}</span>
-              <span>{{ group.list.length }} {{ TEXTS.loansView?.borrowedCount }} {{ expandedBorrowers[group.friendName.toLowerCase()] ? '▲' : '▼' }}</span>
+              <span>{{ group.list.length }} {{ TEXTS.loansView?.borrowedCount }} {{ expandedBorrowers[group.friendName] ? '[ - ]' : '[ + ]' }}</span>
             </div>
-
-            <div class="loan-borrower-content" v-if="expandedBorrowers[group.friendName.toLowerCase()]">
-              <div v-for="item in group.list" :key="item.loan.uri">
-                <div class="loan-chrono-meta">
-                  {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+            
+            <div v-if="expandedBorrowers[group.friendName]" class="loan-borrower-content" style="padding: 0;">
+              <WireframeTable style="margin-bottom: 0; border: none !important;">
+                <div v-for="item in group.list" :key="item.loan.uri" style="position: relative;">
+                  <div class="loan-chrono-meta" style="padding: var(--spacing-sm) var(--spacing-md); margin: 0; border-bottom: var(--border-width) solid var(--color-border);">
+                    {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+                  </div>
+                  <BookMiniCard 
+                    :book="item.book"
+                    :model-value="selectedIds.includes(item.loan.uri)"
+                    style="border: none !important;"
+                    @update:model-value="(val) => {
+                      if (val) {
+                        if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri);
+                      } else {
+                        const idx = selectedIds.indexOf(item.loan.uri);
+                        if (idx > -1) selectedIds.splice(idx, 1);
+                      }
+                    }"
+                  />
                 </div>
-                <BookMiniCard 
-                  :book="item.book"
-                  :model-value="selectedIds.includes(item.loan.uri)"
-                  @update:model-value="(val) => {
-                    if(val) { if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri); }
-                    else selectedIds = selectedIds.filter(id => id !== item.loan.uri);
-                  }"
-                />
-              </div>
+              </WireframeTable>
             </div>
           </div>
         </template>
 
         <template v-else>
-          <div v-for="item in chronologicalLoans" :key="item.loan.uri">
-            <div class="loan-chrono-meta">
-              ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ item.loan.friendName }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+          <WireframeTable>
+            <div v-for="item in displayedLoans" :key="item.loan.uri" style="position: relative;">
+              <div class="loan-chrono-meta" style="padding: var(--spacing-sm) var(--spacing-md); margin: 0; border-bottom: var(--border-width) solid var(--color-border);">
+                ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ item.loan.friendName }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+              </div>
+              <BookMiniCard 
+                :book="item.book"
+                :model-value="selectedIds.includes(item.loan.uri)"
+                style="border: none !important;"
+                @update:model-value="(val) => {
+                  if (val) {
+                    if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri);
+                  } else {
+                    const idx = selectedIds.indexOf(item.loan.uri);
+                    if (idx > -1) selectedIds.splice(idx, 1);
+                  }
+                }"
+              />
             </div>
-            <BookMiniCard 
-              :book="item.book"
-              :model-value="selectedIds.includes(item.loan.uri)"
-              @update:model-value="(val) => {
-                if(val) { if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri); }
-                else selectedIds = selectedIds.filter(id => id !== item.loan.uri);
-              }"
-            />
-          </div>
+          </WireframeTable>
         </template>
       </template>
-
     </div>
   </div>
 </template>

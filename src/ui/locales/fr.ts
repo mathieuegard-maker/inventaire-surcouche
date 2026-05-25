@@ -2,7 +2,7 @@
 
 export const TEXTS = {
   app: {
-    name: "Nom de l'application",
+    name: "Inventaire PWA",
     description: "Description de l'application"
   },
   status: {
@@ -18,8 +18,13 @@ export const TEXTS = {
   },
   login: {
     title: "Connexion",
-    usernamePlaceholder: "Nom d'utilisateur",
-    passwordPlaceholder: "Mot de passe",
+    usernameLabel: "Nom d'utilisateur / Mail",
+    usernamePlaceholder: "Saisissez votre identifiant",
+    passwordLabel: "Mot de passe",
+    passwordPlaceholder: "Saisissez votre mot de passe",
+    showPasswordLabel: "Afficher le mot de passe",
+    noticeText: "Cette application n'est qu'une surcouche indépendante. Vous devez obligatoirement posséder un compte sur Inventaire.io pour pouvoir l'utiliser et synchroniser vos ouvrages.",
+    noticeLink: "Visiter Inventaire.io",
     submitButton: "Se connecter",
     loading: "Connexion au serveur..."
   },
@@ -131,8 +136,13 @@ export const TEXTS = {
   batchActionBar: {
     selectedCount: "sélectionné(s)",
     emptySelection: "Tout sélectionner", /* FIX : Message explicite pour guider l'utilisateur au repos */
-    mixedSelectionError: "Sélection mixte impossible : vous cochez des éléments de statuts différents.",
-    mixedSelectionAdvice: "Veuillez homogénéiser votre sélection pour appliquer une action groupée."
+    mixedSelectionError: "Sélection globale mixte impossible.",
+    mixedSelectionAdvice: "La sélection doit être strictement homogène pour permettre des actions. Il ne peut pas y avoir plusieurs types d'états sélectionnés en même temps afin de garantir la cohérence des opérations.",
+    btnReturnGroup: "Confirmer le Retour de Lot",
+    btnAddInventoryGroup: "Ajouter le Lot à ma Collection",
+    btnAddWishlistGroup: "Ajouter à ma Wishlist",
+    btnLendGroup: "Prêter le Lot Sélectionné",
+    btnToggleWishlistGroup: "Basculer vers la Wishlist"
   },
   baseLoading: {
     message: "Chargement des données en cours...",
@@ -162,6 +172,6 @@ export const TEXTS = {
     completeSuccess: "Téléchargement terminé."
   },
   home: {
-    title: "Nom de l'application - Accueil"
+    title: "Inventaire PWA - Accueil"
   }
 };

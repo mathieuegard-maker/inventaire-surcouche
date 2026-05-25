@@ -48,6 +48,7 @@ onMounted(async () => {
     }
 
     console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
+    // FIX COMPILATION : Appel de la méthode exacte supportée par le résolveur
     const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
     if (resolved) {
       const activeLoan = await databaseService.getLoan(resolved.uri);
@@ -212,6 +213,12 @@ const handleReturn = async () => {
             </span>
           </div>
         </div>
+      </div>
+
+      <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%;">
+        <button class="wireframe-btn" @click="navigateToSeries">
+          [ VOIR TOUTE LA SÉRIE : {{ book.series || 'SAGA' }} ]
+        </button>
       </div>
 
       <div class="book-description" v-if="book.description">

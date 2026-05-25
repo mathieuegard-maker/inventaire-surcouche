@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import WelcomeModal from '../components/WelcomeModal.vue';
 import BaseInput from '../components/BaseInput.vue';
 import BaseButton from '../components/BaseButton.vue';
+import BaseTitle from '../components/BaseTitle.vue';
 import { TEXTS } from '../locales/fr';
 import { connectionService } from '../../core/orchestrators/connection.orchestrator';
 
@@ -12,6 +13,7 @@ const showWelcome = ref(false);
 
 const username = ref('');
 const password = ref('');
+const showPassword = ref(false); // Gestion réactive de la visibilité du mot de passe
 const isLoading = ref(false);
 const errorMessage = ref('');
 
@@ -52,30 +54,56 @@ const handleLogin = async () => {
 <template>
   <div class="login-container">
     <div class="login-card">
-      <h2>{{ TEXTS.login.title }}</h2>
+      <BaseTitle :text="TEXTS.login.title" level="h2" />
       
       <div v-if="errorMessage" class="error-banner">
         {{ errorMessage }}
       </div>
       
       <form @submit.prevent="handleLogin" class="login-form">
-        <BaseInput 
-          v-model="username"
-          type="text" 
-          :placeholder="TEXTS.login.usernamePlaceholder" 
-          :disabled="isLoading"
-          required
-        />
-        <BaseInput 
-          v-model="password"
-          type="password" 
-          :placeholder="TEXTS.login.passwordPlaceholder" 
-          :disabled="isLoading"
-          required
-        />
+        <div class="form-group">
+          <label class="form-label">{{ TEXTS.login.usernameLabel }}</label>
+          <BaseInput 
+            v-model="username"
+            type="text" 
+            :placeholder="TEXTS.login.usernamePlaceholder" 
+            :disabled="isLoading"
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">{{ TEXTS.login.passwordLabel }}</label>
+          <BaseInput 
+            v-model="password"
+            :type="showPassword ? 'text' : 'password'" 
+            :placeholder="TEXTS.login.passwordPlaceholder" 
+            :disabled="isLoading"
+            required
+          />
+        </div>
+
+        <div class="checkbox-group">
+          <input 
+            id="toggle-password"
+            type="checkbox" 
+            v-model="showPassword"
+            class="wireframe-checkbox"
+          />
+          <label for="toggle-password" class="checkbox-label">
+            {{ TEXTS.login.showPasswordLabel }}
+          </label>
+        </div>
+
+        <div class="login-notice-box">
+          <p class="notice-text">{{ TEXTS.login.noticeText }}</p>
+          <a href="https://inventaire.io" target="_blank" rel="noopener noreferrer" class="notice-link">
+            [ {{ TEXTS.login.noticeLink }} ]
+          </a>
+        </div>
+
         <BaseButton 
           type="submit" 
-          variantClass="btn-submit" 
           :disabled="isLoading"
         >
           {{ isLoading ? TEXTS.login.loading : TEXTS.login.submitButton }}

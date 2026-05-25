@@ -84,6 +84,22 @@ export const entityMapper = {
     const rawIsbn13 = getClaimValue(editionClaims, 'P212') || raw.isbn13 || (uri.startsWith('isbn:') ? uri.split(':')[1] : undefined);
     const rawIsbn10 = getClaimValue(editionClaims, 'P957') || raw.isbn10;
 
+    // Récupération initiale des listes
+    let initialAuthorIds = mergeIds('P50', 'authors');
+    const illustratorIds = mergeIds('P110');
+    const scriptwriterIds = mergeIds('P58');
+
+    // ====================================================================
+    // REGLE DE COPIE CONTRE LES FICHES BD SANS AUTEURS DECLARELS
+    // Si aucun auteur n'est présent, on copie les scénaristes et dessinateurs 
+    // en éliminant les doublons (Set) si une personne fait les deux.
+    // ====================================================================
+    if (initialAuthorIds.length === 0) {
+      const backupAuteurs = new Set<string>([...scriptwriterIds, ...illustratorIds]);
+      initialAuthorIds = Array.from(backupAuteurs);
+      console.log(`[MAPPER] Correction BD : Copie des scénaristes/dessinateurs vers authors pour ${uri}`);
+    }
+
     const mappedBook: RawBook = {
       uri: uri,
       workUri: workUri,
@@ -105,10 +121,10 @@ export const entityMapper = {
       publishDate: getClaimValue(editionClaims, 'P577'),
       format: raw.format,
 
-      // IDs pour les résolutions futures
-      authorIds: mergeIds('P50', 'authors'),
-      illustratorIds: mergeIds('P110'),
-      scriptwriterIds: mergeIds('P58'),
+      // IDs pour les résolutions futures (Auteurs mis à jour dynamiquement)
+      authorIds: initialAuthorIds,
+      illustratorIds: illustratorIds,
+      scriptwriterIds: scriptwriterIds,
       publisherId: getClaimValue(editionClaims, 'P123') || raw.publisher,
       
       seriesId: seriesId,
