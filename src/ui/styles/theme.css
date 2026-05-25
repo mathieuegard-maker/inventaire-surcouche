@@ -688,13 +688,12 @@ input::placeholder {
   border: var(--border-width) solid var(--color-border);
 }
 
-/* FIX MATÉRIEL CAMÉRA : Forçage d'alignement synchrone entre le flux vidéo de la caméra 
-   et le canvas de masquage (le shroud) injecté par la librairie pour éviter tout débordement. */
+/* FIX MATÉRIEL CAMÉRA : On ajuste la taille de la vidéo et du canvas de visée 
+   SANS écraser la propriété d'affichage (display) pour laisser le canvas de calcul masqué. */
 .scanner-viewport video,
 .scanner-viewport canvas {
   width: 100% !important;
   height: auto !important;
-  display: block !important;
 }
 
 .scanner-placeholder {
