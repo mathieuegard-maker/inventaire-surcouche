@@ -171,6 +171,34 @@ export const TEXTS = {
     pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
     completeSuccess: "Téléchargement terminé."
   },
+  searchBar: {
+    placeholder: "ENTREZ UN ISBN OU DES MOTS-CLÉS",
+    btnScanner: "SCANNER",
+    btnFermer: "FERMER",
+    btnSearch: "RECHERCHER"
+  },
+  searchResults: {
+    title: "RÉSULTATS DE RECHERCHE",
+    emptyResults: "AUCUN RÉSULTAT CORRESPONDANT À VOS MOTS-CLÉS SUR LES SERVEURS SÉMANTIQUES.",
+    errorEmptyQuery: "LA REQUÊTE DE RECHERCHE EST VIDE.",
+    errorFetch: "IMPOSSIBLE DE RÉCUPÉRER LES RÉSULTATS DEPUIS LE SERVEUR.",
+    errorNoPhysicalEdition: "CETTE ŒUVRE EXISTE MAIS AUCUNE ÉDITION PHYSIQUE DISPOSANT D'UN ISBN VALIDE N'A PU ÊTRE TROUVÉE POUR LE PIVOT.",
+    errorPivot: "ERREUR TECHNIQUE LORS DU CALCUL DU PIVOT SÉMANTIQUE VERS L'ISBN.",
+    sectionSeries: "SAGAS & SÉRIES DÉTECTÉES",
+    sectionAuthors: "AUTEURS & CRÉATEURS DÉTECTÉS",
+    sectionWorks: "ALBUMS & ŒUVRES ISOLÉES",
+    badgeSeries: "SAGA",
+    badgeAuthor: "AUTR",
+    badgeWork: "ALBM"
+  },
+  authorView: {
+    title: "PROFIL AUTEUR",
+    errorFetch: "IMPOSSIBLE DE CHARGER LES DONNÉES DE L'AUTEUR.",
+    emptyWorks: "AUCUNE ŒUVRE TROUVÉE POUR CET AUTEUR.",
+    sectionWorks: "ŒUVRES DE CET AUTEUR",
+    badgeWork: "ALBM",
+    unknownTitle: "TITRE INCONNU"
+  },
   home: {
     title: "Inventaire PWA - Accueil"
   }

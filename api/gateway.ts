@@ -77,6 +77,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     switch (action) {
+      case 'search-text':
+        // CORRECTION OPENAPI : Remplacement de q par search et injection des types obligatoires requis par leur schéma
+        return await proxyFetch(`https://inventaire.io/api/search?search=${encodeURIComponent(req.query.q as string)}&types=works&types=humans&types=series`, { headers });
+
+      case 'author-works':
+        // CORRECTION OPENAPI : Utilisation de l'endpoint natif dédié optimisé au lieu du reverse-claims générique
+        return await proxyFetch(`https://inventaire.io/api/entities/author-works?uri=${encodeURIComponent(req.query.authorUri as string)}`, { headers });
+
       case 'auth-login': {
         const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
         return await proxyFetch('https://inventaire.io/api/auth/login', {
@@ -104,7 +112,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         let successCount = 0;
         const errors = [];
         for (const uri of uris) {
-          // Utilisation du resilientFetch ici aussi pour l'ajout massif
           const response = await resilientFetch('https://inventaire.io/api/items', {
             method: 'POST',
             headers: { ...headers, 'Content-Type': 'application/json' },
@@ -171,7 +178,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { url } = req.query;
         if (!url) return res.status(400).json({ error: 'URL requise' });
         
-        // Résilience sur le proxy d'image également
         const response = await resilientFetch(url as string);
         if (!response.ok) throw new Error(`Erreur réseau distante: ${response.status}`);
         

@@ -50,7 +50,7 @@ describe('Search Orchestrator (TTL & Cache)', () => {
     vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
 
     // Act
-    const res = await searchService.searchByIsbn('123456');
+    const res = await searchService.searchByIsbn('9782012101524');
 
     // Assert : Le livre vient du cache, et on n'a PAS appelé le rafraichissement
     expect(res?.source).toBe('cache');
@@ -68,11 +68,11 @@ describe('Search Orchestrator (TTL & Cache)', () => {
     vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
 
     // Act
-    const res = await searchService.searchByIsbn('123456');
+    const res = await searchService.searchByIsbn('9782012101524');
 
     // Assert : Le livre vient toujours du cache pour la rapidité visuelle...
     expect(res?.source).toBe('cache');
     // ... MAIS la mise à jour fantôme a bien été ordonnée en tâche de fond !
-    expect(syncOrchestrator.refreshBookInBackground).toHaveBeenCalledWith('123456');
+    expect(syncOrchestrator.refreshBookInBackground).toHaveBeenCalledWith('9782012101524');
   });
 });

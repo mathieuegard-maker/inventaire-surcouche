@@ -4,6 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import { searchService } from '../../core/orchestrators/search.orchestrator';
+import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
@@ -36,6 +38,24 @@ onMounted(async () => {
   }
 
   try {
+    const normalized = isbnUtil.normalize(uriParam);
+    if (isbnUtil.isValidFormat(normalized)) {
+      console.log(`[DETAIL VIEW] Détection ISBN : Aiguillage vers le flux de recherche standard pour : ${normalized}`);
+      const response = await searchService.searchByIsbn(normalized);
+      if (response && response.mainBook) {
+        const mainBook = response.mainBook;
+        if (response.loan?.details) {
+          mainBook.loan = response.loan.details;
+        }
+        book.value = mainBook;
+      } else {
+        errorMsg.value = "Impossible de récupérer les détails de cette édition.";
+      }
+      isLoading.value = false;
+      return;
+    }
+
+    // Flux normal pour les URIs (inv:...) ou autres identifiants
     const cached = await databaseService.getBookFromCache(uriParam);
     if (cached) {
       const activeLoan = await databaseService.getLoan(cached.uri);

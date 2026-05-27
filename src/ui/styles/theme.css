@@ -827,7 +827,7 @@ h3.wireframe-title {
   margin-bottom: var(--spacing-sm);
 }
 
-/* 2. Rendu Bureau de la Barre de Recherche (<SmartSearchBar>) */
+/* * 2. Rendu Bureau de la Barre de Recherche (<SmartSearchBar>) */
 .smart-search-row {
   display: flex;
   flex-direction: row;
@@ -836,6 +836,7 @@ h3.wireframe-title {
   gap: 0;
   margin-bottom: var(--spacing-lg);
   background-color: var(--color-bg-main);
+  box-sizing: border-box;
 }
 
 .smart-search-row .btn-scan-side {
@@ -843,6 +844,8 @@ h3.wireframe-title {
   width: max-content !important;
   border: var(--border-width) solid var(--color-border) !important;
   border-right: none !important;
+  border-radius: 0px !important;
+  box-sizing: border-box;
 }
 
 .smart-search-row .elastic-search-input {
@@ -861,12 +864,23 @@ h3.wireframe-title {
   outline: none;
   -webkit-appearance: none !important;
   appearance: none !important;
+  border-radius: 0px !important;
+  box-sizing: border-box;
+}
+
+.smart-search-row .elastic-search-input::placeholder {
+  font-family: var(--font-main) !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  color: #a0a0a0 !important;
 }
 
 .smart-search-row .btn-search-side {
   flex-shrink: 0 !important;
   width: max-content !important;
   border: var(--border-width) solid var(--color-border) !important;
+  border-radius: 0px !important;
+  box-sizing: border-box;
 }
 
 /* 3. Rendu Bureau de l'En-tête Tripartite (<BaseHeader>) */
@@ -1429,4 +1443,33 @@ h3.wireframe-title {
 
 .notice-link:hover {
   text-decoration: underline;
+}
+
+/* --- COMPLÉMENTS POUR L'ÉCRAN DE RECHERCHE SÉMANTIQUE (PHASE C) --- */
+.card-row-clickable {
+  cursor: pointer;
+}
+
+.card-row-clickable:active {
+  background-color: var(--color-bg-alt);
+}
+
+.row-macaron-container {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background-color: var(--color-border) !important;
+  color: var(--color-text-inverse) !important;
+}
+
+.row-macaron-label {
+  font-family: var(--font-main) !important;
+  font-size: 10px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.5px;
+}
+
+.semantic-bucket-section {
+  margin-bottom: var(--spacing-lg);
 }

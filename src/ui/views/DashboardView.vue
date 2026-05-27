@@ -37,6 +37,13 @@ const handleSearch = async (isbn: string) => {
 };
 
 /**
+ * Redirige vers l'écran intermédiaire sémantique pour la recherche textuelle
+ */
+const handleKeywordsSearch = (query: string) => {
+  router.push({ name: 'SearchResultView', query: { q: query } });
+};
+
+/**
  * Initialise le module de flux caméra matériel
  */
 const startScanningSequence = async () => {
@@ -98,7 +105,8 @@ onUnmounted(async () => {
     <SmartSearchBar 
       v-model="searchQuery" 
       :isScanningActive="isScanningActive" 
-      @search="handleSearch" 
+      @isbn-detected="handleSearch" 
+      @keywords-detected="handleKeywordsSearch" 
       @toggle-scan="toggleScanSequence" 
     />
 

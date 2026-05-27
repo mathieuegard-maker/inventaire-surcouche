@@ -5,6 +5,7 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { seriesOrchestrator } from './series.orchestrator';
+import { syncOrchestrator } from './sync.orchestrator';
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -40,6 +41,13 @@ export const searchService = {
       await bookCacheService.saveAndProcessImage(book);
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
+      
+      // AJOUT (TTL) : Si le livre en cache a plus de 30 jours, on lance une mise à jour en arrière-plan
+      const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+      if (book.updatedAt && (Date.now() - book.updatedAt > THIRTY_DAYS)) {
+        console.log(`[SEARCH] Cache périmé (> 30 jours) pour l'ISBN ${isbn}. Lancement du rafraîchissement fantôme.`);
+        syncOrchestrator.refreshBookInBackground(isbn);
+      }
     }
 
     // 2. PHASE ANALYSE D'APPARTENANCE

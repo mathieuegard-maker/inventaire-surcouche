@@ -1,6 +1,6 @@
 <script setup lang="ts">
-//import { ref } from 'vue';
 import BaseButton from './BaseButton.vue';
+import { TEXTS } from '../locales/fr';
 
 const props = defineProps<{
   modelValue: string;
@@ -10,6 +10,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void;
   (e: 'search', value: string): void;
+  (e: 'isbn-detected', value: string): void;
+  (e: 'keywords-detected', value: string): void;
   (e: 'toggle-scan'): void;
 }>();
 
@@ -18,8 +20,22 @@ const handleInputChange = (event: Event) => {
 };
 
 const submitSearch = () => {
-  if (props.modelValue.trim()) {
-    emit('search', props.modelValue.trim());
+  const query = props.modelValue.trim();
+  if (query) {
+    // Nettoyage syntaxique des espaces et tirets pour l'analyse d'aiguillage
+    const cleaned = query.replace(/[\s-]/g, '');
+    const isIsbn = /^\d{10,13}$/.test(cleaned);
+    
+    if (isIsbn) {
+      // Détection ISBN ──► Tunnel physique direct
+      emit('isbn-detected', cleaned);
+    } else {
+      // Détection Mots-clés ──► Tunnel sémantique intermédiaire
+      emit('keywords-detected', query);
+    }
+    
+    // Préservation de l'événement générique pour compatibilité ascendante
+    emit('search', query);
   }
 };
 </script>
@@ -27,7 +43,7 @@ const submitSearch = () => {
 <template>
   <div class="smart-search-row">
     <BaseButton @click="emit('toggle-scan')" class="btn-scan-side">
-      {{ isScanningActive ? 'FERMER' : 'SCANNER' }}
+      {{ isScanningActive ? TEXTS.searchBar.btnFermer : TEXTS.searchBar.btnScanner }}
     </BaseButton>
     
     <input
@@ -35,12 +51,12 @@ const submitSearch = () => {
       :value="modelValue"
       @input="handleInputChange"
       @keydown.enter.prevent="submitSearch"
-      placeholder="ENTREZ UN ISBN"
+      :placeholder="TEXTS.searchBar.placeholder"
       class="elastic-search-input"
     />
     
     <BaseButton @click="submitSearch" class="btn-search-side">
-      RECHERCHER
+      {{ TEXTS.searchBar.btnSearch }}
     </BaseButton>
   </div>
 </template>

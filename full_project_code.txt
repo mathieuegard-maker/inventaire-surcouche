@@ -6351,15 +6351,15 @@ input::placeholder {
   position: relative;
   width: 100%;
   background-color: #000000;
-  aspect-ratio: 4 / 3;
-  overflow: hidden;
   border: var(--border-width) solid var(--color-border);
 }
 
-.scanner-viewport video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
+/* FIX MATÉRIEL CAMÉRA : On ajuste la taille de la vidéo et du canvas de visée 
+   SANS écraser la propriété d'affichage (display) pour laisser le canvas de calcul masqué. */
+.scanner-viewport video,
+.scanner-viewport canvas {
+  width: 100% !important;
+  height: auto !important;
 }
 
 .scanner-placeholder {
@@ -6687,6 +6687,37 @@ h3.wireframe-title {
   opacity: 0.4 !important;
   cursor: not-allowed !important;
 }
+
+.book-card-layout {
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: var(--spacing-md) !important;
+  }
+
+  .book-cover-image {
+    width: 100% !important;
+    max-width: 180px !important; /* Brise la taille géante pour s'adapter au centre du smartphone */
+    height: auto !important;
+    border: var(--border-width) solid var(--color-border) !important;
+  }
+
+  .book-cover-placeholder {
+    width: 100% !important;
+    max-width: 180px !important;
+    height: 240px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    border: var(--border-width) solid var(--color-border) !important;
+    background-color: var(--color-bg-alt) !important;
+    font-size: 12px !important;
+    margin-bottom: var(--spacing-sm) !important;
+  }
+
+  .book-info-layout {
+    width: 100% !important;
+  }
 
 .pagination-counter-label {
   font-family: var(--font-main) !important;
@@ -8083,7 +8114,7 @@ defineProps<{
 ### FICHIER : src/ui/views/LoansView.vue
 ################################################################################
 
-<script setup lang="ts">
+ <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
@@ -8282,13 +8313,13 @@ const resetSelection = () => {
             <div v-if="expandedBorrowers[group.friendName]" class="loan-borrower-content" style="padding: 0;">
               <WireframeTable style="margin-bottom: 0; border: none !important;">
                 <div v-for="item in group.list" :key="item.loan.uri" style="position: relative;">
-                  <div class="loan-chrono-meta" style="margin: var(--spacing-sm) var(--spacing-md) 0 var(--spacing-md);">
+                  <div class="loan-chrono-meta" style="padding: var(--spacing-sm) var(--spacing-md); margin: 0; border-bottom: var(--border-width) solid var(--color-border);">
                     {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
                   </div>
                   <BookMiniCard 
                     :book="item.book"
                     :model-value="selectedIds.includes(item.loan.uri)"
-                    style="border: none !important; border-top: var(--border-width) solid var(--color-border) !important;"
+                    style="border: none !important;"
                     @update:model-value="(val) => {
                       if (val) {
                         if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri);
@@ -8307,13 +8338,13 @@ const resetSelection = () => {
         <template v-else>
           <WireframeTable>
             <div v-for="item in displayedLoans" :key="item.loan.uri" style="position: relative;">
-              <div class="loan-chrono-meta" style="margin: var(--spacing-sm) var(--spacing-md) 0 var(--spacing-md);">
+              <div class="loan-chrono-meta" style="padding: var(--spacing-sm) var(--spacing-md); margin: 0; border-bottom: var(--border-width) solid var(--color-border);">
                 ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ item.loan.friendName }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
               </div>
               <BookMiniCard 
                 :book="item.book"
                 :model-value="selectedIds.includes(item.loan.uri)"
-                style="border: none !important; border-top: var(--border-width) solid var(--color-border) !important;"
+                style="border: none !important;"
                 @update:model-value="(val) => {
                   if (val) {
                     if (!selectedIds.includes(item.loan.uri)) selectedIds.push(item.loan.uri);

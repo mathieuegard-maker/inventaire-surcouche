@@ -8,6 +8,8 @@ import BookDetailView from '../ui/views/BookDetailView.vue';
 import CollectionView from '../ui/views/CollectionView.vue';
 import WishlistView from '../ui/views/WishlistView.vue';
 import LoansView from '../ui/views/LoansView.vue'; // AJOUT : Importation du carnet de prêts
+import SearchResultView from '../ui/views/SearchResultView.vue';
+import AuthorView from '../ui/views/AuthorView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -41,6 +43,16 @@ export const router = createRouter({
       path: '/loans',
       name: 'LoansView',
       component: LoansView
+    },
+    {
+      path: '/search-results',
+      name: 'SearchResultView',
+      component: SearchResultView
+    },
+    {
+      path: '/author/:id',
+      name: 'AuthorView',
+      component: AuthorView
     },
     {
       path: '/book/:uri',

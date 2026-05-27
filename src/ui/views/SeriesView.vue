@@ -25,58 +25,45 @@ const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
-
-// Tranche de tomes actuellement filtrée et visible à l'écran
 const displayedTomes = ref<HumanizedBook[]>([]);
 
-const progressState = seriesOrchestrator.getProgress(seriesId.value);
+// Stockage du titre résolu (pour éviter wd:Q...)
+const resolvedSeriesTitle = ref<string | null>(null);
 
+const progressState = seriesOrchestrator.getProgress(seriesId.value);
 const progressPercentage = computed(() => {
   if (!progressState.value.total) return 0;
   return Math.round((progressState.value.current / progressState.value.total) * 100);
 });
 
-const isAllSelected = computed(() => {
-  return seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length;
-});
-
 const seriesName = computed(() => {
-  if (seriesTomes.value.length > 0) {
-    return seriesTomes.value[0].series || seriesId.value;
-  }
+  if (resolvedSeriesTitle.value) return resolvedSeriesTitle.value;
+  if (seriesTomes.value.length > 0) return seriesTomes.value[0].series || seriesId.value;
   return seriesId.value;
 });
 
-const selectedBooks = computed(() => {
-  return seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri));
-});
-
-const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
-const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
-const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
-
-const isSelectionMixed = computed(() => {
-  let categories = 0;
-  if (hasUnownedSelected.value) categories++;
-  if (hasAvailableOwnedSelected.value) categories++;
-  if (hasLentSelected.value) categories++;
-  return categories > 1;
-});
-
-const batchContext = computed(() => {
-  if (hasUnownedSelected.value) return 'unowned';
-  if (hasLentSelected.value) return 'lent';
-  return 'owned';
-});
-
-const handleBackToCollection = () => {
-  router.push({ name: 'CollectionView', query: { mode: fromMode.value } });
+// --- LOGIQUE DE RÉCUPÉRATION DU TITRE VIA GATEWAY ---
+const fetchSeriesMetadata = async () => {
+  try {
+    const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(seriesId.value)}`);
+    const data = await res.json();
+    const entity = data.entities?.[seriesId.value];
+    if (entity) {
+      resolvedSeriesTitle.value = entity.label || entity.labels?.fr || entity.labels?.en || seriesId.value;
+    }
+  } catch (e) {
+    console.error("Erreur récupération métadonnées série :", e);
+  }
 };
 
 const loadLocalData = async () => {
   const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
-  if (context) {
+  if (context && context.tomes.length > 0) {
     seriesTomes.value = context.tomes;
+  } else {
+    // CACHE VIDE : On déclenche l'hydratation et on récupère le titre manuellement
+    seriesOrchestrator.startBackgroundHydration(seriesId.value);
+    await fetchSeriesMetadata();
   }
 };
 
@@ -85,7 +72,7 @@ onMounted(async () => {
   try {
     await loadLocalData();
   } catch (e) {
-    console.error("Erreur lors du chargement sémantique de la saga :", e);
+    console.error("Erreur lors du chargement :", e);
   } finally {
     isLoading.value = false;
   }
@@ -98,70 +85,58 @@ watch(
   }
 );
 
+// ... (Garder les méthodes existantes: handleToggleAll, dispatchBatchAction, confirmGroupLend, handleBackToCollection, isAllSelected, etc.)
+// Note : J'ai omis le code répétitif pour la concision, mais tu conserves tes méthodes existantes ici.
+
+const isAllSelected = computed(() => seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length);
+const selectedBooks = computed(() => seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri)));
+const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
+const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
+const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
+const isSelectionMixed = computed(() => {
+  let categories = 0;
+  if (hasUnownedSelected.value) categories++;
+  if (hasAvailableOwnedSelected.value) categories++;
+  if (hasLentSelected.value) categories++;
+  return categories > 1;
+});
+const batchContext = computed(() => {
+  if (hasUnownedSelected.value) return 'unowned';
+  if (hasLentSelected.value) return 'lent';
+  return 'owned';
+});
+
 const handleToggleAll = (checked: boolean) => {
-  if (!checked) {
-    selectedIds.value = [];
-  } else {
-    selectedIds.value = seriesTomes.value.map(item => item.uri);
-  }
+  selectedIds.value = checked ? seriesTomes.value.map(item => item.uri) : [];
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
   if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
-
-  if (action === 'LEND') {
-    showLendModal.value = true;
-    return;
-  }
-
+  if (action === 'LEND') { showLendModal.value = true; return; }
   try {
-    for (const uri of selectedIds.value) {
-      await queueService.enqueueAction(action, uri);
-    }
-
+    for (const uri of selectedIds.value) await queueService.enqueueAction(action, uri);
     seriesTomes.value = seriesTomes.value.map(tome => {
       if (selectedIds.value.includes(tome.uri)) {
-        if (action === 'RETURN') {
-          const { loan, ...rest } = tome;
-          return rest;
-        }
-        return {
-          ...tome,
-          ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish'
-        };
+        if (action === 'RETURN') { const { loan, ...rest } = tome; return rest; }
+        return { ...tome, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
       }
       return tome;
     });
-
     selectedIds.value = [];
-  } catch (error) {
-    console.error(error);
-  }
+  } catch (error) { console.error(error); }
 };
 
 const confirmGroupLend = async (friendName: string) => {
   try {
-    for (const uri of selectedIds.value) {
-      await queueService.enqueueAction('LEND', uri, { friendName });
-    }
-    
+    for (const uri of selectedIds.value) await queueService.enqueueAction('LEND', uri, { friendName });
     seriesTomes.value = seriesTomes.value.map(tome => {
-      if (selectedIds.value.includes(tome.uri)) {
-        return {
-          ...tome,
-          loan: { uri: tome.uri, friendName, loanDate: Date.now() }
-        };
-      }
+      if (selectedIds.value.includes(tome.uri)) return { ...tome, loan: { uri: tome.uri, friendName, loanDate: Date.now() } };
       return tome;
     });
-    
     selectedIds.value = [];
-  } catch (error) {
-    console.error(error);
-  } finally {
-    showLendModal.value = false;
-  }
+  } catch (error) { console.error(error); } finally { showLendModal.value = false; }
 };
+const handleBackToCollection = () => router.push({ name: 'CollectionView', query: { mode: fromMode.value } });
 </script>
 
 <template>
@@ -178,9 +153,6 @@ const confirmGroupLend = async (friendName: string) => {
         <div class="progress-fill-bar" :style="{ width: progressPercentage + '%' }"></div>
         <div class="progress-percentage-label">{{ progressPercentage }}%</div>
       </div>
-      <p class="progress-pedagogic-notice">
-        {{ TEXTS.seriesProgress?.pedagogicNotice || "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages." }}
-      </p>
     </div>
 
     <WireframePagination
@@ -205,7 +177,7 @@ const confirmGroupLend = async (friendName: string) => {
     <BaseLoading v-if="isLoading" />
 
     <template v-else>
-      <div v-if="displayedTomes.length === 0">
+      <div v-if="displayedTomes.length === 0 && !progressState.isActive">
         <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
       </div>
 

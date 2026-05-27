@@ -137,3 +137,17 @@ export const entityMapper = {
     return mappedBook;
   }
 };
+
+/**
+ * partitionneur de collection sémantique (RAM Volatile)
+ * Évite l'éparpillements de fichiers pour le tri intermédiaire
+ */
+export const semanticBucketMapper = {
+  partition(items: any[]) {
+    return {
+      authors: items.filter(item => item.type === 'author'),
+      series: items.filter(item => item.type === 'series'),
+      works: items.filter(item => item.type === 'work')
+    };
+  }
+};

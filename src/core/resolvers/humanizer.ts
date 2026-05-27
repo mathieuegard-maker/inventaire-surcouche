@@ -53,8 +53,8 @@ export const entityHumanizer = {
       }
     }
 
-    const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id]).filter(Boolean);
-    const translateSingle = (id?: string) => id ? dictionary[id] : undefined;
+    const translateArray = (ids?: string[]) => (ids || []).map(id => dictionary[id] || id).filter(Boolean);
+    const translateSingle = (id?: string) => id ? (dictionary[id] || id) : undefined;
 
     const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
 

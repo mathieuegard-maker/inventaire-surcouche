@@ -139,27 +139,47 @@ export const queueService = {
             case 'ADD_WISHLIST':
               success = await wishlistService.addBulkToWishlist(urisToProcess);
               break;
-            case 'LEND':
-              // TRAITEMENT UNITAIRE SECURISÉ DES PRÊTS (Évite la saturation d'étagère)
+            case 'LEND': {
+              let allOk = true;
               for (const singleAction of batch) {
                 const lendPayload = singleAction.payload as LendPayload;
                 const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
                 if (ok && singleAction.id) {
                   await databaseService.deletePendingAction(singleAction.id);
+                } else {
+                  allOk = false;
+                  break; // Soft fail, on arrête ce lot pour l'instant
                 }
               }
-              success = false; // Forcer le re-calcul du ticket au tour de boucle suivant
+              if (!allOk) {
+                console.warn(`[QUEUE] ⚠️ Échec de traitement d'un prêt. Pause de la synchronisation.`);
+                this.isProcessing = false;
+                console.groupEnd();
+                return;
+              }
+              success = false; // Pour ne pas re-purger dans le bloc outer
               break;
-            case 'RETURN':
-              // TRAITEMENT UNITAIRE SECURISÉ DES RETOURS
+            }
+            case 'RETURN': {
+              let allOk = true;
               for (const singleAction of batch) {
                 const ok = await loanService.returnBook(singleAction.uri);
                 if (ok && singleAction.id) {
                   await databaseService.deletePendingAction(singleAction.id);
+                } else {
+                  allOk = false;
+                  break;
                 }
+              }
+              if (!allOk) {
+                console.warn(`[QUEUE] ⚠️ Échec de traitement d'un retour. Pause de la synchronisation.`);
+                this.isProcessing = false;
+                console.groupEnd();
+                return;
               }
               success = false;
               break;
+            }
             default:
               console.warn(`[QUEUE] Action non gérée en paquet : ${firstActionType}`);
               success = true; 

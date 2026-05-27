@@ -14,7 +14,8 @@ vi.mock('../database/database.service', () => ({
     deletePendingAction: vi.fn(),
     deleteLoan: vi.fn(),
     saveLoan: vi.fn(),
-    removeRegistryEntry: vi.fn()
+    removeRegistryEntry: vi.fn(),
+    getBookFromCache: vi.fn()
   }
 }));
 
@@ -68,7 +69,7 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
   it('Étape 2A : Doit traiter une action avec succès et la purger de la file', async () => {
     // Arrange
     const fakeAction = { id: 1, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
-    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    vi.mocked(databaseService.getPendingActions).mockResolvedValueOnce([fakeAction as any]).mockResolvedValue([]);
     vi.mocked(loanService.lend).mockResolvedValue(true); // Le serveur répond OUI
 
     // Act
@@ -82,7 +83,7 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
   it('Étape 2B : Doit conserver l\'action en cas de "Soft Fail" (ex: perte de réseau dans la cave)', async () => {
     // Arrange
     const fakeAction = { id: 2, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
-    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    vi.mocked(databaseService.getPendingActions).mockResolvedValueOnce([fakeAction as any]).mockResolvedValue([]);
     vi.mocked(loanService.lend).mockResolvedValue(false); // Le réseau échoue silencieusement
 
     // Act
@@ -97,7 +98,7 @@ describe('Queue Orchestrator (Optimistic UI)', () => {
   it('Étape 3 : Doit déclencher un Rollback local en cas de "Hard Fail" (ex: refus définitif du serveur)', async () => {
     // Arrange
     const fakeAction = { id: 3, action: 'LEND', uri: 'wd:Q123', payload: { friendName: 'Jean' } };
-    vi.mocked(databaseService.getPendingActions).mockResolvedValue([fakeAction as any]);
+    vi.mocked(databaseService.getPendingActions).mockResolvedValueOnce([fakeAction as any]).mockResolvedValue([]);
     // Simulation d'une API qui explose (livre inexistant côté serveur)
     vi.mocked(loanService.lend).mockRejectedValue(new Error('Livre introuvable sur le serveur web'));
 
