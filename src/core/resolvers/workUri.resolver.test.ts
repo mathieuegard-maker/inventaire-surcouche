@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { workUriResolver } from './workUri.resolver';
 import { databaseService } from '../database/database.service';
-import { configService } from '../services/config.service';
+//import { configService } from '../services/config.service';
 
 // 1. MOCKING DES DÉPENDANCES
 vi.mock('../database/database.service', () => ({
@@ -29,7 +29,7 @@ describe('Work URI Resolver', () => {
     it('doit renvoyer directement les URI de type isbn:', async () => {
       // Act
       const result = await workUriResolver.resolveBulk(['isbn:9782203353275']);
-      
+
       // Assert
       expect(result).toEqual(['isbn:9782203353275']);
       expect(databaseService.getEditionByWorkFromCache).not.toHaveBeenCalled();
@@ -55,7 +55,7 @@ describe('Work URI Resolver', () => {
     it('doit arbitrer l\'élection de l\'édition physique (langue, regex anti-bruit, Levenshtein, native)', async () => {
       // Arrange
       // Pas en cache local
-      vi.mocked(databaseService.getEditionByWorkFromCache).mockResolvedValue(null);
+      vi.mocked(databaseService.getEditionByWorkFromCache).mockResolvedValue(undefined);
 
       // Mocks réseau
       const mockReverseClaimsResponse = {
