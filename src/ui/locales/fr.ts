@@ -26,7 +26,9 @@ export const TEXTS = {
     noticeText: "Cette application n'est qu'une surcouche indépendante. Vous devez obligatoirement posséder un compte sur Inventaire.io pour pouvoir l'utiliser et synchroniser vos ouvrages.",
     noticeLink: "Visiter Inventaire.io",
     submitButton: "Se connecter",
-    loading: "Connexion au serveur..."
+    loading: "Connexion au serveur...",
+    errorInvalid: "Identifiants invalides ou compte inconnu.",
+    errorServer: "Impossible de joindre le serveur de synchronisation."
   },
   scanner: {
     title: "Scanner le code-barres d'un livre",
@@ -163,7 +165,10 @@ export const TEXTS = {
     emptyLoans: "Aucun livre n'est actuellement confié à un proche.",
     borrowedCount: "livre(s) dehors",
     sinceLabel: "Prêté le :",
-    friendLabel: "Emprunteur :"
+    friendLabel: "Emprunteur :",
+    unknownFriend: "Inconnu",
+    unknownFriendWeb: "Inconnu (Ajout web)",
+    unknownFriendRestored: "Inconnu (Restauration)"
   },
   seriesProgress: {
     loadingTitle: "Téléchargement de la saga",
@@ -201,5 +206,23 @@ export const TEXTS = {
   },
   home: {
     title: "Inventaire PWA - Accueil"
+  },
+  header: {
+    back: "RETOUR",
+    collection: "COLLECTION",
+    wishlist: "WISHLIST",
+    loans: "PRÊTS",
+    home: "ACCUEIL",
+    menu: "MENU",
+    closeMenu: "FERMER LE MENU"
+  },
+  pagination: {
+    placeholder: "Rechercher un album ou une série (ex: Asterix)...",
+    selectAll: "Tout sélectionner",
+    selectedCount: "sélectionné(s)",
+    perPage: "par page",
+    previous: "PRÉCÉDENT",
+    page: "PAGE",
+    next: "SUIVANT"
   }
 };

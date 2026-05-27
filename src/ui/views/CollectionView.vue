@@ -253,7 +253,7 @@ const resetSelection = () => {
     <WireframePagination
       v-if="!isLoading && currentMode !== 'series'"
       :items="currentSortBooks"
-      :searchKeys="['title']"
+      :searchKeys="['title', 'series', 'authors']"
       :hasSelectAll="true"
       :selectAllValue="isAllSelected"
       :selectedCount="selectedIds.length"

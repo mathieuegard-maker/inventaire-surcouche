@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
+import { TEXTS } from '../locales/fr';
 
 const props = withDefaults(defineProps<{
   items: any[];
@@ -34,7 +35,11 @@ const filteredItems = computed(() => {
     list = list.filter(item => {
       return props.searchKeys.some(key => {
         const val = item[key];
-        return val && String(val).toLowerCase().includes(query);
+        if (!val) return false;
+        if (Array.isArray(val)) {
+          return val.some(element => element && String(element).toLowerCase().includes(query));
+        }
+        return String(val).toLowerCase().includes(query);
       });
     });
   }
@@ -72,7 +77,7 @@ watch(paginatedItems, (newList) => {
       <input
         type="text"
         v-model="searchQuery"
-        placeholder="RECHERCHER UN ALBUM OU UNE SÉRIE (EX: ASTERIX)..."
+        :placeholder="TEXTS.pagination.placeholder"
         class="wireframe-input search-keyword-input"
       />
     </div>
@@ -87,15 +92,15 @@ watch(paginatedItems, (newList) => {
             class="wireframe-checkbox"
           />
           <span class="pagination-select-all-label">
-            {{ selectedCount === 0 ? 'Tout sélectionner' : `${selectedCount} sélectionné(s)` }}
+            {{ selectedCount === 0 ? TEXTS.pagination.selectAll : selectedCount + ' ' + TEXTS.pagination.selectedCount }}
           </span>
         </div>
 
         <div class="page-size-selector-box">
           <select v-model="pageSize" class="wireframe-input size-select">
-            <option :value="20">20 PAR PAGE</option>
-            <option :value="50">50 PAR PAGE</option>
-            <option :value="100">100 PAR PAGE</option>
+            <option :value="20">20 {{ TEXTS.pagination.perPage }}</option>
+            <option :value="50">50 {{ TEXTS.pagination.perPage }}</option>
+            <option :value="100">100 {{ TEXTS.pagination.perPage }}</option>
           </select>
         </div>
       </div>
@@ -106,11 +111,11 @@ watch(paginatedItems, (newList) => {
           :disabled="currentPage === 1"
           @click="currentPage--"
         >
-          [ PRÉCÉDENT ]
+          [ {{ TEXTS.pagination.previous }} ]
         </button>
         
         <span class="pagination-counter-label">
-          PAGE {{ currentPage }} / {{ totalPages }}
+          {{ TEXTS.pagination.page }} {{ currentPage }} / {{ totalPages }}
         </span>
 
         <button
@@ -118,7 +123,7 @@ watch(paginatedItems, (newList) => {
           :disabled="currentPage === totalPages"
           @click="currentPage++"
         >
-          [ SUIVANT ]
+          [ {{ TEXTS.pagination.next }} ]
         </button>
       </div>
     </div>

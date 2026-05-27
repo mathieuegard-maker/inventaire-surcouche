@@ -49,7 +49,7 @@ onMounted(async () => {
         }
         book.value = mainBook;
       } else {
-        errorMsg.value = "Impossible de récupérer les détails de cette édition.";
+        errorMsg.value = TEXTS.bookDetail.fetchError;
       }
       isLoading.value = false;
       return;
@@ -77,11 +77,11 @@ onMounted(async () => {
       }
       book.value = resolved;
     } else {
-      errorMsg.value = "Impossible de récupérer les détails de cette édition.";
+      errorMsg.value = TEXTS.bookDetail.fetchError;
     }
   } catch (e) {
     console.error("[DETAIL VIEW] Erreur de chargement :", e);
-    errorMsg.value = "Une erreur est survenue lors de la récupération des données.";
+    errorMsg.value = TEXTS.bookDetail.loadError;
   } finally {
     isLoading.value = false;
   }
@@ -156,7 +156,7 @@ const handleReturn = async () => {
   <div class="view-container detail-container">
     <BaseHeader title="Détails de l'édition" showBack>
       <template #actions>
-        <BaseButton v-if="hasSeries" @click="navigateToSeries">📚 Voir la saga</BaseButton>
+        <BaseButton v-if="hasSeries" @click="navigateToSeries">{{ TEXTS.bookDetail.btnSeries }}</BaseButton>
       </template>
     </BaseHeader>
 
@@ -169,7 +169,7 @@ const handleReturn = async () => {
 
       <div class="book-card-layout">
         <div v-if="!book.coverUrl" class="book-cover-placeholder">
-          Pas de<br>couverture
+          {{ TEXTS.bookDetail.noCover }}
         </div>
         <img 
           v-else 
@@ -186,7 +186,7 @@ const handleReturn = async () => {
 
           <div v-if="hasSeries" class="book-meta-group">
             <p class="book-meta-item">
-              <strong>Série :</strong> 
+              <strong>{{ TEXTS.bookCard.series }} :</strong> 
               {{ book.series }}
               <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
             </p>
@@ -194,29 +194,29 @@ const handleReturn = async () => {
 
           <div class="book-meta-group" v-if="book.authors?.length || book.scriptwriters?.length || book.illustrators?.length">
             <p class="book-meta-item" v-if="book.authors?.length">
-              <strong>Auteur(s) :</strong> {{ book.authors.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.authors }} :</strong> {{ book.authors.join(', ') }}
             </p>
             <p class="book-meta-item" v-if="book.scriptwriters?.length">
-              <strong>Scénariste(s) :</strong> {{ book.scriptwriters.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
             </p>
             <p class="book-meta-item" v-if="book.illustrators?.length">
-              <strong>Illustrateur(s) :</strong> {{ book.illustrators.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
             </p>
           </div>
 
           <div class="book-meta-group">
             <p class="book-meta-item" v-if="book.publisher">
-              <strong>Éditeur :</strong> {{ book.publisher }} 
+              <strong>{{ TEXTS.bookCard.meta.publisher }} :</strong> {{ book.publisher }} 
               <span v-if="book.collection">[{{ book.collection }}]</span>
             </p>
             <p class="book-meta-item" v-if="book.genres?.length">
-              <strong>Genres :</strong> {{ book.genres.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.genres }} :</strong> {{ book.genres.join(', ') }}
             </p>
             <p class="book-meta-item" v-if="book.publishDate">
-              <strong>Parution :</strong> {{ book.publishDate }}
+              <strong>{{ TEXTS.bookCard.meta.publishDate }} :</strong> {{ book.publishDate }}
             </p>
             <p class="book-meta-item" v-if="book.pageCount">
-              <strong>Pages :</strong> {{ book.pageCount }}
+              <strong>{{ TEXTS.bookCard.meta.pageCount }} :</strong> {{ book.pageCount }}
             </p>
             <p class="book-meta-item" v-if="book.isbn13 || book.isbn10">
               <strong>ISBN :</strong> {{ book.isbn13 || book.isbn10 }}
@@ -237,12 +237,12 @@ const handleReturn = async () => {
 
       <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%;">
         <button class="wireframe-btn" @click="navigateToSeries">
-          [ VOIR TOUTE LA SÉRIE : {{ book.series || 'SAGA' }} ]
+          [ {{ TEXTS.bookDetail.btnSeries.toUpperCase() }} : {{ book.series || 'SAGA' }} ]
         </button>
       </div>
 
       <div class="book-description" v-if="book.description">
-        <h3 class="result-title">Synopsis</h3>
+        <h3 class="result-title">{{ TEXTS.bookDetail.synopsis }}</h3>
         <p>{{ book.description }}</p>
       </div>
 

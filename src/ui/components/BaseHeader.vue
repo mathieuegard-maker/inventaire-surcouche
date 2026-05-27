@@ -17,42 +17,42 @@ const handleLoans = () => { isMenuOpen.value = false; router.push('/loans'); };
   <header class="global-header">
     <div class="nav-desktop">
       <button class="wireframe-btn header-nav-btn" @click="handleBack">
-        {{ TEXTS.seriesView?.back || 'RETOUR' }}
+        {{ TEXTS.header?.back || 'RETOUR' }}
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleCollection">
-        {{ TEXTS.collectionView?.title || 'COLLECTION' }}
+        {{ TEXTS.header?.collection || 'COLLECTION' }}
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleWishlist">
-        {{ TEXTS.wishlistView?.title || 'WISHLIST' }}
+        {{ TEXTS.header?.wishlist || 'WISHLIST' }}
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleLoans">
-        {{ TEXTS.loansView?.title || 'PRÊTS' }}
+        {{ TEXTS.header?.loans || 'PRÊTS' }}
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleHome">
-        ACCUEIL
+        {{ TEXTS.header?.home || 'ACCUEIL' }}
       </button>
     </div>
 
     <div class="nav-mobile">
       <button class="wireframe-btn menu-trigger-btn" @click.stop="isMenuOpen = !isMenuOpen">
-        {{ isMenuOpen ? 'FERMER LE MENU' : 'MENU' }}
+        {{ isMenuOpen ? (TEXTS.header?.closeMenu || 'FERMER LE MENU') : (TEXTS.header?.menu || 'MENU') }}
       </button>
       
       <div v-if="isMenuOpen" class="menu-accordion-drawer">
         <button class="wireframe-btn menu-drawer-item" @click="handleBack">
-          RETOUR
+          {{ TEXTS.header?.back || 'RETOUR' }}
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleCollection">
-          {{ TEXTS.collectionView?.title || 'COLLECTION' }}
+          {{ TEXTS.header?.collection || 'COLLECTION' }}
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleWishlist">
-          {{ TEXTS.wishlistView?.title || 'WISHLIST' }}
+          {{ TEXTS.header?.wishlist || 'WISHLIST' }}
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleLoans">
-          {{ TEXTS.loansView?.title || 'PRÊTS' }}
+          {{ TEXTS.header?.loans || 'PRÊTS' }}
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleHome">
-          ACCUEIL
+          {{ TEXTS.header?.home || 'ACCUEIL' }}
         </button>
       </div>
     </div>

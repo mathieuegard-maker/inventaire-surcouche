@@ -1,5 +1,6 @@
 // src/core/services/loan.service.ts
 import { databaseService } from '../database/database.service';
+import { TEXTS } from '../../ui/locales/fr';
 
 export const loanService = {
   userUri: null as string | null,
@@ -147,7 +148,7 @@ export const loanService = {
           console.log(`[LOAN SERVICE] Prêt web détecté (${entityUri}). Ajout local.`);
           await databaseService.saveLoan({
             uri: entityUri,
-            friendName: 'Inconnu (Ajout web)',
+            friendName: TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)',
             loanDate: Date.now(),
             itemId: distantId
           });

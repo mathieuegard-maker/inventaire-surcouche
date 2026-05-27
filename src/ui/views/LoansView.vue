@@ -78,18 +78,23 @@ const filteredLoansSource = computed(() => {
   return list.sort((a, b) => (a.loan.friendName || '').localeCompare(b.loan.friendName || ''));
 });
 
-/**
- * ADAPTATION SÉMANTIQUE POUR LE COMPOSANT PAGINATION
- * Enrichit temporairement l'objet pour permettre une recherche simultanée
- * sur le nom de l'emprunteur ET sur le titre de l'album.
- */
 const enrichLoansForPagination = computed(() => {
   return filteredLoansSource.value.map(item => ({
     ...item,
     searchTitle: item.book.title || '',
-    searchFriend: item.loan.friendName || ''
+    searchFriend: item.loan.friendName || '',
+    searchSeries: item.book.series || '',
+    searchAuthors: item.book.authors || []
   }));
 });
+
+const translateFriendName = (name?: string): string => {
+  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
+  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
+  return name;
+};
 
 /**
  * RE-GROUPEMENT POST-PAGINATION (Mode Emprunteur)
@@ -99,7 +104,7 @@ const borrowerGroups = computed(() => {
   const groups: Record<string, any[]> = {};
   
   displayedLoans.value.forEach(item => {
-    const name = item.loan.friendName || 'Inconnu';
+    const name = translateFriendName(item.loan.friendName);
     if (!groups[name]) groups[name] = [];
     groups[name].push(item);
   });
@@ -165,7 +170,7 @@ const resetSelection = () => {
     <WireframePagination
       v-if="!isLoading"
       :items="enrichLoansForPagination"
-      :searchKeys="['searchTitle', 'searchFriend']"
+      :searchKeys="['searchTitle', 'searchFriend', 'searchSeries', 'searchAuthors']"
       :hasSelectAll="true"
       :selectAllValue="isAllSelected"
       :selectedCount="selectedIds.length"
@@ -223,7 +228,7 @@ const resetSelection = () => {
           <WireframeTable>
             <div v-for="item in displayedLoans" :key="item.loan.uri" style="position: relative;">
               <div class="loan-chrono-meta" style="padding: var(--spacing-sm) var(--spacing-md); margin: 0; border-bottom: var(--border-width) solid var(--color-border);">
-                ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ item.loan.friendName }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
+                ⏱️ {{ TEXTS.loansView?.friendLabel }} <strong>{{ translateFriendName(item.loan.friendName) }}</strong> — {{ TEXTS.loansView?.sinceLabel }} {{ formatDate(item.loan.loanDate) }}
               </div>
               <BookMiniCard 
                 :book="item.book"

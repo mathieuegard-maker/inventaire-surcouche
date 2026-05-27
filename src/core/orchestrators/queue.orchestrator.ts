@@ -4,6 +4,7 @@ import { loanService } from '../services/loan.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import type { LendPayload, QueueActionPayload } from '../types';
+import { TEXTS } from '../../ui/locales/fr';
 
 /**
  * Utilitaire pour insérer une pause et éviter de surcharger l'API
@@ -58,7 +59,7 @@ export const queueService = {
         const lendData = payload as LendPayload;
         await databaseService.saveLoan({
           uri,
-          friendName: lendData?.friendName || 'Inconnu',
+          friendName: lendData?.friendName || TEXTS.loansView?.unknownFriend || 'Inconnu',
           loanDate: Date.now()
         });
         break;
@@ -143,7 +144,7 @@ export const queueService = {
               let allOk = true;
               for (const singleAction of batch) {
                 const lendPayload = singleAction.payload as LendPayload;
-                const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || 'Inconnu');
+                const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || TEXTS.loansView?.unknownFriend || 'Inconnu');
                 if (ok && singleAction.id) {
                   await databaseService.deletePendingAction(singleAction.id);
                 } else {
@@ -234,7 +235,7 @@ export const queueService = {
         const restoredPayload = action.payload as LendPayload;
         await databaseService.saveLoan({
           uri: action.uri,
-          friendName: restoredPayload?.friendName || 'Inconnu (Restauration)',
+          friendName: restoredPayload?.friendName || TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)',
           loanDate: action.createdAt
         });
         break;

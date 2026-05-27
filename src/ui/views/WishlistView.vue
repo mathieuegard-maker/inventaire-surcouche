@@ -163,7 +163,7 @@ const resetFilters = () => {
     <WireframePagination
       v-if="!isLoading"
       :items="filteredBooks"
-      :searchKeys="['title']"
+      :searchKeys="['title', 'series', 'authors']"
       :hasSelectAll="true"
       :selectAllValue="isAllSelected"
       :selectedCount="selectedIds.length"

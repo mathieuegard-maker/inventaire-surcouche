@@ -1,6 +1,6 @@
-// src/resolvers/mapper.ts
 import type { RawBook } from '../types';
 import { isbnUtil } from '../utils/isbn.util';
+import { TEXTS } from '../../ui/locales/fr';
 
 export const entityMapper = {
   /**
@@ -26,7 +26,7 @@ export const entityMapper = {
     const workTitle = workRaw?.label || workRaw?.labels?.fr || workRaw?.labels?.en;
     const originalTitle = getClaimValue(workClaims, 'P1476') || getClaimValue(editionClaims, 'P1476');
     
-    const title = rawTitle || workTitle || originalTitle || "Titre inconnu";
+    const title = rawTitle || workTitle || originalTitle || TEXTS.authorView?.unknownTitle || "Titre inconnu";
 
     // 2. WORK URI : On le récupère de l'édition (P629) ou on utilise l'URI si c'est déjà un work
     const workUri = getClaimValue(editionClaims, 'P629') || (raw.type === 'work' ? uri : undefined);

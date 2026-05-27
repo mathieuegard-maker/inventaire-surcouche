@@ -40,11 +40,11 @@ const handleLogin = async () => {
     if (isConnected) {
       router.push('/dashboard');
     } else {
-      errorMessage.value = "Identifiants invalides ou compte inconnu.";
+      errorMessage.value = TEXTS.login.errorInvalid || "Identifiants invalides ou compte inconnu.";
     }
   } catch (error) {
     console.error("[VUE] Échec de l'action de connexion :", error);
-    errorMessage.value = "Impossible de joindre le serveur de synchronisation.";
+    errorMessage.value = TEXTS.login.errorServer || "Impossible de joindre le serveur de synchronisation.";
   } finally {
     isLoading.value = false;
   }

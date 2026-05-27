@@ -14,6 +14,14 @@ const emit = defineEmits<{
 
 const router = useRouter();
 
+const translateFriendName = (name?: string): string => {
+  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
+  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
+  return name;
+};
+
 const navigateToDetail = () => {
   if (props.book.uri) {
     router.push(`/book/${encodeURIComponent(props.book.uri)}`);
@@ -48,7 +56,7 @@ const handleZoneClick = () => {
       <p class="row-title">{{ book.title }}</p>
       
       <p v-if="book.loan?.friendName" class="row-authors">
-        👉 {{ book.loan.friendName }}
+        👉 {{ translateFriendName(book.loan.friendName) }}
       </p>
       <p v-else-if="book.series" class="row-series-meta">
         {{ book.series }}
