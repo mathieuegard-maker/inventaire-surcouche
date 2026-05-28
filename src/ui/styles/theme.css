@@ -1473,3 +1473,31 @@ h3.wireframe-title {
 .semantic-bucket-section {
   margin-bottom: var(--spacing-lg);
 }
+
+/* --- STYLE DU BANDEAU GLOBAL HORS-LIGNE --- */
+.offline-global-banner {
+  width: 100% !important;
+  background-color: #f97316 !important; /* Orange vif */
+  color: #ffffff !important;
+  text-align: center !important;
+  padding: var(--spacing-sm) var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 13px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  border-bottom: var(--border-width) solid var(--color-border) !important;
+  box-sizing: border-box !important;
+  animation: pulse-offline 2s infinite ease-in-out;
+}
+
+@keyframes pulse-offline {
+  0% {
+    opacity: 0.95;
+  }
+  50% {
+    opacity: 0.75;
+  }
+  100% {
+    opacity: 0.95;
+  }
+}

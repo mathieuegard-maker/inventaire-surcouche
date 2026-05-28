@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
+import { connectionState } from './state/connection';
 
 const isInitializing = ref(true);
 const router = useRouter(); 
@@ -37,7 +38,12 @@ onMounted(async () => {
     <p>{{ TEXTS.status.initializing }}</p>
   </div>
 
-  <router-view v-else></router-view>
+  <div v-else class="app-main-layout">
+    <div v-if="connectionState.isOffline.value" class="offline-global-banner">
+      ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
+    </div>
+    <router-view></router-view>
+  </div>
   
   <PwaReloadPrompt />
 </template>

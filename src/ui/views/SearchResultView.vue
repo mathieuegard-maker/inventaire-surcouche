@@ -9,6 +9,7 @@ import { TEXTS } from '../locales/fr';
 import { inventaireSearchProvider, type SearchResultItem } from '../../core/providers/inventaire-search.provider';
 import { semanticBucketMapper } from '../../core/resolvers/mapper';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
+import { databaseService } from '../../core/database/database.service';
 
 const route = useRoute();
 const router = useRouter();
@@ -31,6 +32,30 @@ const executeSemanticSearch = async () => {
 
   isLoading.value = true;
   errorMessage.value = '';
+
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+
+  if (isOffline) {
+    try {
+      console.log(`[SEARCH RESULT VIEW] Mode hors-ligne actif. Recherche locale pour : ${query}`);
+      const localBooks = await databaseService.searchBooksLocally(query);
+      workResults.value = localBooks.map(book => ({
+        uri: book.uri,
+        type: 'work',
+        label: book.title,
+        description: book.authors?.join(', ') || book.series || undefined,
+        coverUrl: book.coverUrl
+      }));
+      authorResults.value = [];
+      seriesResults.value = [];
+    } catch (e) {
+      console.error('[SEARCH RESULT VIEW] Échec de la recherche locale :', e);
+      errorMessage.value = "Erreur de recherche locale hors-ligne.";
+    } finally {
+      isLoading.value = false;
+    }
+    return;
+  }
 
   try {
     const rawItems = await inventaireSearchProvider.searchByKeywords(query);
@@ -67,6 +92,13 @@ const handleSelectSeries = (uri: string) => {
 };
 
 const handleSelectWork = async (uri: string) => {
+  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  if (isOffline) {
+    console.log(`[SEARCH RESULT VIEW] Redirection directe hors-ligne pour l'URI : ${uri}`);
+    router.push(`/book/${encodeURIComponent(uri)}`);
+    return;
+  }
+
   isLoading.value = true;
   try {
     // Le Pivot ISBN : Résolution de l'édition physique canonique en tâche de fond

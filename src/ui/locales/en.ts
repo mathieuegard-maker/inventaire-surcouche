@@ -3,7 +3,8 @@
 export const TEXTS = {
   app: {
     name: "Inventaire PWA",
-    description: "Application description"
+    description: "Application description",
+    offlineGlobalBanner: "OFFLINE MODE ACTIVE (READ-ONLY)"
   },
   status: {
     initializing: "Loading...",
@@ -59,6 +60,7 @@ export const TEXTS = {
     btnAddInventory: "Add to collection",
     btnAddWishlist: "Add to wishlist",
     btnViewSeries: "Show entire series",
+    offlineActionsBlocked: "Modification not possible in offline mode.",
     meta: {
       authors: "Author(s)",
       illustrators: "Illustrator(s)",
@@ -144,7 +146,8 @@ export const TEXTS = {
     btnAddInventoryGroup: "Add Batch to Collection",
     btnAddWishlistGroup: "Add to Wishlist",
     btnLendGroup: "Lend Selected Batch",
-    btnToggleWishlistGroup: "Toggle to Wishlist"
+    btnToggleWishlistGroup: "Toggle to Wishlist",
+    offlineActionsBlocked: "Batch actions are disabled in offline mode."
   },
   baseLoading: {
     message: "Loading data...",

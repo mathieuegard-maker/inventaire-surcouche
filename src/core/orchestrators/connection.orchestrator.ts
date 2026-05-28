@@ -2,6 +2,8 @@
 import { userService } from '../services/user.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
+import { sessionStore } from '../../state/session';
+import { connectionState } from '../../state/connection';
 //import { databaseService } from '../database/database.service';
 //import { entityResolver } from '../resolvers/entity.resolver';
 //import { entityHumanizer } from '../resolvers/humanizer';
@@ -14,21 +16,48 @@ export const connectionService = {
   userUri: null as string | null,
 
   /**
-   * Initialisation globale de l'application (Résistante aux pannes)
+   * Initialisation globale de l'application (Résistante aux pannes et compatible hors-ligne)
    */
   async initializeApp(): Promise<boolean> {
     console.group("[CONNECTION SERVICE] Démarrage de l'application");
     try {
-      console.log("Tentative de récupération du profil...");
-      const profile = await userService.fetchProfile();
+      let profile: { uri: string; username: string } | null = null;
+      const isOffline = connectionState.isOffline.value;
+
+      if (!isOffline) {
+        console.log("Tentative de récupération du profil à distance...");
+        try {
+          profile = await userService.fetchProfile();
+        } catch (e) {
+          console.warn("[CONNECTION SERVICE] Échec de la récupération du profil à distance, tentative locale...", e);
+        }
+      }
+
+      if (!profile) {
+        console.log("Tentative de restauration de la session locale...");
+        const restored = sessionStore.restoreSessionFromLocalStorage();
+        if (restored && sessionStore.state.user) {
+          profile = sessionStore.state.user;
+          console.log("[CONNECTION SERVICE] Session restaurée depuis le cache local (mode consultation).");
+        }
+      }
+
       if (!profile || !profile.uri) {
-        console.warn("Aucune session active. Utilisateur déconnecté.");
+        console.warn("Aucune session active ou restaurable. Utilisateur déconnecté.");
         console.groupEnd();
         return false;
       }
 
       this.userUri = profile.uri;
-      console.log(`Session trouvée : ${profile.username} (${this.userUri})`);
+      console.log(`Session activée : ${profile.username} (${this.userUri})`);
+
+      // Si l'application démarre hors-ligne, on court-circuite la synchronisation réseau
+      if (isOffline) {
+        console.log("Application prête en mode hors-ligne restreint (consultation seule) !");
+        this.isInitialized = true;
+        console.groupEnd();
+        return true;
+      }
 
       // 1. Synchronisation NON-bloquante des registres avec Tolérance aux Pannes
       console.log("Synchronisation des registres (Inventory, Wishlist, Loans)...");
@@ -49,7 +78,7 @@ export const connectionService = {
           .catch(e => console.error("[CONNECTION SERVICE] ⚠️ Échec synchronisation Prêts :", e));
 
       this.isInitialized = true;
-      console.log("Application prête (mode résilient) !");
+      console.log("Application prête (mode résilient et connecté) !");
       console.groupEnd();
 
       // 2. Lancement asynchrone de l'hydratation DÉLÉGUÉ au Sync Orchestrator

@@ -147,6 +147,18 @@ export const databaseService = {
     return await db.loans.toArray();
   },
 
+  async searchBooksLocally(query: string): Promise<HumanizedBook[]> {
+    if (!query || !query.trim()) return [];
+    const normalizedQuery = query.toLowerCase().trim();
+    const allBooks = await db.cache_books.toArray();
+    return allBooks.filter(book => {
+      const titleMatch = book.title?.toLowerCase().includes(normalizedQuery);
+      const seriesMatch = book.series?.toLowerCase().includes(normalizedQuery);
+      const authorMatch = book.authors?.some(author => author.toLowerCase().includes(normalizedQuery));
+      return !!(titleMatch || seriesMatch || authorMatch);
+    });
+  },
+
   // --- NOUVEAU : GESTION DE LA FILE D'ATTENTE (Optimistic UI) ---
 
   async savePendingAction(action: PendingAction): Promise<number> {

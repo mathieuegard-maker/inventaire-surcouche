@@ -28,6 +28,11 @@ export const searchService = {
     let source: 'cache' | 'network' = 'cache';
 
     if (!book) {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        console.warn(`[SEARCH] Absent du cache local et pas de réseau disponible pour l'ISBN ${isbn}`);
+        console.groupEnd();
+        return null;
+      }
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
       book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
       

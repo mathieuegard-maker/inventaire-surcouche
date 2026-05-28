@@ -3,7 +3,8 @@
 export const TEXTS = {
   app: {
     name: "Inventaire PWA",
-    description: "Description de l'application"
+    description: "Description de l'application",
+    offlineGlobalBanner: "MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)"
   },
   status: {
     initializing: "Chargement en cours...",
@@ -59,6 +60,7 @@ export const TEXTS = {
     btnAddInventory: "Ajouter à la collection",
     btnAddWishlist: "Ajouter à la liste d'envies",
     btnViewSeries: "Afficher toute la série",
+    offlineActionsBlocked: "Modification impossible en mode hors-ligne.",
     meta: {
       authors: "Auteur(s)",
       illustrators: "Dessinateur(s)",
@@ -144,7 +146,8 @@ export const TEXTS = {
     btnAddInventoryGroup: "Ajouter le Lot à ma Collection",
     btnAddWishlistGroup: "Ajouter à ma Wishlist",
     btnLendGroup: "Prêter le Lot Sélectionné",
-    btnToggleWishlistGroup: "Basculer vers la Wishlist"
+    btnToggleWishlistGroup: "Basculer vers la Wishlist",
+    offlineActionsBlocked: "Les actions groupées sont désactivées en mode hors-ligne."
   },
   baseLoading: {
     message: "Chargement des données en cours...",

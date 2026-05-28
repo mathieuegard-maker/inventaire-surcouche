@@ -19,6 +19,26 @@ export const sessionStore = {
       uri: finalUri,
       username: u.username || u.label || u.name || 'Utilisateur',
     };
+
+    if (typeof localStorage !== 'undefined' && finalUri) {
+      localStorage.setItem('inventaire_session', JSON.stringify(this.state.user));
+    }
+  },
+  
+  restoreSessionFromLocalStorage(): boolean {
+    if (typeof localStorage !== 'undefined') {
+      const saved = localStorage.getItem('inventaire_session');
+      if (saved) {
+        try {
+          this.state.user = JSON.parse(saved);
+          console.log('[DEBUG] Session restaurée depuis localStorage :', this.state.user);
+          return true;
+        } catch (e) {
+          console.error('[DEBUG] Échec de la restauration de la session depuis localStorage :', e);
+        }
+      }
+    }
+    return false;
   },
   
   getUserUri() {

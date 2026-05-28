@@ -5,6 +5,7 @@ import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import type { LendPayload, QueueActionPayload } from '../types';
 import { TEXTS } from '../../ui/locales/fr';
+import { connectionState } from '../../state/connection';
 
 /**
  * Utilitaire pour insérer une pause et éviter de surcharger l'API
@@ -75,6 +76,11 @@ export const queueService = {
    * et tente de l'exécuter en arrière-plan.
    */
   async enqueueAction(actionType: PendingAction['action'], uri: string, payload?: QueueActionPayload): Promise<void> {
+    if (connectionState.isOffline.value) {
+      console.error("[QUEUE] Action d'écriture refusée : l'application est hors-ligne.");
+      throw new Error("Action impossible hors-ligne");
+    }
+
     console.group(`[QUEUE] Nouvelle action interceptée: ${actionType} sur ${uri}`);
     
     const action: PendingAction = {
