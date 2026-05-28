@@ -1,13 +1,23 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
+import BookMiniCard from '../components/BookMiniCard.vue';
+import WireframeTable from '../components/WireframeTable.vue';
+import WireframePagination from '../components/WireframePagination.vue';
+import BatchActionBar from '../components/BatchActionBar.vue';
+import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import { inventaireSearchProvider } from '../../core/providers/inventaire-search.provider';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
+import { databaseService } from '../../core/database/database.service';
+import { entityResolver } from '../../core/resolvers/entity.resolver';
+import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import type { HumanizedBook } from '../../core/types';
+import { entityHumanizer } from '../../core/resolvers/humanizer';
 
 const route = useRoute();
 const router = useRouter();
@@ -15,7 +25,33 @@ const router = useRouter();
 const isLoading = ref(true);
 const errorMessage = ref('');
 const authorName = ref('');
-const works = ref<{ uri: string; label: string; description?: string }[]>([]);
+const authorBooks = ref<HumanizedBook[]>([]);
+const selectedIds = ref<string[]>([]);
+const displayedTomes = ref<HumanizedBook[]>([]);
+const showLendModal = ref(false);
+
+const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
+  const needsHumanization = (currentBook.series && currentBook.series.startsWith('wd:')) ||
+                            (currentBook.authors && currentBook.authors.some(a => a.startsWith('wd:'))) ||
+                            (currentBook.publisher && currentBook.publisher.startsWith('wd:')) ||
+                            (currentBook.genres && currentBook.genres.some(g => g.startsWith('wd:'))) ||
+                            (currentBook.collection && currentBook.collection.startsWith('wd:'));
+  if (needsHumanization) {
+    console.log(`[AUTHOR VIEW] Livre partiellement humanisé détecté (${currentBook.uri}). Ré-humanisation à la volée...`);
+    entityHumanizer.rehumanize(currentBook).then((updated) => {
+      if (updated) {
+        const idx = authorBooks.value.findIndex(b => b.uri === currentBook.uri);
+        if (idx !== -1) {
+          authorBooks.value[idx] = { 
+            ...updated, 
+            ownershipStatus: authorBooks.value[idx].ownershipStatus, 
+            loan: authorBooks.value[idx].loan 
+          };
+        }
+      }
+    });
+  }
+};
 
 onMounted(async () => {
   const authorId = route.params.id as string;
@@ -26,7 +62,6 @@ onMounted(async () => {
   }
 
   try {
-    // 1. Récupération des métadonnées de l'auteur pour afficher son identité textuelle
     const authorRes = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(authorId)}`);
     if (authorRes.ok) {
       const authorData = await authorRes.json();
@@ -36,37 +71,63 @@ onMounted(async () => {
       authorName.value = authorId;
     }
 
-    // 2. Récupération asynchrone des URIs d'œuvres sémantiques rattachées
     const workUris = await inventaireSearchProvider.fetchAuthorWorks(authorId);
     if (workUris.length === 0) {
       isLoading.value = false;
       return;
     }
 
-    // 3. Aspiration des fiches descriptives par paquets (chunks) de 50 pour éviter la saturation
-    const CHUNK_SIZE = 50;
-    const fetchedWorks: { uri: string; label: string; description?: string }[] = [];
+    // 3. Résolution groupée en URIs physiques
+    const physicalUris = await workUriResolver.resolveBulk(workUris);
 
-    for (let i = 0; i < workUris.length; i += CHUNK_SIZE) {
-      const chunk = workUris.slice(i, i + CHUNK_SIZE);
-      const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
-      if (res.ok) {
-        const data = await res.json();
-        const entities = data.entities || {};
-        chunk.forEach(uri => {
-          const ent = entities[uri];
-          if (ent) {
-            fetchedWorks.push({
-              uri,
-              label: ent.label || ent.labels?.fr || ent.labels?.en || TEXTS.authorView.unknownTitle,
-              description: ent.description || ent.descriptions?.fr || undefined
-            });
+    // 4. Résolution complète en HumanizedBook (avec cache-first)
+    const fetchedBooks: HumanizedBook[] = [];
+    const CHUNK_SIZE = 10;
+
+    for (let i = 0; i < physicalUris.length; i += CHUNK_SIZE) {
+      const chunk = physicalUris.slice(i, i + CHUNK_SIZE);
+      const chunkBooks = await Promise.all(
+        chunk.map(async (uri) => {
+          try {
+            let book = await databaseService.getBookFromCache(uri);
+            if (!book) {
+              book = await entityResolver.resolvePhysicalEntity(uri);
+              if (book) {
+                await databaseService.saveBookToCache(book);
+              }
+            }
+            if (book) {
+              // Couplage dynamique avec l'état local (possession, souhaits, prêt)
+              const isInInventory = await databaseService.isUriInRegistry('inventory', book.uri) ||
+                                    (book.workUri ? await databaseService.isUriInRegistry('inventory', book.workUri) : false);
+              if (isInInventory) {
+                book.ownershipStatus = 'owned';
+                const activeLoan = await databaseService.getLoan(book.uri);
+                if (activeLoan) {
+                  book.loan = activeLoan;
+                }
+              } else {
+                const isInWishlist = await databaseService.isUriInRegistry('wishlist', book.uri) ||
+                                     (book.workUri ? await databaseService.isUriInRegistry('wishlist', book.workUri) : false);
+                if (isInWishlist) {
+                  book.ownershipStatus = 'wish';
+                } else {
+                  book.ownershipStatus = 'none';
+                }
+              }
+              checkAndTriggerRehumanize(book);
+            }
+            return book;
+          } catch (e) {
+            console.error(`[AUTHOR VIEW] Erreur de résolution pour ${uri} :`, e);
+            return null;
           }
-        });
-      }
+        })
+      );
+      fetchedBooks.push(...(chunkBooks.filter((b): b is HumanizedBook => !!b)));
     }
 
-    works.value = fetchedWorks;
+    authorBooks.value = fetchedBooks;
   } catch (error) {
     console.error('[AUTHOR VIEW] Échec du chargement du profil de l\'auteur :', error);
     errorMessage.value = TEXTS.authorView.errorFetch;
@@ -75,21 +136,74 @@ onMounted(async () => {
   }
 });
 
-const handleSelectWork = async (uri: string) => {
-  isLoading.value = true;
+// Méthodes d'interaction
+const isAllSelected = computed(() => authorBooks.value.length > 0 && selectedIds.value.length === authorBooks.value.length);
+const selectedBooks = computed(() => authorBooks.value.filter(book => selectedIds.value.includes(book.uri)));
+const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
+const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
+const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
+
+const isSelectionMixed = computed(() => {
+  let categories = 0;
+  if (hasUnownedSelected.value) categories++;
+  if (hasAvailableOwnedSelected.value) categories++;
+  if (hasLentSelected.value) categories++;
+  return categories > 1;
+});
+
+const batchContext = computed(() => {
+  if (hasUnownedSelected.value) return 'unowned';
+  if (hasLentSelected.value) return 'lent';
+  return 'owned';
+});
+
+const handleToggleAll = (checked: boolean) => {
+  selectedIds.value = checked ? authorBooks.value.map(item => item.uri) : [];
+};
+
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+  if (action === 'LEND') {
+    showLendModal.value = true;
+    return;
+  }
   try {
-    // Déclenchement de l'entonnoir d'élection canonique (Levenshtein + Langue + JUNK_REGEX) pour extraire l'ISBN physique
-    const isbn = await workUriResolver.resolveIsbnFromWorkUri(uri);
-    if (isbn) {
-      router.push(`/book/${encodeURIComponent(isbn)}`);
-    } else {
-      alert(TEXTS.searchResults.errorNoPhysicalEdition);
-      isLoading.value = false;
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction(action, uri);
     }
+    authorBooks.value = authorBooks.value.map(book => {
+      if (selectedIds.value.includes(book.uri)) {
+        if (action === 'RETURN') {
+          const copy = { ...book };
+          delete copy.loan;
+          return copy;
+        }
+        return { ...book, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
+      }
+      return book;
+    });
+    selectedIds.value = [];
   } catch (error) {
-    console.error('[AUTHOR VIEW] Échec du calcul du pivot ISBN :', error);
-    alert(TEXTS.searchResults.errorPivot);
-    isLoading.value = false;
+    console.error('[AUTHOR VIEW] Échec de l\'action groupée :', error);
+  }
+};
+
+const confirmGroupLend = async (friendName: string) => {
+  try {
+    for (const uri of selectedIds.value) {
+      await queueService.enqueueAction('LEND', uri, { friendName });
+    }
+    authorBooks.value = authorBooks.value.map(book => {
+      if (selectedIds.value.includes(book.uri)) {
+        return { ...book, loan: { uri: book.uri, friendName, loanDate: Date.now() } };
+      }
+      return book;
+    });
+    selectedIds.value = [];
+  } catch (error) {
+    console.error('[AUTHOR VIEW] Échec du prêt groupé :', error);
+  } finally {
+    showLendModal.value = false;
   }
 };
 </script>
@@ -105,30 +219,55 @@ const handleSelectWork = async (uri: string) => {
       <BaseBanner v-if="errorMessage" type="error" :message="errorMessage" />
       
       <BaseBanner 
-        v-if="!works.length && !errorMessage" 
+        v-if="!authorBooks.length && !errorMessage" 
         type="error" 
         :message="TEXTS.authorView.emptyWorks" 
       />
 
-      <div v-if="works.length" class="semantic-bucket-section">
+      <div v-if="authorBooks.length" class="semantic-bucket-section">
         <div class="wishlist-section-header">{{ TEXTS.authorView.sectionWorks }}</div>
-        <div class="wireframe-table-container">
-          <div 
-            v-for="work in works" 
-            :key="work.uri" 
-            class="mini-card-row card-row-clickable"
-            @click="handleSelectWork(work.uri)"
-          >
-            <div class="row-cover-container row-macaron-container">
-              <span class="row-macaron-label">{{ TEXTS.authorView.badgeWork }}</span>
-            </div>
-            <div class="row-info-content">
-              <p class="row-title">{{ work.label }}</p>
-              <p v-if="work.description" class="row-series-meta">{{ work.description }}</p>
-            </div>
-          </div>
-        </div>
+        
+        <WireframePagination
+          :items="authorBooks"
+          :searchKeys="['title', 'series']"
+          :hasSelectAll="true"
+          :selectAllValue="isAllSelected"
+          :selectedCount="selectedIds.length"
+          @update:selectAllValue="handleToggleAll"
+          @update:processedItems="(val) => displayedTomes = val"
+        />
+
+        <BatchActionBar 
+          :selected-count="selectedIds.length"
+          :is-mixed="isSelectionMixed"
+          :context="batchContext"
+          @execute="dispatchBatchAction"
+        />
+
+        <WireframeTable v-if="displayedTomes.length > 0">
+          <BookMiniCard 
+            v-for="livre in displayedTomes" 
+            :key="livre.uri" 
+            :book="livre"
+            :model-value="selectedIds.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if (val) {
+                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+              } else {
+                const idx = selectedIds.indexOf(livre.uri);
+                if (idx > -1) selectedIds.splice(idx, 1);
+              }
+            }"
+          />
+        </WireframeTable>
       </div>
     </div>
+
+    <LendModal
+      :show="showLendModal"
+      :bookCount="selectedIds.length"
+      @close="showLendModal = false"
+      @confirm="confirmGroupLend"
+    />
   </div>
 </template>

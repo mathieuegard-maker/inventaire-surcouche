@@ -14,6 +14,7 @@ import LendModal from '../components/LendModal.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
+import { entityHumanizer } from '../../core/resolvers/humanizer';
 
 const route = useRoute();
 const router = useRouter();
@@ -28,6 +29,22 @@ const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
 const isLent = computed(() => !!book.value?.loan);
 const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
 const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
+
+const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
+  const needsHumanization = (currentBook.series && currentBook.series.startsWith('wd:')) ||
+                            (currentBook.authors && currentBook.authors.some(a => a.startsWith('wd:'))) ||
+                            (currentBook.publisher && currentBook.publisher.startsWith('wd:')) ||
+                            (currentBook.genres && currentBook.genres.some(g => g.startsWith('wd:'))) ||
+                            (currentBook.collection && currentBook.collection.startsWith('wd:'));
+  if (needsHumanization) {
+    console.log(`[DETAIL VIEW] Livre partiellement humanisé détecté (${currentBook.uri}). Ré-humanisation à la volée...`);
+    entityHumanizer.rehumanize(currentBook).then((updated) => {
+      if (updated) {
+        book.value = { ...updated, loan: book.value?.loan };
+      }
+    });
+  }
+};
 
 onMounted(async () => {
   const uriParam = route.params.uri as string;
@@ -48,6 +65,7 @@ onMounted(async () => {
           mainBook.loan = response.loan.details;
         }
         book.value = mainBook;
+        checkAndTriggerRehumanize(mainBook);
       } else {
         errorMsg.value = TEXTS.bookDetail.fetchError;
       }
@@ -64,6 +82,7 @@ onMounted(async () => {
       }
       book.value = cached;
       isLoading.value = false;
+      checkAndTriggerRehumanize(cached);
       return;
     }
 

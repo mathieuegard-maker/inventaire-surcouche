@@ -1,5 +1,6 @@
 // src/core/resolvers/humanizer.ts
 import type { RawBook, HumanizedBook } from '../types';
+import { databaseService } from '../database/database.service';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
@@ -90,5 +91,79 @@ export const entityHumanizer = {
 
     console.log(`[HUMANIZER] Succès pour ${rawBook.uri} (Alignement multilingue actif)`);
     return humanized;
+  },
+
+  /**
+   * Ré-humanise à la volée un livre déjà en cache qui contient des IDs Wikidata bruts (wd:...)
+   */
+  async rehumanize(book: HumanizedBook): Promise<HumanizedBook | null> {
+    console.log(`[REHUMANIZER] Détection de ré-humanisation pour ${book.uri}`);
+    const allIds = new Set<string>();
+    
+    const checkAndAdd = (val: string | undefined) => {
+      if (val && val.startsWith('wd:')) {
+        allIds.add(val);
+      }
+    };
+    
+    const checkAndAddArray = (arr: string[] | undefined) => {
+      if (arr) {
+        arr.forEach(val => {
+          if (val && val.startsWith('wd:')) {
+            allIds.add(val);
+          }
+        });
+      }
+    };
+
+    checkAndAddArray(book.authors);
+    checkAndAddArray(book.illustrators);
+    checkAndAddArray(book.scriptwriters);
+    checkAndAdd(book.publisher);
+    checkAndAdd(book.series);
+    checkAndAddArray(book.genres);
+    checkAndAdd(book.collection);
+
+    const idArray = Array.from(allIds);
+    if (idArray.length === 0) return null;
+
+    try {
+      console.log(`[REHUMANIZER] Résolution à la volée de ${idArray.length} identifiants bruts...`);
+      const browserLang = typeof navigator !== 'undefined' && navigator.language ? navigator.language.split('-')[0].toLowerCase() : 'fr';
+      const dictionary: Record<string, string> = {};
+
+      for (let i = 0; i < idArray.length; i += 50) {
+        const chunk = idArray.slice(i, i + 50);
+        const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const data = await res.json();
+        const entities = data.entities || data;
+
+        for (const [uri, entity] of Object.entries(entities)) {
+          const e = entity as any;
+          if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
+          else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
+          else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
+          else if (e.label) dictionary[uri] = e.label;
+        }
+      }
+
+      const translate = (val: string | undefined) => val && dictionary[val] ? dictionary[val] : val;
+      const translateArray = (arr: string[] | undefined) => arr ? arr.map(val => dictionary[val] || val) : [];
+
+      book.authors = translateArray(book.authors);
+      book.illustrators = translateArray(book.illustrators);
+      book.scriptwriters = translateArray(book.scriptwriters);
+      book.publisher = translate(book.publisher);
+      book.series = translate(book.series);
+      book.genres = translateArray(book.genres);
+      book.collection = translate(book.collection);
+
+      await databaseService.saveBookToCache(book);
+      console.log(`[REHUMANIZER] Ré-humanisation réussie pour ${book.uri}`);
+      return book;
+    } catch (e) {
+      console.warn("[REHUMANIZER] Erreur lors de la ré-humanisation :", e);
+      return null;
+    }
   }
 };
