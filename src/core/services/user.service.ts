@@ -12,7 +12,9 @@ export const userService = {
 
     if (!res.ok) {
       console.log('[DEBUG] Détails du rejet API :', data);
-      throw new Error(data.error || "Session invalide");
+      const error = new Error(data.error || "Session invalide") as any;
+      error.status = res.status;
+      throw error;
     }
     
     sessionStore.setUser(data);

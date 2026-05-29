@@ -43,5 +43,12 @@ export const sessionStore = {
   
   getUserUri() {
     return this.state.user?.uri;
+  },
+  
+  clearSession() {
+    this.state.user = null;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('inventaire_session');
+    }
   }
 };

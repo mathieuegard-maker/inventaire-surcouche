@@ -5,6 +5,7 @@ import { userService } from '../services/user.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import { loanService } from '../services/loan.service';
+import { sessionStore } from '../../state/session';
 //import { syncOrchestrator } from './sync.orchestrator';
 
 // --- 1. MOCKING DES SERVICES (Les Simulacres) ---
@@ -71,5 +72,18 @@ describe('Connection Orchestrator', () => {
     await connectionService.initializeApp();
 
     expect(loanService.sync).toHaveBeenCalledWith('wd:User', fakeItems);
+  });
+
+  it('doit vider la session locale et retourner false si le profil à distance renvoie une erreur d\'authentification (ex: 401)', async () => {
+    const authError = new Error('Unauthorized') as any;
+    authError.status = 401;
+    vi.mocked(userService.fetchProfile).mockRejectedValue(authError);
+    
+    const spyClear = vi.spyOn(sessionStore, 'clearSession');
+    
+    const result = await connectionService.initializeApp();
+    
+    expect(result).toBe(false);
+    expect(spyClear).toHaveBeenCalled();
   });
 });

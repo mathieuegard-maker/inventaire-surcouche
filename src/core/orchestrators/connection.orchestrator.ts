@@ -28,8 +28,14 @@ export const connectionService = {
         console.log("Tentative de récupération du profil à distance...");
         try {
           profile = await userService.fetchProfile();
-        } catch (e) {
+        } catch (e: any) {
           console.warn("[CONNECTION SERVICE] Échec de la récupération du profil à distance, tentative locale...", e);
+          if (e.status === 401 || e.status === 403 || e.message === 'Session invalide' || e.message?.includes('Unauthorized')) {
+            console.error("[CONNECTION SERVICE] Session invalide ou cookies supprimés. Nettoyage de la session locale...");
+            sessionStore.clearSession();
+            console.groupEnd();
+            return false;
+          }
         }
       }
 
