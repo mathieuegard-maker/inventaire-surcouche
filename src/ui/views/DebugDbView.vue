@@ -71,7 +71,7 @@ const clearDatabase = async () => {
       <tbody>
         <tr v-for="book in filteredBooks" :key="book.uri">
           <td>
-            <img v-if="book.coverUrl" :src="book.coverUrl" class="debug-cover-img" />
+            <img v-if="book.localCover || book.coverUrl" :src="book.localCover || book.coverUrl" class="debug-cover-img" />
             <span v-else>❌</span>
           </td>
           <td>{{ book.title }}</td>

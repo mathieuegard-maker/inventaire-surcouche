@@ -44,7 +44,7 @@ const executeSemanticSearch = async () => {
         type: 'work',
         label: book.title,
         description: book.authors?.join(', ') || book.series || undefined,
-        coverUrl: book.coverUrl
+        coverUrl: book.localCover || book.coverUrl
       }));
       authorResults.value = [];
       seriesResults.value = [];

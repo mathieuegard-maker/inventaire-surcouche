@@ -38,8 +38,8 @@ const handleZoneClick = () => {
     
     <div class="row-cover-container">
       <img 
-        v-if="book.coverUrl" 
-        :src="book.coverUrl" 
+        v-if="book.localCover || book.coverUrl" 
+        :src="book.localCover || book.coverUrl" 
         :alt="book.title"
         class="row-cover-image"
       />

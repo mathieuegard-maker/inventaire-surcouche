@@ -130,7 +130,7 @@ const seriesGondolas = computed(() => {
       id: g.id,
       name: g.name,
       ownedCount: g.tomes.length,
-      coverUrl: g.tomes[0]?.coverUrl
+      coverUrl: g.tomes[0]?.localCover || g.tomes[0]?.coverUrl
     };
   });
 

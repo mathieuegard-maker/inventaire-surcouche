@@ -34,8 +34,8 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
     
     <div class="book-card-layout">
       <img 
-        v-if="book.coverUrl" 
-        :src="book.coverUrl" 
+        v-if="book.localCover || book.coverUrl" 
+        :src="book.localCover || book.coverUrl" 
         :alt="book.title" 
         class="book-cover-image" 
       />

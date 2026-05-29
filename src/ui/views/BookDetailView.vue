@@ -187,12 +187,12 @@ const handleReturn = async () => {
       <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
 
       <div class="book-card-layout">
-        <div v-if="!book.coverUrl" class="book-cover-placeholder">
+        <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
           {{ TEXTS.bookDetail.noCover }}
         </div>
         <img 
           v-else 
-          :src="book.coverUrl" 
+          :src="book.localCover || book.coverUrl" 
           :alt="book.title" 
           class="book-cover-image" 
         />
