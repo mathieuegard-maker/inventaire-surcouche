@@ -18,6 +18,7 @@ import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
+import { fetchWithTimeout } from '../../state/connection';
 
 const route = useRoute();
 const router = useRouter();
@@ -62,7 +63,7 @@ onMounted(async () => {
   }
 
   try {
-    const authorRes = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(authorId)}`);
+    const authorRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(authorId)}`);
     if (authorRes.ok) {
       const authorData = await authorRes.json();
       const entity = authorData.entities?.[authorId];

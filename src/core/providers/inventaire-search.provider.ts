@@ -1,4 +1,4 @@
-// src/core/providers/inventaire-search.provider.ts
+import { fetchWithTimeout } from '../../state/connection';
 
 export interface SearchResultItem {
   uri: string;
@@ -22,7 +22,7 @@ export const inventaireSearchProvider: InventaireSearchProvider = {
     if (!query || !query.trim()) return [];
     
     try {
-      const response = await fetch(`/api/gateway?action=search-text&q=${encodeURIComponent(query.trim())}`);
+      const response = await fetchWithTimeout(`/api/gateway?action=search-text&q=${encodeURIComponent(query.trim())}`);
       if (!response.ok) {
         throw new Error(`Erreur gateway HTTP ${response.status}`);
       }
@@ -66,7 +66,7 @@ export const inventaireSearchProvider: InventaireSearchProvider = {
     if (!authorUri) return [];
     
     try {
-      const response = await fetch(`/api/gateway?action=author-works&authorUri=${encodeURIComponent(authorUri)}`);
+      const response = await fetchWithTimeout(`/api/gateway?action=author-works&authorUri=${encodeURIComponent(authorUri)}`);
       if (!response.ok) {
         throw new Error(`Erreur gateway HTTP ${response.status}`);
       }

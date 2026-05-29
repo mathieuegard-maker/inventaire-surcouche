@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 import { connectionState } from './state/connection';
 
+const isOffline = computed(() => connectionState.isOffline.value);
 const isInitializing = ref(true);
 const router = useRouter(); 
 const route = useRoute(); // Permet de lire l'URL actuelle demandée
@@ -39,7 +40,7 @@ onMounted(async () => {
   </div>
 
   <div v-else class="app-main-layout">
-    <div v-if="connectionState.isOffline.value" class="offline-global-banner">
+    <div v-if="isOffline" class="offline-global-banner">
       ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
     </div>
     <router-view></router-view>

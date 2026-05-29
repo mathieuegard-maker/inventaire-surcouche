@@ -1,12 +1,13 @@
 // src/core/services/user.service.ts
 import { sessionStore } from '../../state/session';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const userService = {
   /**
    * Récupère le profil de l'utilisateur actuellement connecté via le cookie de session
    */
   async fetchProfile() {
-    const res = await fetch('/api/gateway?action=user-get');
+    const res = await fetchWithTimeout('/api/gateway?action=user-get');
     const data = await res.json();
 
     if (!res.ok) {
@@ -23,7 +24,7 @@ export const userService = {
    */
   async login(username: string, password: string): Promise<boolean> {
     // CORRECTION : Remplacement de 'login' par 'auth-login' pour s'aligner sur le switch du Gateway
-    const res = await fetch('/api/gateway?action=auth-login', {
+    const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

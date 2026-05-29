@@ -6,6 +6,7 @@ import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { seriesOrchestrator } from './series.orchestrator';
 import { syncOrchestrator } from './sync.orchestrator';
+import { connectionState } from '../../state/connection';
 import type { SearchResponse, HumanizedBook } from '../types';
 
 export const searchService = {
@@ -28,7 +29,7 @@ export const searchService = {
     let source: 'cache' | 'network' = 'cache';
 
     if (!book) {
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (connectionState.isOffline.value) {
         console.warn(`[SEARCH] Absent du cache local et pas de réseau disponible pour l'ISBN ${isbn}`);
         console.groupEnd();
         return null;

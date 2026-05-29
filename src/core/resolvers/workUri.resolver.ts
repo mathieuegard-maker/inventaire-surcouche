@@ -1,6 +1,7 @@
 // src/core/resolvers/workUri.resolver.ts
 import { databaseService } from '../database/database.service';
 import { configService } from '../services/config.service';
+import { fetchWithTimeout } from '../../state/connection';
 
 /**
  * Calcule la distance de Levenshtein entre deux chaînes (Score de similarité)
@@ -180,7 +181,7 @@ export const workUriResolver = {
 
     await Promise.all(missingWorks.map(async (workUri) => {
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
         const data = await res.json();
         const uris = data.uris || [];
         workToEditionsMap[workUri] = uris;
@@ -199,7 +200,7 @@ export const workUriResolver = {
     for (let i = 0; i < urisArray.length; i += CHUNK_SIZE) {
       const chunk = urisArray.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(editionDataMap, data.entities || {});
       } catch (e) {
@@ -211,7 +212,7 @@ export const workUriResolver = {
     for (let i = 0; i < missingWorks.length; i += CHUNK_SIZE) {
       const chunk = missingWorks.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(workDataMap, data.entities || {});
       } catch (e) {}
@@ -245,20 +246,20 @@ export const workUriResolver = {
       const preferredLangWd = configService.getPreferredLanguageWdCode();
 
       // 2. Extraction du titre de référence de l'œuvre
-      const resWork = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(workUri)}`);
+      const resWork = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(workUri)}`);
       const dataWork = await resWork.json();
       const workDataMap = dataWork.entities || {};
       const workLabel = extractEntityTitle(workDataMap[workUri]);
 
       // 3. Récupération des éditions candidates rattachées (Reverse-claims)
-      const resEditions = await fetch(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+      const resEditions = await fetchWithTimeout(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
       const dataEditions = await resEditions.json();
       const editions: string[] = dataEditions.uris || [];
       if (editions.length === 0) return undefined;
 
       // 4. Chargement des métadonnées des 50 premières éditions pour arbitrage
       const chunk = editions.slice(0, 50);
-      const resData = await fetch(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+      const resData = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
       const dataJson = await resData.json();
       const editionDataMap = dataJson.entities || {};
 

@@ -1,5 +1,6 @@
 // src/core/services/wishlist.service.ts
 import { databaseService } from '../database/database.service';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const wishlistService = {
   wishlistId: null as string | null,
@@ -9,7 +10,7 @@ export const wishlistService = {
     console.group(`[WISHLIST] Initialisation pour l'utilisateur ${userId}`);
     
     try {
-      const res = await fetch(`/api/gateway?action=lists-by-creator&userId=${encodeURIComponent(userId)}`);
+      const res = await fetchWithTimeout(`/api/gateway?action=lists-by-creator&userId=${encodeURIComponent(userId)}`);
       const data = await res.json();
       
       if (!res.ok) throw new Error(data.error || "Impossible de charger les listes");
@@ -22,7 +23,7 @@ export const wishlistService = {
 
       if (!targetList) {
         console.log("Aucune liste Wishlist trouvée, création en cours...");
-        const createRes = await fetch('/api/gateway?action=lists-create', {
+        const createRes = await fetchWithTimeout('/api/gateway?action=lists-create', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -44,7 +45,7 @@ export const wishlistService = {
 
       this.wishlistId = targetList._id;
       
-      const listRes = await fetch(`/api/gateway?action=lists-get&id=${this.wishlistId}`);
+      const listRes = await fetchWithTimeout(`/api/gateway?action=lists-get&id=${this.wishlistId}`);
       const listData = await listRes.json();
       
       if (!listRes.ok) throw new Error(listData.error || "Impossible de lire le contenu");
@@ -85,7 +86,7 @@ export const wishlistService = {
     const cachedBook = await databaseService.getBookFromCache(editionUri);
     const targetUri = cachedBook?.workUri || editionUri;
 
-    const res = await fetch('/api/gateway?action=lists-add-elements', {
+    const res = await fetchWithTimeout('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: this.wishlistId, uris: [targetUri] })
@@ -113,7 +114,7 @@ export const wishlistService = {
       return cachedBook?.workUri || uri;
     }));
 
-    const res = await fetch('/api/gateway?action=lists-add-elements', {
+    const res = await fetchWithTimeout('/api/gateway?action=lists-add-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: this.wishlistId, uris: targetUris })
@@ -149,7 +150,7 @@ export const wishlistService = {
       }
     }
 
-    const res = await fetch('/api/gateway?action=lists-remove-elements', {
+    const res = await fetchWithTimeout('/api/gateway?action=lists-remove-elements', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: this.wishlistId, uris: Array.from(targetUris) })

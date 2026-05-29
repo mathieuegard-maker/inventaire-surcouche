@@ -1,6 +1,7 @@
 // src/core/services/loan.service.ts
 import { databaseService } from '../database/database.service';
 import { TEXTS } from '../../ui/locales/fr';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const loanService = {
   userUri: null as string | null,
@@ -12,7 +13,7 @@ export const loanService = {
   async safeFetch(url: string, options?: RequestInit): Promise<any> {
     console.log(`[LOAN DEBUG] 🚀 fetch: ${options?.method || 'GET'} ${url}`);
     try {
-      const response = await fetch(url, options);
+      const response = await fetchWithTimeout(url, options);
       const text = await response.text();
       if (!response.ok) {
         console.error(`[LOAN DEBUG] ❌ Erreur API:`, text.substring(0, 250));
@@ -37,7 +38,7 @@ export const loanService = {
     if (!this.userUri) return {};
     
     try {
-      const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
+      const res = await fetchWithTimeout(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(this.userUri)}`);
       const data = await res.json();
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);

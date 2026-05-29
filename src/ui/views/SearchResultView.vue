@@ -10,6 +10,7 @@ import { inventaireSearchProvider, type SearchResultItem } from '../../core/prov
 import { semanticBucketMapper } from '../../core/resolvers/mapper';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
 import { databaseService } from '../../core/database/database.service';
+import { connectionState } from '../../state/connection';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,7 +34,7 @@ const executeSemanticSearch = async () => {
   isLoading.value = true;
   errorMessage.value = '';
 
-  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  const isOffline = connectionState.isOffline.value;
 
   if (isOffline) {
     try {
@@ -92,7 +93,7 @@ const handleSelectSeries = (uri: string) => {
 };
 
 const handleSelectWork = async (uri: string) => {
-  const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+  const isOffline = connectionState.isOffline.value;
   if (isOffline) {
     console.log(`[SEARCH RESULT VIEW] Redirection directe hors-ligne pour l'URI : ${uri}`);
     router.push(`/book/${encodeURIComponent(uri)}`);

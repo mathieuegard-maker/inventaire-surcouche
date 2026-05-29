@@ -1,9 +1,10 @@
 // src/core/services/auth.service.ts
 import { sessionStore } from '../../state/session';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const authService = {
   async login(username: string, password: string) {
-    const res = await fetch('/api/gateway?action=auth-login', {
+    const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),

@@ -1,6 +1,7 @@
 // src/core/resolvers/humanizer.ts
 import type { RawBook, HumanizedBook } from '../types';
 import { databaseService } from '../database/database.service';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
@@ -35,7 +36,7 @@ export const entityHumanizer = {
         for (let i = 0; i < idArray.length; i += 50) {
           const chunk = idArray.slice(i, i + 50);
           
-          const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+          const res = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
           const data = await res.json();
           const entities = data.entities || data;
 
@@ -134,7 +135,7 @@ export const entityHumanizer = {
 
       for (let i = 0; i < idArray.length; i += 50) {
         const chunk = idArray.slice(i, i + 50);
-        const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const res = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         const entities = data.entities || data;
 

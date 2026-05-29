@@ -52,7 +52,7 @@ export const connectionService = {
       console.log(`Session activée : ${profile.username} (${this.userUri})`);
 
       // Si l'application démarre hors-ligne, on court-circuite la synchronisation réseau
-      if (isOffline) {
+      if (connectionState.isOffline.value) {
         console.log("Application prête en mode hors-ligne restreint (consultation seule) !");
         this.isInitialized = true;
         console.groupEnd();

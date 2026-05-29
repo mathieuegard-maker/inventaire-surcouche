@@ -13,6 +13,7 @@ import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
+import { fetchWithTimeout } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
@@ -45,7 +46,7 @@ const seriesName = computed(() => {
 // --- LOGIQUE DE RÉCUPÉRATION DU TITRE VIA GATEWAY ---
 const fetchSeriesMetadata = async () => {
   try {
-    const res = await fetch(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(seriesId.value)}`);
+    const res = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(seriesId.value)}`);
     const data = await res.json();
     const entity = data.entities?.[seriesId.value];
     if (entity) {

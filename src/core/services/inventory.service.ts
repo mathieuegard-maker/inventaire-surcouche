@@ -1,11 +1,12 @@
 // src/core/services/inventory.service.ts
 import { databaseService } from '../database/database.service';
+import { fetchWithTimeout } from '../../state/connection';
 
 export const inventoryService = {
   async loadLibrary(uri: string): Promise<{ count: number, items: any[] }> {
     console.group(`[INVENTORY] Synchronisation pour ${uri}`);
     try {
-      const res = await fetch(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(uri)}`);
+      const res = await fetchWithTimeout(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(uri)}`);
       const data = await res.json();
 
       const items = data.items || [];
@@ -33,7 +34,7 @@ export const inventoryService = {
   },
 
   async addToLibrary(uri: string): Promise<boolean> {
-    const res = await fetch('/api/gateway?action=inventory-add', {
+    const res = await fetchWithTimeout('/api/gateway?action=inventory-add', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uri })
@@ -44,7 +45,7 @@ export const inventoryService = {
   },
 
   async addBulkToLibrary(uris: string[]): Promise<boolean> {
-    const res = await fetch('/api/gateway?action=inventory-bulk', {
+    const res = await fetchWithTimeout('/api/gateway?action=inventory-bulk', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uris })

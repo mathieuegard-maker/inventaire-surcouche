@@ -1,4 +1,5 @@
 // src/core/resolvers/series.resolver.ts
+import { fetchWithTimeout } from '../../state/connection';
 
 export const seriesResolver = {
   /**
@@ -8,7 +9,7 @@ export const seriesResolver = {
   async getSeriesWorks(seriesId: string): Promise<string[]> {
     console.group(`[SERIES RESOLVER] Récupération de la série: ${seriesId}`);
     try {
-      const resList = await fetch(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
+      const resList = await fetchWithTimeout(`/api/gateway?action=series-list&seriesId=${encodeURIComponent(seriesId)}`);
       const dataList = await resList.json();
       
       const tomeUris = dataList.uris || dataList.tomes || [];
