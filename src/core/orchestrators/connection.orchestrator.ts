@@ -49,9 +49,14 @@ export const connectionService = {
       }
 
       if (!profile || !profile.uri) {
-        console.warn("Aucune session active ou restaurable. Utilisateur déconnecté.");
-        console.groupEnd();
-        return false;
+        if (isOffline) {
+          console.log("[CONNECTION SERVICE] Aucun profil disponible mais mode hors-ligne détecté. Amorçage invité hors-ligne...");
+          profile = { uri: 'wd:offline_guest', username: 'Invité' };
+        } else {
+          console.warn("Aucune session active ou restaurable. Utilisateur déconnecté.");
+          console.groupEnd();
+          return false;
+        }
       }
 
       this.userUri = profile.uri;
@@ -122,6 +127,26 @@ export const connectionService = {
       console.error("[CONNECTION SERVICE] Erreur critique pendant le login :", error);
       console.groupEnd();
       throw error;
+    }
+  },
+
+  /**
+   * Vérifie et restaure la session en ligne après une reconnexion
+   */
+  async checkSessionOnReconnection(): Promise<boolean> {
+    console.log("[CONNECTION SERVICE] Vérification de la session suite au retour réseau...");
+    try {
+      const profile = await userService.fetchProfile();
+      if (profile && profile.uri) {
+        this.userUri = profile.uri;
+        console.log("[CONNECTION SERVICE] Session restaurée en ligne :", profile.username);
+        return true;
+      }
+      return false;
+    } catch (e: any) {
+      console.warn("[CONNECTION SERVICE] Session invalide ou cookies expirés au retour réseau. Nettoyage de la session locale...", e);
+      sessionStore.clearSession();
+      return false;
     }
   }
 };

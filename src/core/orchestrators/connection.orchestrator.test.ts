@@ -6,6 +6,7 @@ import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import { loanService } from '../services/loan.service';
 import { sessionStore } from '../../state/session';
+import { connectionState } from '../../state/connection';
 //import { syncOrchestrator } from './sync.orchestrator';
 
 // --- 1. MOCKING DES SERVICES (Les Simulacres) ---
@@ -85,5 +86,43 @@ describe('Connection Orchestrator', () => {
     
     expect(result).toBe(false);
     expect(spyClear).toHaveBeenCalled();
+  });
+
+  it('doit s\'initialiser avec un profil invité temporaire s\'il n\'y a ni cookie ni session locale mais qu\'on est hors-ligne', async () => {
+    // 1. Simuler l'état hors-ligne
+    connectionState.isOffline.value = true;
+    
+    // 2. S'assurer que la restauration locale échoue
+    vi.spyOn(sessionStore, 'restoreSessionFromLocalStorage').mockReturnValue(false);
+    sessionStore.state.user = null;
+
+    const result = await connectionService.initializeApp();
+
+    expect(result).toBe(true);
+    expect(connectionService.userUri).toBe('wd:offline_guest');
+    
+    // Rétablir l'état par défaut après le test
+    connectionState.isOffline.value = false;
+  });
+
+  describe('checkSessionOnReconnection', () => {
+    it('doit retourner true et mettre à jour le userUri si fetchProfile réussit', async () => {
+      vi.mocked(userService.fetchProfile).mockResolvedValue({ uri: 'wd:UserOnline', username: 'OnlineUser' } as any);
+      
+      const result = await connectionService.checkSessionOnReconnection();
+      
+      expect(result).toBe(true);
+      expect(connectionService.userUri).toBe('wd:UserOnline');
+    });
+
+    it('doit appeler clearSession et retourner false si fetchProfile échoue', async () => {
+      vi.mocked(userService.fetchProfile).mockRejectedValue(new Error('Unauthorized'));
+      const spyClear = vi.spyOn(sessionStore, 'clearSession');
+      
+      const result = await connectionService.checkSessionOnReconnection();
+      
+      expect(result).toBe(false);
+      expect(spyClear).toHaveBeenCalled();
+    });
   });
 });

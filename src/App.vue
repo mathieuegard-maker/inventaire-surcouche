@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { TEXTS } from './ui/locales/fr';
@@ -10,6 +10,19 @@ const isOffline = computed(() => connectionState.isOffline.value);
 const isInitializing = ref(true);
 const router = useRouter(); 
 const route = useRoute(); // Permet de lire l'URL actuelle demandée
+
+// Surveillance réactive du retour réseau
+watch(isOffline, async (newOfflineVal) => {
+  if (!newOfflineVal) {
+    console.log("[App] Le réseau est de retour. Vérification de la validité de la session...");
+    const hasValidSession = await connectionService.checkSessionOnReconnection();
+    if (!hasValidSession) {
+      router.push('/login');
+    } else if (route.path === '/login') {
+      router.push('/dashboard');
+    }
+  }
+});
 
 onMounted(async () => {
   try {
