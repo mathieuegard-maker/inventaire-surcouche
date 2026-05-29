@@ -1894,7 +1894,6 @@ h3.wireframe-title {
 .global-scanner-box .scanner-viewport-wrapper {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
   min-height: 200px;
   background-color: #000000;
   border: var(--border-width) solid var(--color-border);
