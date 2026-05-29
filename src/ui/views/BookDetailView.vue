@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
@@ -46,8 +46,12 @@ const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
   }
 };
 
-onMounted(async () => {
-  const uriParam = route.params.uri as string;
+const loadBook = async (uriParam: string) => {
+  isLoading.value = true;
+  errorMsg.value = '';
+  successMessage.value = '';
+  book.value = null;
+
   if (!uriParam) {
     errorMsg.value = TEXTS.bookDetail?.missingId || "Identifiant du livre manquant.";
     isLoading.value = false;
@@ -100,11 +104,26 @@ onMounted(async () => {
     }
   } catch (e) {
     console.error("[DETAIL VIEW] Erreur de chargement :", e);
-    errorMsg.value = TEXTS.bookDetail.loadError;
+    errorMsg.value = TEXTS.bookDetail.loadError || "Erreur de chargement.";
   } finally {
     isLoading.value = false;
   }
+};
+
+onMounted(async () => {
+  const uriParam = route.params.uri as string;
+  await loadBook(uriParam);
 });
+
+// Réagir au changement d'URI si on navigue sur un autre livre depuis la même vue
+watch(
+  () => route.params.uri,
+  async (newUri) => {
+    if (newUri) {
+      await loadBook(newUri as string);
+    }
+  }
+);
 
 const navigateToSeries = () => {
   if (seriesIdentifier.value) {
