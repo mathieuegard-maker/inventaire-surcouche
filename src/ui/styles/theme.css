@@ -899,7 +899,7 @@ h3.wireframe-title {
   outline: none;
   -webkit-appearance: none !important;
   appearance: none !important;
-  border-radius: 0px !important;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm) !important;
   box-sizing: border-box;
 }
 
@@ -914,7 +914,7 @@ h3.wireframe-title {
   flex-shrink: 0 !important;
   width: max-content !important;
   border: var(--border-width) solid var(--color-border) !important;
-  border-radius: 0px !important;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0 !important;
   box-sizing: border-box;
 }
 
@@ -1149,20 +1149,45 @@ h3.wireframe-title {
     width: 100% !important;
   }
   
+  .global-header .mobile-header-bar {
+    display: flex !important;
+    flex-direction: row !important;
+    width: 100% !important;
+    border: var(--border-width) solid var(--color-border) !important;
+    border-radius: var(--radius-sm) !important;
+    overflow: hidden !important;
+  }
+
   .global-header .menu-trigger-btn {
     position: relative !important;
     z-index: 100000 !important;
     pointer-events: auto !important;
-    width: 100% !important;
+    flex: 1 !important;
     height: var(--row-height-base) !important;
-    border: var(--border-width) solid var(--color-border) !important;
+    border: none !important;
+    border-right: var(--border-width) solid var(--color-border) !important;
     background-color: var(--color-bg-main) !important;
     color: var(--color-text-main) !important;
     font-family: var(--font-main) !important;
-    font-size: 14px !important;
+    font-size: 13px !important;
     font-weight: bold !important;
     text-transform: uppercase !important;
     cursor: pointer !important;
+    border-radius: 0px !important;
+  }
+  
+  .global-header .mobile-scan-trigger-btn {
+    flex: 1 !important;
+    height: var(--row-height-base) !important;
+    border: none !important;
+    background-color: var(--color-bg-main) !important;
+    color: var(--color-text-main) !important;
+    font-family: var(--font-main) !important;
+    font-size: 13px !important;
+    font-weight: bold !important;
+    text-transform: uppercase !important;
+    cursor: pointer !important;
+    border-radius: 0px !important;
   }
   
   .global-header .menu-accordion-drawer {
@@ -1856,4 +1881,29 @@ h3.wireframe-title {
 }
 .book-status-banner.none::before {
   content: "✕";
+}
+
+/* NOUVEAU : Styles du Scanner Global */
+.global-scanner-box {
+  max-width: 848px;
+  margin: 0 auto var(--spacing-lg) auto;
+  padding: 0 var(--spacing-lg);
+  box-sizing: border-box;
+}
+
+.global-scanner-box .scanner-viewport-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 200px;
+  background-color: #000000;
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.btn-scan-active {
+  background-color: var(--color-primary) !important;
+  color: var(--color-text-inverse) !important;
+  border-color: var(--color-primary) !important;
 }

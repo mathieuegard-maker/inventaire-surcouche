@@ -5,6 +5,7 @@ import { connectionService } from './core/orchestrators/connection.orchestrator'
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 import { connectionState } from './state/connection';
+import { scannerState } from './state/scanner';
 
 const isOffline = computed(() => connectionState.isOffline.value);
 const isInitializing = ref(true);
@@ -21,6 +22,13 @@ watch(isOffline, async (newOfflineVal) => {
     } else if (route.path === '/login') {
       router.push('/dashboard');
     }
+  }
+});
+
+// Arrêt automatique du scanner lors d'un changement de page
+watch(() => route.path, () => {
+  if (scannerState.isScanningActive.value) {
+    scannerState.stopScan();
   }
 });
 
@@ -56,6 +64,20 @@ onMounted(async () => {
     <div v-if="isOffline" class="offline-global-banner">
       ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
     </div>
+
+    <!-- Volet de Scan Global -->
+    <div v-show="scannerState.isScanningActive.value" class="global-scanner-box">
+      <div class="scanner-viewport-wrapper">
+        <div id="global-barcode-scanner-viewport" class="scanner-viewport"></div>
+        <div v-if="!scannerState.isSearching.value" class="scanner-placeholder">
+          <p>{{ TEXTS.scanner?.searching || 'En attente d\'un code-barres...' }}</p>
+        </div>
+      </div>
+      <div v-if="scannerState.errorMessage.value" class="error-banner">
+        {{ scannerState.errorMessage.value }}
+      </div>
+    </div>
+
     <router-view></router-view>
   </div>
   

@@ -4,7 +4,6 @@ import { TEXTS } from '../locales/fr';
 
 const props = defineProps<{
   modelValue: string;
-  isScanningActive: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -12,7 +11,6 @@ const emit = defineEmits<{
   (e: 'search', value: string): void;
   (e: 'isbn-detected', value: string): void;
   (e: 'keywords-detected', value: string): void;
-  (e: 'toggle-scan'): void;
 }>();
 
 const handleInputChange = (event: Event) => {
@@ -42,10 +40,6 @@ const submitSearch = () => {
 
 <template>
   <div class="smart-search-row">
-    <BaseButton @click="emit('toggle-scan')" class="btn-scan-side">
-      {{ isScanningActive ? TEXTS.searchBar.btnFermer : TEXTS.searchBar.btnScanner }}
-    </BaseButton>
-    
     <input
       type="text"
       :value="modelValue"
