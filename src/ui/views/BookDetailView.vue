@@ -186,6 +186,17 @@ const handleReturn = async () => {
     <div v-else-if="book" class="result-card success">
       <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
 
+      <!-- Bandeau de Statut de Possession Explicite -->
+      <div class="book-status-banner" :class="isLent ? 'lent' : (book.ownershipStatus === 'owned' ? 'owned' : (book.ownershipStatus === 'wish' ? 'wish' : 'none'))">
+        <span class="status-banner-text">
+          {{ 
+            isLent ? `${TEXTS.bookStatus?.lent || 'Prêté'} à ${book.loan?.friendName}` : 
+            (book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
+            (book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : TEXTS.bookStatus?.none)) 
+          }}
+        </span>
+      </div>
+
       <div class="book-card-layout">
         <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
           {{ TEXTS.bookDetail.noCover }}
@@ -240,16 +251,6 @@ const handleReturn = async () => {
             <p class="book-meta-item" v-if="book.isbn13 || book.isbn10">
               <strong>ISBN :</strong> {{ book.isbn13 || book.isbn10 }}
             </p>
-          </div>
-
-          <div class="badge-container">
-            <span class="badge" :class="isLent ? 'lent' : (isOwned ? 'owned' : 'missing')">
-              {{ 
-                isLent ? `${TEXTS.bookStatus?.lent || 'Prêté'} : ${book.loan?.friendName}` : 
-                (book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
-                (book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : TEXTS.bookStatus?.none)) 
-              }}
-            </span>
           </div>
         </div>
       </div>

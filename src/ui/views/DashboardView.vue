@@ -161,19 +161,19 @@ onUnmounted(async () => {
       <template v-else>
         <!-- Grille des statistiques clés (Globaux) -->
         <div class="stats-grid">
-          <div class="stats-card">
+          <div class="stats-card card-owned">
             <div class="stats-value">{{ stats.totalOwned }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalOwned }}</div>
           </div>
-          <div class="stats-card">
+          <div class="stats-card card-series">
             <div class="stats-value">{{ stats.totalSeries }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalSeries }}</div>
           </div>
-          <div class="stats-card">
+          <div class="stats-card card-wishlist">
             <div class="stats-value">{{ stats.totalWishlist }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalWishlist }}</div>
           </div>
-          <div class="stats-card">
+          <div class="stats-card card-loans">
             <div class="stats-value">{{ stats.totalLoans }}</div>
             <div class="stats-label">
               {{ TEXTS.dashboardStats.loansWithRate.replace('{rate}', stats.loanRate.toString()) }}

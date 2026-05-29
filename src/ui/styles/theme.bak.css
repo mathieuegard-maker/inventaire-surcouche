@@ -1,60 +1,38 @@
 /* ==========================================================================
-   DOMAINE 1 : TOKENS & FONDATIONS (Nouveau Thème Moderne & Doux)
+   DOMAINE 1 : TOKENS & FONDATIONS (Le cœur du Wireframe Minimaliste)
    ========================================================================== */
 
 :root {
-  /* Nuancier Moderne, Sobre & Épuré */
-  --color-bg-main: #ffffff;
-  --color-bg-alt: #f8fafc; /* Gris ardoise très clair et doux */
-  --color-border: #e2e8f0; /* Bordure grise très fine et douce */
-  --color-border-hover: #cbd5e1;
-  --color-text-main: #0f172a; /* Bleu/gris ardoise très foncé, plus doux que noir pur */
-  --color-text-muted: #64748b; /* Gris ardoise intermédiaire pour les infos secondaires */
+  /* Nuancier Monochrome Apaisé - Unification sur un blanc cassé unique partout */
+  --color-bg-main: #fafafa;
+  --color-bg-alt: #fafafa;
+  --color-border: #000000;
+  --color-text-main: #000000;
+  --color-text-muted: #666666;
   --color-text-inverse: #ffffff;
-  --color-overlay: rgba(15, 23, 42, 0.6); /* Overlay doux avec la teinte ardoise */
+  --color-overlay: rgba(0, 0, 0, 0.8);
   
-  /* Accentuation Indigo moderne & sobre */
-  --color-primary: #4f46e5;
-  --color-primary-hover: #4338ca;
-  --color-primary-light: #e0e7ff;
-  
-  /* Statuts Doux (Pastels modernes) */
-  --color-status-owned: #10b981; /* Vert émeraude */
-  --color-status-owned-light: #ecfdf5;
-  --color-status-wish: #f59e0b; /* Ambre */
-  --color-status-wish-light: #fffbeb;
-  --color-status-lent: #3b82f6; /* Bleu */
-  --color-status-lent-light: #eff6ff;
-
-  /* Géométrie Moderne */
-  --border-width: 1px;
+  /* Géométrie Stricte (Zéro arrondi, alignement constant) */
+  --border-width: 2px;
   --spacing-sm: 8px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   
-  /* Arrondis */
-  --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  /* CONSIGNE GÉNÉRALE DE HAUTEUR : Modifiable en un seul coup de cuillère à pot */
+  --row-height-base: 48px;
   
-  /* Ombres portées */
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
-
-  --row-height-base: 46px;
-  
-  /* Typographie Moderne Sans-Serif */
-  --font-main: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  /* Typographie Unique */
+  --font-main: monospace;
 }
 
 /* Force le calcul strict pour empêcher tout débordement horizontal */
 *, *::before, *::after {
-  box-sizing: border-box;
+  box-sizing: border-box !important;
 }
 
-button, input, select, textarea {
-  border-radius: var(--radius-sm);
+/* Éradication absolue et définitive de TOUS les border-radius de l'application */
+button, input, select, textarea, div, span, img, canvas, video {
+  border-radius: 0px !important;
 }
 
 body {
@@ -65,14 +43,19 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Alignement typographique moderne */
+/* FIX TYPOGRAPHIQUE RADICAL : Élimine les dérives des polices natives des navigateurs */
 input, select, textarea, button, option {
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
 }
 
+/* FIX SÉMANTIQUE : Force les indications de saisie à respecter la charte graphique */
 input::placeholder {
-  font-family: var(--font-main);
-  color: var(--color-text-muted);
+  font-family: var(--font-main) !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  color: var(--color-text-muted) !important;
 }
 
 .view-container {
@@ -86,97 +69,93 @@ input::placeholder {
   padding-bottom: var(--spacing-sm);
   margin-top: 0;
   margin-bottom: var(--spacing-lg);
-  font-family: var(--font-main);
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--color-text-main);
+  font-family: var(--font-main) !important;
+  font-size: 18px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: -0.5px;
 }
 
 .view-container h3 {
-  font-family: var(--font-main);
-  font-size: 15px;
-  font-weight: 700;
+  font-family: var(--font-main) !important;
+  font-size: 14px;
+  font-weight: bold;
   margin-top: var(--spacing-lg);
   margin-bottom: var(--spacing-sm);
-  color: var(--color-text-main);
+  text-transform: uppercase;
 }
+
 
 /* ==========================================================================
    DOMAINE 2 : ATOMES & COMPOSANTS DE BASE (L'interaction unifiée)
    ========================================================================== */
 
-/* Bouton Unique Universel - Design moderne et soigné */
+/* Bouton Unique Universel - Hérite de la hauteur générale */
 .wireframe-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: var(--row-height-base);
+  height: var(--row-height-base); /* Liaison à la consigne générale */
   padding: 0 var(--spacing-md);
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: bold;
+  text-transform: uppercase;
   cursor: pointer;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  border-radius: var(--radius-sm);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: var(--shadow-sm);
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important;
+  transition: background-color 0.1s ease;
 }
 
-.wireframe-btn:hover {
-  background-color: var(--color-bg-alt);
-  border-color: var(--color-border-hover);
+.wireframe-btn:active {
+  background-color: var(--color-bg-alt) !important;
 }
 
 /* Variantes de boutons */
 .wireframe-btn.btn-primary {
-  background-color: var(--color-primary);
-  border-color: var(--color-primary);
-  color: var(--color-text-inverse);
+  background-color: var(--color-border) !important;
+  color: var(--color-text-inverse) !important;
 }
 
-.wireframe-btn.btn-primary:hover {
-  background-color: var(--color-primary-hover);
-  border-color: var(--color-primary-hover);
+.wireframe-btn.btn-primary:active {
+  background-color: var(--text-muted) !important;
 }
 
 .wireframe-btn.btn-danger {
-  background-color: #ef4444;
-  border-color: #ef4444;
-  color: var(--color-text-inverse);
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  border-style: solid !important;
 }
 
-.wireframe-btn.btn-danger:hover {
-  background-color: #dc2626;
-  border-color: #dc2626;
+.wireframe-btn.btn-danger:active {
+  background-color: #f0f0f0 !important;
 }
 
-/* Champs de saisie standardisés */
+/* Champs de saisie standardisés - Héritent de la hauteur générale */
 .wireframe-input {
   width: 100%;
-  height: var(--row-height-base);
+  height: var(--row-height-base); /* Liaison à la consigne générale */
   padding: 0 var(--spacing-md);
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
   font-size: 14px;
-  border: var(--border-width) solid var(--color-border);
-  background-color: var(--color-bg-main);
-  color: var(--color-text-main);
-  border-radius: var(--radius-sm);
-  transition: all 0.2s ease;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  color: var(--color-text-main) !important;
+  line-height: 1 !important;
 }
 
 .wireframe-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
+  background-color: var(--color-bg-alt) !important;
 }
 
 .wireframe-checkbox {
   width: 20px;
   height: 20px;
-  accent-color: var(--color-primary);
+  accent-color: var(--color-border);
   cursor: pointer;
   margin: 0;
 }
@@ -189,23 +168,21 @@ input::placeholder {
 .badge {
   display: inline-block;
   padding: 4px var(--spacing-sm);
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: bold;
+  text-transform: uppercase;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
 }
 
 .badge.owned {
-  background-color: var(--color-status-owned-light);
-  color: var(--color-status-owned);
-  border-color: var(--color-status-owned);
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
 }
 
 .badge.missing {
-  background-color: var(--color-bg-alt);
-  color: var(--color-text-muted);
-  border-color: var(--color-border);
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
 }
 
 
@@ -213,7 +190,7 @@ input::placeholder {
    DOMAINE 3 : STRUCTURATION GLOBALISÉE (Les Molécules partagées)
    ========================================================================== */
 
-/* En-tête de page unifié */
+/* En-tête de page unifié (<BaseHeader> historique) */
 .base-page-header {
   border-bottom: var(--border-width) solid var(--color-border);
   padding-bottom: var(--spacing-sm);
@@ -230,42 +207,39 @@ input::placeholder {
 
 .base-header-title {
   margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--color-text-main);
+  font-size: 16px;
+  text-transform: uppercase;
+  font-weight: bold;
 }
 
 .base-header-back-btn {
   background: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
   padding: 6px var(--spacing-md);
-  font-family: var(--font-main);
+  font-family: var(--font-main) !important;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: bold;
   cursor: pointer;
+  text-transform: uppercase;
   line-height: 1 !important;
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
-  transition: all 0.2s ease;
 }
 
-.base-header-back-btn:hover {
+.base-header-back-btn:active {
   background-color: var(--color-bg-alt);
-  border-color: var(--color-border-hover);
 }
 
-/* Barre d'action de lot collante */
+/* Barre d'action de lot collante (<BatchActionBar>) 
+   FIX GEOMETRIQUE : Alignement, hauteur de ligne héritée et espace à gauche
+*/
 .sticky-action-bar {
   position: sticky;
   top: 0;
   z-index: 100;
   background-color: var(--color-bg-main);
   border: var(--border-width) solid var(--color-border);
-  padding: 0 !important;
+  padding: 0 !important; /* On vide les marges internes pour caler la hauteur sur la variable */
   margin-bottom: var(--spacing-md);
-  height: var(--row-height-base);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-sm);
+  height: var(--row-height-base); /* Liaison à la consigne générale */
 }
 
 .action-bar-master-row {
@@ -273,15 +247,16 @@ input::placeholder {
   align-items: center;
   gap: var(--spacing-md);
   height: 100%;
-  padding-left: var(--spacing-md);
+  padding-left: var(--spacing-md); /* Crée la respiration au début pour la case à cocher */
 }
 
 .action-bar-status-text {
-  font-weight: 600;
+  font-weight: bold;
+  text-transform: uppercase;
   font-size: 13px;
   display: flex;
   align-items: center;
-  height: 100%;
+  height: 100%; /* Force le centrage vertical parfait face au texte */
 }
 
 .mixed-error-container {
@@ -291,10 +266,11 @@ input::placeholder {
 }
 
 .error-text-line {
-  color: #ef4444;
-  font-weight: 600;
+  color: var(--color-text-main);
+  font-weight: bold;
   margin: 0 0 2px 0;
   font-size: 12px;
+  text-transform: uppercase;
 }
 
 .error-advice-line {
@@ -316,54 +292,52 @@ input::placeholder {
   }
 }
 
-/* Bandeaux de notification et d'alertes adoucis */
+/* Bandeaux de notification et d'alertes */
 .error-banner {
-  background-color: #fee2e2;
-  color: #ef4444;
-  border: var(--border-width) solid #fca5a5;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  border: var(--border-width) solid var(--color-border);
   padding: var(--spacing-md);
   margin-top: var(--spacing-md);
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
   text-align: center;
-  border-radius: var(--radius-sm);
 }
 
 .success-banner {
-  background-color: #d1fae5;
-  color: #10b981;
-  border: var(--border-width) solid #6ee7b7;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
+  border: var(--border-width) solid var(--color-border);
   padding: var(--spacing-md);
   margin-top: var(--spacing-md);
-  font-weight: 600;
-  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  font-size: 12px;
   text-align: center;
-  border-radius: var(--radius-sm);
 }
 
-/* Onglets de navigation interne harmonisés */
+/* Onglets de navigation interne harmonisés - Héritent de la hauteur générale */
 .collection-modes-tabs {
   display: flex;
   border: var(--border-width) solid var(--color-border);
   margin-bottom: var(--spacing-md);
   background-color: var(--color-bg-main);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
 }
 
 .tab-button {
   flex: 1;
   background: var(--color-bg-main) !important;
   border: none;
-  height: var(--row-height-base);
-  font-family: var(--font-main);
+  height: var(--row-height-base); /* Liaison à la consigne générale */
+  font-family: var(--font-main) !important;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: bold;
+  text-transform: uppercase;
   cursor: pointer;
   color: var(--color-text-muted);
   text-align: center;
-  transition: all 0.2s ease;
+  transition: all 0.1s ease;
   line-height: 1 !important;
 }
 
@@ -372,8 +346,8 @@ input::placeholder {
 }
 
 .tab-button.active {
-  color: var(--color-primary) !important;
-  background-color: var(--color-primary-light) !important;
+  color: var(--color-text-main) !important;
+  background-color: var(--color-bg-alt) !important;
 }
 
 
@@ -387,7 +361,7 @@ input::placeholder {
   gap: var(--spacing-sm);
 }
 
-/* Ligne Livre unifiée */
+/* Ligne Livre unifiée - Ajustable localement si surcharge voulue */
 .mini-card-row {
   display: flex;
   align-items: stretch;
@@ -395,16 +369,11 @@ input::placeholder {
   border: var(--border-width) solid var(--color-border);
   cursor: pointer;
   position: relative;
-  height: 80px;
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  overflow: hidden;
-  box-shadow: var(--shadow-sm);
-  transition: all 0.2s ease;
+  height: 80px; /* Consigne de hauteur spécifique pour le format carte-liste */
 }
 
-.mini-card-row:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--color-border-hover);
+.mini-card-row:active {
+  background-color: var(--color-bg-alt);
 }
 
 .row-cover-container {
@@ -442,12 +411,12 @@ input::placeholder {
   position: absolute;
   bottom: 0;
   right: 0;
-  background-color: rgba(15, 23, 42, 0.85);
-  color: #ffffff;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
   font-size: 9px;
-  font-weight: 600;
-  padding: 2px 6px;
-  border-radius: var(--radius-sm) 0 0 0;
+  font-weight: bold;
+  padding: 2px 4px;
+  text-transform: uppercase;
 }
 
 .row-info-content {
@@ -499,28 +468,24 @@ input::placeholder {
 
 .status-text-label {
   font-size: 10px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
+  font-weight: bold;
+  text-transform: uppercase;
+  padding: 2px 6px;
 }
 
 .status-text-label.owned {
-  background-color: var(--color-status-owned-light);
-  color: var(--color-status-owned);
-  border-color: #a7f3d0;
+  background-color: var(--color-border);
+  color: var(--color-text-inverse);
 }
 
 .status-text-label.wish {
-  background-color: var(--color-status-wish-light);
-  color: #d97706;
-  border-color: #fde68a;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-main);
+  background-color: var(--color-bg-main);
 }
 
 .status-text-label.none {
-  background-color: var(--color-bg-alt);
   color: var(--color-text-muted);
-  border-color: var(--color-border);
 }
 
 .row-selection-area {
@@ -1558,8 +1523,6 @@ h3.wireframe-title {
   padding: var(--spacing-md);
   background-color: var(--color-bg-main);
   box-sizing: border-box;
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
 }
 
 .stats-header {
@@ -1575,9 +1538,9 @@ h3.wireframe-title {
 
 .stats-title {
   margin: 0 !important;
-  font-size: 15px !important;
-  font-weight: 700 !important;
-  color: var(--color-text-main) !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
 }
 
 .stats-period-selector {
@@ -1595,13 +1558,7 @@ h3.wireframe-title {
   background-color: var(--color-bg-main);
   color: var(--color-text-main);
   outline: none;
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  transition: all 0.2s ease;
-}
-
-.stats-select:focus {
-  border-color: var(--color-primary);
+  font-weight: bold;
 }
 
 .stats-grid {
@@ -1616,26 +1573,19 @@ h3.wireframe-title {
   padding: var(--spacing-sm);
   text-align: center;
   background-color: var(--color-bg-alt);
-  border-radius: var(--radius-sm);
-  transition: all 0.2s ease;
-}
-
-.stats-card:hover {
-  border-color: var(--color-border-hover);
-  background-color: var(--color-bg-main);
 }
 
 .stats-value {
   font-size: 32px;
-  font-weight: 700;
+  font-weight: bold;
   margin-bottom: 4px;
-  color: var(--color-text-main);
 }
 
 .stats-label {
   font-size: 10px;
-  font-weight: 600;
-  color: var(--color-text-muted);
+  font-weight: bold;
+  color: #666666;
+  text-transform: uppercase;
 }
 
 .stats-extra-row {
@@ -1650,8 +1600,6 @@ h3.wireframe-title {
   border: var(--border-width) solid var(--color-border);
   padding: var(--spacing-md);
   background-color: var(--color-bg-main);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
 }
 
 .stats-card-header {
@@ -1679,8 +1627,8 @@ h3.wireframe-title {
   margin-top: 0;
   margin-bottom: var(--spacing-sm);
   font-size: 12px;
-  font-weight: 700;
-  color: var(--color-text-main);
+  font-weight: bold;
+  text-transform: uppercase;
   border-bottom: 1px solid var(--color-border);
   padding-bottom: 4px;
 }
@@ -1695,8 +1643,8 @@ h3.wireframe-title {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
-  padding: 6px 0;
-  border-bottom: 1px dashed var(--color-border);
+  padding: 4px 0;
+  border-bottom: 1px dashed #dddddd;
 }
 
 .stats-list-item:last-child {
@@ -1712,15 +1660,13 @@ h3.wireframe-title {
 }
 
 .stats-item-count {
-  font-weight: 600;
-  color: var(--color-primary);
+  font-weight: bold;
 }
 
 .stats-info-msg {
   text-align: center;
   padding: var(--spacing-md);
   font-family: var(--font-main);
-  color: var(--color-text-muted);
 }
 
 .stats-flux-container {
@@ -1737,15 +1683,15 @@ h3.wireframe-title {
 
 .stats-flux-value {
   font-size: 28px;
-  font-weight: 700;
+  font-weight: bold;
   margin-bottom: 4px;
-  color: var(--color-text-main);
 }
 
 .stats-flux-label {
   font-size: 10px;
-  font-weight: 600;
-  color: var(--color-text-muted);
+  font-weight: bold;
+  color: #666666;
+  text-transform: uppercase;
 }
 
 .stats-empty-msg {
@@ -1753,96 +1699,4 @@ h3.wireframe-title {
   font-style: italic;
   margin: 0;
   color: #666666;
-}
-
-/* --- POINTES DE COULEUR POUR LES CARTES STATISTIQUES --- */
-.stats-card.card-owned {
-  background-color: var(--color-status-owned-light);
-  border-color: #a7f3d0;
-  box-shadow: var(--shadow-sm);
-}
-.stats-card.card-owned .stats-value {
-  color: var(--color-status-owned);
-}
-
-.stats-card.card-series {
-  background-color: var(--color-primary-light);
-  border-color: #c7d2fe;
-  box-shadow: var(--shadow-sm);
-}
-.stats-card.card-series .stats-value {
-  color: var(--color-primary);
-}
-
-.stats-card.card-wishlist {
-  background-color: var(--color-status-wish-light);
-  border-color: #fde68a;
-  box-shadow: var(--shadow-sm);
-}
-.stats-card.card-wishlist .stats-value {
-  color: #d97706;
-}
-
-.stats-card.card-loans {
-  background-color: var(--color-status-lent-light);
-  border-color: #bfdbfe;
-  box-shadow: var(--shadow-sm);
-}
-.stats-card.card-loans .stats-value {
-  color: var(--color-status-lent);
-}
-
-/* --- BANDEAU DE STATUT DE POSSESSION (FICHE LIVRE) --- */
-.book-status-banner {
-  padding: 12px var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  font-weight: 700;
-  font-size: 13px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.book-status-banner::before {
-  font-size: 14px;
-}
-
-.book-status-banner.owned {
-  background-color: var(--color-status-owned-light);
-  color: var(--color-status-owned);
-  border-color: #a7f3d0;
-}
-.book-status-banner.owned::before {
-  content: "✓";
-}
-
-.book-status-banner.wish {
-  background-color: var(--color-status-wish-light);
-  color: #d97706;
-  border-color: #fde68a;
-}
-.book-status-banner.wish::before {
-  content: "★";
-}
-
-.book-status-banner.lent {
-  background-color: var(--color-status-lent-light);
-  color: var(--color-status-lent);
-  border-color: #bfdbfe;
-}
-.book-status-banner.lent::before {
-  content: "🤝";
-}
-
-.book-status-banner.none {
-  background-color: var(--color-bg-alt);
-  color: var(--color-text-muted);
-  border-color: var(--color-border);
-}
-.book-status-banner.none::before {
-  content: "✕";
 }
