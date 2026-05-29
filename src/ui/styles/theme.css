@@ -1132,6 +1132,8 @@ h3.wireframe-title {
   .smart-search-row .elastic-search-input {
     width: 100% !important;
     height: var(--row-height-base) !important;
+    min-height: var(--row-height-base) !important;
+    flex: none !important;
     line-height: var(--row-height-base) !important;
     border: var(--border-width) solid var(--color-border) !important;
   }
@@ -1339,12 +1341,14 @@ h3.wireframe-title {
    pour éliminer le saut d'écran au chargement de Vue. */
 .splash-screen {
   box-sizing: border-box !important;
-  border: 2px solid #000000 !important;
-  background-color: #fafafa !important;
-  padding: 24px !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-main) !important;
+  padding: 32px 24px !important;
   text-align: center !important;
   max-width: 400px !important;
   width: calc(100% - 32px) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: var(--shadow-lg) !important;
   
   /* Centrage rigoureux identique au Flexbox de index.html via positionnement fixe calculé */
   position: fixed !important;
@@ -1356,25 +1360,32 @@ h3.wireframe-title {
 
 /* Alignement parfait du titre h1 du splash interne avec celui de index.html */
 .splash-screen .app-title {
-  font-family: monospace !important;
-  font-size: 24px !important; /* Concordance stricte à 24px avec index.html */
-  font-weight: bold !important;
-  text-transform: uppercase !important;
-  margin: 0 0 16px 0 !important;
-  padding: 8px 0 !important;
-  border-top: 2px solid #000000 !important;
-  border-bottom: 2px solid #000000 !important;
+  font-family: var(--font-main) !important;
+  font-size: 26px !important;
+  font-weight: 800 !important;
+  letter-spacing: -0.02em !important;
+  color: var(--color-text-main) !important;
+  margin: 0 0 12px 0 !important;
+  padding: 0 0 16px 0 !important;
+  border-top: none !important;
+  border-bottom: var(--border-width) solid var(--color-border) !important;
   text-align: center !important;
   line-height: normal !important;
 }
 
 /* Élimination de la marge par défaut du paragraphe pour éviter le saut de hauteur */
 .splash-screen p {
-  font-family: monospace !important;
-  font-size: 13px !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  color: var(--color-text-muted) !important;
   margin: 0 !important; /* Concordance stricte avec .loading-text de index.html */
-  font-weight: bold !important;
-  text-transform: uppercase !important;
+  font-weight: 500 !important;
+  animation: pulse-loading 1.5s infinite ease-in-out !important;
+}
+
+@keyframes pulse-loading {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
 
 /* Conteneur de connexion occupant la totalité de la hauteur dynamique mobile */
