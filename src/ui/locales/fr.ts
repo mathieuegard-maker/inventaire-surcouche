@@ -190,6 +190,7 @@ export const TEXTS = {
     emptyResults: "AUCUN RÉSULTAT CORRESPONDANT À VOS MOTS-CLÉS SUR LES SERVEURS SÉMANTIQUES.",
     errorEmptyQuery: "LA REQUÊTE DE RECHERCHE EST VIDE.",
     errorFetch: "IMPOSSIBLE DE RÉCUPÉRER LES RÉSULTATS DEPUIS LE SERVEUR.",
+    errorLocalSearch: "IMPOSSIBLE D'EFFECTUER LA RECHERCHE LOCALEMENT EN MODE HORS-LIGNE.",
     errorNoPhysicalEdition: "CETTE ŒUVRE EXISTE MAIS AUCUNE ÉDITION PHYSIQUE DISPOSANT D'UN ISBN VALIDE N'A PU ÊTRE TROUVÉE POUR LE PIVOT.",
     errorPivot: "ERREUR TECHNIQUE LORS DU CALCUL DU PIVOT SÉMANTIQUE VERS L'ISBN.",
     sectionSeries: "SAGAS & SÉRIES DÉTECTÉES",
@@ -227,5 +228,25 @@ export const TEXTS = {
     previous: "PRÉCÉDENT",
     page: "PAGE",
     next: "SUIVANT"
+  },
+  dashboardStats: {
+    title: "VOTRE BIBLIOTHÈQUE EN CHIFFRES",
+    totalOwned: "ALBUMS POSSÉDÉS",
+    totalSeries: "SAGAS COMMENCÉES",
+    totalWishlist: "SUR LA WISHLIST",
+    totalLoans: "LIVRES PRÊTÉS",
+    loansWithRate: "LIVRES PRÊTÉS ({rate}%)",
+    activityTitle: "ACTIVITÉ SUR LA PÉRIODE",
+    acquiredInPeriod: "Acquisitions",
+    loansInPeriod: "Prêts initiés",
+    topGenres: "GENRES FAVORIS",
+    topAuthors: "AUTEURS FAVORIS",
+    periodLabel: "Période :",
+    period30: "30 derniers jours",
+    period90: "90 derniers jours",
+    period365: "Dernière année",
+    periodAll: "Tout le temps",
+    noData: "Aucune statistique calculable.",
+    loading: "Analyse de la bibliothèque locale..."
   }
 };

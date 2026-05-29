@@ -120,6 +120,10 @@ export const databaseService = {
     return entries.map((entry: RegistryEntry) => entry.uri);
   },
 
+  async getAllRegistryEntries(tableName: 'inventory' | 'wishlist'): Promise<RegistryEntry[]> {
+    return await db[tableName].toArray();
+  },
+
   // CORRECTION : Encapsulation dans une transaction atomique "rw" (Read/Write)
   async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
     await db.transaction('rw', db[tableName], async () => {

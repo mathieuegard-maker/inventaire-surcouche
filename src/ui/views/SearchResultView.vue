@@ -51,7 +51,7 @@ const executeSemanticSearch = async () => {
       seriesResults.value = [];
     } catch (e) {
       console.error('[SEARCH RESULT VIEW] Échec de la recherche locale :', e);
-      errorMessage.value = "Erreur de recherche locale hors-ligne.";
+      errorMessage.value = TEXTS.searchResults.errorLocalSearch || "Erreur de recherche locale hors-ligne.";
     } finally {
       isLoading.value = false;
     }

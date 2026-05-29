@@ -190,6 +190,7 @@ export const TEXTS = {
     emptyResults: "NO RESULTS MATCHING YOUR KEYWORDS ON SEMANTIC SERVERS.",
     errorEmptyQuery: "SEARCH QUERY IS EMPTY.",
     errorFetch: "UNABLE TO FETCH RESULTS FROM SERVER.",
+    errorLocalSearch: "UNABLE TO PERFORM LOCAL SEARCH IN OFFLINE MODE.",
     errorNoPhysicalEdition: "THIS WORK EXISTS BUT NO PHYSICAL EDITION WITH A VALID ISBN COULD BE FOUND.",
     errorPivot: "TECHNICAL ERROR WHILE RESOLVING SEMANTIC PIVOT TO ISBN.",
     sectionSeries: "DETECTED SAGAS & SERIES",
@@ -227,5 +228,25 @@ export const TEXTS = {
     previous: "PREVIOUS",
     page: "PAGE",
     next: "NEXT"
+  },
+  dashboardStats: {
+    title: "YOUR LIBRARY IN NUMBERS",
+    totalOwned: "OWNED ALBUMS",
+    totalSeries: "SAGAS STARTED",
+    totalWishlist: "ON WISHLIST",
+    totalLoans: "LENT BOOKS",
+    loansWithRate: "LENT BOOKS ({rate}%)",
+    activityTitle: "ACTIVITY IN PERIOD",
+    acquiredInPeriod: "Acquisitions",
+    loansInPeriod: "Loans initiated",
+    topGenres: "FAVORITE GENRES",
+    topAuthors: "FAVORITE AUTHORS",
+    periodLabel: "Period:",
+    period30: "Last 30 days",
+    period90: "Last 90 days",
+    period365: "Last year",
+    periodAll: "All time",
+    noData: "No statistics available.",
+    loading: "Analyzing local library..."
   }
 };

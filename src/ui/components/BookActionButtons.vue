@@ -57,8 +57,7 @@ const isOffline = computed(() => connectionState.isOffline.value);
     
     <div 
       v-if="isOffline" 
-      class="offline-action-warning" 
-      style="margin-top: var(--spacing-sm); color: var(--color-error); font-size: var(--font-size-sm); font-weight: 500;"
+      class="offline-action-warning"
     >
       ⚠️ {{ TEXTS.bookCard?.offlineActionsBlocked || 'Actions de modification désactivées hors-ligne.' }}
     </div>

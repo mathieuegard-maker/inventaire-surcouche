@@ -1501,3 +1501,202 @@ h3.wireframe-title {
     opacity: 0.95;
   }
 }
+
+/* --- COMPOSANTS HORS-LIGNE MOBILES (NETTOYAGE INLINE STYLES) --- */
+.offline-action-warning {
+  margin-top: var(--spacing-sm) !important;
+  color: var(--color-error) !important;
+  font-size: var(--font-size-sm) !important;
+  font-weight: 500 !important;
+}
+
+.offline-group-warning-container {
+  margin-bottom: var(--spacing-sm) !important;
+}
+
+/* =========================================
+   PANNEAU DE STATISTIQUES (DASHBOARD)
+========================================= */
+.dashboard-stats-section {
+  margin-top: var(--spacing-lg);
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-main);
+  box-sizing: border-box;
+}
+
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: var(--border-width) solid var(--color-border);
+  padding-bottom: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.stats-title {
+  margin: 0 !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+}
+
+.stats-period-selector {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: 13px;
+}
+
+.stats-select {
+  padding: 6px 12px;
+  border: var(--border-width) solid var(--color-border);
+  font-family: var(--font-main);
+  font-size: 12px;
+  background-color: var(--color-bg-main);
+  color: var(--color-text-main);
+  outline: none;
+  font-weight: bold;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.stats-card {
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-sm);
+  text-align: center;
+  background-color: var(--color-bg-alt);
+}
+
+.stats-value {
+  font-size: 32px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.stats-label {
+  font-size: 10px;
+  font-weight: bold;
+  color: #666666;
+  text-transform: uppercase;
+}
+
+.stats-extra-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-md);
+  border-top: var(--border-width) dashed var(--color-border);
+  padding-top: var(--spacing-md);
+}
+
+.stats-extra-card {
+  border: var(--border-width) solid var(--color-border);
+  padding: var(--spacing-md);
+  background-color: var(--color-bg-main);
+}
+
+.stats-card-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--spacing-sm);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 12px;
+  margin-bottom: var(--spacing-md);
+}
+
+.stats-card-header .stats-select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.stats-card-header .stats-extra-title {
+  border-bottom: none;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+
+.stats-extra-title {
+  margin-top: 0;
+  margin-bottom: var(--spacing-sm);
+  font-size: 12px;
+  font-weight: bold;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+}
+
+.stats-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.stats-list-item {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 4px 0;
+  border-bottom: 1px dashed #dddddd;
+}
+
+.stats-list-item:last-child {
+  border-bottom: none;
+}
+
+.stats-item-name {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 75%;
+}
+
+.stats-item-count {
+  font-weight: bold;
+}
+
+.stats-info-msg {
+  text-align: center;
+  padding: var(--spacing-md);
+  font-family: var(--font-main);
+}
+
+.stats-flux-container {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  margin-top: var(--spacing-sm);
+}
+
+.stats-flux-item {
+  text-align: center;
+  flex: 1;
+}
+
+.stats-flux-value {
+  font-size: 28px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.stats-flux-label {
+  font-size: 10px;
+  font-weight: bold;
+  color: #666666;
+  text-transform: uppercase;
+}
+
+.stats-empty-msg {
+  font-size: 12px;
+  font-style: italic;
+  margin: 0;
+  color: #666666;
+}

@@ -20,7 +20,7 @@ const isOffline = computed(() => connectionState.isOffline.value);
   <div class="sticky-actions-wrapper" v-if="selectedCount > 0" style="margin-bottom: var(--spacing-md); width: 100%;">
     <div class="group-actions-grid" style="margin-top: 0; display: flex; flex-direction: column; gap: var(--spacing-sm);">
       
-      <div v-if="isOffline" class="error-banner" style="margin-bottom: var(--spacing-sm);">
+      <div v-if="isOffline" class="error-banner offline-group-warning-container">
         <p class="error-text-line">⚠️ {{ TEXTS.batchActionBar?.offlineActionsBlocked || 'Les actions groupées sont désactivées en mode hors-ligne.' }}</p>
       </div>
 
