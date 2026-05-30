@@ -36,14 +36,14 @@ const pageState = getOrCreateViewState(stateKey, {
   filters: {
     mode: 'books',
     genre: 'all',
-    sort: 'title'
+    sort: 'date'
   }
 });
 
 // COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante ou l'état sauvegardé
 const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || pageState.filters.mode || 'books');
 const selectedGenre = ref(pageState.filters.genre || 'all');
-const currentSort = ref(pageState.filters.sort || 'title');
+const currentSort = ref(pageState.filters.sort || 'date');
 
 const currentPage = ref(pageState.currentPage);
 const pageSize = ref(pageState.pageSize);
