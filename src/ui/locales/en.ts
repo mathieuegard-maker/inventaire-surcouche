@@ -98,7 +98,15 @@ export const TEXTS = {
     btnSeries: "View saga",
     loadingSpec: "Loading edition specifications...",
     noCover: "No cover",
-    synopsis: "Synopsis"
+    synopsis: "Synopsis",
+    btnDelete: "Delete from collection",
+    btnDeleteWish: "Remove from wishlist",
+    deleteSuccess: "The book has been successfully deleted.",
+    deleteConfirmTitle: "Confirm Deletion",
+    deleteConfirmMsg: "Are you sure you want to delete this book from your collection? This action is permanent and will also remove it from your inventaire.io account.",
+    deleteConfirmWishMsg: "Are you sure you want to remove this book from your wishlist? This action is permanent and will also remove it from your inventaire.io account.",
+    btnDeleteConfirm: "Delete",
+    btnDeleteCancel: "Cancel"
   },
   debugDbView: {
     title: "Local Lab (Dexie DB)",
@@ -147,6 +155,14 @@ export const TEXTS = {
     btnAddWishlistGroup: "Add to Wishlist",
     btnLendGroup: "Lend Selected Batch",
     btnToggleWishlistGroup: "Toggle to Wishlist",
+    btnDeleteGroup: "Delete selected selection",
+    deleteConfirmTitle: "Confirm Deletion",
+    deleteConfirmMsgSingular: "Are you sure you want to delete this book from your collection? This action is permanent and will also remove it from your inventaire.io account.",
+    deleteConfirmMsgPlural: "Are you sure you want to delete these {count} books from your collection? This action is permanent and will also remove them from your inventaire.io account.",
+    deleteConfirmWishMsgSingular: "Are you sure you want to remove this book from your wishlist? This action is permanent and will also remove it from your inventaire.io account.",
+    deleteConfirmWishMsgPlural: "Are you sure you want to remove these {count} books from your wishlist? This action is permanent and will also remove them from your inventaire.io account.",
+    btnDeleteConfirm: "Delete",
+    btnDeleteCancel: "Cancel",
     offlineActionsBlocked: "Batch actions are disabled in offline mode."
   },
   baseLoading: {

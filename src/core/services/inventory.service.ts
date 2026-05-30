@@ -11,11 +11,15 @@ export const inventoryService = {
 
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
-      const urisToSync = itemList.map((item: any) => item.entity).filter(Boolean);
-      await databaseService.syncRegistry('inventory', urisToSync);
+      const entriesToSync = itemList.map((item: any) => ({
+        uri: item.entity,
+        itemId: item._id
+      })).filter((e: any) => Boolean(e.uri));
+
+      await databaseService.syncRegistry('inventory', entriesToSync);
       
       console.groupEnd();
-      return { count: urisToSync.length, items: itemList };
+      return { count: entriesToSync.length, items: itemList };
     } catch (error) {
       console.error("[INVENTORY] Erreur :", error);
       console.groupEnd();
@@ -40,7 +44,34 @@ export const inventoryService = {
       body: JSON.stringify({ uri })
     });
     if (!res.ok) throw new Error("Erreur ajout");
-    await databaseService.addRegistryEntry('inventory', uri);
+    const data = await res.json();
+    const itemId = data.item?._id || data._id || undefined;
+    await databaseService.addRegistryEntry('inventory', uri, itemId);
+    return true;
+  },
+
+  async removeFromLibrary(uri: string): Promise<boolean> {
+    const entry = await databaseService.getRegistryEntry('inventory', uri);
+    const itemId = entry?.itemId;
+
+    if (itemId) {
+      const res = await fetchWithTimeout('/api/gateway?action=inventory-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [itemId] })
+      });
+      if (!res.ok) {
+        throw new Error("Erreur lors de la suppression de l'exemplaire sur inventaire.io");
+      }
+    }
+
+    await databaseService.removeRegistryEntry('inventory', uri);
+
+    const cachedBook = await databaseService.getBookFromCache(uri);
+    if (cachedBook) {
+      cachedBook.ownershipStatus = 'none';
+      await databaseService.saveBookToCache(cachedBook);
+    }
     return true;
   },
 

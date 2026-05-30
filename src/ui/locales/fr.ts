@@ -98,7 +98,15 @@ export const TEXTS = {
     btnSeries: "Voir la saga",
     loadingSpec: "Chargement des spécifications de l'édition...",
     noCover: "Pas de couverture",
-    synopsis: "Synopsis"
+    synopsis: "Synopsis",
+    btnDelete: "Supprimer de la collection",
+    btnDeleteWish: "Retirer de la liste d'envies",
+    deleteSuccess: "L'ouvrage a bien été supprimé.",
+    deleteConfirmTitle: "Confirmer la suppression",
+    deleteConfirmMsg: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
+    deleteConfirmWishMsg: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
+    btnDeleteConfirm: "Supprimer",
+    btnDeleteCancel: "Annuler"
   },
   debugDbView: {
     title: "Laboratoire Local (Dexie DB)",
@@ -147,6 +155,14 @@ export const TEXTS = {
     btnAddWishlistGroup: "Ajouter à ma Wishlist",
     btnLendGroup: "Prêter le Lot Sélectionné",
     btnToggleWishlistGroup: "Basculer vers la Wishlist",
+    btnDeleteGroup: "Supprimer le lot sélectionné",
+    deleteConfirmTitle: "Confirmer la suppression",
+    deleteConfirmMsgSingular: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
+    deleteConfirmMsgPlural: "Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.",
+    deleteConfirmWishMsgSingular: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
+    deleteConfirmWishMsgPlural: "Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d'envies ? Cette action est définitive et les retirera également de votre compte inventaire.io.",
+    btnDeleteConfirm: "Supprimer",
+    btnDeleteCancel: "Annuler",
     offlineActionsBlocked: "Les actions groupées sont désactivées en mode hors-ligne."
   },
   baseLoading: {

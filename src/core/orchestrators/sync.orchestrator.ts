@@ -149,9 +149,33 @@ export const syncOrchestrator = {
          await this.hydrateRemainingPhysicalEntities(missingItems);
       }
 
-      // 6. Aspiration préventive des séries (Sagas)
-      console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
+      // 6. Nettoyage du cache pour les livres retirés à distance
+      console.log(`[HYDRATATION] Nettoyage du cache pour les livres supprimés à distance...`);
       const localBooks = await databaseService.getAllBooksFromCache();
+      const inventoryUrisSet = new Set(inventoryPhysicalUris);
+      const wishlistUrisSet = new Set(wishlistPhysicalUris);
+
+      for (const book of localBooks) {
+        const isActuallyOwned = inventoryUrisSet.has(book.uri) || (!!book.workUri && inventoryUrisSet.has(book.workUri));
+        const isActuallyWished = wishlistUrisSet.has(book.uri) || (!!book.workUri && wishlistUrisSet.has(book.workUri));
+
+        if (book.ownershipStatus === 'owned' && !isActuallyOwned) {
+          if (isActuallyWished) {
+            await bookCacheService.saveAndProcessImage(book, 'wish');
+          } else {
+            await bookCacheService.saveAndProcessImage(book, 'none');
+          }
+        } else if (book.ownershipStatus === 'wish' && !isActuallyWished) {
+          if (isActuallyOwned) {
+            await bookCacheService.saveAndProcessImage(book, 'owned');
+          } else {
+            await bookCacheService.saveAndProcessImage(book, 'none');
+          }
+        }
+      }
+
+      // 7. Aspiration préventive des séries (Sagas)
+      console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
       const seriesIds = new Set<string>();
       
       for (const book of localBooks) {
@@ -168,10 +192,74 @@ export const syncOrchestrator = {
         }
       }
 
+      // 8. Correction silencieuse des fiches mal humanisées en tâche de fond
+      this.correctPoorlyHumanizedBooks();
+
     } catch (error) {
       console.error("[HYDRATATION] Erreur globale :", error);
     } finally {
       console.groupEnd();
+    }
+  },
+
+  /**
+   * TÂCHE DE FOND : Détecte et ré-humanise de manière transparente les fiches de livres
+   * contenant encore des IDs bruts Wikidata (wd:Q...).
+   */
+  async correctPoorlyHumanizedBooks(): Promise<void> {
+    console.log("[BACKGROUND-CORRECTOR] Lancement de la vérification de la base locale...");
+    try {
+      const allBooks = await databaseService.getAllBooksFromCache();
+      const needsCorrection = allBooks.filter(book => {
+        const check = (val: string | undefined) => val && val.startsWith('wd:');
+        const checkArray = (arr: string[] | undefined) => arr && arr.some(val => val && val.startsWith('wd:'));
+        return !!(
+          check(book.series) ||
+          check(book.publisher) ||
+          check(book.collection) ||
+          checkArray(book.authors) ||
+          checkArray(book.illustrators) ||
+          checkArray(book.scriptwriters) ||
+          checkArray(book.genres)
+        );
+      });
+
+      if (needsCorrection.length === 0) {
+        console.log("[BACKGROUND-CORRECTOR] ✅ Aucun livre mal humanisé détecté dans la base locale.");
+        return;
+      }
+
+      console.log(`[BACKGROUND-CORRECTOR] ⚠️ ${needsCorrection.length} livres nécessitent une ré-humanisation.`);
+
+      const { entityHumanizer } = await import('../resolvers/humanizer');
+      for (const book of needsCorrection) {
+        // Attente entre chaque livre pour laisser respirer l'application et l'API
+        await new Promise(resolve => setTimeout(resolve, 1500));
+
+        const { connectionState } = await import('../../state/connection');
+        const { queueService } = await import('./queue.orchestrator');
+
+        // Gardes d'inactivité : on s'arrête si offline ou si le réseau est sollicité
+        if (connectionState.isOffline.value) {
+          console.log("[BACKGROUND-CORRECTOR] Application hors-ligne. Interruption.");
+          break;
+        }
+
+        if (queueService.isProcessing) {
+          console.log("[BACKGROUND-CORRECTOR] File d'attente réseau active. Attente...");
+          continue;
+        }
+
+        try {
+          console.log(`[BACKGROUND-CORRECTOR] Correction sémantique pour : ${book.title} (${book.uri})`);
+          await entityHumanizer.rehumanize(book);
+        } catch (err: any) {
+          console.warn(`[BACKGROUND-CORRECTOR] Impossible de corriger ${book.uri}:`, err.message);
+        }
+      }
+      console.log("[BACKGROUND-CORRECTOR] Fin du cycle de correction.");
+    } catch (e) {
+      console.error("[BACKGROUND-CORRECTOR] Erreur lors de la correction :", e);
     }
   }
 };

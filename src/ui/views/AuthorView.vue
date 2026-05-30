@@ -236,31 +236,35 @@ const confirmGroupLend = async (friendName: string) => {
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
           @update:processedItems="(val) => displayedTomes = val"
-        />
+        >
+          <div v-if="displayedTomes.length === 0">
+            <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+          </div>
 
-        <BatchActionBar 
-          :selected-count="selectedIds.length"
-          :is-mixed="isSelectionMixed"
-          :context="batchContext"
-          @execute="dispatchBatchAction"
-        />
+          <WireframeTable v-else>
+            <BookMiniCard 
+              v-for="livre in displayedTomes" 
+              :key="livre.uri" 
+              :book="livre"
+              :model-value="selectedIds.includes(livre.uri)"
+              @update:model-value="(val) => {
+                if (val) {
+                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                } else {
+                  const idx = selectedIds.indexOf(livre.uri);
+                  if (idx > -1) selectedIds.splice(idx, 1);
+                }
+              }"
+            />
+          </WireframeTable>
 
-        <WireframeTable v-if="displayedTomes.length > 0">
-          <BookMiniCard 
-            v-for="livre in displayedTomes" 
-            :key="livre.uri" 
-            :book="livre"
-            :model-value="selectedIds.includes(livre.uri)"
-            @update:model-value="(val) => {
-              if (val) {
-                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-              } else {
-                const idx = selectedIds.indexOf(livre.uri);
-                if (idx > -1) selectedIds.splice(idx, 1);
-              }
-            }"
+          <BatchActionBar 
+            :selected-count="selectedIds.length"
+            :is-mixed="isSelectionMixed"
+            :context="batchContext"
+            @execute="dispatchBatchAction"
           />
-        </WireframeTable>
+        </WireframePagination>
       </div>
     </div>
 

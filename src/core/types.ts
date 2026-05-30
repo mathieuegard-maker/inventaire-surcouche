@@ -3,6 +3,7 @@
 export interface RegistryEntry {
   uri: string;
   addedAt: number;
+  itemId?: string;
 }
 
 export interface BaseBook {

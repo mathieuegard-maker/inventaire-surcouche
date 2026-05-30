@@ -10,7 +10,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'execute', action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN'): void;
+  (e: 'execute', action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'): void;
 }>();
 
 const isOffline = computed(() => connectionState.isOffline.value);
@@ -34,11 +34,17 @@ const isOffline = computed(() => connectionState.isOffline.value);
           <button :disabled="isOffline" class="wireframe-btn btn-primary" @click="!isOffline && emit('execute', 'RETURN')">
             {{ TEXTS.batchActionBar.btnReturnGroup }}
           </button>
+          <button :disabled="isOffline" class="wireframe-btn btn-danger" @click="!isOffline && emit('execute', 'DELETE')">
+            {{ TEXTS.batchActionBar.btnDeleteGroup || 'Supprimer le lot' }}
+          </button>
         </template>
 
         <template v-else-if="context === 'wishlist'">
           <button :disabled="isOffline" class="wireframe-btn btn-primary" @click="!isOffline && emit('execute', 'ADD_INVENTORY')">
             {{ TEXTS.batchActionBar.btnAddInventoryGroup }}
+          </button>
+          <button :disabled="isOffline" class="wireframe-btn btn-danger" @click="!isOffline && emit('execute', 'DELETE')">
+            {{ TEXTS.batchActionBar.btnDeleteGroup || 'Supprimer le lot' }}
           </button>
         </template>
 
@@ -46,7 +52,7 @@ const isOffline = computed(() => connectionState.isOffline.value);
           <button :disabled="isOffline" class="wireframe-btn btn-primary" @click="!isOffline && emit('execute', 'ADD_INVENTORY')">
             {{ TEXTS.batchActionBar.btnAddInventoryGroup }}
           </button>
-          <button :disabled="isOffline" class="wireframe-btn btn-danger" @click="!isOffline && emit('execute', 'ADD_WISHLIST')">
+          <button :disabled="isOffline" class="wireframe-btn" @click="!isOffline && emit('execute', 'ADD_WISHLIST')">
             {{ TEXTS.batchActionBar.btnAddWishlistGroup }}
           </button>
         </template>
@@ -55,8 +61,11 @@ const isOffline = computed(() => connectionState.isOffline.value);
           <button :disabled="isOffline" class="wireframe-btn btn-primary" @click="!isOffline && emit('execute', 'LEND')">
             {{ TEXTS.batchActionBar.btnLendGroup }}
           </button>
-          <button :disabled="isOffline" class="wireframe-btn btn-danger" @click="!isOffline && emit('execute', 'ADD_WISHLIST')">
+          <button :disabled="isOffline" class="wireframe-btn" @click="!isOffline && emit('execute', 'ADD_WISHLIST')">
             {{ TEXTS.batchActionBar.btnToggleWishlistGroup }}
+          </button>
+          <button :disabled="isOffline" class="wireframe-btn btn-danger" @click="!isOffline && emit('execute', 'DELETE')">
+            {{ TEXTS.batchActionBar.btnDeleteGroup || 'Supprimer le lot' }}
           </button>
         </template>
       </template>

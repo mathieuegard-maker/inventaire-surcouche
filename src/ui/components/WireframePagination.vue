@@ -8,21 +8,58 @@ const props = withDefaults(defineProps<{
   hasSelectAll?: boolean;
   selectAllValue?: boolean;
   selectedCount?: number;
+  currentPage?: number;
+  pageSize?: number;
+  searchQuery?: string;
 }>(), {
   hasSelectAll: false,
   selectAllValue: false,
-  selectedCount: 0
+  selectedCount: 0,
+  currentPage: undefined,
+  pageSize: undefined,
+  searchQuery: undefined
 });
 
 const emit = defineEmits<{
   (e: 'update:processedItems', filteredList: any[]): void;
   (e: 'update:selectAllValue', value: boolean): void;
+  (e: 'update:currentPage', page: number): void;
+  (e: 'update:pageSize', size: number): void;
+  (e: 'update:searchQuery', query: string): void;
 }>();
 
-// États internes
-const searchQuery = ref('');
-const currentPage = ref(1);
-const pageSize = ref(20);
+// États internes avec synchronisation bidirectionnelle
+const internalSearchQuery = ref(props.searchQuery ?? '');
+const internalPage = ref(props.currentPage ?? 1);
+const internalPageSize = ref(props.pageSize ?? 20);
+
+// Sync de l'extérieur vers l'intérieur
+watch(() => props.currentPage, (val) => {
+  if (val !== undefined && val !== internalPage.value) {
+    internalPage.value = val;
+  }
+});
+watch(() => props.pageSize, (val) => {
+  if (val !== undefined && val !== internalPageSize.value) {
+    internalPageSize.value = val;
+  }
+});
+watch(() => props.searchQuery, (val) => {
+  if (val !== undefined && val !== internalSearchQuery.value) {
+    internalSearchQuery.value = val;
+  }
+});
+
+// Émissions vers l'extérieur
+watch(internalPage, (val) => {
+  emit('update:currentPage', val);
+});
+watch(internalPageSize, (val) => {
+  emit('update:pageSize', val);
+});
+watch(internalSearchQuery, (val) => {
+  emit('update:searchQuery', val);
+});
 
 /**
  * 1. ÉTAPE DE FILTRAGE : Recherche textuelle seule
@@ -30,8 +67,8 @@ const pageSize = ref(20);
 const filteredItems = computed(() => {
   let list = [...props.items];
 
-  if (searchQuery.value.trim()) {
-    const query = searchQuery.value.toLowerCase().trim();
+  if (internalSearchQuery.value.trim()) {
+    const query = internalSearchQuery.value.toLowerCase().trim();
     list = list.filter(item => {
       return props.searchKeys.some(key => {
         const val = item[key];
@@ -48,21 +85,21 @@ const filteredItems = computed(() => {
 });
 
 /**
- * 2. ÉTAPE DE PAGINATION : Découpage en tranches (20, 50, 100)
+ * 2. ÉTAPE DE PAGINATION : Découpage en tranches
  */
 const totalPages = computed(() => {
-  return Math.ceil(filteredItems.value.length / pageSize.value) || 1;
+  return Math.ceil(filteredItems.value.length / internalPageSize.value) || 1;
 });
 
 const paginatedItems = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value;
-  const end = start + pageSize.value;
+  const start = (internalPage.value - 1) * internalPageSize.value;
+  const end = start + internalPageSize.value;
   return filteredItems.value.slice(start, end);
 });
 
 // Réinitialisation automatique de la page si les filtres changent
-watch([searchQuery, pageSize], () => {
-  currentPage.value = 1;
+watch([internalSearchQuery, internalPageSize], () => {
+  internalPage.value = 1;
 });
 
 // Émission automatique de la liste finale vers le tableau d'affichage parent
@@ -76,13 +113,14 @@ watch(paginatedItems, (newList) => {
     <div class="search-keyword-row">
       <input
         type="text"
-        v-model="searchQuery"
+        v-model="internalSearchQuery"
         :placeholder="TEXTS.pagination.placeholder"
         class="wireframe-input search-keyword-input"
       />
     </div>
 
-    <div class="pagination-controls-row">
+    <!-- Contrôles de pagination du haut -->
+    <div class="pagination-controls-row upper-pagination">
       <div class="pagination-upper-controls">
         <div v-if="hasSelectAll" class="pagination-select-all-zone">
           <input
@@ -97,7 +135,7 @@ watch(paginatedItems, (newList) => {
         </div>
 
         <div class="page-size-selector-box">
-          <select v-model="pageSize" class="wireframe-input size-select">
+          <select v-model="internalPageSize" class="wireframe-input size-select">
             <option :value="20">20 {{ TEXTS.pagination.perPage }}</option>
             <option :value="50">50 {{ TEXTS.pagination.perPage }}</option>
             <option :value="100">100 {{ TEXTS.pagination.perPage }}</option>
@@ -108,20 +146,70 @@ watch(paginatedItems, (newList) => {
       <div class="page-navigation-buttons">
         <button
           class="wireframe-btn nav-arrow-btn"
-          :disabled="currentPage === 1"
-          @click="currentPage--"
+          :disabled="internalPage === 1"
+          @click="internalPage--"
         >
           [ {{ TEXTS.pagination.previous }} ]
         </button>
         
         <span class="pagination-counter-label">
-          {{ TEXTS.pagination.page }} {{ currentPage }} / {{ totalPages }}
+          {{ TEXTS.pagination.page }} {{ internalPage }} / {{ totalPages }}
         </span>
 
         <button
           class="wireframe-btn nav-arrow-btn"
-          :disabled="currentPage === totalPages"
-          @click="currentPage++"
+          :disabled="internalPage === totalPages"
+          @click="internalPage++"
+        >
+          [ {{ TEXTS.pagination.next }} ]
+        </button>
+      </div>
+    </div>
+
+    <!-- Le contenu de la liste/table est inséré ici en sandwich -->
+    <slot></slot>
+
+    <!-- Contrôles de pagination du bas -->
+    <div class="pagination-controls-row lower-pagination">
+      <div class="pagination-upper-controls">
+        <div v-if="hasSelectAll" class="pagination-select-all-zone">
+          <input
+            type="checkbox"
+            :checked="selectAllValue"
+            @change="emit('update:selectAllValue', ($event.target as HTMLInputElement).checked)"
+            class="wireframe-checkbox"
+          />
+          <span class="pagination-select-all-label">
+            {{ selectedCount === 0 ? TEXTS.pagination.selectAll : selectedCount + ' ' + TEXTS.pagination.selectedCount }}
+          </span>
+        </div>
+
+        <div class="page-size-selector-box">
+          <select v-model="internalPageSize" class="wireframe-input size-select">
+            <option :value="20">20 {{ TEXTS.pagination.perPage }}</option>
+            <option :value="50">50 {{ TEXTS.pagination.perPage }}</option>
+            <option :value="100">100 {{ TEXTS.pagination.perPage }}</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="page-navigation-buttons">
+        <button
+          class="wireframe-btn nav-arrow-btn"
+          :disabled="internalPage === 1"
+          @click="internalPage--"
+        >
+          [ {{ TEXTS.pagination.previous }} ]
+        </button>
+        
+        <span class="pagination-counter-label">
+          {{ TEXTS.pagination.page }} {{ internalPage }} / {{ totalPages }}
+        </span>
+
+        <button
+          class="wireframe-btn nav-arrow-btn"
+          :disabled="internalPage === totalPages"
+          @click="internalPage++"
         >
           [ {{ TEXTS.pagination.next }} ]
         </button>

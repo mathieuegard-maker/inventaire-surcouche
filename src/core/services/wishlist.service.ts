@@ -159,6 +159,11 @@ export const wishlistService = {
     if (res.ok) {
       for (const uri of targetUris) {
          await databaseService.removeRegistryEntry('wishlist', uri);
+         const cachedBook = await databaseService.getBookFromCache(uri);
+         if (cachedBook) {
+           cachedBook.ownershipStatus = 'none';
+           await databaseService.saveBookToCache(cachedBook);
+         }
       }
       return true;
     } else {

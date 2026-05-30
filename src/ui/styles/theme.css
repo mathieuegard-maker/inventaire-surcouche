@@ -5,25 +5,33 @@
 :root {
   /* Nuancier Moderne, Sobre & Épuré */
   --color-bg-main: #ffffff;
-  --color-bg-alt: #f8fafc; /* Gris ardoise très clair et doux */
-  --color-border: #e2e8f0; /* Bordure grise très fine et douce */
+  --color-bg-alt: #f8fafc;
+  /* Gris ardoise très clair et doux */
+  --color-border: #e2e8f0;
+  /* Bordure grise très fine et douce */
   --color-border-hover: #cbd5e1;
-  --color-text-main: #0f172a; /* Bleu/gris ardoise très foncé, plus doux que noir pur */
-  --color-text-muted: #64748b; /* Gris ardoise intermédiaire pour les infos secondaires */
+  --color-text-main: #0f172a;
+  /* Bleu/gris ardoise très foncé, plus doux que noir pur */
+  --color-text-muted: #64748b;
+  /* Gris ardoise intermédiaire pour les infos secondaires */
   --color-text-inverse: #ffffff;
-  --color-overlay: rgba(15, 23, 42, 0.6); /* Overlay doux avec la teinte ardoise */
-  
+  --color-overlay: rgba(15, 23, 42, 0.6);
+  /* Overlay doux avec la teinte ardoise */
+
   /* Accentuation Indigo moderne & sobre */
   --color-primary: #4f46e5;
   --color-primary-hover: #4338ca;
   --color-primary-light: #e0e7ff;
-  
+
   /* Statuts Doux (Pastels modernes) */
-  --color-status-owned: #10b981; /* Vert émeraude */
+  --color-status-owned: #10b981;
+  /* Vert émeraude */
   --color-status-owned-light: #ecfdf5;
-  --color-status-wish: #f59e0b; /* Ambre */
+  --color-status-wish: #f59e0b;
+  /* Ambre */
   --color-status-wish-light: #fffbeb;
-  --color-status-lent: #3b82f6; /* Bleu */
+  --color-status-lent: #3b82f6;
+  /* Bleu */
   --color-status-lent-light: #eff6ff;
 
   /* Géométrie Moderne */
@@ -31,29 +39,34 @@
   --spacing-sm: 8px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
-  
+
   /* Arrondis */
   --radius-sm: 6px;
   --radius-md: 12px;
   --radius-lg: 16px;
-  
+
   /* Ombres portées */
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -4px rgba(0, 0, 0, 0.05);
 
   --row-height-base: 46px;
-  
+
   /* Typographie Moderne Sans-Serif */
   --font-main: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 /* Force le calcul strict pour empêcher tout débordement horizontal */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-button, input, select, textarea {
+button,
+input,
+select,
+textarea {
   border-radius: var(--radius-sm);
 }
 
@@ -66,7 +79,11 @@ body {
 }
 
 /* Alignement typographique moderne */
-input, select, textarea, button, option {
+input,
+select,
+textarea,
+button,
+option {
   font-family: var(--font-main);
 }
 
@@ -456,7 +473,7 @@ input::placeholder {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-width: 0; 
+  min-width: 0;
 }
 
 .row-title {
@@ -593,6 +610,7 @@ input::placeholder {
     flex-direction: row;
     flex-wrap: wrap;
   }
+
   .book-actions-flex .wireframe-btn {
     flex: 1;
     min-width: 140px;
@@ -696,7 +714,7 @@ input::placeholder {
   border-right: none !important;
 }
 
-#manual-input-container button, 
+#manual-input-container button,
 #manual-input-container input[type="submit"] {
   width: auto !important;
   height: var(--row-height-base) !important;
@@ -820,7 +838,7 @@ input::placeholder {
   font-size: 11px;
   font-weight: bold;
   mix-blend-mode: difference;
-  color: #ffffff; 
+  color: #ffffff;
 }
 
 .progress-pedagogic-notice {
@@ -1072,35 +1090,36 @@ h3.wireframe-title {
 }
 
 .book-card-layout {
-    flex-direction: column !important;
-    align-items: center !important;
-    gap: var(--spacing-md) !important;
-  }
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: var(--spacing-md) !important;
+}
 
-  .book-cover-image {
-    width: 100% !important;
-    max-width: 180px !important; /* Brise la taille géante pour s'adapter au centre du smartphone */
-    height: auto !important;
-    border: var(--border-width) solid var(--color-border) !important;
-  }
+.book-cover-image {
+  width: 100% !important;
+  max-width: 180px !important;
+  /* Brise la taille géante pour s'adapter au centre du smartphone */
+  height: auto !important;
+  border: var(--border-width) solid var(--color-border) !important;
+}
 
-  .book-cover-placeholder {
-    width: 100% !important;
-    max-width: 180px !important;
-    height: 240px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    text-align: center !important;
-    border: var(--border-width) solid var(--color-border) !important;
-    background-color: var(--color-bg-alt) !important;
-    font-size: 12px !important;
-    margin-bottom: var(--spacing-sm) !important;
-  }
+.book-cover-placeholder {
+  width: 100% !important;
+  max-width: 180px !important;
+  height: 240px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  background-color: var(--color-bg-alt) !important;
+  font-size: 12px !important;
+  margin-bottom: var(--spacing-sm) !important;
+}
 
-  .book-info-layout {
-    width: 100% !important;
-  }
+.book-info-layout {
+  width: 100% !important;
+}
 
 .pagination-counter-label {
   font-family: var(--font-main) !important;
@@ -1116,19 +1135,20 @@ h3.wireframe-title {
    ========================================================================== */
 
 @media screen and (max-width: 600px) {
+
   /* 1. SEUIL ACQUISITION : Empilement de la ligne ISBN */
   .smart-search-row {
     flex-direction: column !important;
     gap: var(--spacing-sm) !important;
   }
-  
+
   .smart-search-row .btn-scan-side,
   .smart-search-row .btn-search-side {
     width: 100% !important;
     height: var(--row-height-base) !important;
     border: var(--border-width) solid var(--color-border) !important;
   }
-  
+
   .smart-search-row .elastic-search-input {
     width: 100% !important;
     height: var(--row-height-base) !important;
@@ -1142,13 +1162,13 @@ h3.wireframe-title {
   .global-header .nav-desktop {
     display: none !important;
   }
-  
+
   .global-header .nav-mobile {
     display: flex !important;
     flex-direction: column !important;
     width: 100% !important;
   }
-  
+
   .global-header .mobile-header-bar {
     display: flex !important;
     flex-direction: row !important;
@@ -1175,7 +1195,7 @@ h3.wireframe-title {
     cursor: pointer !important;
     border-radius: 0px !important;
   }
-  
+
   .global-header .mobile-scan-trigger-btn {
     flex: 1 !important;
     height: var(--row-height-base) !important;
@@ -1189,7 +1209,7 @@ h3.wireframe-title {
     cursor: pointer !important;
     border-radius: 0px !important;
   }
-  
+
   .global-header .menu-accordion-drawer {
     display: flex !important;
     flex-direction: column !important;
@@ -1200,7 +1220,7 @@ h3.wireframe-title {
     position: relative !important;
     z-index: 100000 !important;
   }
-  
+
   .global-header .menu-drawer-item {
     width: 100% !important;
     height: var(--row-height-base) !important;
@@ -1214,7 +1234,7 @@ h3.wireframe-title {
     text-transform: uppercase !important;
     cursor: pointer !important;
   }
-  
+
   .global-header .menu-drawer-item:last-child {
     border-bottom: none !important;
   }
@@ -1224,11 +1244,11 @@ h3.wireframe-title {
     flex-direction: column !important;
     gap: var(--spacing-md) !important;
   }
-  
+
   .collection-controls-bar .control-group {
     width: 100% !important;
   }
-  
+
   .collection-controls-bar .wireframe-input {
     width: 100% !important;
     height: var(--row-height-base) !important;
@@ -1263,7 +1283,7 @@ h3.wireframe-title {
     width: 100% !important;
     justify-content: space-between !important;
   }
-  
+
   .page-navigation-buttons .nav-arrow-btn {
     flex: 1 !important;
   }
@@ -1279,11 +1299,13 @@ h3.wireframe-title {
   left: 0 !important;
   width: 100vw !important;
   height: 100vh !important;
-  background-color: rgba(250, 250, 250, 0.9) !important; /* Calé sur le blanc cassé --color-bg-main opacifié */
+  background-color: rgba(250, 250, 250, 0.9) !important;
+  /* Calé sur le blanc cassé --color-bg-main opacifié */
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  z-index: 999999 !important; /* Passe impérativement par-dessus la sticky-bar et le header */
+  z-index: 999999 !important;
+  /* Passe impérativement par-dessus la sticky-bar et le header */
   padding: var(--spacing-md) !important;
 }
 
@@ -1351,6 +1373,29 @@ h3.wireframe-title {
   color: var(--color-text-inverse) !important;
 }
 
+.modal-box .btn-danger {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: var(--row-height-base) !important;
+  padding: 0 var(--spacing-md) !important;
+  font-family: var(--font-main) !important;
+  font-size: 14px !important;
+  font-weight: bold !important;
+  text-transform: uppercase !important;
+  cursor: pointer !important;
+  background-color: #ef4444 !important;
+  color: var(--color-text-inverse) !important;
+  border: var(--border-width) solid #ef4444 !important;
+  line-height: 1 !important;
+}
+
+.modal-box .btn-danger:hover {
+  background-color: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
 .modal-box .btn-action:disabled {
   background-color: var(--color-bg-alt) !important;
   color: var(--color-text-muted) !important;
@@ -1374,7 +1419,7 @@ h3.wireframe-title {
   width: calc(100% - 32px) !important;
   border-radius: var(--radius-md) !important;
   box-shadow: var(--shadow-lg) !important;
-  
+
   /* Centrage rigoureux identique au Flexbox de index.html via positionnement fixe calculé */
   position: fixed !important;
   top: 50% !important;
@@ -1403,14 +1448,22 @@ h3.wireframe-title {
   font-family: var(--font-main) !important;
   font-size: 14px !important;
   color: var(--color-text-muted) !important;
-  margin: 0 !important; /* Concordance stricte avec .loading-text de index.html */
+  margin: 0 !important;
+  /* Concordance stricte avec .loading-text de index.html */
   font-weight: 500 !important;
   animation: pulse-loading 1.5s infinite ease-in-out !important;
 }
 
 @keyframes pulse-loading {
-  0%, 100% { opacity: 0.6; }
-  50% { opacity: 1; }
+
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 /* Conteneur de connexion occupant la totalité de la hauteur dynamique mobile */
@@ -1548,7 +1601,8 @@ h3.wireframe-title {
 /* --- STYLE DU BANDEAU GLOBAL HORS-LIGNE --- */
 .offline-global-banner {
   width: 100% !important;
-  background-color: #f97316 !important; /* Orange vif */
+  background-color: #f97316 !important;
+  /* Orange vif */
   color: #ffffff !important;
   text-align: center !important;
   padding: var(--spacing-sm) var(--spacing-md) !important;
@@ -1565,9 +1619,11 @@ h3.wireframe-title {
   0% {
     opacity: 0.95;
   }
+
   50% {
     opacity: 0.75;
   }
+
   100% {
     opacity: 0.95;
   }
@@ -1797,6 +1853,7 @@ h3.wireframe-title {
   border-color: #a7f3d0;
   box-shadow: var(--shadow-sm);
 }
+
 .stats-card.card-owned .stats-value {
   color: var(--color-status-owned);
 }
@@ -1806,6 +1863,7 @@ h3.wireframe-title {
   border-color: #c7d2fe;
   box-shadow: var(--shadow-sm);
 }
+
 .stats-card.card-series .stats-value {
   color: var(--color-primary);
 }
@@ -1815,6 +1873,7 @@ h3.wireframe-title {
   border-color: #fde68a;
   box-shadow: var(--shadow-sm);
 }
+
 .stats-card.card-wishlist .stats-value {
   color: #d97706;
 }
@@ -1824,6 +1883,7 @@ h3.wireframe-title {
   border-color: #bfdbfe;
   box-shadow: var(--shadow-sm);
 }
+
 .stats-card.card-loans .stats-value {
   color: var(--color-status-lent);
 }
@@ -1852,6 +1912,7 @@ h3.wireframe-title {
   color: var(--color-status-owned);
   border-color: #a7f3d0;
 }
+
 .book-status-banner.owned::before {
   content: "✓";
 }
@@ -1861,6 +1922,7 @@ h3.wireframe-title {
   color: #d97706;
   border-color: #fde68a;
 }
+
 .book-status-banner.wish::before {
   content: "★";
 }
@@ -1870,6 +1932,7 @@ h3.wireframe-title {
   color: var(--color-status-lent);
   border-color: #bfdbfe;
 }
+
 .book-status-banner.lent::before {
   content: "🤝";
 }
@@ -1879,6 +1942,7 @@ h3.wireframe-title {
   color: var(--color-text-muted);
   border-color: var(--color-border);
 }
+
 .book-status-banner.none::before {
   content: "✕";
 }

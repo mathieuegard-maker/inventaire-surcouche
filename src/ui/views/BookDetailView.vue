@@ -15,6 +15,8 @@ import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
+import { inventoryService } from '../../core/services/inventory.service';
+import { wishlistService } from '../../core/services/wishlist.service';
 
 const route = useRoute();
 const router = useRouter();
@@ -24,11 +26,51 @@ const isLoading = ref(true);
 const errorMsg = ref('');
 const successMessage = ref('');
 const showLendModal = ref(false);
+const showDeleteModal = ref(false);
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
 const isLent = computed(() => !!book.value?.loan);
 const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
 const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
+
+// Navigation dans la série
+const seriesTomes = ref<HumanizedBook[]>([]);
+
+const currentTomeIndex = computed(() => {
+  if (!book.value || seriesTomes.value.length === 0) return -1;
+  return seriesTomes.value.findIndex(t => t.uri === book.value?.uri);
+});
+
+const previousBook = computed(() => {
+  const idx = currentTomeIndex.value;
+  if (idx > 0) return seriesTomes.value[idx - 1];
+  return null;
+});
+
+const nextBook = computed(() => {
+  const idx = currentTomeIndex.value;
+  if (idx !== -1 && idx < seriesTomes.value.length - 1) return seriesTomes.value[idx + 1];
+  return null;
+});
+
+const loadSeriesContext = async () => {
+  if (book.value?.seriesId) {
+    const tomes = await databaseService.getBooksBySeriesId(book.value.seriesId);
+    // Tri numérique par numéro de tome
+    tomes.sort((a, b) => {
+      const numA = parseFloat(a.seriesNumber || '0') || 0;
+      const numB = parseFloat(b.seriesNumber || '0') || 0;
+      return numA - numB;
+    });
+    seriesTomes.value = tomes;
+  } else {
+    seriesTomes.value = [];
+  }
+};
+
+const navigateToBook = (uri: string) => {
+  router.push({ name: 'BookDetail', params: { uri } });
+};
 
 const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
   const needsHumanization = (currentBook.series && currentBook.series.startsWith('wd:')) ||
@@ -46,18 +88,10 @@ const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
   }
 };
 
-const loadBook = async (uriParam: string) => {
+const loadBookDetails = async (uriParam: string) => {
   isLoading.value = true;
   errorMsg.value = '';
   successMessage.value = '';
-  book.value = null;
-
-  if (!uriParam) {
-    errorMsg.value = TEXTS.bookDetail?.missingId || "Identifiant du livre manquant.";
-    isLoading.value = false;
-    return;
-  }
-
   try {
     const normalized = isbnUtil.normalize(uriParam);
     if (isbnUtil.isValidFormat(normalized)) {
@@ -73,7 +107,6 @@ const loadBook = async (uriParam: string) => {
       } else {
         errorMsg.value = TEXTS.bookDetail.fetchError;
       }
-      isLoading.value = false;
       return;
     }
 
@@ -85,13 +118,11 @@ const loadBook = async (uriParam: string) => {
         cached.loan = activeLoan;
       }
       book.value = cached;
-      isLoading.value = false;
       checkAndTriggerRehumanize(cached);
       return;
     }
 
     console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
-    // FIX COMPILATION : Appel de la méthode exacte supportée par le résolveur
     const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
     if (resolved) {
       const activeLoan = await databaseService.getLoan(resolved.uri);
@@ -99,31 +130,34 @@ const loadBook = async (uriParam: string) => {
         resolved.loan = activeLoan;
       }
       book.value = resolved;
+      checkAndTriggerRehumanize(resolved);
     } else {
       errorMsg.value = TEXTS.bookDetail.fetchError;
     }
   } catch (e) {
     console.error("[DETAIL VIEW] Erreur de chargement :", e);
-    errorMsg.value = TEXTS.bookDetail.loadError || "Erreur de chargement.";
+    errorMsg.value = TEXTS.bookDetail.loadError;
   } finally {
     isLoading.value = false;
+    await loadSeriesContext();
   }
 };
 
-onMounted(async () => {
-  const uriParam = route.params.uri as string;
-  await loadBook(uriParam);
+watch(() => route.params.uri, (newUri) => {
+  if (newUri) {
+    loadBookDetails(newUri as string);
+  }
 });
 
-// Réagir au changement d'URI si on navigue sur un autre livre depuis la même vue
-watch(
-  () => route.params.uri,
-  async (newUri) => {
-    if (newUri) {
-      await loadBook(newUri as string);
-    }
+onMounted(() => {
+  const uriParam = route.params.uri as string;
+  if (uriParam) {
+    loadBookDetails(uriParam);
+  } else {
+    errorMsg.value = TEXTS.bookDetail?.missingId || "Identifiant du livre manquant.";
+    isLoading.value = false;
   }
-);
+});
 
 const navigateToSeries = () => {
   if (seriesIdentifier.value) {
@@ -188,6 +222,33 @@ const handleReturn = async () => {
     console.error(e);
   }
 };
+
+const handleDelete = () => {
+  showDeleteModal.value = true;
+};
+
+const confirmDelete = async () => {
+  if (!book.value?.uri) return;
+  errorMsg.value = '';
+  successMessage.value = '';
+  try {
+    const status = book.value.ownershipStatus;
+    if (status === 'owned') {
+      await inventoryService.removeFromLibrary(book.value.uri);
+    } else if (status === 'wish') {
+      await wishlistService.removeFromWishlist([book.value.uri]);
+    }
+    book.value.ownershipStatus = 'none';
+    if (book.value.loan) {
+      delete book.value.loan;
+    }
+    successMessage.value = TEXTS.bookDetail?.deleteSuccess || "L'ouvrage a bien été supprimé.";
+  } catch (error: any) {
+    errorMsg.value = error.message || "Erreur lors de la suppression de l'ouvrage.";
+  } finally {
+    showDeleteModal.value = false;
+  }
+};
 </script>
 
 <template>
@@ -217,15 +278,39 @@ const handleReturn = async () => {
       </div>
 
       <div class="book-card-layout">
-        <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
-          {{ TEXTS.bookDetail.noCover }}
+        <div class="book-cover-nav-container">
+          <button 
+            v-if="hasSeries"
+            class="wireframe-btn cover-nav-btn prev-btn" 
+            :disabled="!previousBook" 
+            @click="previousBook && navigateToBook(previousBook.uri)"
+            aria-label="Tome précédent"
+          >
+            &lt;
+          </button>
+
+          <div class="book-cover-wrapper">
+            <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
+              {{ TEXTS.bookDetail.noCover }}
+            </div>
+            <img 
+              v-else 
+              :src="book.localCover || book.coverUrl" 
+              :alt="book.title" 
+              class="book-cover-image" 
+            />
+          </div>
+
+          <button 
+            v-if="hasSeries"
+            class="wireframe-btn cover-nav-btn next-btn" 
+            :disabled="!nextBook" 
+            @click="nextBook && navigateToBook(nextBook.uri)"
+            aria-label="Tome suivant"
+          >
+            &gt;
+          </button>
         </div>
-        <img 
-          v-else 
-          :src="book.localCover || book.coverUrl" 
-          :alt="book.title" 
-          class="book-cover-image" 
-        />
 
         <div class="book-info-layout">
           <div>
@@ -293,6 +378,7 @@ const handleReturn = async () => {
           @add-wishlist="handleAddWishlist"
           @lend="handleLend"
           @return="handleReturn"
+          @delete="handleDelete"
         />
       </div>
     </div>
@@ -303,5 +389,68 @@ const handleReturn = async () => {
       @close="showLendModal = false"
       @confirm="confirmLend"
     />
+
+    <!-- Modal de confirmation de suppression -->
+    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+      <div class="modal-box">
+        <h2>{{ TEXTS.bookDetail?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+        <p class="modal-text">
+          {{ book?.ownershipStatus === 'owned' ? (TEXTS.bookDetail?.deleteConfirmMsg || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') : (TEXTS.bookDetail?.deleteConfirmWishMsg || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') }}
+        </p>
+        
+        <div class="modal-actions">
+          <button 
+            @click="confirmDelete" 
+            class="btn-danger"
+          >
+            {{ TEXTS.bookDetail?.btnDeleteConfirm || 'Supprimer' }}
+          </button>
+          
+          <button @click="showDeleteModal = false" class="btn-close">
+            {{ TEXTS.bookDetail?.btnDeleteCancel || 'Annuler' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.book-cover-nav-container {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: var(--spacing-md) !important;
+  width: 100% !important;
+}
+
+.book-cover-wrapper {
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+}
+
+.cover-nav-btn {
+  width: 40px !important;
+  height: 40px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  font-family: monospace !important;
+  font-size: 20px !important;
+  font-weight: bold !important;
+  padding: 0 !important;
+  cursor: pointer !important;
+  background-color: var(--color-bg-main) !important;
+  border: var(--border-width) solid var(--color-border) !important;
+  color: var(--color-text-main) !important;
+  user-select: none !important;
+}
+
+.cover-nav-btn:disabled {
+  opacity: 0.25 !important;
+  cursor: not-allowed !important;
+}
+</style>

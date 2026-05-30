@@ -102,12 +102,16 @@ export const databaseService = {
 
   // --- GESTION DES REGISTRES (Listes légères) ---
   
-  async addRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
-    await db[tableName].put({ uri, addedAt: Date.now() });
+  async addRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string, itemId?: string): Promise<void> {
+    await db[tableName].put({ uri, addedAt: Date.now(), itemId });
   },
 
   async removeRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
     await db[tableName].delete(uri);
+  },
+
+  async getRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<RegistryEntry | undefined> {
+    return await db[tableName].get(uri);
   },
 
   async isUriInRegistry(tableName: 'inventory' | 'wishlist', uri: string): Promise<boolean> {
@@ -125,10 +129,16 @@ export const databaseService = {
   },
 
   // CORRECTION : Encapsulation dans une transaction atomique "rw" (Read/Write)
-  async syncRegistry(tableName: 'inventory' | 'wishlist', uris: string[]): Promise<void> {
+  async syncRegistry(tableName: 'inventory' | 'wishlist', items: (string | { uri: string, itemId?: string })[]): Promise<void> {
     await db.transaction('rw', db[tableName], async () => {
       await db[tableName].clear();
-      const entries: RegistryEntry[] = uris.map((uri: string) => ({ uri, addedAt: Date.now() }));
+      const entries: RegistryEntry[] = items.map((item) => {
+        if (typeof item === 'string') {
+          return { uri: item, addedAt: Date.now() };
+        } else {
+          return { uri: item.uri, addedAt: Date.now(), itemId: item.itemId };
+        }
+      });
       await db[tableName].bulkPut(entries);
     });
   },

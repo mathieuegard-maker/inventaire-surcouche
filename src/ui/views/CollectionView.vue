@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import { inventoryService } from '../../core/services/inventory.service';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
@@ -16,6 +17,7 @@ import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
+import { getOrCreateViewState, saveViewState } from '../../state/viewState';
 
 const router = useRouter();
 const route = useRoute();
@@ -24,11 +26,28 @@ const allOwnedBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
+const showDeleteModal = ref(false);
 
-// COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante si elle existe
-const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || 'books');
-const selectedGenre = ref('all');
-const currentSort = ref('title');
+const stateKey = 'collection';
+const pageState = getOrCreateViewState(stateKey, {
+  currentPage: 1,
+  pageSize: 20,
+  searchQuery: '',
+  filters: {
+    mode: 'books',
+    genre: 'all',
+    sort: 'title'
+  }
+});
+
+// COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante ou l'état sauvegardé
+const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || pageState.filters.mode || 'books');
+const selectedGenre = ref(pageState.filters.genre || 'all');
+const currentSort = ref(pageState.filters.sort || 'title');
+
+const currentPage = ref(pageState.currentPage);
+const pageSize = ref(pageState.pageSize);
+const searchQuery = ref(pageState.searchQuery);
 
 const displayedBooks = ref<HumanizedBook[]>([]);
 const displayedSeries = ref<any[]>([]);
@@ -41,10 +60,37 @@ const isAllSelected = computed(() => {
 // COHÉRENCE ROUTAGE : Met à jour l'URL de manière transparente dès que l'utilisateur change d'onglet
 watch(currentMode, (newMode) => {
   router.replace({ query: { ...route.query, mode: newMode } });
+  pageState.filters.mode = newMode;
+});
+watch(selectedGenre, (newGenre) => {
+  pageState.filters.genre = newGenre;
+});
+watch(currentSort, (newSort) => {
+  pageState.filters.sort = newSort;
+});
+watch(currentPage, (val) => {
+  pageState.currentPage = val;
+});
+watch(pageSize, (val) => {
+  pageState.pageSize = val;
+});
+watch(searchQuery, (val) => {
+  pageState.searchQuery = val;
+});
+
+onBeforeRouteLeave((to, from) => {
+  saveViewState(stateKey, {
+    scrollPosition: window.scrollY || document.documentElement.scrollTop
+  });
 });
 
 onMounted(async () => {
   await fetchCatalogue();
+  if (pageState.scrollPosition > 0) {
+    setTimeout(() => {
+      window.scrollTo({ top: pageState.scrollPosition, behavior: 'instant' });
+    }, 100);
+  }
 });
 
 const fetchCatalogue = async () => {
@@ -179,11 +225,16 @@ const handleToggleAll = (checked: boolean) => {
   }
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
   if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
 
   if (action === 'LEND') {
     showLendModal.value = true;
+    return;
+  }
+
+  if (action === 'DELETE') {
+    showDeleteModal.value = true;
     return;
   }
 
@@ -207,6 +258,20 @@ const confirmGroupLend = async (friendName: string) => {
     console.error(e);
   } finally {
     showLendModal.value = false;
+  }
+};
+
+const confirmGroupDelete = async () => {
+  try {
+    for (const uri of selectedIds.value) {
+      await inventoryService.removeFromLibrary(uri);
+    }
+    await fetchCatalogue();
+  } catch (e) {
+    console.error("Erreur lors de la suppression en lot :", e);
+  } finally {
+    showDeleteModal.value = false;
+    selectedIds.value = [];
   }
 };
 
@@ -242,45 +307,24 @@ const resetSelection = () => {
       @update:sortValue="(val) => currentSort = val"
     />
 
-    <WireframePagination
-      v-if="!isLoading && currentMode === 'series'"
-      :items="seriesGondolas"
-      :searchKeys="['name']"
-      :hasSelectAll="false"
-      @update:processedItems="(val) => displayedSeries = val"
-    />
-
-    <WireframePagination
-      v-if="!isLoading && currentMode !== 'series'"
-      :items="currentSortBooks"
-      :searchKeys="['title', 'series', 'authors']"
-      :hasSelectAll="true"
-      :selectAllValue="isAllSelected"
-      :selectedCount="selectedIds.length"
-      @update:selectAllValue="handleToggleAll"
-      @update:processedItems="(val) => displayedBooks = val"
-    />
-
-    <BatchActionBar 
-      v-if="!isLoading && currentMode !== 'series'"
-      :selected-count="selectedIds.length"
-      :is-mixed="isSelectionMixed"
-      :context="batchContext"
-      @execute="dispatchBatchAction"
-    />
-
     <BaseLoading v-if="isLoading" />
 
     <template v-else>
-      <div v-if="currentMode === 'series' && displayedSeries.length === 0">
-        <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
-      </div>
-      <div v-else-if="currentMode !== 'series' && displayedBooks.length === 0">
-        <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
-      </div>
+      <WireframePagination
+        v-if="currentMode === 'series'"
+        :items="seriesGondolas"
+        :searchKeys="['name']"
+        :hasSelectAll="false"
+        v-model:currentPage="currentPage"
+        v-model:pageSize="pageSize"
+        v-model:searchQuery="searchQuery"
+        @update:processedItems="(val) => displayedSeries = val"
+      >
+        <div v-if="displayedSeries.length === 0">
+          <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+        </div>
 
-      <WireframeTable v-else>
-        <template v-if="currentMode === 'series'">
+        <WireframeTable v-else>
           <SeriesMiniCard
             v-for="saga in displayedSeries"
             :key="saga.id"
@@ -289,9 +333,27 @@ const resetSelection = () => {
             :coverUrl="saga.coverUrl"
             @click="navigateToSeries(saga.id)"
           />
-        </template>
+        </WireframeTable>
+      </WireframePagination>
 
-        <template v-else>
+      <WireframePagination
+        v-if="currentMode !== 'series'"
+        :items="currentSortBooks"
+        :searchKeys="['title', 'series', 'authors']"
+        :hasSelectAll="true"
+        :selectAllValue="isAllSelected"
+        :selectedCount="selectedIds.length"
+        v-model:currentPage="currentPage"
+        v-model:pageSize="pageSize"
+        v-model:searchQuery="searchQuery"
+        @update:selectAllValue="handleToggleAll"
+        @update:processedItems="(val) => displayedBooks = val"
+      >
+        <div v-if="displayedBooks.length === 0">
+          <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+        </div>
+
+        <WireframeTable v-else>
           <BookMiniCard 
             v-for="livre in displayedBooks" 
             :key="livre.uri" 
@@ -306,8 +368,15 @@ const resetSelection = () => {
               }
             }"
           />
-        </template>
-      </WireframeTable>
+        </WireframeTable>
+
+        <BatchActionBar 
+          :selected-count="selectedIds.length"
+          :is-mixed="isSelectionMixed"
+          :context="batchContext"
+          @execute="dispatchBatchAction"
+        />
+      </WireframePagination>
     </template>
 
     <LendModal
@@ -316,5 +385,31 @@ const resetSelection = () => {
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
     />
+
+    <!-- Modal de confirmation de suppression en lot -->
+    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+      <div class="modal-box">
+        <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+        <p class="modal-text">
+          {{ selectedIds.length > 1 
+            ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
+            : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
+          }}
+        </p>
+        
+        <div class="modal-actions">
+          <button 
+            @click="confirmGroupDelete" 
+            class="btn-danger"
+          >
+            {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
+          </button>
+          
+          <button @click="showDeleteModal = false" class="btn-close">
+            {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>

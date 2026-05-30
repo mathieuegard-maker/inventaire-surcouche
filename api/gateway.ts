@@ -27,6 +27,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Paramètre action manquant' });
   }
 
+  // Normalisation du body de la requête
+  let body = req.body;
+  if (body) {
+    if (Buffer.isBuffer(body)) {
+      try {
+        body = body.toString('utf-8');
+      } catch (e) {
+        console.warn('[GATEWAY] Impossible de convertir le Buffer du body en chaîne de caractères:', e);
+      }
+    }
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        console.warn('[GATEWAY] Impossible de parser le body en JSON:', e);
+      }
+    }
+  }
+
   // --- HELPER ROBUSTE ---
   const proxyFetch = async (url: string, options: RequestInit) => {
     const response = await resilientFetch(url, options);
@@ -86,11 +105,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await proxyFetch(`https://inventaire.io/api/entities/author-works?uri=${encodeURIComponent(req.query.authorUri as string)}`, { headers });
 
       case 'auth-login': {
-        const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
         return await proxyFetch('https://inventaire.io/api/auth/login', {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: body.username, password: body.password }),
+          body: JSON.stringify({ username: body?.username, password: body?.password }),
         });
       }
 
@@ -104,11 +122,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await proxyFetch('https://inventaire.io/api/items', {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entity: req.body.uri }) 
+          body: JSON.stringify({ entity: body?.uri }) 
         });
 
       case 'inventory-bulk': {
-        const uris = req.body.uris;
+        const uris = body?.uris;
         let successCount = 0;
         const errors = [];
         for (const uri of uris) {
@@ -124,6 +142,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ success: true, added: successCount, errors });
       }
 
+      case 'inventory-delete':
+        return await proxyFetch('https://inventaire.io/api/items/delete', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+
       case 'lists-by-creator':
         return await proxyFetch(`https://inventaire.io/api/lists/by-creators?users=${encodeURIComponent(req.query.userId as string)}`, { headers });
 
@@ -131,7 +156,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await proxyFetch('https://inventaire.io/api/lists', {
           method: 'POST',
           headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: req.body.name, type: 'work' }) 
+          body: JSON.stringify({ name: body?.name, type: 'work' }) 
         });
 
       case 'lists-get':
@@ -141,14 +166,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await proxyFetch('https://inventaire.io/api/lists/add-elements', {
           method: 'PUT',
           headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: req.body.id, uris: req.body.uris }) 
+          body: JSON.stringify({ id: body?.id, uris: body?.uris }) 
         });
 
       case 'lists-remove-elements':
         return await proxyFetch('https://inventaire.io/api/lists/remove-elements', {
           method: 'PUT',
           headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: req.body.id, uris: req.body.uris }) 
+          body: JSON.stringify({ id: body?.id, uris: body?.uris }) 
         });
 
       case 'shelves': {
@@ -164,7 +189,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return await proxyFetch(newUrl.toString(), {
           method: req.method,
           headers: req.method !== 'GET' ? { ...headers, 'Content-Type': 'application/json' } : headers,
-          body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(req.body) : undefined
+          body: (req.method !== 'GET' && req.method !== 'HEAD') ? JSON.stringify(body) : undefined
         });
       }
 

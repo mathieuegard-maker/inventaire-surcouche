@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import { wishlistService } from '../../core/services/wishlist.service';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
@@ -12,13 +14,30 @@ import WireframeTable from '../components/WireframeTable.vue';
 import WireframePagination from '../components/WireframePagination.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
+import { getOrCreateViewState, saveViewState } from '../../state/viewState';
 
 const allWishBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
+const showDeleteModal = ref(false);
 
-const selectedGenre = ref('all');
-const selectedAuthor = ref('all');
+const stateKey = 'wishlist';
+const pageState = getOrCreateViewState(stateKey, {
+  currentPage: 1,
+  pageSize: 20,
+  searchQuery: '',
+  filters: {
+    genre: 'all',
+    author: 'all'
+  }
+});
+
+const selectedGenre = ref(pageState.filters.genre || 'all');
+const selectedAuthor = ref(pageState.filters.author || 'all');
+
+const currentPage = ref(pageState.currentPage);
+const pageSize = ref(pageState.pageSize);
+const searchQuery = ref(pageState.searchQuery);
 
 const displayedWishBooks = ref<HumanizedBook[]>([]);
 
@@ -27,8 +46,35 @@ const isAllSelected = computed(() => {
   return targets.length > 0 && selectedIds.value.length === targets.length;
 });
 
+watch(selectedGenre, (newGenre) => {
+  pageState.filters.genre = newGenre;
+});
+watch(selectedAuthor, (newAuthor) => {
+  pageState.filters.author = newAuthor;
+});
+watch(currentPage, (val) => {
+  pageState.currentPage = val;
+});
+watch(pageSize, (val) => {
+  pageState.pageSize = val;
+});
+watch(searchQuery, (val) => {
+  pageState.searchQuery = val;
+});
+
+onBeforeRouteLeave((to, from) => {
+  saveViewState(stateKey, {
+    scrollPosition: window.scrollY || document.documentElement.scrollTop
+  });
+});
+
 onMounted(async () => {
   await fetchWishlist();
+  if (pageState.scrollPosition > 0) {
+    setTimeout(() => {
+      window.scrollTo({ top: pageState.scrollPosition, behavior: 'instant' });
+    }, 100);
+  }
 });
 
 const fetchWishlist = async () => {
@@ -119,8 +165,13 @@ const handleToggleAll = (checked: boolean) => {
   }
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
   if (selectedIds.value.length === 0) return;
+
+  if (action === 'DELETE') {
+    showDeleteModal.value = true;
+    return;
+  }
 
   try {
     for (const uri of selectedIds.value) {
@@ -129,6 +180,18 @@ const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'L
     await fetchWishlist();
   } catch (e) {
     console.error("[WISHLIST BATCH ERROR]", e);
+  }
+};
+
+const confirmGroupDelete = async () => {
+  try {
+    await wishlistService.removeFromWishlist(selectedIds.value);
+    await fetchWishlist();
+  } catch (e) {
+    console.error("Erreur lors de la suppression en lot de la wishlist :", e);
+  } finally {
+    showDeleteModal.value = false;
+    selectedIds.value = [];
   }
 };
 
@@ -160,75 +223,104 @@ const resetFilters = () => {
       </div>
     </div>
 
-    <WireframePagination
-      v-if="!isLoading"
-      :items="filteredBooks"
-      :searchKeys="['title', 'series', 'authors']"
-      :hasSelectAll="true"
-      :selectAllValue="isAllSelected"
-      :selectedCount="selectedIds.length"
-      @update:selectAllValue="handleToggleAll"
-      @update:processedItems="(val) => displayedWishBooks = val"
-    />
-
-    <BatchActionBar 
-      v-if="!isLoading"
-      :selected-count="selectedIds.length"
-      :is-mixed="false"
-      context="wishlist"
-      @execute="dispatchBatchAction"
-    />
-
     <BaseLoading v-if="isLoading" />
 
-    <div class="main-content-wrapper" v-else>
-      <BaseBanner v-if="displayedWishBooks.length === 0" type="error" :message="TEXTS.wishlistView?.emptyWishlist" />
+    <template v-else>
+      <WireframePagination
+        :items="filteredBooks"
+        :searchKeys="['title', 'series', 'authors']"
+        :hasSelectAll="true"
+        :selectAllValue="isAllSelected"
+        :selectedCount="selectedIds.length"
+        v-model:currentPage="currentPage"
+        v-model:pageSize="pageSize"
+        v-model:searchQuery="searchQuery"
+        @update:selectAllValue="handleToggleAll"
+        @update:processedItems="(val) => displayedWishBooks = val"
+      >
+        <div class="main-content-wrapper">
+          <BaseBanner v-if="displayedWishBooks.length === 0" type="error" :message="TEXTS.wishlistView?.emptyWishlist" />
 
-      <template v-else>
-        <div v-for="group in sortedSeriesGroups" :key="group.name">
-          <div class="wishlist-section-header">
-            {{ TEXTS.wishlistView?.seriesSection }}{{ group.name }}
-          </div>
-          <WireframeTable>
-            <BookMiniCard 
-              v-for="livre in group.tomes" 
-              :key="livre.uri" 
-              :book="livre"
-              :model-value="selectedIds.includes(livre.uri)"
-              @update:model-value="(val) => {
-                if (val) {
-                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-                } else {
-                  const idx = selectedIds.indexOf(livre.uri);
-                  if (idx > -1) selectedIds.splice(idx, 1);
-                }
-              }"
-            />
-          </WireframeTable>
+          <template v-else>
+            <div v-for="group in sortedSeriesGroups" :key="group.name">
+              <div class="wishlist-section-header">
+                {{ TEXTS.wishlistView?.seriesSection }}{{ group.name }}
+              </div>
+              <WireframeTable>
+                <BookMiniCard 
+                  v-for="livre in group.tomes" 
+                  :key="livre.uri" 
+                  :book="livre"
+                  :model-value="selectedIds.includes(livre.uri)"
+                  @update:model-value="(val) => {
+                    if (val) {
+                      if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                    } else {
+                      const idx = selectedIds.indexOf(livre.uri);
+                      if (idx > -1) selectedIds.splice(idx, 1);
+                    }
+                  }"
+                />
+              </WireframeTable>
+            </div>
+
+            <div v-if="independentBooksSorted.length > 0">
+              <div class="wishlist-section-header">
+                ✨ {{ TEXTS.wishlistView?.independentBooks }}
+              </div>
+              <WireframeTable>
+                <BookMiniCard 
+                  v-for="livre in independentBooksSorted" 
+                  :key="livre.uri" 
+                  :book="livre"
+                  :model-value="selectedIds.includes(livre.uri)"
+                  @update:model-value="(val) => {
+                    if (val) {
+                      if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                    } else {
+                      const idx = selectedIds.indexOf(livre.uri);
+                      if (idx > -1) selectedIds.splice(idx, 1);
+                    }
+                  }"
+                />
+              </WireframeTable>
+            </div>
+          </template>
         </div>
 
-        <div v-if="independentBooksSorted.length > 0">
-          <div class="wishlist-section-header">
-            ✨ {{ TEXTS.wishlistView?.independentBooks }}
-          </div>
-          <WireframeTable>
-            <BookMiniCard 
-              v-for="livre in independentBooksSorted" 
-              :key="livre.uri" 
-              :book="livre"
-              :model-value="selectedIds.includes(livre.uri)"
-              @update:model-value="(val) => {
-                if (val) {
-                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-                } else {
-                  const idx = selectedIds.indexOf(livre.uri);
-                  if (idx > -1) selectedIds.splice(idx, 1);
-                }
-              }"
-            />
-          </WireframeTable>
+        <BatchActionBar 
+          :selected-count="selectedIds.length"
+          :is-mixed="false"
+          context="wishlist"
+          @execute="dispatchBatchAction"
+        />
+      </WireframePagination>
+    </template>
+
+    <!-- Modal de confirmation de suppression en lot pour la wishlist -->
+    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+      <div class="modal-box">
+        <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+        <p class="modal-text">
+          {{ selectedIds.length > 1 
+            ? (TEXTS.batchActionBar?.deleteConfirmWishMsgPlural || 'Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d\'envies ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
+            : (TEXTS.batchActionBar?.deleteConfirmWishMsgSingular || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
+          }}
+        </p>
+        
+        <div class="modal-actions">
+          <button 
+            @click="confirmGroupDelete" 
+            class="btn-danger"
+          >
+            {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
+          </button>
+          
+          <button @click="showDeleteModal = false" class="btn-close">
+            {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
+          </button>
         </div>
-      </template>
+      </div>
     </div>
   </div>
 </template>

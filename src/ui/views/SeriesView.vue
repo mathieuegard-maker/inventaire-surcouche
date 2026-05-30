@@ -156,48 +156,51 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       </div>
     </div>
 
-    <WireframePagination
-      v-if="!isLoading"
-      :items="seriesTomes"
-      :searchKeys="['title']"
-      :hasSelectAll="true"
-      :selectAllValue="isAllSelected"
-      :selectedCount="selectedIds.length"
-      @update:selectAllValue="handleToggleAll"
-      @update:processedItems="(val) => displayedTomes = val"
-    />
-
-    <BatchActionBar 
-      v-if="!isLoading"
-      :selected-count="selectedIds.length"
-      :is-mixed="isSelectionMixed"
-      :context="batchContext"
-      @execute="dispatchBatchAction"
-    />
-
     <BaseLoading v-if="isLoading" />
 
     <template v-else>
-      <div v-if="displayedTomes.length === 0 && !progressState.isActive">
+      <div v-if="seriesTomes.length === 0 && !progressState.isActive">
         <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
       </div>
 
-      <WireframeTable v-else>
-        <BookMiniCard 
-          v-for="livre in displayedTomes" 
-          :key="livre.uri" 
-          :book="livre"
-          :model-value="selectedIds.includes(livre.uri)"
-          @update:model-value="(val) => {
-            if (val) {
-              if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-            } else {
-              const idx = selectedIds.indexOf(livre.uri);
-              if (idx > -1) selectedIds.splice(idx, 1);
-            }
-          }"
+      <WireframePagination
+        v-else
+        :items="seriesTomes"
+        :searchKeys="['title']"
+        :hasSelectAll="true"
+        :selectAllValue="isAllSelected"
+        :selectedCount="selectedIds.length"
+        @update:selectAllValue="handleToggleAll"
+        @update:processedItems="(val) => displayedTomes = val"
+      >
+        <div v-if="displayedTomes.length === 0">
+          <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+        </div>
+
+        <WireframeTable v-else>
+          <BookMiniCard 
+            v-for="livre in displayedTomes" 
+            :key="livre.uri" 
+            :book="livre"
+            :model-value="selectedIds.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if (val) {
+                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+              } else {
+                const idx = selectedIds.indexOf(livre.uri);
+                if (idx > -1) selectedIds.splice(idx, 1);
+              }
+            }"
+          />
+        </WireframeTable>
+
+        <BatchActionBar 
+          :selected-count="selectedIds.length"
+          :is-mixed="isSelectionMixed"
+          :context="batchContext"
+          @execute="dispatchBatchAction"
         />
-      </WireframeTable>
+      </WireframePagination>
     </template>
 
     <LendModal
