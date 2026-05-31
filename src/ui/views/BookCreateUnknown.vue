@@ -11,11 +11,15 @@ import BaseButton from '../components/BaseButton.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { imageUtil } from '../../core/utils/image.util';
+import { connectionState } from '../../state/connection';
+import { inventaireSyncService } from '../../core/services/inventaire-sync.service';
+import { inventoryService } from '../../core/services/inventory.service';
 
 const route = useRoute();
 const router = useRouter();
 
 const isLoading = ref(true);
+const loadingStatus = ref('Recherche des métadonnées...');
 const errorMsg = ref<string | null>(null);
 const successMsg = ref<string | null>(null);
 
@@ -64,6 +68,7 @@ onMounted(async () => {
     return;
   }
 
+  loadingStatus.value = "Recherche des métadonnées externes (BNF, Open Library)...";
   console.log(`[CREATE UNKNOWN] Lancement de l'aspiration externe pour l'ISBN : ${normalizedIsbn}`);
   try {
     const extData = await externalMetadataService.fetchFromExternalSources(normalizedIsbn);
@@ -92,6 +97,11 @@ const handleSave = async () => {
   errorMsg.value = null;
   successMsg.value = null;
 
+  if (connectionState.isOffline.value) {
+    errorMsg.value = "Vous devez être en ligne pour créer un livre sur inventaire.io.";
+    return;
+  }
+
   if (!titleInput.value.trim()) {
     errorMsg.value = "Le titre du livre est obligatoire.";
     return;
@@ -103,6 +113,7 @@ const handleSave = async () => {
   }
 
   isLoading.value = true;
+  loadingStatus.value = "Création et synchronisation sur inventaire.io...";
 
   try {
     const cleanTitle = titleInput.value.trim();
@@ -111,7 +122,7 @@ const handleSave = async () => {
       .map(a => a.trim())
       .filter(Boolean);
 
-    const book: HumanizedBook = {
+    const tempBook: HumanizedBook = {
       uri: `isbn:${normalizedIsbn}`,
       isbn13: normalizedIsbn.length === 13 ? normalizedIsbn : undefined,
       isbn10: normalizedIsbn.length === 10 ? normalizedIsbn : undefined,
@@ -125,21 +136,36 @@ const handleSave = async () => {
       pageCount: pageCountInput.value || undefined,
       coverUrl: coverUrlInput.value.trim() || undefined,
       genres: [],
-      ownershipStatus: 'none', // Par défaut 'none' pour laisser l'utilisateur l'ajouter ensuite
+      ownershipStatus: 'none',
       series: noSeries.value ? undefined : (seriesInput.value.trim() || undefined),
       seriesNumber: noSeries.value ? undefined : (seriesNumberInput.value.trim() || undefined)
     };
 
-    console.log(`[CREATE UNKNOWN] Sauvegarde du nouveau livre local :`, book);
-    await bookCacheService.saveAndProcessImage(book);
+    console.log(`[CREATE UNKNOWN] Synchronisation en ligne...`);
+    const syncResult = await inventaireSyncService.syncBookToInventaire(tempBook);
 
-    successMsg.value = "Ouvrage créé avec succès dans la base locale ! Redirection...";
+    loadingStatus.value = "Ajout à votre collection sur inventaire.io...";
+    await inventoryService.addToLibrary(syncResult.editionUri);
+
+    loadingStatus.value = "Sauvegarde locale et redirection...";
+    const finalBook: HumanizedBook = {
+      ...tempBook,
+      uri: syncResult.editionUri,
+      workUri: syncResult.workUri,
+      seriesId: syncResult.seriesUri,
+      ownershipStatus: 'owned'
+    };
+
+    console.log(`[CREATE UNKNOWN] Sauvegarde locale du livre résolu :`, finalBook);
+    await bookCacheService.saveAndProcessImage(finalBook, 'owned');
+
+    successMsg.value = "Ouvrage créé et ajouté à votre collection avec succès ! Redirection...";
     setTimeout(() => {
-      router.push(`/book/${encodeURIComponent(book.uri)}`);
+      router.push(`/book/${encodeURIComponent(finalBook.uri)}`);
     }, 1500);
   } catch (err: any) {
     console.error("[CREATE UNKNOWN] Erreur lors de la sauvegarde :", err);
-    errorMsg.value = "Impossible de sauvegarder l'ouvrage localement : " + err.message;
+    errorMsg.value = "Impossible de créer l'ouvrage : " + err.message;
     isLoading.value = false;
   }
 };
@@ -149,7 +175,12 @@ const handleSave = async () => {
   <div class="view-container">
     <BaseHeader title="Création d'ouvrage" showBack />
 
-    <BaseLoading v-if="isLoading && !successMsg" />
+    <div v-if="isLoading && !successMsg" style="display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md); margin-top: var(--spacing-xl);">
+      <BaseLoading />
+      <p style="font-family: var(--font-main); font-size: 13px; color: var(--color-text-muted); font-weight: bold; text-align: center; text-transform: uppercase;">
+        {{ loadingStatus }}
+      </p>
+    </div>
 
     <div v-else class="creation-unknown-container">
       <BaseBanner v-if="errorMsg" type="error" :message="errorMsg" />
@@ -158,7 +189,7 @@ const handleSave = async () => {
       <div v-if="!successMsg" class="creation-box">
         <div class="info-alert-banner">
           <p>
-            <strong>ISBN inconnu d'inventaire.io :</strong> Nous avons cherché des informations sur la BNF et Open Library pour vous aider à pré-remplir la fiche de cet ouvrage. Vous pouvez modifier et valider les champs ci-dessous pour l'enregistrer dans votre base locale.
+            <strong>ISBN inconnu d'inventaire.io :</strong> Nous avons cherché des informations sur la BNF et Open Library pour vous aider à pré-remplir la fiche de cet ouvrage. Vous pouvez modifier et valider les champs ci-dessous pour le créer sur inventaire.io et l'ajouter à votre collection.
           </p>
         </div>
 
@@ -241,7 +272,7 @@ const handleSave = async () => {
 
         <div class="form-actions-row">
           <BaseButton type="primary" @click="handleSave" class="btn-save-creation">
-            [ CRÉER L'OUVRAGE LOCALEMENT ]
+            [ ENREGISTRER SUR INVENTAIRE.IO ]
           </BaseButton>
         </div>
       </div>

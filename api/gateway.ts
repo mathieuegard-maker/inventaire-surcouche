@@ -199,6 +199,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'entities-by-uris':
         return await proxyFetch(`https://inventaire.io/api/entities/by-uris?uris=${req.query.uris}`, { headers });
 
+      case 'entities-create': {
+        return await proxyFetch('https://inventaire.io/api/entities', {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      }
+
       case 'external-lookup': {
         const { isbn, source } = req.query;
         if (!isbn) return res.status(400).json({ error: "ISBN requis" });
