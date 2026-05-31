@@ -18,6 +18,7 @@ import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { imageUtil } from '../../core/utils/image.util';
 
 const router = useRouter();
 const route = useRoute();
@@ -176,7 +177,7 @@ const seriesGondolas = computed(() => {
       id: g.id,
       name: g.name,
       ownedCount: g.tomes.length,
-      coverUrl: g.tomes[0]?.localCover || g.tomes[0]?.coverUrl
+      coverUrl: imageUtil.resolveCoverUrl(g.tomes[0])
     };
   });
 

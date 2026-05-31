@@ -4,6 +4,7 @@ import BaseButton from './BaseButton.vue';
 import BookActionButtons from './BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { SearchResponse } from '../../core/types';
+import { imageUtil } from '../../core/utils/image.util';
 
 const props = defineProps<{
   searchResult: SearchResponse;
@@ -35,7 +36,7 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
     <div class="book-card-layout">
       <img 
         v-if="book.localCover || book.coverUrl" 
-        :src="book.localCover || book.coverUrl" 
+        :src="imageUtil.resolveCoverUrl(book)" 
         :alt="book.title" 
         class="book-cover-image" 
       />

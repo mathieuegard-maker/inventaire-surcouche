@@ -205,7 +205,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!source) return res.status(400).json({ error: "Source requise (bnf ou openlibrary)" });
 
         if (source === 'bnf') {
-          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn as string)}%22&recordSchema=dublincore`;
+          const recordSchema = req.query.schema === 'intermarc' ? 'intermarcxchange' : 'dublincore';
+          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn as string)}%22&recordSchema=${recordSchema}`;
           const bnfRes = await resilientFetch(bnfUrl);
           const bnfText = await bnfRes.text();
           res.setHeader('Content-Type', 'application/xml; charset=utf-8');
@@ -219,6 +220,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         } else {
           return res.status(400).json({ error: `Source '${source}' non reconnue.` });
         }
+      }
+
+      case 'google-books': {
+        const { isbn } = req.query;
+        if (!isbn) return res.status(400).json({ error: "ISBN requis" });
+        
+        const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn as string)}`;
+        const gbRes = await resilientFetch(gbUrl);
+        const gbText = await gbRes.text();
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.status(gbRes.status).send(gbText);
       }
 
       case 'image-proxy': {

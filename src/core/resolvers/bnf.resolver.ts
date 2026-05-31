@@ -78,6 +78,47 @@ export function cleanPageCount(rawFormat: string): number | undefined {
   return match ? parseInt(match[1], 10) : undefined;
 }
 
+/**
+ * Tente d'extraire le nom de la série et le numéro à partir des relations BNF
+ */
+export function extractSeriesInfo(relations: string[]): { series?: string; seriesNumber?: string } {
+  for (const relation of relations) {
+    // Cas 1: Collection principale : (Nom ; Numéro) ou Collection : (Nom ; Numéro)
+    const matchParentheses = relation.match(/Collection\s*(?:principale)?\s*:\s*\(([^;)]+)(?:\s*;\s*([^)]+))?\)/i);
+    if (matchParentheses) {
+      return {
+        series: matchParentheses[1].trim(),
+        seriesNumber: matchParentheses[2] ? matchParentheses[2].trim() : undefined
+      };
+    }
+
+    // Cas 2: Collection principale : Nom ou Collection : Nom
+    const matchSimple = relation.match(/Collection\s*(?:principale)?\s*:\s*([^;(\n]+)/i);
+    if (matchSimple) {
+      return {
+        series: matchSimple[1].trim()
+      };
+    }
+  }
+  return {};
+}
+
+/**
+ * Extrait l'identifiant d'image de couverture depuis le XML au format InterMarc
+ */
+export function extractBnfCoverId(xml: string): string | null {
+  const tag950Regex = /<[^:>]*:datafield[^>]*tag="950"[^>]*>([\s\S]*?)<\/[^:>]*:datafield>/;
+  const match950 = tag950Regex.exec(xml);
+  if (!match950) return null;
+
+  const content950 = match950[1];
+  const subfieldARegex = /<[^:>]*:subfield[^>]*code="a"[^>]*>([\s\S]*?)<\/[^:>]*:subfield>/;
+  const matchSubfieldA = subfieldARegex.exec(content950);
+  
+  return matchSubfieldA ? matchSubfieldA[1].trim() : null;
+}
+
+
 export const bnfResolver = {
   async resolve(isbn: string): Promise<ExternalBookMetadata | null> {
     try {
@@ -106,10 +147,30 @@ export const bnfResolver = {
       const rawPublishers = extractTagContents(xmlText, 'dc:publisher');
       const rawDates = extractTagContents(xmlText, 'dc:date');
       const rawFormats = extractTagContents(xmlText, 'dc:format');
+      const rawRelations = extractTagContents(xmlText, 'dc:relation');
 
       if (rawTitles.length === 0) {
         console.warn(`[BNF RESOLVER] Notice BNF présente mais titre introuvable.`);
         return null;
+      }
+
+      const seriesInfo = extractSeriesInfo(rawRelations);
+
+      // Récupération de la couverture via le schéma InterMarc (double-fetch)
+      let coverUrl: string | undefined = undefined;
+      try {
+        const gatewayImUrl = `/api/gateway?action=external-lookup&isbn=${encodeURIComponent(isbn)}&source=bnf&schema=intermarc`;
+        const imRes = await fetchWithTimeout(gatewayImUrl);
+        if (imRes.ok) {
+          const imXmlText = await imRes.text();
+          const coverId = extractBnfCoverId(imXmlText);
+          if (coverId) {
+            coverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
+            console.log(`[BNF RESOLVER] Image de couverture BNF trouvée : ${coverUrl}`);
+          }
+        }
+      } catch (coverErr: any) {
+        console.warn(`[BNF RESOLVER] Erreur lors de la récupération de la couverture :`, coverErr.message);
       }
 
       return {
@@ -118,7 +179,9 @@ export const bnfResolver = {
         authors: rawCreators.map(cleanAuthor).filter(Boolean),
         publisher: rawPublishers.length > 0 ? cleanPublisher(rawPublishers[0]) : undefined,
         publishDate: rawDates.length > 0 ? cleanPublishDate(rawDates[0]) : undefined,
-        pageCount: rawFormats.length > 0 ? cleanPageCount(rawFormats[0]) : undefined
+        pageCount: rawFormats.length > 0 ? cleanPageCount(rawFormats[0]) : undefined,
+        coverUrl,
+        ...seriesInfo
       };
     } catch (e: any) {
       console.error(`[BNF RESOLVER] Erreur lors de la résolution de l'ISBN ${isbn}:`, e.message);

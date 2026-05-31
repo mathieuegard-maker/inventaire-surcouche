@@ -17,6 +17,7 @@ import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
+import { imageUtil } from '../../core/utils/image.util';
 
 const route = useRoute();
 const router = useRouter();
@@ -97,7 +98,11 @@ const loadBookDetails = async (uriParam: string) => {
     if (isbnUtil.isValidFormat(normalized)) {
       console.log(`[DETAIL VIEW] Détection ISBN : Aiguillage vers le flux de recherche standard pour : ${normalized}`);
       const response = await searchService.searchByIsbn(normalized);
-      if (response && response.mainBook) {
+      if (response) {
+        if ('isUnknown' in response && (response as any).isUnknown) {
+          router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
+          return;
+        }
         const mainBook = response.mainBook;
         if (response.loan?.details) {
           mainBook.loan = response.loan.details;
@@ -295,7 +300,7 @@ const confirmDelete = async () => {
             </div>
             <img 
               v-else 
-              :src="book.localCover || book.coverUrl" 
+              :src="imageUtil.resolveCoverUrl(book)" 
               :alt="book.title" 
               class="book-cover-image" 
             />

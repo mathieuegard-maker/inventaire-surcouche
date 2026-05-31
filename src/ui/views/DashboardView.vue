@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
+import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
@@ -20,10 +21,14 @@ const handleSearch = async (isbn: string) => {
   if (!isbn) return;
   errorMessage.value = null;
   try {
-    const cleanedIsbn = isbn.replace(/-/g, '');
+    const cleanedIsbn = isbnUtil.normalize(isbn);
     const response = await searchService.searchByIsbn(cleanedIsbn);
-    if (response && response.mainBook?.uri) {
-      router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+    if (response) {
+      if ('isUnknown' in response && (response as any).isUnknown) {
+        router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
+      } else if (response.mainBook?.uri) {
+        router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+      }
     } else {
       errorMessage.value = TEXTS.scanner.notFound;
     }

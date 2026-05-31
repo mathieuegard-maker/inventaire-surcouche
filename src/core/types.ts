@@ -119,4 +119,6 @@ export interface ExternalBookMetadata {
   publishDate?: string;
   pageCount?: number;
   coverUrl?: string;
+  series?: string;
+  seriesNumber?: string;
 }

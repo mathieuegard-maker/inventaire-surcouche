@@ -2,6 +2,7 @@
 import { useRouter } from 'vue-router';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
+import { imageUtil } from '../../core/utils/image.util';
 
 const props = defineProps<{
   book: HumanizedBook;
@@ -39,7 +40,7 @@ const handleZoneClick = () => {
     <div class="row-cover-container">
       <img 
         v-if="book.localCover || book.coverUrl" 
-        :src="book.localCover || book.coverUrl" 
+        :src="imageUtil.resolveCoverUrl(book)" 
         :alt="book.title"
         class="row-cover-image"
       />

@@ -55,6 +55,11 @@ export const router = createRouter({
       component: AuthorView
     },
     {
+      path: '/book/create-unknown',
+      name: 'BookCreateUnknown',
+      component: () => import('../ui/views/BookCreateUnknown.vue')
+    },
+    {
       path: '/book/:uri',
       name: 'BookDetail',
       component: BookDetailView

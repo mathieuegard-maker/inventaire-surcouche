@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { databaseService, db } from '../../core/database/database.service';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
+import { imageUtil } from '../../core/utils/image.util';
 
 const allBooks = ref<HumanizedBook[]>([]);
 const searchQuery = ref('');
@@ -71,7 +72,7 @@ const clearDatabase = async () => {
       <tbody>
         <tr v-for="book in filteredBooks" :key="book.uri">
           <td>
-            <img v-if="book.localCover || book.coverUrl" :src="book.localCover || book.coverUrl" class="debug-cover-img" />
+            <img v-if="book.localCover || book.coverUrl" :src="imageUtil.resolveCoverUrl(book)" class="debug-cover-img" />
             <span v-else>❌</span>
           </td>
           <td>{{ book.title }}</td>

@@ -21,7 +21,10 @@ vi.mock('../services/wishlist.service', () => ({
   wishlistService: { isUriWished: vi.fn() }
 }));
 vi.mock('../resolvers/entity.resolver', () => ({
-  entityResolver: { fromIsbn: vi.fn() }
+  entityResolver: { 
+    fromIsbn: vi.fn(),
+    resolvePhysicalEntity: vi.fn()
+  }
 }));
 vi.mock('../resolvers/humanizer', () => ({
   entityHumanizer: { humanize: vi.fn() }
@@ -74,5 +77,22 @@ describe('Search Orchestrator (TTL & Cache)', () => {
     expect(res?.source).toBe('cache');
     // ... MAIS la mise à jour fantôme a bien été ordonnée en tâche de fond !
     expect(syncOrchestrator.refreshBookInBackground).toHaveBeenCalledWith('9782012101524');
+  });
+
+  it('doit renvoyer un statut isUnknown si le livre n\'existe ni en cache ni sur le réseau inventaire.io', async () => {
+    // Arrange : Livre absent du cache et absent du réseau
+    const { entityResolver } = await import('../resolvers/entity.resolver');
+    
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(undefined);
+    vi.mocked(entityResolver.resolvePhysicalEntity).mockResolvedValue(null);
+
+    // Act
+    const res = await searchService.searchByIsbn('9782355848858');
+
+    // Assert
+    expect(res).toEqual({
+      isUnknown: true,
+      isbn: '9782355848858'
+    });
   });
 });

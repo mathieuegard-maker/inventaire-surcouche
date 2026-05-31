@@ -38,9 +38,9 @@ export const searchService = {
       book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
       
       if (!book) {
-        console.error(`[SEARCH] Échec de la résolution réseau pour : ${isbn}`);
+        console.warn(`[SEARCH] Échec de la résolution réseau pour : ${isbn}. Bascule vers l'agrégation de création.`);
         console.groupEnd();
-        return null;
+        return { isUnknown: true, isbn } as any;
       }
       
       source = 'network';

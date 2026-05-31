@@ -21,11 +21,15 @@ export const scannerState = {
       try {
         await barcodeIsbnProvider.startScanner(
           'global-barcode-scanner-viewport',
-          (response) => {
+          (response: any) => {
             isScanningActive.value = false;
             isSearching.value = false;
-            if (response && response.mainBook?.uri) {
-              router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+            if (response) {
+              if (response.isUnknown) {
+                router.push({ name: 'BookCreateUnknown', query: { isbn: response.isbn } });
+              } else if (response.mainBook?.uri) {
+                router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+              }
             } else {
               errorMessage.value = TEXTS.scanner?.notFound || 'Ouvrage non trouvé.';
             }

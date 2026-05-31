@@ -6,10 +6,67 @@ import {
   cleanAuthor, 
   cleanPublisher, 
   cleanPublishDate, 
-  cleanPageCount 
+  cleanPageCount,
+  extractSeriesInfo,
+  extractBnfCoverId
 } from './bnf.resolver';
 
 describe('BNF Resolver & Parsers', () => {
+
+  describe('extractSeriesInfo', () => {
+    it('doit extraire la serie et le numero entre parentheses', () => {
+      const relations = ['Collection principale : (Astérix ; 39)', 'Autre relation'];
+      expect(extractSeriesInfo(relations)).toEqual({
+        series: 'Astérix',
+        seriesNumber: '39'
+      });
+    });
+
+    it('doit extraire uniquement la serie si pas de numero', () => {
+      const relations = ['Collection principale : (Sillage)'];
+      expect(extractSeriesInfo(relations)).toEqual({
+        series: 'Sillage',
+        seriesNumber: undefined
+      });
+    });
+
+    it('doit extraire la serie simple sans parentheses', () => {
+      const relations = ['Collection : Astérix'];
+      expect(extractSeriesInfo(relations)).toEqual({
+        series: 'Astérix',
+        seriesNumber: undefined
+      });
+    });
+
+    it('doit renvoyer un objet vide si aucune relation correspondante', () => {
+      expect(extractSeriesInfo(['Autre relation'])).toEqual({});
+      expect(extractSeriesInfo([])).toEqual({});
+    });
+  });
+
+  describe('extractBnfCoverId', () => {
+    it('doit extraire l\'identifiant de la sous-zone a du tag 950', () => {
+      const xml = `<mxc:datafield tag="950" ind1=" " ind2=" ">
+        <mxc:subfield code="a">119563</mxc:subfield>
+        <mxc:subfield code="b">C1</mxc:subfield>
+      </mxc:datafield>`;
+      expect(extractBnfCoverId(xml)).toBe('119563');
+    });
+
+    it('doit retourner null si le tag 950 n\'existe pas', () => {
+      const xml = `<mxc:datafield tag="930" ind1=" " ind2=" ">
+        <mxc:subfield code="a">FR-751131010</mxc:subfield>
+      </mxc:datafield>`;
+      expect(extractBnfCoverId(xml)).toBeNull();
+    });
+
+    it('doit retourner null si la sous-zone a du tag 950 n\'existe pas', () => {
+      const xml = `<mxc:datafield tag="950" ind1=" " ind2=" ">
+        <mxc:subfield code="b">C1</mxc:subfield>
+      </mxc:datafield>`;
+      expect(extractBnfCoverId(xml)).toBeNull();
+    });
+  });
 
   describe('cleanTitle', () => {
     it('doit extraire le titre principal avant le premier slash', () => {
@@ -62,8 +119,68 @@ describe('BNF Resolver & Parsers', () => {
   });
 
   describe('resolve', () => {
-    it('doit résoudre les métadonnées BNF d\'un XML de réponse valide', async () => {
-      const mockXml = `<?xml version="1.0" encoding="UTF-8"?>
+    it('doit résoudre les métadonnées BNF d\'un XML de réponse valide avec couverture', async () => {
+      const mockDcXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>1</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <oai_dc:dc xmlns:dc="http://purl.org/dc/elements/1.1/">
+                <dc:title>Le Petit Prince / Antoine de Saint-Exupéry</dc:title>
+                <dc:creator>Saint-Exupéry, Antoine de (1900-1944). Auteur du texte</dc:creator>
+                <dc:publisher>Gallimard (Paris)</dc:publisher>
+                <dc:date>2007</dc:date>
+                <dc:format>1 vol. (113 p.) ; 18 cm</dc:format>
+              </oai_dc:dc>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      const mockImXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>1</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2" format="INTERMARC" id="ark:/12148/cb41023439w" type="Bibliographic">
+                <mxc:datafield tag="950" ind1=" " ind2=" ">
+                  <mxc:subfield code="a">119563</mxc:subfield>
+                  <mxc:subfield code="b">C1</mxc:subfield>
+                </mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      const globalFetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('schema=intermarc')) {
+          return Promise.resolve({
+            ok: true,
+            text: () => Promise.resolve(mockImXml)
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve(mockDcXml)
+        });
+      });
+      vi.stubGlobal('fetch', globalFetchMock);
+
+      const result = await bnfResolver.resolve('9782070612758');
+      expect(result).not.toBeNull();
+      expect(result?.title).toBe('Le Petit Prince');
+      expect(result?.authors).toEqual(['Antoine de Saint-Exupéry']);
+      expect(result?.publisher).toBe('Gallimard');
+      expect(result?.publishDate).toBe('2007');
+      expect(result?.pageCount).toBe(113);
+      expect(result?.coverUrl).toBe('https://catalogue.bnf.fr/couverture?idImage=119563&couverture=1&appName=NE');
+    });
+
+    it('doit résoudre les métadonnées sans couverture si l\'InterMarc n\'en a pas', async () => {
+      const mockDcXml = `<?xml version="1.0" encoding="UTF-8"?>
       <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
         <srw:numberOfRecords>1</srw:numberOfRecords>
         <srw:records>
@@ -71,29 +188,45 @@ describe('BNF Resolver & Parsers', () => {
             <srw:recordData>
               <oai_dc:dc xmlns:dc="http://purl.org/dc/elements/1.1/">
                 <dc:title>Celle qui brûle / Paula Hawkins</dc:title>
-                <dc:creator>Hawkins, Paula (1972-....). Auteur du texte</dc:creator>
-                <dc:publisher>Sonatine éditions (Paris)</dc:publisher>
-                <dc:date>2021</dc:date>
-                <dc:format>1 vol. (346 p.) ; 22 cm</dc:format>
+                <dc:creator>Hawkins, Paula. Auteur du texte</dc:creator>
               </oai_dc:dc>
             </srw:recordData>
           </srw:record>
         </srw:records>
       </srw:searchRetrieveResponse>`;
 
-      const globalFetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        text: () => Promise.resolve(mockXml)
+      const mockImXmlWithoutCover = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>1</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2" format="INTERMARC" id="ark:/12148/cb468521385" type="Bibliographic">
+                <mxc:datafield tag="930" ind1=" " ind2=" "></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      const globalFetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes('schema=intermarc')) {
+          return Promise.resolve({
+            ok: true,
+            text: () => Promise.resolve(mockImXmlWithoutCover)
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          text: () => Promise.resolve(mockDcXml)
+        });
       });
       vi.stubGlobal('fetch', globalFetchMock);
 
       const result = await bnfResolver.resolve('9782355848858');
       expect(result).not.toBeNull();
       expect(result?.title).toBe('Celle qui brûle');
-      expect(result?.authors).toEqual(['Paula Hawkins']);
-      expect(result?.publisher).toBe('Sonatine éditions');
-      expect(result?.publishDate).toBe('2021');
-      expect(result?.pageCount).toBe(346);
+      expect(result?.coverUrl).toBeUndefined();
     });
 
     it('doit renvoyer null si la notice BNF n\'a aucun enregistrement', async () => {
