@@ -121,16 +121,17 @@ describe('Inventaire Sync Service', () => {
         
         if (url.includes('action=entities-create')) {
           const body = JSON.parse(options.body);
-          if (body.type === 'serie') {
+          const p31 = body.claims?.['wdt:P31']?.[0];
+          if (p31 === 'wd:Q14406742') {
             return Promise.resolve({ ok: true, json: () => Promise.resolve({ entity: { uri: 'inv:series_db' } }) });
           }
-          if (body.type === 'human') {
+          if (p31 === 'wd:Q5') {
             return Promise.resolve({ ok: true, json: () => Promise.resolve({ entity: { uri: 'inv:author_turk' } }) });
           }
-          if (body.type === 'work') {
+          if (p31 === 'wd:Q47461344') {
             return Promise.resolve({ ok: true, json: () => Promise.resolve({ entity: { uri: 'inv:work_db' } }) });
           }
-          if (body.type === 'edition') {
+          if (p31 === 'wd:Q3331189') {
             return Promise.resolve({ ok: true, json: () => Promise.resolve({ entity: { uri: 'inv:edition_db' } }) });
           }
         }

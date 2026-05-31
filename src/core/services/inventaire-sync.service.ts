@@ -30,13 +30,16 @@ export const inventaireSyncService = {
    * Crée une entité de type spécifié sur inventaire.io.
    */
   async createEntity(type: 'serie' | 'work' | 'edition' | 'human', label: string, claims: Record<string, any>): Promise<string> {
-    const body = {
-      type,
-      labels: {
-        fr: label
-      },
+    const body: Record<string, any> = {
       claims
     };
+    
+    // Les éditions ne peuvent pas avoir de label selon l'API d'Inventaire
+    if (type !== 'edition' && label) {
+      body.labels = {
+        fr: label
+      };
+    }
     
     const res = await fetchWithTimeout('/api/gateway?action=entities-create', {
       method: 'POST',
