@@ -199,6 +199,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'entities-by-uris':
         return await proxyFetch(`https://inventaire.io/api/entities/by-uris?uris=${req.query.uris}`, { headers });
 
+      case 'external-lookup': {
+        const { isbn, source } = req.query;
+        if (!isbn) return res.status(400).json({ error: "ISBN requis" });
+        if (!source) return res.status(400).json({ error: "Source requise (bnf ou openlibrary)" });
+
+        if (source === 'bnf') {
+          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn as string)}%22&recordSchema=dublincore`;
+          const bnfRes = await resilientFetch(bnfUrl);
+          const bnfText = await bnfRes.text();
+          res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+          return res.status(bnfRes.status).send(bnfText);
+        } else if (source === 'openlibrary') {
+          const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn as string)}&jscmd=data&format=json`;
+          const olRes = await resilientFetch(olUrl);
+          const olText = await olRes.text();
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          return res.status(olRes.status).send(olText);
+        } else {
+          return res.status(400).json({ error: `Source '${source}' non reconnue.` });
+        }
+      }
+
       case 'image-proxy': {
         const { url } = req.query;
         if (!url) return res.status(400).json({ error: 'URL requise' });

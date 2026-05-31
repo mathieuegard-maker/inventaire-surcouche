@@ -107,3 +107,16 @@ export interface LendPayload {
 
 // Le payload peut être soit vide (pour un retour, ajout wishlist, etc.), soit contenir les infos du prêt
 export type QueueActionPayload = LendPayload | Record<string, never> | undefined;
+
+/**
+ * Métadonnées structurées d'un livre provenant d'une source externe
+ */
+export interface ExternalBookMetadata {
+  isbn: string;
+  title: string;
+  authors: string[];
+  publisher?: string;
+  publishDate?: string;
+  pageCount?: number;
+  coverUrl?: string;
+}
