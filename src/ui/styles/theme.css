@@ -1710,6 +1710,7 @@ h3.wireframe-title {
   background-color: var(--color-bg-alt);
   border-radius: var(--radius-sm);
   transition: all 0.2s ease;
+  cursor: pointer;
 }
 
 .stats-card:hover {

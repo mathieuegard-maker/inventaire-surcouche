@@ -92,19 +92,47 @@ onMounted(async () => {
       <template v-else>
         <!-- Grille des statistiques clés (Globaux) -->
         <div class="stats-grid">
-          <div class="stats-card card-owned">
+          <div 
+            class="stats-card card-owned" 
+            role="button" 
+            tabindex="0" 
+            @click="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
+            @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
+            @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
+          >
             <div class="stats-value">{{ stats.totalOwned }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalOwned }}</div>
           </div>
-          <div class="stats-card card-series">
+          <div 
+            class="stats-card card-series" 
+            role="button" 
+            tabindex="0" 
+            @click="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
+            @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
+            @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
+          >
             <div class="stats-value">{{ stats.totalSeries }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalSeries }}</div>
           </div>
-          <div class="stats-card card-wishlist">
+          <div 
+            class="stats-card card-wishlist" 
+            role="button" 
+            tabindex="0" 
+            @click="router.push({ name: 'WishlistView' })"
+            @keydown.enter="router.push({ name: 'WishlistView' })"
+            @keydown.space.prevent="router.push({ name: 'WishlistView' })"
+          >
             <div class="stats-value">{{ stats.totalWishlist }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalWishlist }}</div>
           </div>
-          <div class="stats-card card-loans">
+          <div 
+            class="stats-card card-loans" 
+            role="button" 
+            tabindex="0" 
+            @click="router.push({ name: 'LoansView' })"
+            @keydown.enter="router.push({ name: 'LoansView' })"
+            @keydown.space.prevent="router.push({ name: 'LoansView' })"
+          >
             <div class="stats-value">{{ stats.totalLoans }}</div>
             <div class="stats-label">
               {{ TEXTS.dashboardStats.loansWithRate.replace('{rate}', stats.loanRate.toString()) }}
