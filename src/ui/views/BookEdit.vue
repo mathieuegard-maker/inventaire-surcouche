@@ -543,9 +543,12 @@ const handleSave = () => {
 
 .apply-btn-inline {
   font-size: 11px !important;
-  padding: 4px 8px !important;
+  padding: 0 8px !important;
   flex-shrink: 0 !important;
   margin: 0 !important;
+  width: auto !important;
+  height: 26px !important;
+  line-height: 26px !important;
 }
 
 .suggestion-match-inline {
