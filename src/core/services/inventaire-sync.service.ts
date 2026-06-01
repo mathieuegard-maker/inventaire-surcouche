@@ -70,7 +70,8 @@ export const inventaireSyncService = {
     let seriesUri: string | undefined = undefined;
     if (book.series?.trim()) {
       console.log(`[INVENTAIRE SYNC] Recherche de la série : ${book.series}`);
-      seriesUri = await this.searchEntity(book.series, 'series');
+      const searchRes = await this.searchEntity(book.series, 'series');
+      seriesUri = searchRes || undefined;
       
       if (!seriesUri) {
         console.log(`[INVENTAIRE SYNC] Série non trouvée, création de la série : ${book.series}`);

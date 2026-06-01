@@ -18,6 +18,7 @@ import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import { imageUtil } from '../../core/utils/image.util';
+import { connectionState } from '../../state/connection';
 
 const route = useRoute();
 const router = useRouter();
@@ -167,6 +168,12 @@ onMounted(() => {
 const navigateToSeries = () => {
   if (seriesIdentifier.value) {
     router.push({ name: 'SeriesView', params: { id: seriesIdentifier.value } });
+  }
+};
+
+const navigateToEdit = () => {
+  if (book.value?.uri) {
+    router.push(`/book/${encodeURIComponent(book.value.uri)}/edit`);
   }
 };
 
@@ -385,6 +392,16 @@ const confirmDelete = async () => {
           @return="handleReturn"
           @delete="handleDelete"
         />
+        <div v-if="book.ownershipStatus === 'owned'" style="margin-top: var(--spacing-sm); width: 100%; display: flex; justify-content: center;">
+          <BaseButton 
+            type="primary" 
+            style="width: 100%;"
+            :disabled="connectionState.isOffline.value"
+            @click="navigateToEdit"
+          >
+            [ MODIFIER / CORRIGER LA FICHE ]
+          </BaseButton>
+        </div>
       </div>
     </div>
 

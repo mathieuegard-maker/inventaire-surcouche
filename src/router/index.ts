@@ -65,6 +65,11 @@ export const router = createRouter({
       component: BookDetailView
     },
     {
+      path: '/book/:uri/edit',
+      name: 'BookEdit',
+      component: () => import('../ui/views/BookEdit.vue')
+    },
+    {
       path: '/debug',
       name: 'debug',
       component: DebugDbView
