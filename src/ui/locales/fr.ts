@@ -264,5 +264,16 @@ export const TEXTS = {
     periodAll: "Tout le temps",
     noData: "Aucune statistique calculable.",
     loading: "Analyse de la bibliothèque locale..."
+  },
+  dedupModal: {
+    titleSeries: "DÉDUPLICATION DES SÉRIES",
+    titleAuthors: "DÉDUPLICATION DES AUTEURS",
+    seriesMsg: "Des séries avec un nom proche de \"{name}\" ont été détectées sur inventaire.io. Souhaitez-vous lier votre livre à une série existante, ou créer une nouvelle série ?",
+    authorsMsg: "Des auteurs avec un nom proche de \"{name}\" ont été détectés sur inventaire.io. Souhaitez-vous lier votre livre à un auteur existant, ou créer un nouvel auteur ?",
+    linkExisting: "Lier à l'entité existante :",
+    distance: "distance Levenshtein:",
+    createNew: "Créer une nouvelle entité :",
+    btnCancel: "ANNULER",
+    btnConfirm: "CONFIRMER"
   }
 };

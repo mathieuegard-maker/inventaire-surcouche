@@ -8,6 +8,7 @@ import { databaseService } from '../database/database.service';
 vi.mock('../database/database.service', () => ({
   databaseService: {
     getRegistryEntry: vi.fn(),
+    addRegistryEntry: vi.fn(),
     removeRegistryEntry: vi.fn(),
     getBookFromCache: vi.fn(),
     saveBookToCache: vi.fn(),
@@ -104,6 +105,28 @@ describe('Inventory & Wishlist Deletion Services', () => {
       expect(databaseService.saveBookToCache).toHaveBeenCalledWith(
         expect.objectContaining({ uri: 'inv:edition1', ownershipStatus: 'none' })
       );
+    });
+  });
+
+  describe('inventoryService.addBulkToLibrary', () => {
+    it('doit enregistrer les itemIds retournés par le gateway dans le registre local', async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          added: 2,
+          addedItems: [
+            { uri: 'inv:ed1', itemId: 'item-1' },
+            { uri: 'inv:ed2', itemId: 'item-2' }
+          ],
+          errors: []
+        })
+      } as any);
+
+      const res = await inventoryService.addBulkToLibrary(['inv:ed1', 'inv:ed2']);
+      expect(res).toBe(true);
+      expect(databaseService.addRegistryEntry).toHaveBeenCalledWith('inventory', 'inv:ed1', 'item-1');
+      expect(databaseService.addRegistryEntry).toHaveBeenCalledWith('inventory', 'inv:ed2', 'item-2');
     });
   });
 });

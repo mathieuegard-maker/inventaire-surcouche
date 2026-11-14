@@ -2,24 +2,9 @@
 import { databaseService } from '../database/database.service';
 import { configService } from '../services/config.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { getLevenshteinDistance } from '../utils/string.util';
 
-/**
- * Calcule la distance de Levenshtein entre deux chaînes (Score de similarité)
- */
-function getEditDistance(a: string, b: string): number {
-  if (!a) return b ? b.length : 0;
-  if (!b) return a ? a.length : 0;
-  const matrix: number[][] = [];
-  for (let i = 0; i <= a.length; i++) matrix[i] = [i];
-  for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-  for (let i = 1; i <= a.length; i++) {
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1].toLowerCase() === b[j - 1].toLowerCase() ? 0 : 1;
-      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
-    }
-  }
-  return matrix[a.length][b.length];
-}
+const REVERSE_CLAIMS_CONCURRENCY = 5;
 
 /**
  * Extrait intelligemment le titre d'une entité selon son format (Wikidata ou Inventaire natif)
@@ -118,7 +103,7 @@ function electBestEdition(
   const scoredEditions: EditionScore[] = targetEditions.map(edUri => {
     const edData = editionDataMap[edUri];
     const edLabel = extractEntityTitle(edData);
-    const score = getEditDistance(workLabel, edLabel);
+    const score = getLevenshteinDistance(workLabel, edLabel);
     return {
       uri: edUri,
       score,
@@ -179,18 +164,21 @@ export const workUriResolver = {
     const workToEditionsMap: Record<string, string[]> = {};
     const allEditionUrisToFetch = new Set<string>();
 
-    await Promise.all(missingWorks.map(async (workUri) => {
-      try {
-        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
-        const data = await res.json();
-        const uris = data.uris || [];
-        workToEditionsMap[workUri] = uris;
-        uris.forEach((u: string) => allEditionUrisToFetch.add(u));
-      } catch (e) {
-        console.error(`[WORK-URI RESOLVER] Erreur reverse-claims pour ${workUri}`, e);
-        workToEditionsMap[workUri] = [];
-      }
-    }));
+    for (let i = 0; i < missingWorks.length; i += REVERSE_CLAIMS_CONCURRENCY) {
+      const group = missingWorks.slice(i, i + REVERSE_CLAIMS_CONCURRENCY);
+      await Promise.all(group.map(async (workUri) => {
+        try {
+          const res = await fetchWithTimeout(`/api/gateway?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`);
+          const data = await res.json();
+          const uris = data.uris || [];
+          workToEditionsMap[workUri] = uris;
+          uris.forEach((u: string) => allEditionUrisToFetch.add(u));
+        } catch (e) {
+          console.error(`[WORK-URI RESOLVER] Erreur reverse-claims pour ${workUri}`, e);
+          workToEditionsMap[workUri] = [];
+        }
+      }));
+    }
 
     // 3. Récupération des données pour l'analyse sémantique
     const editionDataMap: Record<string, any> = {};
@@ -200,7 +188,7 @@ export const workUriResolver = {
     for (let i = 0; i < urisArray.length; i += CHUNK_SIZE) {
       const chunk = urisArray.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const res = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(editionDataMap, data.entities || {});
       } catch (e) {
@@ -212,7 +200,7 @@ export const workUriResolver = {
     for (let i = 0; i < missingWorks.length; i += CHUNK_SIZE) {
       const chunk = missingWorks.slice(i, i + CHUNK_SIZE);
       try {
-        const res = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const res = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
         const data = await res.json();
         Object.assign(workDataMap, data.entities || {});
       } catch (e) {}
@@ -252,19 +240,23 @@ export const workUriResolver = {
       const workLabel = extractEntityTitle(workDataMap[workUri]);
 
       // 3. Récupération des éditions candidates rattachées (Reverse-claims)
-      const resEditions = await fetchWithTimeout(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+      const resEditions = await fetchWithTimeout(`/api/gateway?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`);
       const dataEditions = await resEditions.json();
       const editions: string[] = dataEditions.uris || [];
       if (editions.length === 0) return undefined;
 
-      // 4. Chargement des métadonnées des 50 premières éditions pour arbitrage
-      const chunk = editions.slice(0, 50);
-      const resData = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
-      const dataJson = await resData.json();
-      const editionDataMap = dataJson.entities || {};
+      // 4. Chargement des métadonnées (jusqu'à 100 éditions par paquets de 50)
+      const candidates = editions.slice(0, 100);
+      const editionDataMap: Record<string, any> = {};
+      for (let i = 0; i < candidates.length; i += 50) {
+        const chunk = candidates.slice(i, i + 50);
+        const resData = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(chunk.join('|'))}`);
+        const dataJson = await resData.json();
+        Object.assign(editionDataMap, dataJson.entities || {});
+      }
 
       // 5. Arbitrage via notre entonnoir algorithmique factorisé commun
-      const chosenUri = electBestEdition(workUri, chunk, editionDataMap, workLabel, preferredLangWd);
+      const chosenUri = electBestEdition(workUri, candidates, editionDataMap, workLabel, preferredLangWd);
       
       // 6. Extraction sécurisée de l'ISBN sur l'édition élue
       const electedData = editionDataMap[chosenUri];

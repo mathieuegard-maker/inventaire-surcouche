@@ -2,6 +2,7 @@
 import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
+import { queueService } from './core/orchestrators/queue.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 import { connectionState } from './state/connection';
@@ -19,8 +20,11 @@ watch(isOffline, async (newOfflineVal) => {
     const hasValidSession = await connectionService.checkSessionOnReconnection();
     if (!hasValidSession) {
       router.push('/login');
-    } else if (route.path === '/login') {
-      router.push('/dashboard');
+    } else {
+      queueService.processQueue();
+      if (route.path === '/login') {
+        router.push('/dashboard');
+      }
     }
   }
 });

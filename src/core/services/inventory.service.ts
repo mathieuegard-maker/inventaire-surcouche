@@ -1,6 +1,7 @@
 // src/core/services/inventory.service.ts
 import { databaseService } from '../database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { loanService } from './loan.service';
 
 export const inventoryService = {
   async loadLibrary(uri: string): Promise<{ count: number, items: any[] }> {
@@ -17,6 +18,7 @@ export const inventoryService = {
       })).filter((e: any) => Boolean(e.uri));
 
       await databaseService.syncRegistry('inventory', entriesToSync);
+      loanService.invalidateInventoryCache();
       
       console.groupEnd();
       return { count: entriesToSync.length, items: itemList };
@@ -47,12 +49,16 @@ export const inventoryService = {
     const data = await res.json();
     const itemId = data.item?._id || data._id || undefined;
     await databaseService.addRegistryEntry('inventory', uri, itemId);
+    loanService.invalidateInventoryCache();
     return true;
   },
 
-  async removeFromLibrary(uri: string): Promise<boolean> {
+  async removeFromLibrary(uri: string, explicitItemId?: string): Promise<boolean> {
     const entry = await databaseService.getRegistryEntry('inventory', uri);
-    const itemId = entry?.itemId;
+    let itemId = explicitItemId || entry?.itemId;
+    if (!itemId) {
+      itemId = (await loanService.getInventoryItemId(uri)) || undefined;
+    }
 
     if (itemId) {
       const res = await fetchWithTimeout('/api/gateway?action=inventory-delete', {
@@ -66,6 +72,7 @@ export const inventoryService = {
     }
 
     await databaseService.removeRegistryEntry('inventory', uri);
+    loanService.invalidateInventoryCache();
 
     const cachedBook = await databaseService.getBookFromCache(uri);
     if (cachedBook) {
@@ -82,7 +89,22 @@ export const inventoryService = {
       body: JSON.stringify({ uris })
     });
     if (!res.ok) throw new Error("Erreur bulk");
-    for (const uri of uris) await databaseService.addRegistryEntry('inventory', uri);
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+    const itemIdByUri = new Map<string, string | undefined>();
+    if (Array.isArray(data?.addedItems)) {
+      for (const entry of data.addedItems) {
+        if (entry?.uri) itemIdByUri.set(entry.uri, entry.itemId);
+      }
+    }
+    for (const uri of uris) {
+      await databaseService.addRegistryEntry('inventory', uri, itemIdByUri.get(uri));
+    }
+    loanService.invalidateInventoryCache();
     return true;
   }
 };

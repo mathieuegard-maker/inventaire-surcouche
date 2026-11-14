@@ -3,6 +3,56 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { Buffer } from 'buffer';
 
 const USER_AGENT_BASE = 'InventaireMobileOverlay/2.0 (mathieu.egard@gmail.com)';
+const ALLOWED_SHELF_PATHS = new Set(['by-owners', 'by-ids', 'add-items', 'remove-items', 'delete']);
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (
+    lower === 'localhost' ||
+    lower.endsWith('.localhost') ||
+    lower.endsWith('.local') ||
+    lower.endsWith('.internal') ||
+    lower === '::1' ||
+    lower === '::' ||
+    lower.startsWith('fc') ||
+    lower.startsWith('fd') ||
+    lower.startsWith('fe80:')
+  ) {
+    return true;
+  }
+
+  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(lower);
+  if (ipv4Match) {
+    const [, aStr, bStr] = ipv4Match;
+    const a = Number(aStr);
+    const b = Number(bStr);
+    if (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateImageProxyUrl(rawUrl: string): URL | null {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+    if (parsed.username || parsed.password) return null;
+    if (!parsed.hostname || isPrivateOrLocalHostname(parsed.hostname)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 // --- RÉSILENCE MILITAIRE : Auto-Retry en cas de micro-coupure réseau ---
 const resilientFetch = async (url: string, options?: RequestInit, retries = 3): Promise<Response> => {
@@ -77,10 +127,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
         
         if (setCookies.length > 0) {
+          const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+          const isHttps = forwardedProto === 'https';
+          const secureAttr = isHttps ? '; Secure' : '';
           const cleanCookies = setCookies.map(c => c.split(';').map(part => part.trim()).filter(part => {
               const p = part.toLowerCase();
               return !p.startsWith('domain=') && !p.startsWith('samesite=') && !p.startsWith('secure');
-            }).join('; ') + '; Path=/; SameSite=Lax; HttpOnly');
+            }).join('; ') + `; Path=/; SameSite=Lax; HttpOnly${secureAttr}`);
           res.setHeader('Set-Cookie', cleanCookies);
         }
     }
@@ -127,7 +180,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       case 'inventory-bulk': {
         const uris = body?.uris;
+        if (!Array.isArray(uris)) {
+          return res.status(400).json({ error: 'Tableau uris requis' });
+        }
         let successCount = 0;
+        const addedItems: Array<{ uri: string; itemId?: string }> = [];
         const errors = [];
         for (const uri of uris) {
           const response = await resilientFetch('https://inventaire.io/api/items', {
@@ -135,11 +192,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             headers: { ...headers, 'Content-Type': 'application/json' },
             body: JSON.stringify({ entity: uri }) 
           });
-          if (response.ok) successCount++;
-          else errors.push({ uri, error: await response.text() });
+          if (response.ok) {
+            successCount++;
+            let itemId: string | undefined;
+            try {
+              const itemData = await response.json();
+              itemId = itemData?._id || itemData?.id;
+            } catch {
+              // Ignorer si la réponse n'est pas du JSON
+            }
+            addedItems.push({ uri, itemId });
+          } else {
+            errors.push({ uri, error: await response.text() });
+          }
           await new Promise(resolve => setTimeout(resolve, 150)); 
         }
-        return res.status(200).json({ success: true, added: successCount, errors });
+        return res.status(200).json({ success: true, added: successCount, addedItems, errors });
       }
 
       case 'inventory-delete':
@@ -177,9 +245,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
 
       case 'shelves': {
-        const path = req.query.path as string;
+        const rawPath = req.query.path;
+        const path = typeof rawPath === 'string' ? rawPath.trim() : '';
         let inventaireUrl = 'https://inventaire.io/api/shelves';
-        if (path) inventaireUrl += `/${path}`;
+        if (path) {
+          if (!ALLOWED_SHELF_PATHS.has(path)) {
+            return res.status(400).json({ error: `Chemin shelves non autorisé: ${path}` });
+          }
+          inventaireUrl += `/${path}`;
+        }
         
         const newUrl = new URL(inventaireUrl);
         Object.keys(req.query).forEach(key => {
@@ -196,12 +270,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'series-list':
         return await proxyFetch(`https://inventaire.io/api/entities/reverse-claims?property=wdt:P179&value=${encodeURIComponent(req.query.seriesId as string)}`, { headers });
 
-      case 'entities-by-uris':
-        return await proxyFetch(`https://inventaire.io/api/entities/by-uris?uris=${req.query.uris}`, { headers });
+      case 'reverse-claims': {
+        const property = req.query.property as string;
+        const value = req.query.value as string;
+        if (!property || !value) {
+          return res.status(400).json({ error: 'Paramètres property et value requis' });
+        }
+        const rcUrl = new URL('https://inventaire.io/api/entities/reverse-claims');
+        rcUrl.searchParams.set('property', property);
+        rcUrl.searchParams.set('value', value);
+        if (req.query.refresh) rcUrl.searchParams.set('refresh', String(req.query.refresh));
+        if (req.query.sort) rcUrl.searchParams.set('sort', String(req.query.sort));
+        return await proxyFetch(rcUrl.toString(), { headers });
+      }
+
+      case 'entities-by-uris': {
+        const uris = req.query.uris as string;
+        if (!uris) return res.status(400).json({ error: 'Paramètre uris requis' });
+        const byUrisUrl = new URL('https://inventaire.io/api/entities/by-uris');
+        byUrisUrl.searchParams.set('uris', uris);
+        if (req.query.attributes) byUrisUrl.searchParams.set('attributes', String(req.query.attributes));
+        if (req.query.relatives) byUrisUrl.searchParams.set('relatives', String(req.query.relatives));
+        return await proxyFetch(byUrisUrl.toString(), { headers });
+      }
 
       case 'entities-create': {
         return await proxyFetch('https://inventaire.io/api/entities', {
           method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      }
+
+      case 'entities-update-claim': {
+        return await proxyFetch('https://inventaire.io/api/entities/update-claim', {
+          method: 'PUT',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      }
+
+      case 'entities-update-label': {
+        return await proxyFetch('https://inventaire.io/api/entities/update-label', {
+          method: 'PUT',
           headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify(body)
         });
@@ -242,17 +353,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       case 'image-proxy': {
-        const { url } = req.query;
-        if (!url) return res.status(400).json({ error: 'URL requise' });
+        const rawUrl = req.query.url;
+        if (typeof rawUrl !== 'string' || !rawUrl.trim()) {
+          return res.status(400).json({ error: 'URL requise' });
+        }
+        const validatedUrl = validateImageProxyUrl(rawUrl.trim());
+        if (!validatedUrl) {
+          return res.status(400).json({ error: 'URL image invalide ou interdite' });
+        }
         
-        const response = await resilientFetch(url as string);
+        const response = await resilientFetch(validatedUrl.toString(), {
+          signal: AbortSignal.timeout(10000)
+        });
         if (!response.ok) throw new Error(`Erreur réseau distante: ${response.status}`);
+        if (response.url && !validateImageProxyUrl(response.url)) {
+          return res.status(400).json({ error: 'Redirection image interdite' });
+        }
+
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > MAX_IMAGE_BYTES) {
+          return res.status(413).json({ error: 'Image trop volumineuse' });
+        }
         
-        const contentType = response.headers.get('content-type');
-        if (contentType) res.setHeader('Content-Type', contentType);
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.toLowerCase().startsWith('image/')) {
+          return res.status(415).json({ error: 'Le contenu distant n est pas une image' });
+        }
 
         const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
+          return res.status(413).json({ error: 'Image trop volumineuse' });
+        }
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         return res.status(200).send(Buffer.from(arrayBuffer));
       }
 

@@ -8,13 +8,29 @@ export const bookCacheService = {
    * Gère la sauvegarde d'un livre en base locale avec préservation des données 
    * et déclenchement du worker de compression d'image.
    */
-  async saveAndProcessImage(book: HumanizedBook, targetStatus?: 'owned' | 'wish' | 'none'): Promise<void> {
+  async saveAndProcessImage(
+    book: HumanizedBook,
+    targetStatus?: 'owned' | 'wish' | 'none',
+    options?: { forceOverwrite?: boolean }
+  ): Promise<void> {
     try {
       // 1. Fusion pour préserver l'image Base64 si elle existe déjà
       const existingBook = await databaseService.getBookFromCache(book.uri);
       
-      if (existingBook && existingBook.localCover) {
+      if (existingBook && existingBook.isLocallyEdited && !options?.forceOverwrite) {
+        console.log(`[BOOK CACHE] Préservation des modifications locales pour ${book.uri}. Pas d'écrasement.`);
+        if (targetStatus && existingBook.ownershipStatus !== targetStatus) {
+          existingBook.ownershipStatus = targetStatus;
+          await databaseService.saveBookToCache(existingBook);
+        }
+        return;
+      }
+
+      const coverChanged = existingBook && existingBook.coverUrl !== book.coverUrl;
+      if (existingBook && existingBook.localCover && !coverChanged) {
         book.localCover = existingBook.localCover;
+      } else if (coverChanged) {
+        book.localCover = undefined;
       }
 
       // 2. Mise à jour de l'état de possession si demandé

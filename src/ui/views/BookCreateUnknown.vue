@@ -3,17 +3,16 @@ import { ref, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isbnUtil } from '../../core/utils/isbn.util';
 import { externalMetadataService } from '../../core/services/external-metadata.service';
-import { bookCacheService } from '../../core/services/book-cache.service';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
-import { TEXTS } from '../locales/fr';
+import DedupModal from '../components/DedupModal.vue';
+import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
+import { useSemanticResolution } from '../composables/useSemanticResolution';
 import type { HumanizedBook } from '../../core/types';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
-import { inventaireSyncService } from '../../core/services/inventaire-sync.service';
-import { inventoryService } from '../../core/services/inventory.service';
 
 const route = useRoute();
 const router = useRouter();
@@ -93,6 +92,17 @@ onMounted(async () => {
   }
 });
 
+const {
+  currentStep,
+  selectedOptionUri,
+  resolvedSeriesUri,
+  resolvedAuthorUris,
+  showResolutionModal,
+  startResolution,
+  confirmStep,
+  cancelResolution
+} = useSemanticResolution();
+
 const handleSave = async () => {
   errorMsg.value = null;
   successMsg.value = null;
@@ -112,6 +122,34 @@ const handleSave = async () => {
     return;
   }
 
+  isLoading.value = true;
+  loadingStatus.value = "Analyse sémantique des données...";
+
+  try {
+    const steps = await bookSemanticOrchestrator.analyzeDuplicates(
+      authorsInput.value,
+      seriesInput.value,
+      noSeries.value
+    );
+
+    isLoading.value = false;
+
+    if (steps.length > 0) {
+      startResolution(steps);
+    } else {
+      await saveChanges();
+    }
+  } catch (err: any) {
+    isLoading.value = false;
+    errorMsg.value = "Erreur lors de la préparation de la sauvegarde : " + err.message;
+  }
+};
+
+const confirmResolutionStep = async () => {
+  await confirmStep(saveChanges);
+};
+
+const saveChanges = async () => {
   isLoading.value = true;
   loadingStatus.value = "Création et synchronisation sur inventaire.io...";
 
@@ -141,23 +179,11 @@ const handleSave = async () => {
       seriesNumber: noSeries.value ? undefined : (seriesNumberInput.value.trim() || undefined)
     };
 
-    console.log(`[CREATE UNKNOWN] Synchronisation en ligne...`);
-    const syncResult = await inventaireSyncService.syncBookToInventaire(tempBook);
-
-    loadingStatus.value = "Ajout à votre collection sur inventaire.io...";
-    await inventoryService.addToLibrary(syncResult.editionUri);
-
-    loadingStatus.value = "Sauvegarde locale et redirection...";
-    const finalBook: HumanizedBook = {
-      ...tempBook,
-      uri: syncResult.editionUri,
-      workUri: syncResult.workUri,
-      seriesId: syncResult.seriesUri,
-      ownershipStatus: 'owned'
-    };
-
-    console.log(`[CREATE UNKNOWN] Sauvegarde locale du livre résolu :`, finalBook);
-    await bookCacheService.saveAndProcessImage(finalBook, 'owned');
+    const finalBook = await bookSemanticOrchestrator.saveCreatedBook(
+      tempBook,
+      resolvedSeriesUri.value,
+      resolvedAuthorUris.value
+    );
 
     successMsg.value = "Ouvrage créé et ajouté à votre collection avec succès ! Redirection...";
     setTimeout(() => {
@@ -277,6 +303,15 @@ const handleSave = async () => {
         </div>
       </div>
     </div>
+
+    <!-- Modale de Déduplication Sémantique (Séries / Auteurs) -->
+    <DedupModal
+      :show="showResolutionModal"
+      :step="currentStep"
+      v-model:selectedUri="selectedOptionUri"
+      @confirm="confirmResolutionStep"
+      @cancel="cancelResolution"
+    />
   </div>
 </template>
 

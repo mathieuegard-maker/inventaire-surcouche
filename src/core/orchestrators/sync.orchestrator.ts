@@ -186,10 +186,11 @@ export const syncOrchestrator = {
 
       if (seriesIds.size > 0) {
         console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesIds.size} séries...`);
-        for (const seriesId of seriesIds) {
-          // Appel de la version sécurisée
-          this.hydrateSeriesInBackground(seriesId);
-        }
+        (async () => {
+          for (const seriesId of seriesIds) {
+            await this.hydrateSeriesInBackground(seriesId);
+          }
+        })();
       }
 
       // 8. Correction silencieuse des fiches mal humanisées en tâche de fond
@@ -211,6 +212,7 @@ export const syncOrchestrator = {
     try {
       const allBooks = await databaseService.getAllBooksFromCache();
       const needsCorrection = allBooks.filter(book => {
+        if (book.isLocallyEdited) return false;
         const check = (val: string | undefined) => val && val.startsWith('wd:');
         const checkArray = (arr: string[] | undefined) => arr && arr.some(val => val && val.startsWith('wd:'));
         return !!(

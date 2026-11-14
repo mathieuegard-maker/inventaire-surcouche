@@ -4,12 +4,6 @@ import { entityHumanizer } from './humanizer';
 import type { RawBook, HumanizedBook } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 
-const USER_AGENT = 'InventaireMobileOverlay/1.8 (mathieu.egard@gmail.com)';
-
-/**
- * NOUVEAU : Fonction de "Scavenging" (Pillage).
- * Si l'édition élue n'a pas de couverture, on emprunte celle d'une édition sœur.
- */
 async function scavengeMissingImage(entityData: any, workUri: string, entityId: string): Promise<void> {
   // Correction du bug `{}` : On vérifie que l'image existe ET qu'elle n'est pas un objet vide
   const hasValidImage = entityData.image && (
@@ -22,14 +16,14 @@ async function scavengeMissingImage(entityData: any, workUri: string, entityId: 
 
   console.log(`[ENTITY RESOLVER] Couverture manquante (ou objet vide) pour ${entityId}. Début du pillage sur l'œuvre ${workUri}...`);
   try {
-    const sibRes = await fetchWithTimeout(`https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P629&value=${workUri}`);
+    const sibRes = await fetchWithTimeout(`/api/gateway?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`);
     const sibData = await sibRes.json();
     const siblingUris = (sibData.uris || []).filter((u: string) => u !== entityId);
     
     if (siblingUris.length === 0) return;
 
     const topSiblings = siblingUris.slice(0, 10);
-    const imgRes = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(topSiblings.join('|'))}&attributes=image`);
+    const imgRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(topSiblings.join('|'))}&attributes=image`);
     const imgData = await imgRes.json();
     
     for (const sUri of topSiblings) {
@@ -57,14 +51,14 @@ export const entityResolver = {
   async fromIsbn(isbn: string): Promise<RawBook | null> {
     try {
       const searchUri = `isbn:${isbn}`;
-      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(searchUri)}&attributes=info|labels|descriptions|claims|image`;
+      const url = `/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(searchUri)}&attributes=${encodeURIComponent('info|labels|descriptions|claims|image')}&relatives=wdt:P629`;
       
       const res = await fetchWithTimeout(url, {
-        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+        headers: { 'Accept': 'application/json' }
       });
       const data = await res.json();
       
-      const entityId = Object.keys(data.entities || {})[0];
+      const entityId = Object.keys(data.entities || {}).find(k => k === searchUri || !k.startsWith('wd:')) || Object.keys(data.entities || {})[0];
       const entityData = data.entities?.[entityId];
 
       if (!entityData) {
@@ -80,10 +74,10 @@ export const entityResolver = {
       
       await scavengeMissingImage(entityData, workUri, entityId);
 
-      let workData = undefined;
-      if (workUri) {
-        const wRes = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
-          headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+      let workData = workUri ? data.entities?.[workUri] : undefined;
+      if (workUri && !workData) {
+        const wRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(workUri)}&attributes=${encodeURIComponent('info|labels|descriptions|claims|image')}`, {
+          headers: { 'Accept': 'application/json' }
         });
         const wData = await wRes.json();
         workData = wData.entities?.[workUri];
@@ -102,16 +96,18 @@ export const entityResolver = {
    */
   async resolvePhysicalEntity(physicalUri: string): Promise<HumanizedBook | null> {
     try {
-      const url = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(physicalUri)}&attributes=info|labels|descriptions|claims|image`;
+      const url = `/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(physicalUri)}&attributes=${encodeURIComponent('info|labels|descriptions|claims|image')}&relatives=wdt:P629`;
       
       const res = await fetchWithTimeout(url, {
-        headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+        headers: { 'Accept': 'application/json' }
       });
       const data = await res.json();
       
       // CRITICAL FIX : L'API renvoie la vraie URI 'inv:...' même si on cherche par 'isbn:...'
       // On doit donc récupérer la vraie clé de l'entité retournée.
-      const resolvedEntityId = Object.keys(data.entities || {})[0];
+      const resolvedEntityId = data.entities?.[physicalUri]
+        ? physicalUri
+        : (Object.keys(data.entities || {}).find(k => !k.startsWith('wd:')) || Object.keys(data.entities || {})[0]);
       const entityData = data.entities?.[resolvedEntityId];
 
       if (!entityData) {
@@ -124,10 +120,10 @@ export const entityResolver = {
       
       await scavengeMissingImage(entityData, workUri, resolvedEntityId);
 
-      let workData = undefined;
-      if (workUri) {
-        const wRes = await fetchWithTimeout(`https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(workUri)}&attributes=info|labels|descriptions|claims|image`, {
-           headers: { 'Accept': 'application/json', 'User-Agent': USER_AGENT }
+      let workData = workUri ? data.entities?.[workUri] : undefined;
+      if (workUri && !workData) {
+        const wRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(workUri)}&attributes=${encodeURIComponent('info|labels|descriptions|claims|image')}`, {
+           headers: { 'Accept': 'application/json' }
         });
         const wData = await wRes.json();
         workData = wData.entities?.[workUri];

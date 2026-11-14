@@ -3,9 +3,11 @@ import { databaseService, type PendingAction } from '../database/database.servic
 import { loanService } from '../services/loan.service';
 import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
-import type { LendPayload, QueueActionPayload } from '../types';
+import type { LendPayload, QueueActionPayload, RemoveInventoryPayload } from '../types';
 import { TEXTS } from '../../ui/locales/fr';
 import { connectionState } from '../../state/connection';
+
+const MAX_BULK_CHUNK = 15;
 
 /**
  * Utilitaire pour insérer une pause et éviter de surcharger l'API
@@ -82,11 +84,19 @@ export const queueService = {
     }
 
     console.group(`[QUEUE] Nouvelle action interceptée: ${actionType} sur ${uri}`);
+
+    let effectivePayload = payload;
+    if (actionType === 'REMOVE_INVENTORY' && !(payload as RemoveInventoryPayload | undefined)?.itemId) {
+      const existingEntry = await databaseService.getRegistryEntry('inventory', uri);
+      if (existingEntry?.itemId) {
+        effectivePayload = { itemId: existingEntry.itemId };
+      }
+    }
     
     const action: PendingAction = {
       action: actionType,
       uri,
-      payload,
+      payload: effectivePayload,
       status: 'pending',
       createdAt: Date.now()
     };
@@ -122,9 +132,13 @@ export const queueService = {
         }
 
         const firstActionType = actions[0].action;
-        const batch = actions.filter(a => a.action === firstActionType);
-        const urisToProcess = batch.map(a => a.uri);
-        const batchIds = batch.map(a => a.id).filter((id): id is number => id !== undefined);
+        const allOfType = actions.filter(a => a.action === firstActionType);
+        const chunk = firstActionType === 'ADD_INVENTORY'
+          ? allOfType.slice(0, MAX_BULK_CHUNK)
+          : allOfType;
+        const urisToProcess = chunk.map(a => a.uri);
+        const batchIds = chunk.map(a => a.id).filter((id): id is number => id !== undefined);
+        let rollbackTargets = chunk;
 
         console.log(`[QUEUE] Création d'un paquet de type [${firstActionType}] contenant ${urisToProcess.length} éléments.`);
 
@@ -146,9 +160,37 @@ export const queueService = {
             case 'ADD_WISHLIST':
               success = await wishlistService.addBulkToWishlist(urisToProcess);
               break;
+            case 'REMOVE_INVENTORY': {
+              let allOk = true;
+              for (let i = 0; i < chunk.length; i++) {
+                const singleAction = chunk[i];
+                rollbackTargets = chunk.slice(i);
+                const removePayload = singleAction.payload as RemoveInventoryPayload | undefined;
+                const ok = await inventoryService.removeFromLibrary(singleAction.uri, removePayload?.itemId);
+                if (ok && singleAction.id) {
+                  await databaseService.deletePendingAction(singleAction.id);
+                } else {
+                  allOk = false;
+                  break;
+                }
+              }
+              if (!allOk) {
+                console.warn(`[QUEUE] ⚠️ Échec de suppression inventaire. Pause de la synchronisation.`);
+                this.isProcessing = false;
+                console.groupEnd();
+                return;
+              }
+              success = false;
+              break;
+            }
+            case 'REMOVE_WISHLIST':
+              success = await wishlistService.removeFromWishlist(urisToProcess);
+              break;
             case 'LEND': {
               let allOk = true;
-              for (const singleAction of batch) {
+              for (let i = 0; i < chunk.length; i++) {
+                const singleAction = chunk[i];
+                rollbackTargets = chunk.slice(i);
                 const lendPayload = singleAction.payload as LendPayload;
                 const ok = await loanService.lend(singleAction.uri, lendPayload?.friendName || TEXTS.loansView?.unknownFriend || 'Inconnu');
                 if (ok && singleAction.id) {
@@ -169,7 +211,9 @@ export const queueService = {
             }
             case 'RETURN': {
               let allOk = true;
-              for (const singleAction of batch) {
+              for (let i = 0; i < chunk.length; i++) {
+                const singleAction = chunk[i];
+                rollbackTargets = chunk.slice(i);
                 const ok = await loanService.returnBook(singleAction.uri);
                 if (ok && singleAction.id) {
                   await databaseService.deletePendingAction(singleAction.id);
@@ -198,14 +242,14 @@ export const queueService = {
               await databaseService.deletePendingAction(id);
             }
             await sleep(500);
-          } else if (firstActionType !== 'LEND' && firstActionType !== 'RETURN') {
+          } else if (firstActionType !== 'LEND' && firstActionType !== 'RETURN' && firstActionType !== 'REMOVE_INVENTORY') {
             console.warn(`[QUEUE] ⚠️ Échec ou blocage du paquet [${firstActionType}]. Pause de la synchronisation.`);
             break; 
           }
 
         } catch (error: any) {
            console.error(`[QUEUE] 💥 Refus définitif du serveur pour le paquet [${firstActionType}]. Lancement des rollbacks individuels.`);
-           for (const failedAction of batch) {
+           for (const failedAction of rollbackTargets) {
              await this.rollbackAction(failedAction);
              if (failedAction.id) {
                await databaseService.deletePendingAction(failedAction.id);
@@ -228,16 +272,12 @@ export const queueService = {
     console.warn(`[QUEUE] ⏪ Rollback local déclenché pour ${action.action} sur ${action.uri}`);
     
     const cachedBook = await databaseService.getBookFromCache(action.uri);
-    if (cachedBook) {
-      cachedBook.ownershipStatus = 'none';
-      await databaseService.saveBookToCache(cachedBook);
-    }
 
     switch (action.action) {
       case 'LEND':
         await databaseService.deleteLoan(action.uri);
         break;
-      case 'RETURN':
+      case 'RETURN': {
         const restoredPayload = action.payload as LendPayload;
         await databaseService.saveLoan({
           uri: action.uri,
@@ -245,11 +285,36 @@ export const queueService = {
           loanDate: action.createdAt
         });
         break;
+      }
       case 'ADD_INVENTORY':
         await databaseService.removeRegistryEntry('inventory', action.uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'none';
+          await databaseService.saveBookToCache(cachedBook);
+        }
         break;
       case 'ADD_WISHLIST':
         await databaseService.removeRegistryEntry('wishlist', action.uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'none';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+      case 'REMOVE_INVENTORY': {
+        const removePayload = action.payload as RemoveInventoryPayload | undefined;
+        await databaseService.addRegistryEntry('inventory', action.uri, removePayload?.itemId);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'owned';
+          await databaseService.saveBookToCache(cachedBook);
+        }
+        break;
+      }
+      case 'REMOVE_WISHLIST':
+        await databaseService.addRegistryEntry('wishlist', action.uri);
+        if (cachedBook) {
+          cachedBook.ownershipStatus = 'wish';
+          await databaseService.saveBookToCache(cachedBook);
+        }
         break;
     }
   }

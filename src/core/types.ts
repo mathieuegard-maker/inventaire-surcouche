@@ -48,6 +48,7 @@ export interface HumanizedBook extends BaseBook {
   collection?: string;
   ownershipStatus: 'owned' | 'wish' | 'none';
   loan?: LoanRecord; // AJOUT : Attribut contextuel optionnel pour porter le prêt local
+  isLocallyEdited?: boolean; // FLAG : Indique que le livre a été édité localement pour éviter l'écrasement par la tâche de fond
 }
 
 /**
@@ -105,8 +106,12 @@ export interface LendPayload {
   friendName: string;
 }
 
-// Le payload peut être soit vide (pour un retour, ajout wishlist, etc.), soit contenir les infos du prêt
-export type QueueActionPayload = LendPayload | Record<string, never> | undefined;
+export interface RemoveInventoryPayload {
+  itemId?: string;
+}
+
+// Le payload peut être soit vide (pour un retour, ajout wishlist, etc.), soit contenir les infos du prêt/suppression
+export type QueueActionPayload = LendPayload | RemoveInventoryPayload | Record<string, never> | undefined;
 
 /**
  * Métadonnées structurées d'un livre provenant d'une source externe

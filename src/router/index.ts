@@ -1,5 +1,7 @@
 // src/router/index.ts
 import { createRouter, createWebHistory } from 'vue-router';
+import { sessionStore } from '../state/session';
+import { connectionService } from '../core/orchestrators/connection.orchestrator';
 import LoginView from '../ui/views/LoginView.vue';
 import DashboardView from '../ui/views/DashboardView.vue';
 import SeriesView from '../ui/views/SeriesView.vue';
@@ -82,6 +84,21 @@ export const router = createRouter({
 });
 
 router.beforeEach((to, from) => {
+  const isAuthenticated = Boolean(sessionStore.getUserUri());
+
+  if (to.path === '/login') {
+    if (isAuthenticated) {
+      console.log(`[ROUTER] Session active détectée, redirection '${from.path}' -> '/dashboard'`);
+      return '/dashboard';
+    }
+    return true;
+  }
+
+  if (connectionService.isInitialized && !isAuthenticated) {
+    console.warn(`[ROUTER] Accès refusé à '${to.path}' sans session active. Redirection vers '/login'.`);
+    return '/login';
+  }
+
   console.log(`[ROUTER] Navigation validée de '${from.path}' vers '${to.path}'`);
   return true;
 });

@@ -58,22 +58,40 @@ export const loanService = {
     }
   },
 
+  invalidateInventoryCache() {
+    this.cachedInventoryMap = null;
+  },
+
   /**
    * OPTIMISATION : Trouve l'ID physique sans faire de nouvel appel réseau
    */
   async getInventoryItemId(entityUri: string): Promise<string | null> {
     if (!this.userUri) return null;
-    
-    // On utilise la map construite (qui sera piochée dans le cache si elle existe déjà)
-    const map = await this.getInventoryMap();
-    
-    // Recherche inversée : trouver la clé (ID physique) à partir de la valeur (URI logique)
-    const itemId = Object.keys(map).find(key => map[key] === entityUri);
-    
-    if (!itemId) {
-        console.warn(`[LOAN SERVICE] Impossible de trouver l'exemplaire physique pour ${entityUri}`);
+
+    // 1. Lookup direct via le registre local (si itemId déjà connu)
+    const entry = await databaseService.getRegistryEntry('inventory', entityUri);
+    if (entry?.itemId) {
+      if (this.cachedInventoryMap) {
+        this.cachedInventoryMap[entry.itemId] = entityUri;
+      }
+      return entry.itemId;
     }
-    
+
+    // 2. Sinon recherche dans la map mémoire (avec un rafraîchissement si le cache était déjà peuplé)
+    const hadCache = Boolean(this.cachedInventoryMap);
+    let map = await this.getInventoryMap();
+    let itemId = Object.keys(map).find(key => map[key] === entityUri);
+
+    if (!itemId && hadCache) {
+      this.cachedInventoryMap = null;
+      map = await this.getInventoryMap();
+      itemId = Object.keys(map).find(key => map[key] === entityUri);
+    }
+
+    if (!itemId) {
+      console.warn(`[LOAN SERVICE] Impossible de trouver l'exemplaire physique pour ${entityUri}`);
+    }
+
     return itemId || null;
   },
 

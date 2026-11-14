@@ -25,10 +25,10 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'] // On retire .wasm de la liste
       },
       manifest: {
-        name: 'nom du projet',
-        short_name: 'projet',
+        name: 'Inventaire Surcouche',
+        short_name: 'Inventaire',
         description: 'Surcouche mobile optimisée pour Inventaire.io',
-        theme_color: '#5bc31b',
+        theme_color: '#4f46e5',
         background_color: '#ffffff',
         display: 'standalone',
         icons: [

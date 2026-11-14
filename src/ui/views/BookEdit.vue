@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
@@ -8,7 +8,9 @@ import BaseHeader from '../components/BaseHeader.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
-import { imageUtil } from '../../core/utils/image.util';
+import DedupModal from '../components/DedupModal.vue';
+import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
+import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
 
@@ -142,21 +144,104 @@ const applyAllSuggestions = () => {
   applySuggestion('coverUrl');
 };
 
-const handleSave = () => {
-  successMsg.value = "Sauvegarde simulée avec succès ! (Étape 1 validée)";
-  console.log("[BOOK EDIT] Formulaire soumis :", {
-    title: titleInput.value,
-    authors: authorsInput.value.split(',').map(a => a.trim()).filter(Boolean),
-    series: seriesInput.value,
-    seriesNumber: seriesNumberInput.value,
-    publisher: publisherInput.value,
-    publishDate: publishDateInput.value,
-    pageCount: pageCountInput.value,
-    coverUrl: coverUrlInput.value
-  });
-  setTimeout(() => {
-    router.push(`/book/${encodeURIComponent(uri)}`);
-  }, 1500);
+const {
+  currentStep,
+  selectedOptionUri,
+  resolvedSeriesUri,
+  resolvedAuthorUris,
+  showResolutionModal,
+  startResolution,
+  confirmStep,
+  cancelResolution
+} = useSemanticResolution();
+
+const handleSave = async () => {
+  errorMsg.value = null;
+  successMsg.value = null;
+
+  if (connectionState.isOffline.value) {
+    errorMsg.value = "Toute action de modification doit être effectuée en ligne. Le mode hors ligne est réservé à la consultation.";
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  if (!titleInput.value.trim()) {
+    errorMsg.value = "Le titre de l'ouvrage ne peut pas être vide.";
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+
+  isLoading.value = true;
+  loadingStatus.value = "Analyse sémantique des données...";
+
+  try {
+    const steps = await bookSemanticOrchestrator.analyzeDuplicates(
+      authorsInput.value,
+      seriesInput.value,
+      noSeries.value,
+      originalBook.value
+    );
+
+    isLoading.value = false;
+
+    if (steps.length > 0) {
+      startResolution(steps);
+    } else {
+      await saveChanges();
+    }
+  } catch (err: any) {
+    isLoading.value = false;
+    errorMsg.value = "Erreur lors de la préparation de la sauvegarde : " + err.message;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+};
+
+const confirmResolutionStep = async () => {
+  await confirmStep(saveChanges);
+};
+
+const saveChanges = async () => {
+  if (!originalBook.value) return;
+  isLoading.value = true;
+  loadingStatus.value = "Enregistrement des modifications sur inventaire.io...";
+  errorMsg.value = null;
+
+  try {
+    const cleanSeries = noSeries.value ? '' : seriesInput.value.trim();
+    const originalSeries = originalBook.value.series || '';
+    const hasSeriesChanged = cleanSeries.toLowerCase() !== originalSeries.toLowerCase();
+    const effectiveSeriesUri = resolvedSeriesUri.value ?? (!hasSeriesChanged && cleanSeries ? originalBook.value.seriesId : undefined);
+
+    const updatedData = {
+      title: titleInput.value.trim(),
+      authors: authorsInput.value.split(',').map(a => a.trim()).filter(Boolean),
+      series: cleanSeries,
+      seriesNumber: noSeries.value ? '' : seriesNumberInput.value.trim(),
+      publisher: publisherInput.value.trim(),
+      publishDate: publishDateInput.value.trim(),
+      pageCount: pageCountInput.value,
+      coverUrl: coverUrlInput.value.trim()
+    };
+
+    await bookSemanticOrchestrator.saveEditedBook(
+      originalBook.value,
+      updatedData,
+      effectiveSeriesUri,
+      resolvedAuthorUris.value
+    );
+
+    successMsg.value = "Modifications enregistrées avec succès !";
+    isLoading.value = false;
+
+    setTimeout(() => {
+      router.push(`/book/${encodeURIComponent(uri)}`);
+    }, 1500);
+  } catch (err: any) {
+    console.error("[BOOK EDIT] Échec de la sauvegarde :", err);
+    isLoading.value = false;
+    errorMsg.value = "Erreur lors de la sauvegarde : " + err.message;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 };
 </script>
 
@@ -422,6 +507,15 @@ const handleSave = () => {
         </div>
       </div>
     </div>
+
+    <!-- Modale de Déduplication Sémantique (Séries / Auteurs) -->
+    <DedupModal
+      :show="showResolutionModal"
+      :step="currentStep"
+      v-model:selectedUri="selectedOptionUri"
+      @confirm="confirmResolutionStep"
+      @cancel="cancelResolution"
+    />
   </div>
 </template>
 
