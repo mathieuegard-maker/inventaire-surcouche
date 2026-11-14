@@ -189,50 +189,51 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
         <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
       </div>
 
-      <div v-if="missingTomes.length > 0 && seriesTomes.length > 0" style="margin-bottom: var(--spacing-md);">
-        <button class="wireframe-btn btn-primary" style="width: 100%;" @click="completeMissingSeries">
-          Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
-        </button>
-      </div>
-
-      <WireframePagination
-        v-else
-        :items="seriesTomes"
-        :searchKeys="['title']"
-        :hasSelectAll="true"
-        :selectAllValue="isAllSelected"
-        :selectedCount="selectedIds.length"
-        @update:selectAllValue="handleToggleAll"
-        @update:processedItems="(val) => displayedTomes = val"
-      >
-        <div v-if="displayedTomes.length === 0">
-          <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+      <template v-else>
+        <div v-if="missingTomes.length > 0 && seriesTomes.length > 0" style="margin-bottom: var(--spacing-md);">
+          <button class="wireframe-btn btn-primary" style="width: 100%;" @click="completeMissingSeries">
+            Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
+          </button>
         </div>
 
-        <WireframeTable v-else>
-          <BookMiniCard 
-            v-for="livre in displayedTomes" 
-            :key="livre.uri" 
-            :book="livre"
-            :model-value="selectedIds.includes(livre.uri)"
-            @update:model-value="(val) => {
-              if (val) {
-                if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
-              } else {
-                const idx = selectedIds.indexOf(livre.uri);
-                if (idx > -1) selectedIds.splice(idx, 1);
-              }
-            }"
-          />
-        </WireframeTable>
+        <WireframePagination
+          :items="seriesTomes"
+          :searchKeys="['title']"
+          :hasSelectAll="true"
+          :selectAllValue="isAllSelected"
+          :selectedCount="selectedIds.length"
+          @update:selectAllValue="handleToggleAll"
+          @update:processedItems="(val) => displayedTomes = val"
+        >
+          <div v-if="displayedTomes.length === 0">
+            <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+          </div>
 
-        <BatchActionBar 
-          :selected-count="selectedIds.length"
-          :is-mixed="isSelectionMixed"
-          :context="batchContext"
-          @execute="dispatchBatchAction"
-        />
-      </WireframePagination>
+          <WireframeTable v-else>
+            <BookMiniCard 
+              v-for="livre in displayedTomes" 
+              :key="livre.uri" 
+              :book="livre"
+              :model-value="selectedIds.includes(livre.uri)"
+              @update:model-value="(val) => {
+                if (val) {
+                  if (!selectedIds.includes(livre.uri)) selectedIds.push(livre.uri);
+                } else {
+                  const idx = selectedIds.indexOf(livre.uri);
+                  if (idx > -1) selectedIds.splice(idx, 1);
+                }
+              }"
+            />
+          </WireframeTable>
+
+          <BatchActionBar 
+            :selected-count="selectedIds.length"
+            :is-mixed="isSelectionMixed"
+            :context="batchContext"
+            @execute="dispatchBatchAction"
+          />
+        </WireframePagination>
+      </template>
     </template>
 
     <LendModal
