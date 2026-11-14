@@ -49,18 +49,22 @@ export const entityMapper = {
     let finalCoverUrl = undefined;
     
     if (rawImageSource) {
-      // CORRECTION : On extrait le chemin (qu'il soit dans .url, .value ou direct)
       const imgPath = typeof rawImageSource === 'string' ? rawImageSource : (rawImageSource.url || rawImageSource.value);
       
-      if (typeof imgPath === 'string') {
-        // CORRECTION : On récupère uniquement le hash final (le dernier segment du chemin)
-        const imgHash = imgPath.split('/').pop();
-        
-        if (imgHash) {
-          // RECONSTRUCTION : Si c'est un hash, on utilise le format 300x300, sinon on garde l'URL absolue
-          finalCoverUrl = imgHash.startsWith('http') 
-            ? imgHash 
-            : `https://inventaire.io/img/entities/300x300/${imgHash}`;
+      if (typeof imgPath === 'string' && imgPath.trim()) {
+        const trimmed = imgPath.trim();
+        if (
+          trimmed.startsWith('http://') ||
+          trimmed.startsWith('https://') ||
+          trimmed.startsWith('data:') ||
+          trimmed.startsWith('/api/')
+        ) {
+          finalCoverUrl = trimmed;
+        } else {
+          const imgHash = trimmed.split('/').pop();
+          if (imgHash) {
+            finalCoverUrl = `https://inventaire.io/img/entities/300x300/${imgHash}`;
+          }
         }
       }
     }

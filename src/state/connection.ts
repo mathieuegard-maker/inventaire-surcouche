@@ -1,14 +1,15 @@
 import { ref } from 'vue';
 
 const isTestEnv = typeof (globalThis as any).process !== 'undefined' && (globalThis as any).process.env?.VITEST;
+const isBrowser = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-// En mode test, on simule par défaut que l'on est en ligne pour ne pas perturber les tests unitaires existants
-const isOffline = ref(isTestEnv ? false : (typeof navigator !== 'undefined' ? !navigator.onLine : false));
+// En mode test ou Worker Cloudflare (sans window), on simule par défaut que l'on est en ligne
+const isOffline = ref(isTestEnv || !isBrowser ? false : (typeof navigator !== 'undefined' && navigator.onLine !== undefined ? !navigator.onLine : false));
 
 let heartbeatInterval: any = null;
 
 const startHeartbeat = () => {
-  if (heartbeatInterval || isTestEnv) return;
+  if (heartbeatInterval || isTestEnv || !isBrowser) return;
   console.log("[NETWORK] Lancement du heartbeat de surveillance (10s) pour détecter la reconnexion au serveur...");
   heartbeatInterval = setInterval(async () => {
     if (!isOffline.value) {

@@ -1,67 +1,248 @@
+// src/state/scanner.ts
+// État réactif global du Scanner 3 Modes :
+// 1. 'check'  : Mode Vérif Magasin / Salon (< 1s, affiche le verdict immédiat + accès à toute la série)
+// 2. 'burst'  : Mode Rafale continu (enregistre à la volée dans Collection ou Wishlist sans appuyer sur aucun bouton)
+// 3. 'photo'  : Mode Photo de Couverture ou d'Étagère (via clé IA gratuite BYOK avec validation livre par livre)
+
 import { ref } from 'vue';
-import { barcodeIsbnProvider } from '../plugins/barcode/barcode-isbn.provider';
-import { TEXTS } from '../ui/locales/fr';
 import type { Router } from 'vue-router';
+import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
+import { queueService } from '../core/orchestrators/queue.orchestrator';
+import { backgroundCreationOrchestrator } from '../core/orchestrators/background-creation.orchestrator';
+import { externalMetadataService } from '../core/services/external-metadata.service';
+import { databaseService } from '../core/database/database.service';
+import type { SearchResponse } from '../core/types';
+
+export type ScannerMode = 'check' | 'burst' | 'photo';
+export type BurstTarget = 'owned' | 'wishlist';
+
+export interface BurstScannedEntry {
+  isbn: string;
+  uri: string;
+  title: string;
+  series?: string;
+  seriesNumber?: string;
+  status: 'added' | 'already_owned' | 'creating_bg';
+  target: BurstTarget;
+  timestamp: number;
+}
 
 const isScanningActive = ref(false);
 const isSearching = ref(false);
 const errorMessage = ref<string | null>(null);
+const activeMode = ref<ScannerMode>('check');
+const burstTarget = ref<BurstTarget>('owned');
+const lastCheckResult = ref<(SearchResponse & { isUnknown?: boolean; isbn?: string }) | null>(null);
+const burstHistory = ref<BurstScannedEntry[]>([]);
+const latestBurstToast = ref<BurstScannedEntry | null>(null);
+let activeRouter: Router | null = null;
 
 export const scannerState = {
   isScanningActive,
   isSearching,
   errorMessage,
+  activeMode,
+  burstTarget,
+  lastCheckResult,
+  burstHistory,
+  latestBurstToast,
 
-  async startScan(router: Router) {
+  async startScan(router: Router, mode?: ScannerMode) {
+    activeRouter = router;
+    if (mode) activeMode.value = mode;
     errorMessage.value = null;
+    lastCheckResult.value = null;
     isScanningActive.value = true;
-    
-    // Petit délai pour s'assurer que le DOM a rendu la div avec l'ID viewport
+
+    if (activeMode.value === 'photo') {
+      isSearching.value = false;
+      await barcodeIsbnProvider.stopScanner();
+      return;
+    }
+
+    const isContinuous = activeMode.value === 'burst';
+
     setTimeout(async () => {
       try {
         await barcodeIsbnProvider.startScanner(
           'global-barcode-scanner-viewport',
-          (response: any) => {
-            isScanningActive.value = false;
+          async (response: any, rawIsbn?: string) => {
+            if (activeMode.value === 'burst') {
+              await this.handleBurstDetection(response, rawIsbn || '');
+              return;
+            }
+
+            // Mode 'check' (Vérif Magasin < 1s)
             isSearching.value = false;
             if (response) {
-              if (response.isUnknown) {
-                router.push({ name: 'BookCreateUnknown', query: { isbn: response.isbn } });
-              } else if (response.mainBook?.uri) {
-                router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
-              }
+              playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
+              lastCheckResult.value = {
+                ...response,
+                isbn: rawIsbn || response.isbn || response.mainBook?.isbn13
+              };
             } else {
-              errorMessage.value = TEXTS.scanner?.notFound || 'Ouvrage non trouvé.';
+              errorMessage.value = 'Ouvrage non trouvé.';
             }
           },
           (errorMsg) => {
-            isScanningActive.value = false;
             isSearching.value = false;
             errorMessage.value = errorMsg;
           },
           () => {
             isSearching.value = true;
-          }
+          },
+          { continuous: isContinuous }
         );
       } catch (err: any) {
         isScanningActive.value = false;
         isSearching.value = false;
-        errorMessage.value = err.message || "Erreur de démarrage du scanner.";
+        errorMessage.value = err.message || 'Erreur de démarrage du scanner.';
       }
     }, 150);
+  },
+
+  async handleBurstDetection(response: any, scannedIsbn: string) {
+    const target = burstTarget.value;
+
+    // Cas 1 : Livre résolu immédiatement (depuis le cache local ou auto-résolu sur Cloudflare D1)
+    if (response && response.mainBook?.uri && !response.isUnknown) {
+      const book = response.mainBook;
+      const alreadyOwned = Boolean(response.ownership?.isWorkOwned);
+
+      if (alreadyOwned && target === 'owned') {
+        playScanBeep('duplicate');
+        const entry: BurstScannedEntry = {
+          isbn: scannedIsbn,
+          uri: book.uri,
+          title: book.title,
+          series: book.series,
+          seriesNumber: book.seriesNumber,
+          status: 'already_owned',
+          target,
+          timestamp: Date.now()
+        };
+        burstHistory.value.unshift(entry);
+        latestBurstToast.value = entry;
+        return;
+      }
+
+      playScanBeep('success');
+      if (target === 'owned') {
+        await queueService.enqueueAction('ADD_INVENTORY', book.uri);
+      } else {
+        await queueService.enqueueAction('ADD_WISHLIST', book.uri);
+      }
+
+      const entry: BurstScannedEntry = {
+        isbn: scannedIsbn,
+        uri: book.uri,
+        title: book.title,
+        series: book.series,
+        seriesNumber: book.seriesNumber,
+        status: 'added',
+        target,
+        timestamp: Date.now()
+      };
+      burstHistory.value.unshift(entry);
+      latestBurstToast.value = entry;
+      return;
+    }
+
+    // Cas 2 : ISBN inconnu -> Enrichissement et création en tâche de fond sans bloquer la caméra !
+    playScanBeep('success');
+    const placeholderUri = `local:burst:${scannedIsbn}`;
+    const entry: BurstScannedEntry = {
+      isbn: scannedIsbn,
+      uri: placeholderUri,
+      title: `ISBN ${scannedIsbn} (Enrichissement en fond...)`,
+      status: 'creating_bg',
+      target,
+      timestamp: Date.now()
+    };
+    burstHistory.value.unshift(entry);
+    latestBurstToast.value = entry;
+
+    // Résolution asynchrone non bloquante
+    externalMetadataService
+      .fetchFromExternalSources(scannedIsbn)
+      .then(async (meta) => {
+        const title = meta?.title || `Livre ISBN ${scannedIsbn}`;
+        entry.title = title;
+        entry.series = meta?.series;
+        entry.seriesNumber = meta?.seriesNumber;
+        await backgroundCreationOrchestrator.enqueueBookCreation({
+          tempBook: {
+            uri: placeholderUri,
+            type: 'edition',
+            isbn13: scannedIsbn,
+            title,
+            authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
+            illustrators: [],
+            scriptwriters: [],
+            publisher: meta?.publisher || '',
+            publishDate: meta?.publishDate,
+            pageCount: meta?.pageCount,
+            coverUrl: meta?.coverUrl,
+            series: meta?.series,
+            seriesNumber: meta?.seriesNumber,
+            genres: [],
+            ownershipStatus: target === 'owned' ? 'owned' : 'wish'
+          },
+          expandSeries: Boolean(meta?.series)
+        });
+      })
+      .catch((e: unknown) => {
+        console.warn('[BURST SCAN] Échec enrichissement en tâche de fond :', e);
+      });
+  },
+
+  async undoBurstEntry(entry: BurstScannedEntry) {
+    burstHistory.value = burstHistory.value.filter((e) => e.timestamp !== entry.timestamp);
+    if (latestBurstToast.value?.timestamp === entry.timestamp) {
+      latestBurstToast.value = null;
+    }
+    if (entry.status === 'added') {
+      if (entry.target === 'owned') {
+        await queueService.enqueueAction('REMOVE_INVENTORY', entry.uri);
+      } else {
+        await queueService.enqueueAction('REMOVE_WISHLIST', entry.uri);
+      }
+      const cached = await databaseService.getBookFromCache(entry.uri);
+      if (cached) {
+        cached.ownershipStatus = 'none';
+        await databaseService.saveBookToCache(cached);
+      }
+    }
+  },
+
+  async switchMode(newMode: ScannerMode) {
+    activeMode.value = newMode;
+    lastCheckResult.value = null;
+    errorMessage.value = null;
+    if (isScanningActive.value && activeRouter) {
+      await this.startScan(activeRouter, newMode);
+    }
+  },
+
+  async resumeCameraInCheckMode() {
+    lastCheckResult.value = null;
+    if (activeRouter) {
+      await this.startScan(activeRouter, 'check');
+    }
   },
 
   async stopScan() {
     await barcodeIsbnProvider.stopScanner();
     isScanningActive.value = false;
     isSearching.value = false;
+    lastCheckResult.value = null;
   },
 
-  toggleScan(router: Router) {
-    if (isScanningActive.value) {
+  toggleScan(router: Router, mode?: ScannerMode) {
+    if (isScanningActive.value && (!mode || activeMode.value === mode)) {
       this.stopScan();
     } else {
-      this.startScan(router);
+      this.startScan(router, mode || activeMode.value);
     }
   }
 };

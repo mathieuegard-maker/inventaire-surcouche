@@ -4,48 +4,73 @@ import { fetchWithTimeout } from '../../state/connection';
 
 export const userService = {
   /**
-   * Récupère le profil de l'utilisateur actuellement connecté via le cookie de session
+   * Récupère le profil de l'utilisateur actuellement connecté (cookie ou URI de bibliothèque en repli)
    */
   async fetchProfile() {
-    const res = await fetchWithTimeout('/api/gateway?action=user-get');
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=user-get${query}`);
     const data = await res.json();
 
     if (!res.ok) {
-      console.log('[DEBUG] Détails du rejet API :', data);
-      const error = new Error(data.error || "Session invalide") as any;
+      const error = new Error(data.error || 'Session invalide') as any;
       error.status = res.status;
       throw error;
     }
-    
+
     sessionStore.setUser(data);
     return sessionStore.state.user;
   },
 
   /**
-   * Envoie une requête d'authentification au Gateway avec les identifiants requis
+   * Authentification ou création de compte V2 autonome sur Cloudflare D1
+   * Supporte optionnellement un code d'invitation famille (`inviteCode`)
    */
-  async login(username: string, password: string): Promise<boolean> {
-    // CORRECTION : Remplacement de 'login' par 'auth-login' pour s'aligner sur le switch du Gateway
+  async login(username: string, password: string, inviteCode?: string): Promise<boolean> {
     const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, ...(inviteCode ? { inviteCode } : {}) })
     });
 
     const data = await res.json();
 
     if (!res.ok) {
-      console.log('[DEBUG] Échec de la connexion API :', data);
       return false;
     }
 
-    // Si le Gateway renvoie directement les données utilisateur à la connexion
     if (data) {
       sessionStore.setUser(data);
     }
-    
+
     return true;
+  },
+
+  /**
+   * Rejoint une bibliothèque familiale existante via son code d'invitation (ex: FAM-XXXXXX)
+   */
+  async joinFamilyLibrary(inviteCode: string): Promise<{ ok: boolean; error?: string }> {
+    const userUri = sessionStore.getUserUri();
+    const res = await fetchWithTimeout('/api/gateway?action=family-join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inviteCode: inviteCode.trim().toUpperCase(), userUri })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      return { ok: false, error: data.error || 'Code famille invalide.' };
+    }
+    if (sessionStore.state.user) {
+      sessionStore.setUser({
+        ...sessionStore.state.user,
+        uri: data.uri,
+        libraryId: data.libraryId,
+        inviteCode: data.inviteCode,
+        publicReadonlyToken: data.publicReadonlyToken
+      });
+    }
+    return { ok: true };
   }
 };

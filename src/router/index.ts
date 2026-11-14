@@ -77,6 +77,11 @@ export const router = createRouter({
       component: DebugDbView
     },
     {
+      path: '/shared/:token',
+      name: 'PublicShareView',
+      component: () => import('../ui/views/PublicShareView.vue')
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/login'
     }
@@ -84,6 +89,9 @@ export const router = createRouter({
 });
 
 router.beforeEach((to, from) => {
+  if (to.path.startsWith('/shared/')) {
+    return true;
+  }
   const isAuthenticated = Boolean(sessionStore.getUserUri());
 
   if (to.path === '/login') {

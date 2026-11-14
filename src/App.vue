@@ -6,19 +6,19 @@ import { queueService } from './core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from './core/orchestrators/background-creation.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
+import ScannerOverlayModal from './ui/components/ScannerOverlayModal.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
 
 const isOffline = computed(() => connectionState.isOffline.value);
 const bgStatus = backgroundCreationOrchestrator.status;
 const isInitializing = ref(true);
-const router = useRouter(); 
-const route = useRoute(); // Permet de lire l'URL actuelle demandée
+const router = useRouter();
+const route = useRoute();
 
 // Surveillance réactive du retour réseau
 watch(isOffline, async (newOfflineVal) => {
-  if (!newOfflineVal) {
-    console.log("[App] Le réseau est de retour. Vérification de la validité de la session...");
+  if (!newOfflineVal && !route.path.startsWith('/shared/')) {
     const hasValidSession = await connectionService.checkSessionOnReconnection();
     if (!hasValidSession) {
       router.push('/login');
@@ -33,25 +33,31 @@ watch(isOffline, async (newOfflineVal) => {
 });
 
 // Arrêt automatique du scanner lors d'un changement de page
-watch(() => route.path, () => {
-  if (scannerState.isScanningActive.value) {
-    scannerState.stopScan();
+watch(
+  () => route.path,
+  () => {
+    if (scannerState.isScanningActive.value) {
+      scannerState.stopScan();
+    }
   }
-});
+);
 
 onMounted(async () => {
   try {
+    if (window.location.pathname.startsWith('/shared/')) {
+      isInitializing.value = false;
+      return;
+    }
+
     const isConnected = await connectionService.initializeApp();
-    
+
     if (isConnected) {
       backgroundCreationOrchestrator.resumePendingJobs();
-      // On ne force le retour à l'accueil que si l'utilisateur arrive de la racine ou du login
       if (route.path === '/login' || route.path === '/') {
         router.push('/dashboard');
       }
-      // Sinon, on le laisse tranquille sur sa page (ex: /debug, /series/...)
     } else {
-      router.push('/login');
+      router.push({ path: '/login', query: route.query });
     }
   } catch (error) {
     console.error("[VUE] Erreur lors de l'initialisation :", error);
@@ -70,17 +76,21 @@ onMounted(async () => {
 
   <div v-else class="app-main-layout">
     <div v-if="isOffline" class="offline-global-banner">
-      ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
+      ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)' }}
     </div>
 
     <div
       v-if="bgStatus.isActive || bgStatus.lastError"
       style="margin: 8px 16px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px;"
-      :style="bgStatus.lastError && !bgStatus.isActive ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;' : 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'"
+      :style="
+        bgStatus.lastError && !bgStatus.isActive
+          ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;'
+          : 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'
+      "
     >
       <span>
         <template v-if="bgStatus.isActive">
-          ⏳ {{ bgStatus.stepLabel || 'Création en cours sur inventaire.io...' }}
+          ⏳ {{ bgStatus.stepLabel || 'Enrichissement en cours...' }}
           <strong v-if="bgStatus.pendingCount > 1">({{ bgStatus.pendingCount }} en file)</strong>
         </template>
         <template v-else-if="bgStatus.lastError">
@@ -97,21 +107,11 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- Volet de Scan Global -->
-    <div v-show="scannerState.isScanningActive.value" class="global-scanner-box">
-      <div class="scanner-viewport-wrapper">
-        <div id="global-barcode-scanner-viewport" class="scanner-viewport"></div>
-        <div v-if="!scannerState.isSearching.value" class="scanner-placeholder">
-          <p>{{ TEXTS.scanner?.searching || 'En attente d\'un code-barres...' }}</p>
-        </div>
-      </div>
-      <div v-if="scannerState.errorMessage.value" class="error-banner">
-        {{ scannerState.errorMessage.value }}
-      </div>
-    </div>
+    <!-- Scanner 3 Modes (Vérif Magasin <1s, Mode Rafale continu, Photo Couverture/Étagère BYOK) -->
+    <ScannerOverlayModal />
 
     <router-view></router-view>
   </div>
-  
+
   <PwaReloadPrompt />
 </template>

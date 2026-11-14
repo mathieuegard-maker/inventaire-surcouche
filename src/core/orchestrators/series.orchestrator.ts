@@ -88,8 +88,20 @@ export const seriesOrchestrator = {
       }
     }
 
-    // 3. Tri numérique strict par numéro de volume
-    tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+    // 3. Tri numérique robuste (Tomes numérotés 1, 2... puis Hors-Séries HS1, HS2... puis Intégrales / non-numérotés)
+    const getSortWeight = (vol?: string): number => {
+      if (!vol) return 9999;
+      const trimmed = vol.trim();
+      const numMatch = /^(\d+(?:\.\d+)?)/.exec(trimmed);
+      if (numMatch) return parseFloat(numMatch[1]);
+      const hsMatch = /hs\s*(\d+)?/i.exec(trimmed);
+      if (hsMatch) return 5000 + (hsMatch[1] ? parseInt(hsMatch[1], 10) : 0);
+      return 8000;
+    };
+    tomes.sort((a, b) => {
+      const diff = getSortWeight(a.seriesNumber) - getSortWeight(b.seriesNumber);
+      return diff !== 0 ? diff : (a.title || '').localeCompare(b.title || '', 'fr');
+    });
     
     // 4. Calcul des métadonnées de possession
     const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;

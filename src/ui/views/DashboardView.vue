@@ -6,10 +6,13 @@ import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
+import FamilyShareModal from '../components/FamilyShareModal.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService, type DashboardStats } from '../../core/services/stats.service';
+import { scannerState } from '../../state/scanner';
 
 const router = useRouter();
+const showFamilyModal = ref(false);
 
 const searchQuery = ref('');
 const errorMessage = ref<string | null>(null);
@@ -75,6 +78,44 @@ onMounted(async () => {
       @isbn-detected="handleSearch" 
       @keywords-detected="handleKeywordsSearch" 
     />
+
+    <!-- Barre d'actions rapides V2 : Modes de Scan & Partage Familial -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; margin: 1rem 0;">
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #4f46e5; color: #fff; font-weight: 800; padding: 0.65rem;"
+        @click="scannerState.startScan(router, 'check')"
+      >
+        🏪 Scan Magasin (&lt;1s)
+      </button>
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #0f172a; color: #fff; font-weight: 800; padding: 0.65rem;"
+        @click="scannerState.startScan(router, 'burst')"
+      >
+        ⚡ Scan en Rafale
+      </button>
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #f8fafc; font-weight: 800; padding: 0.65rem;"
+        @click="scannerState.startScan(router, 'photo')"
+      >
+        📸 Photo Couv / Étagère
+      </button>
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #ecfdf5; color: #065f46; font-weight: 800; padding: 0.65rem;"
+        @click="showFamilyModal = true"
+      >
+        👨‍👩‍👧‍👦 Foyer &amp; Partage
+      </button>
+    </div>
+
+    <FamilyShareModal :show="showFamilyModal" @close="showFamilyModal = false" />
 
     <div v-if="errorMessage" class="error-banner">
       {{ errorMessage }}

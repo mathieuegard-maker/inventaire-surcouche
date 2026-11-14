@@ -12,6 +12,7 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import LendModal from '../components/LendModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
@@ -19,6 +20,7 @@ import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import { imageUtil } from '../../core/utils/image.util';
+import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
 import { connectionState } from '../../state/connection';
 
 const route = useRoute();
@@ -30,6 +32,68 @@ const errorMsg = ref('');
 const successMessage = ref('');
 const showLendModal = ref(false);
 const showDeleteModal = ref(false);
+const showSeriesMergeModal = ref(false);
+
+// Statut de lecture optionnel (stocké localement par URI d'œuvre/édition)
+const readingStatus = ref<string>('none');
+const readingRating = ref<number>(0);
+
+function loadLocalReadingMeta(uri: string) {
+  try {
+    const raw = localStorage.getItem(`biblio_reading_${uri}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      readingStatus.value = parsed.status || 'none';
+      readingRating.value = Number(parsed.rating) || 0;
+    } else {
+      readingStatus.value = 'none';
+      readingRating.value = 0;
+    }
+  } catch {
+    readingStatus.value = 'none';
+    readingRating.value = 0;
+  }
+}
+
+function saveLocalReadingMeta() {
+  if (!book.value?.uri) return;
+  localStorage.setItem(
+    `biblio_reading_${book.value.uri}`,
+    JSON.stringify({ status: readingStatus.value, rating: readingRating.value })
+  );
+  successMessage.value = 'Statut de lecture mis à jour ✓';
+}
+
+async function handleCustomCoverUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !book.value) return;
+  try {
+    const webpDataUrl = await compressImageToWebpDataUrl(file, {
+      maxWidth: 420,
+      maxHeight: 600,
+      quality: 0.8,
+      cropRatio: 0.7
+    });
+    book.value.localCover = webpDataUrl;
+    book.value.coverUrl = webpDataUrl;
+    book.value.isLocallyEdited = true;
+    await databaseService.saveBookToCache(book.value);
+    successMessage.value = 'Couverture recadrée et compressée en WebP ✓';
+  } catch (e: any) {
+    errorMsg.value = e.message || 'Impossible de compresser la couverture.';
+  } finally {
+    input.value = '';
+  }
+}
+
+async function handleSeriesMerged(payload: { seriesId: string; seriesTitle: string }) {
+  if (!book.value) return;
+  book.value.seriesId = payload.seriesId;
+  book.value.series = payload.seriesTitle;
+  successMessage.value = `Rattaché à la série "${payload.seriesTitle}" ✓`;
+  await loadSeriesContext();
+}
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
 const isLent = computed(() => !!book.value?.loan);
@@ -157,6 +221,9 @@ const loadBookDetails = async (uriParam: string) => {
     errorMsg.value = TEXTS.bookDetail.loadError;
   } finally {
     isLoading.value = false;
+    if (book.value?.uri) {
+      loadLocalReadingMeta(book.value.uri);
+    }
     await loadSeriesContext();
   }
 };
@@ -410,6 +477,43 @@ const confirmDelete = async () => {
         <p>{{ book.description }}</p>
       </div>
 
+      <!-- Statut de lecture optionnel + Actions V2 (Couverture WebP & Rattachement Série / Hors-Série) -->
+      <div style="margin: 1rem 0; padding: 0.75rem; border: 2px solid #000; background: #f8fafc; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+          <strong style="font-size: 0.85rem;">📖 Lecture (optionnel) :</strong>
+          <select v-model="readingStatus" @change="saveLocalReadingMeta" style="border: 2px solid #000; padding: 0.3rem 0.5rem; font-weight: 700; font-size: 0.82rem;">
+            <option value="none">— Non renseigné —</option>
+            <option value="unread">📚 À lire (PAL)</option>
+            <option value="reading">⏳ En cours de lecture</option>
+            <option value="read">✅ Lu</option>
+            <option value="abandoned">⏸️ Abandonné</option>
+          </select>
+          <select v-model.number="readingRating" @change="saveLocalReadingMeta" style="border: 2px solid #000; padding: 0.3rem 0.5rem; font-weight: 700; font-size: 0.82rem;">
+            <option :value="0">Note : —</option>
+            <option :value="5">★★★★★ (5/5)</option>
+            <option :value="4">★★★★☆ (4/5)</option>
+            <option :value="3">★★★☆☆ (3/5)</option>
+            <option :value="2">★★☆☆☆ (2/5)</option>
+            <option :value="1">★☆☆☆☆ (1/5)</option>
+          </select>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+          <label class="wireframe-btn" style="cursor: pointer; padding: 0.35rem 0.65rem; font-size: 0.8rem; width: auto;">
+            <input type="file" accept="image/*" capture="environment" hidden @change="handleCustomCoverUpload" />
+            📸 Photo Couverture (WebP)
+          </label>
+          <button
+            type="button"
+            class="wireframe-btn"
+            style="padding: 0.35rem 0.65rem; font-size: 0.8rem; width: auto; background: #eef2ff;"
+            @click="showSeriesMergeModal = true"
+          >
+            🔗 {{ hasSeries ? 'Changer / Fusionner la série' : 'Rattacher à une série (ou Hors-Série)' }}
+          </button>
+        </div>
+      </div>
+
       <div class="book-actions-layout">
         <BookActionButtons 
           :ownership-status="book.ownershipStatus"
@@ -432,6 +536,17 @@ const confirmDelete = async () => {
         </div>
       </div>
     </div>
+
+    <SeriesMergeModal
+      v-if="book"
+      :show="showSeriesMergeModal"
+      :bookUris="[book.uri, ...(book.workUri ? [book.workUri] : [])]"
+      :currentSeriesId="book.seriesId"
+      :currentSeriesTitle="book.series"
+      :initialVolumeLabel="book.seriesNumber"
+      @close="showSeriesMergeModal = false"
+      @merged="handleSeriesMerged"
+    />
 
     <LendModal
       :show="showLendModal"

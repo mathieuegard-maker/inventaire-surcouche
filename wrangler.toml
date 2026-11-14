@@ -1,0 +1,11 @@
+# Configuration Cloudflare Pages + D1 (Base SQLite en région WEUR)
+name = "biblio-collection-pwa"
+pages_build_output_dir = "dist"
+compatibility_date = "2025-01-01"
+
+# 1. Liaison Base de données SQLite Serverless (Cloudflare D1 - Région WEUR)
+[[d1_databases]]
+binding = "DB"
+database_name = "biblio-catalog-db"
+database_id = "f1f0f7a3-f319-4c97-a495-1ef143881795"
+migrations_dir = "migrations"

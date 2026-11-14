@@ -10,6 +10,7 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
@@ -27,6 +28,7 @@ const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
+const showMergeSeriesModal = ref(false);
 const displayedTomes = ref<HumanizedBook[]>([]);
 
 // Stockage du titre résolu (pour éviter wd:Q...)
@@ -190,9 +192,22 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       </div>
 
       <template v-else>
-        <div v-if="missingTomes.length > 0 && seriesTomes.length > 0" style="margin-bottom: var(--spacing-md);">
-          <button class="wireframe-btn btn-primary" style="width: 100%;" @click="completeMissingSeries">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: var(--spacing-md);">
+          <button
+            v-if="missingTomes.length > 0 && seriesTomes.length > 0"
+            class="wireframe-btn btn-primary"
+            style="flex: 2; min-width: 220px;"
+            @click="completeMissingSeries"
+          >
             Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
+          </button>
+          <button
+            type="button"
+            class="wireframe-btn"
+            style="flex: 1; min-width: 180px; background: #eef2ff; font-weight: 700;"
+            @click="showMergeSeriesModal = true"
+          >
+            🔗 Fusionner / Regrouper la série
           </button>
         </div>
 
@@ -241,6 +256,15 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       :bookCount="selectedIds.length"
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
+    />
+
+    <SeriesMergeModal
+      :show="showMergeSeriesModal"
+      :bookUris="selectedIds.length > 0 ? selectedIds : seriesTomes.map(t => t.uri)"
+      :currentSeriesId="seriesId"
+      :currentSeriesTitle="seriesName"
+      @close="showMergeSeriesModal = false"
+      @merged="(p) => router.push({ name: 'SeriesView', params: { id: p.seriesId } })"
     />
   </div>
 </template>
