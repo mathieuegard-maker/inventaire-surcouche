@@ -9,6 +9,7 @@ import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
+import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import type { HumanizedBook } from '../../core/types';
 import { imageUtil } from '../../core/utils/image.util';
@@ -33,6 +34,7 @@ const coverUrlInput = ref('');
 const seriesInput = ref('');
 const seriesNumberInput = ref('');
 const noSeries = ref(false);
+const expandSeries = ref(true);
 
 // Watchers intelligents pour une UX fluide
 watch(noSeries, (val) => {
@@ -179,16 +181,15 @@ const saveChanges = async () => {
       seriesNumber: noSeries.value ? undefined : (seriesNumberInput.value.trim() || undefined)
     };
 
-    const finalBook = await bookSemanticOrchestrator.saveCreatedBook(
+    await backgroundCreationOrchestrator.enqueueBookCreation({
       tempBook,
-      resolvedSeriesUri.value,
-      resolvedAuthorUris.value
-    );
+      resolvedSeriesUri: resolvedSeriesUri.value,
+      resolvedAuthorUris: resolvedAuthorUris.value,
+      expandSeries: !noSeries.value && expandSeries.value
+    });
 
-    successMsg.value = "Ouvrage créé et ajouté à votre collection avec succès ! Redirection...";
-    setTimeout(() => {
-      router.push(`/book/${encodeURIComponent(finalBook.uri)}`);
-    }, 1500);
+    isLoading.value = false;
+    router.replace('/dashboard');
   } catch (err: any) {
     console.error("[CREATE UNKNOWN] Erreur lors de la sauvegarde :", err);
     errorMsg.value = "Impossible de créer l'ouvrage : " + err.message;
@@ -272,6 +273,10 @@ const saveChanges = async () => {
                 <input type="checkbox" id="noSeriesCheckbox" v-model="noSeries" class="wireframe-checkbox" />
                 <label for="noSeriesCheckbox" class="checkbox-label">Ce livre ne fait pas partie d'une série</label>
               </div>
+              <div v-if="!noSeries" class="checkbox-container">
+                <input type="checkbox" id="expandSeriesCheckbox" v-model="expandSeries" class="wireframe-checkbox" />
+                <label for="expandSeriesCheckbox" class="checkbox-label">Créer aussi les autres tomes manquants de cette série sur inventaire.io (tâche de fond)</label>
+              </div>
             </div>
 
             <div class="form-group">
@@ -298,7 +303,7 @@ const saveChanges = async () => {
 
         <div class="form-actions-row">
           <BaseButton type="primary" @click="handleSave" class="btn-save-creation">
-            [ ENREGISTRER SUR INVENTAIRE.IO ]
+            Enregistrer et passer à la suite
           </BaseButton>
         </div>
       </div>

@@ -319,18 +319,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       case 'external-lookup': {
-        const { isbn, source } = req.query;
-        if (!isbn) return res.status(400).json({ error: "ISBN requis" });
+        const { isbn, source, series, author } = req.query;
         if (!source) return res.status(400).json({ error: "Source requise (bnf ou openlibrary)" });
 
         if (source === 'bnf') {
           const recordSchema = req.query.schema === 'intermarc' ? 'intermarcxchange' : 'dublincore';
+          if (typeof series === 'string' && series.trim()) {
+            const cleanSeries = series.replace(/["()]/g, ' ').trim();
+            const cleanAuthor = typeof author === 'string' ? author.replace(/["()]/g, ' ').trim() : '';
+            const cql = cleanAuthor
+              ? `(bib.title all "${cleanSeries}") and (bib.author all "${cleanAuthor}")`
+              : `bib.title all "${cleanSeries}"`;
+            const maxRec = Math.min(Math.max(Number(req.query.maxRecords) || 50, 1), 100);
+            const startRec = Math.max(Number(req.query.startRecord) || 1, 1);
+            const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
+            const bnfRes = await resilientFetch(bnfUrl);
+            const bnfText = await bnfRes.text();
+            res.setHeader('Content-Type', 'application/xml; charset=utf-8');
+            return res.status(bnfRes.status).send(bnfText);
+          }
+
+          if (!isbn) return res.status(400).json({ error: "ISBN ou série requis" });
           const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn as string)}%22&recordSchema=${recordSchema}`;
           const bnfRes = await resilientFetch(bnfUrl);
           const bnfText = await bnfRes.text();
           res.setHeader('Content-Type', 'application/xml; charset=utf-8');
           return res.status(bnfRes.status).send(bnfText);
         } else if (source === 'openlibrary') {
+          if (!isbn) return res.status(400).json({ error: "ISBN requis" });
           const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn as string)}&jscmd=data&format=json`;
           const olRes = await resilientFetch(olUrl);
           const olText = await olRes.text();

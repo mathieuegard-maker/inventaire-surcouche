@@ -11,12 +11,24 @@ export interface PendingAction {
   createdAt: number;
 }
 
+export interface PendingCreation {
+  id?: number;
+  tempBook: HumanizedBook;
+  resolvedSeriesUri?: string;
+  resolvedAuthorUris: Record<string, string>;
+  expandSeries: boolean;
+  status: 'pending' | 'processing' | 'failed';
+  errorMessage?: string;
+  createdAt: number;
+}
+
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;
   wishlist!: Table<RegistryEntry, string>;
   cache_books!: Table<HumanizedBook, string>;
   loans!: Table<LoanRecord, string>; // Table pour le carnet de prêt
   pending_actions!: Table<PendingAction, number>; // NOUVELLE TABLE : File d'attente
+  pending_creations!: Table<PendingCreation, number>; // File de créations distantes en tâche de fond
 
   constructor() {
     super('InventaireLocalDBV2');
@@ -36,6 +48,16 @@ export class AppDatabase extends Dexie {
       cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
       loans: 'uri, friendName',
       pending_actions: '++id, action, uri, status, createdAt' // ++id génère un auto-incrément mathématique
+    });
+
+    // Version 5 : Ajout de la file persistante pour créations / séries en tâche de fond
+    this.version(5).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName',
+      pending_actions: '++id, action, uri, status, createdAt',
+      pending_creations: '++id, status, createdAt'
     });
   }
 }
@@ -185,5 +207,126 @@ export const databaseService = {
 
   async deletePendingAction(id: number): Promise<void> {
     await db.pending_actions.delete(id);
+  },
+
+  // --- GESTION DU CACHE AVANCÉE & FUSION DE SÉRIES ---
+
+  async deleteBookFromCache(uri: string): Promise<void> {
+    await db.cache_books.delete(uri);
+  },
+
+  /**
+   * Remplace une fiche temporaire (ex: isbn:...) ou doublon par la fiche canonique (ex: inv:...)
+   * en migrant atomiquement les registres, prêts, actions en file et métadonnées locales.
+   */
+  async replaceBookUri(oldUri: string, newBook: HumanizedBook): Promise<HumanizedBook> {
+    const plainNew: HumanizedBook = JSON.parse(JSON.stringify(newBook));
+    return await db.transaction(
+      'rw',
+      [db.cache_books, db.inventory, db.wishlist, db.loans, db.pending_actions],
+      async () => {
+        const oldBook = oldUri !== plainNew.uri ? await db.cache_books.get(oldUri) : undefined;
+        const existingTarget = await db.cache_books.get(plainNew.uri);
+
+        const rankOwnership = (s?: HumanizedBook['ownershipStatus']) =>
+          s === 'owned' ? 2 : s === 'wish' ? 1 : 0;
+
+        const bestOwnership = [oldBook?.ownershipStatus, existingTarget?.ownershipStatus, plainNew.ownershipStatus]
+          .sort((a, b) => rankOwnership(b) - rankOwnership(a))[0] || 'none';
+
+        const merged: HumanizedBook = {
+          ...oldBook,
+          ...existingTarget,
+          ...plainNew,
+          uri: plainNew.uri,
+          localCover: plainNew.localCover || existingTarget?.localCover || oldBook?.localCover,
+          coverUrl: plainNew.coverUrl || existingTarget?.coverUrl || oldBook?.coverUrl,
+          isLocallyEdited: Boolean(plainNew.isLocallyEdited || existingTarget?.isLocallyEdited || oldBook?.isLocallyEdited),
+          ownershipStatus: bestOwnership,
+          updatedAt: Date.now()
+        };
+
+        await db.cache_books.put(merged);
+
+        if (oldUri && oldUri !== plainNew.uri) {
+          await db.cache_books.delete(oldUri);
+
+          const oldInv = await db.inventory.get(oldUri);
+          if (oldInv) {
+            const existingNewInv = await db.inventory.get(plainNew.uri);
+            await db.inventory.put({
+              uri: plainNew.uri,
+              addedAt: oldInv.addedAt,
+              itemId: existingNewInv?.itemId || oldInv.itemId
+            });
+            await db.inventory.delete(oldUri);
+          }
+
+          const oldWish = await db.wishlist.get(oldUri);
+          if (oldWish) {
+            await db.wishlist.put({ uri: plainNew.uri, addedAt: oldWish.addedAt });
+            await db.wishlist.delete(oldUri);
+          }
+
+          const oldLoan = await db.loans.get(oldUri);
+          if (oldLoan) {
+            await db.loans.put({ ...oldLoan, uri: plainNew.uri });
+            await db.loans.delete(oldUri);
+          }
+
+          const pending = await db.pending_actions.where('uri').equals(oldUri).toArray();
+          for (const act of pending) {
+            if (act.id !== undefined) {
+              await db.pending_actions.update(act.id, { uri: plainNew.uri });
+            }
+          }
+        }
+
+        return merged;
+      }
+    );
+  },
+
+  async findLocalSeriesMatches(seriesName?: string, seriesId?: string): Promise<HumanizedBook[]> {
+    const normTarget = (seriesName || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/['’".,:;!?()\[\]-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const allBooks = await db.cache_books.toArray();
+    return allBooks.filter(book => {
+      if (seriesId && book.seriesId === seriesId) return true;
+      if (!normTarget || !book.series) return false;
+      const normBookSeries = book.series
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/['’".,:;!?()\[\]-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return normBookSeries === normTarget;
+    });
+  },
+
+  // --- GESTION DES CRÉATIONS EN TÂCHE DE FOND ---
+
+  async savePendingCreation(job: PendingCreation): Promise<number> {
+    const plainJob: PendingCreation = JSON.parse(JSON.stringify(job));
+    return await db.pending_creations.put(plainJob);
+  },
+
+  async getPendingCreations(): Promise<PendingCreation[]> {
+    return await db.pending_creations.orderBy('createdAt').toArray();
+  },
+
+  async updatePendingCreation(id: number, patch: Partial<PendingCreation>): Promise<void> {
+    await db.pending_creations.update(id, patch);
+  },
+
+  async deletePendingCreation(id: number): Promise<void> {
+    await db.pending_creations.delete(id);
   }
 };

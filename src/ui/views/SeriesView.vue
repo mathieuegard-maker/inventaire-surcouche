@@ -13,6 +13,7 @@ import LendModal from '../components/LendModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
+import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { fetchWithTimeout } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
 
@@ -86,6 +87,13 @@ watch(
   }
 );
 
+watch(
+  () => backgroundCreationOrchestrator.status.value.lastCompletedAt,
+  async () => {
+    await loadLocalData();
+  }
+);
+
 // ... (Garder les méthodes existantes: handleToggleAll, dispatchBatchAction, confirmGroupLend, handleBackToCollection, isAllSelected, etc.)
 // Note : J'ai omis le code répétitif pour la concision, mais tu conserves tes méthodes existantes ici.
 
@@ -137,6 +145,24 @@ const confirmGroupLend = async (friendName: string) => {
     selectedIds.value = [];
   } catch (error) { console.error(error); } finally { showLendModal.value = false; }
 };
+const missingTomes = computed(() => seriesTomes.value.filter(tome => tome.ownershipStatus !== 'owned'));
+
+const completeMissingSeries = async () => {
+  const targets = missingTomes.value.map(t => t.uri);
+  if (targets.length === 0) return;
+  try {
+    for (const uri of targets) {
+      await queueService.enqueueAction('ADD_INVENTORY', uri);
+    }
+    seriesTomes.value = seriesTomes.value.map(tome =>
+      targets.includes(tome.uri) ? { ...tome, ownershipStatus: 'owned' } : tome
+    );
+    selectedIds.value = [];
+  } catch (error) {
+    console.error(error);
+  }
+};
+
 const handleBackToCollection = () => router.push({ name: 'CollectionView', query: { mode: fromMode.value } });
 </script>
 
@@ -161,6 +187,12 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
     <template v-else>
       <div v-if="seriesTomes.length === 0 && !progressState.isActive">
         <BaseBanner type="error" :message="TEXTS.collectionView?.emptyCollection" />
+      </div>
+
+      <div v-if="missingTomes.length > 0 && seriesTomes.length > 0" style="margin-bottom: var(--spacing-md);">
+        <button class="wireframe-btn btn-primary" style="width: 100%;" @click="completeMissingSeries">
+          Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
+        </button>
       </div>
 
       <WireframePagination

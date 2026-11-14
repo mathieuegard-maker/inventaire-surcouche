@@ -399,4 +399,75 @@ describe('BNF Resolver & Parsers', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('searchSeriesVolumes', () => {
+    it('doit filtrer les doubles/intégrales/langues étrangères et dédoublonner les rééditions d un même tome', async () => {
+      const mockSeriesXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>4</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">190101s 2019                 frfre     b  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">978-2-8001-3692-9</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="100"><mxc:subfield code="a">Vehlmann</mxc:subfield><mxc:subfield code="m">Fabien</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">La disparition</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">56 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Seuls</mxc:subfield><mxc:subfield code="v">1</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="950"><mxc:subfield code="a">12345</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">170101s 2017                 frfre     b  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">978-2-8001-7045-9</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">La disparition</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">64 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Seuls</mxc:subfield><mxc:subfield code="v">01</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">200101s 2020                 frfre     b  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">978-2-8001-9999-3</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">Tomes 1 et 2</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">48-48 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Seuls</mxc:subfield><mxc:subfield code="v">1-2</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">240101s 2024                 frfre     b  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">978-2-8102-0676-6</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="100"><mxc:subfield code="a">Vehlmann</mxc:subfield><mxc:subfield code="m">Fabien</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">Les protecteurs</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">52 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Seuls</mxc:subfield><mxc:subfield code="v">14</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve(mockSeriesXml)
+      }));
+
+      const volumes = await bnfResolver.searchSeriesVolumes('Seuls', 'Fabien Vehlmann');
+      expect(volumes).toHaveLength(2);
+      expect(volumes[0].seriesNumber).toBe('1');
+      expect(volumes[0].isbn).toBe('9782800136929');
+      expect(volumes[0].coverUrl).toContain('idImage=12345');
+      expect(volumes[1].seriesNumber).toBe('14');
+      expect(volumes[1].title).toBe('Les protecteurs');
+    });
+  });
 });

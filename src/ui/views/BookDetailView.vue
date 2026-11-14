@@ -5,6 +5,7 @@ import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
+import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseLoading from '../components/BaseLoading.vue';
@@ -65,6 +66,14 @@ const loadSeriesContext = async () => {
       return numA - numB;
     });
     seriesTomes.value = tomes;
+  } else if (book.value?.series) {
+    const tomes = await databaseService.findLocalSeriesMatches(book.value.series);
+    tomes.sort((a, b) => {
+      const numA = parseFloat(a.seriesNumber || '0') || 0;
+      const numB = parseFloat(b.seriesNumber || '0') || 0;
+      return numA - numB;
+    });
+    seriesTomes.value = tomes;
   } else {
     seriesTomes.value = [];
   }
@@ -116,8 +125,11 @@ const loadBookDetails = async (uriParam: string) => {
       return;
     }
 
-    // Flux normal pour les URIs (inv:...) ou autres identifiants
-    const cached = await databaseService.getBookFromCache(uriParam);
+    // Flux normal pour les URIs (inv:...) ou autres identifiants (avec fallback ISBN si promu en tâche de fond)
+    let cached = await databaseService.getBookFromCache(uriParam);
+    if (!cached && uriParam.startsWith('isbn:')) {
+      cached = await databaseService.getBookByIsbn(isbnUtil.normalize(uriParam.slice(5)));
+    }
     if (cached) {
       const activeLoan = await databaseService.getLoan(cached.uri);
       if (activeLoan) {
@@ -154,6 +166,22 @@ watch(() => route.params.uri, (newUri) => {
     loadBookDetails(newUri as string);
   }
 });
+
+watch(
+  () => backgroundCreationOrchestrator.status.value.lastCompletedAt,
+  async (val) => {
+    if (!val || !book.value) return;
+    const currentIsbn = book.value.isbn13 || book.value.isbn10 || (book.value.uri.startsWith('isbn:') ? book.value.uri.slice(5) : undefined);
+    const refreshed =
+      (await databaseService.getBookFromCache(book.value.uri)) ||
+      (currentIsbn ? await databaseService.getBookByIsbn(isbnUtil.normalize(currentIsbn)) : undefined);
+    if (refreshed) {
+      const activeLoan = await databaseService.getLoan(refreshed.uri);
+      book.value = activeLoan ? { ...refreshed, loan: activeLoan } : refreshed;
+    }
+    await loadSeriesContext();
+  }
+);
 
 onMounted(() => {
   const uriParam = route.params.uri as string;

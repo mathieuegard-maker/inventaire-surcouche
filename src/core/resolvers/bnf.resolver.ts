@@ -1,6 +1,29 @@
 // src/core/resolvers/bnf.resolver.ts
 import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
+import { isbnUtil } from '../utils/isbn.util';
+import { getLevenshteinDistance } from '../utils/string.util';
+
+const JUNK_SERIES_REGEX = /\b(intégrale|coffret|box\s*set|pack|compilation)\b|tomes?\s*\d+\s*[-–à]\s*\d+|vols?\s*\d+\s*[-–à]\s*\d+/i;
+
+export function normalizeTextKey(value: string): string {
+  return (value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['’".,:;!?()\[\]-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function normalizeSeriesNumber(raw?: string): string {
+  if (!raw) return '';
+  const cleaned = raw
+    .replace(/^(tome|vol\.?|volume|t\.?|n°|#)\s*/i, '')
+    .trim();
+  const numeric = /^\d+$/.test(cleaned) ? String(parseInt(cleaned, 10)) : cleaned;
+  return numeric;
+}
 
 export interface MarcSubfield {
   code: string;
@@ -254,13 +277,141 @@ export function extractBnfCoverId(xml: string): string | null {
   return matchSubfieldA ? matchSubfieldA[1].trim() : null;
 }
 
+function extractControlField(xml: string, tag: string): string {
+  const match = new RegExp(`<[^:>]*:controlfield[^>]*tag="${tag}"[^>]*>([^<]*)<\\/[^:>]*:controlfield>`).exec(xml);
+  return match ? match[1] : '';
+}
+
+export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }) | null {
+  const fields = parseMarcFields(recordXml);
+  if (fields.length === 0) return null;
+
+  // 1. ISBN (020$a prioritaire sur 020$z)
+  const f020List = fields.filter(f => f.tag === '020');
+  let rawIsbn = '';
+  let hasPrimaryIsbn = false;
+  for (const f020 of f020List) {
+    const a = getSubfield(f020, 'a');
+    if (a && isbnUtil.isValidFormat(a)) {
+      rawIsbn = a;
+      hasPrimaryIsbn = true;
+      break;
+    }
+  }
+  if (!rawIsbn) {
+    for (const f020 of f020List) {
+      const z = getSubfield(f020, 'z');
+      if (z && isbnUtil.isValidFormat(z)) {
+        rawIsbn = z;
+        break;
+      }
+    }
+  }
+  if (!rawIsbn) return null;
+  const cleanIsbn = isbnUtil.normalize(rawIsbn);
+  const isbn = cleanIsbn.length === 10 ? isbnUtil.toIsbn13(cleanIsbn) : cleanIsbn;
+
+  // 2. Titre & filtre anti-compilation / double-album
+  const f245 = fields.find(f => f.tag === '245');
+  const rawImTitle = f245 ? getSubfield(f245, 'a') : '';
+  if (!rawImTitle) return null;
+  const imVolumeNumber = f245 ? getSubfield(f245, 'u') : undefined;
+  const secondTitleInSameVol = f245 ? getSubfield(f245, 'b') : undefined;
+
+  const f280 = fields.find(f => f.tag === '280');
+  const paginationRaw = f280 ? getSubfield(f280, 'a') : undefined;
+  if (paginationRaw && /\d+\s*-\s*\d+\s*p\./.test(paginationRaw)) {
+    return null; // Édition double type "48-48 p."
+  }
+  if (secondTitleInSameVol && /\b(tomes?|albums?)\b/i.test(secondTitleInSameVol)) {
+    return null;
+  }
+
+  // 3. Série & numéro de tome (460 -> 290 -> 410)
+  let imSeries: string | undefined;
+  let imSeriesNumber: string | undefined;
+  const f460 = fields.find(f => f.tag === '460');
+  if (f460) {
+    imSeries = getSubfield(f460, 't');
+    imSeriesNumber = getSubfield(f460, 'v');
+  }
+  if (!imSeries) {
+    const f290 = fields.find(f => f.tag === '290');
+    if (f290) {
+      imSeries = getSubfield(f290, 'a');
+      imSeriesNumber = getSubfield(f290, 'v');
+    }
+  }
+  if (!imSeries) {
+    const f410 = fields.find(f => f.tag === '410');
+    if (f410) {
+      imSeries = getSubfield(f410, 't');
+      imSeriesNumber = getSubfield(f410, 'v');
+    }
+  }
+
+  const titleParse = parseSeriesFromTitle(rawImTitle);
+  const title = titleParse.title || rawImTitle.trim();
+  const series = cleanSeriesName(imSeries || titleParse.series || '');
+  const rawSeriesNum = imSeriesNumber || imVolumeNumber || titleParse.seriesNumber;
+  const seriesNumber = normalizeSeriesNumber(rawSeriesNum) || undefined;
+
+  if (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series))) {
+    return null;
+  }
+
+  // 4. Auteurs (100, 700)
+  const authorSet = new Set<string>();
+  for (const f of fields) {
+    if (f.tag === '100' || f.tag === '700') {
+      const last = getSubfield(f, 'a');
+      const first = getSubfield(f, 'm');
+      const full = [first, last].filter(Boolean).join(' ').trim();
+      if (full) authorSet.add(full);
+    }
+  }
+
+  // 5. Éditeur, date, pagination, couverture, langue
+  const f260 = fields.find(f => f.tag === '260');
+  const publisher = f260 ? getSubfield(f260, 'c')?.trim() : undefined;
+  const rawDate = f260 ? getSubfield(f260, 'd') : undefined;
+  const publishDate = rawDate ? (cleanPublishDate(rawDate) || undefined) : undefined;
+  const pageCount = paginationRaw ? cleanPageCount(paginationRaw) : undefined;
+
+  const f950 = fields.find(f => f.tag === '950');
+  const coverId = f950 ? getSubfield(f950, 'a') : undefined;
+  const coverUrl = coverId ? `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE` : undefined;
+
+  const cf008 = extractControlField(recordXml, '008');
+  const langCode = cf008.length >= 38 ? cf008.substring(35, 38).trim() : '';
+
+  return {
+    isbn,
+    title,
+    authors: Array.from(authorSet),
+    publisher,
+    publishDate,
+    pageCount,
+    coverUrl,
+    series: series || undefined,
+    seriesNumber,
+    _lang: langCode || undefined,
+    _hasPrimaryIsbn: hasPrimaryIsbn
+  };
+}
+
 export const bnfResolver = {
   async resolve(isbn: string): Promise<ExternalBookMetadata | null> {
     try {
-      console.log(`[BNF RESOLVER] Recherche par ISBN : ${isbn}`);
-      const gatewayUrl = `/api/gateway?action=external-lookup&isbn=${encodeURIComponent(isbn)}&source=bnf`;
-      
-      const res = await fetchWithTimeout(gatewayUrl);
+      console.log(`[BNF RESOLVER] Recherche parallèle DC + InterMarc par ISBN : ${isbn}`);
+      const gatewayDcUrl = `/api/gateway?action=external-lookup&isbn=${encodeURIComponent(isbn)}&source=bnf`;
+      const gatewayImUrl = `/api/gateway?action=external-lookup&isbn=${encodeURIComponent(isbn)}&source=bnf&schema=intermarc`;
+
+      const [res, imRes] = await Promise.all([
+        fetchWithTimeout(gatewayDcUrl),
+        fetchWithTimeout(gatewayImUrl).catch(() => null)
+      ]);
+
       if (!res.ok) {
         console.warn(`[BNF RESOLVER] Erreur API BNF (Status ${res.status})`);
         return null;
@@ -290,7 +441,7 @@ export const bnfResolver = {
         return null;
       }
 
-      // Récupération et parsing approfondi d'InterMarc (double-fetch systématique)
+      // Traitement InterMarc déjà récupéré en parallèle
       let coverUrl: string | undefined = undefined;
       let imTitle: string | undefined = undefined;
       let imSeries: string | undefined = undefined;
@@ -298,9 +449,7 @@ export const bnfResolver = {
       let imVolumeNumber: string | undefined = undefined;
 
       try {
-        const gatewayImUrl = `/api/gateway?action=external-lookup&isbn=${encodeURIComponent(isbn)}&source=bnf&schema=intermarc`;
-        const imRes = await fetchWithTimeout(gatewayImUrl);
-        if (imRes.ok) {
+        if (imRes && imRes.ok) {
           const imXmlText = await imRes.text();
           const imFields = parseMarcFields(imXmlText);
 
@@ -399,6 +548,114 @@ export const bnfResolver = {
     } catch (e: any) {
       console.error(`[BNF RESOLVER] Erreur lors de la résolution de l'ISBN ${isbn}:`, e.message);
       return null;
+    }
+  },
+
+  /**
+   * Recherche les autres tomes d'une série sur la BNF (SRU InterMarc)
+   * et dédoublonne les rééditions par numéro de tome / titre.
+   */
+  async searchSeriesVolumes(seriesName: string, authorName?: string): Promise<ExternalBookMetadata[]> {
+    const cleanTargetSeries = cleanSeriesName(seriesName);
+    const targetSeriesKey = normalizeTextKey(cleanTargetSeries);
+    if (!targetSeriesKey) return [];
+
+    const fetchRecords = async (withAuthor?: string): Promise<string[]> => {
+      const params = new URLSearchParams({
+        action: 'external-lookup',
+        source: 'bnf',
+        schema: 'intermarc',
+        series: cleanTargetSeries,
+        maxRecords: '80'
+      });
+      if (withAuthor?.trim()) {
+        params.set('author', withAuthor.trim());
+      }
+      const res = await fetchWithTimeout(`/api/gateway?${params.toString()}`);
+      if (!res.ok) return [];
+      const xml = await res.text();
+      return xml.split('<srw:record>').slice(1);
+    };
+
+    try {
+      let rawRecords = await fetchRecords(authorName);
+      if (rawRecords.length < 2 && authorName?.trim()) {
+        // Repli sans contrainte d'auteur si la série change de scénariste/dessinateur
+        const fallbackRecords = await fetchRecords();
+        if (fallbackRecords.length > rawRecords.length) {
+          rawRecords = fallbackRecords;
+        }
+      }
+
+      const candidates: Array<ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }> = [];
+      for (const recXml of rawRecords) {
+        const parsed = parseIntermarcRecord(recXml);
+        if (!parsed || !parsed.series) continue;
+
+        const candSeriesKey = normalizeTextKey(parsed.series);
+        const seriesMatch =
+          candSeriesKey === targetSeriesKey ||
+          (candSeriesKey.length >= 4 && getLevenshteinDistance(candSeriesKey, targetSeriesKey) <= 2);
+
+        if (!seriesMatch) continue;
+        // Exclure explicitement les éditions dans une langue non française si codée
+        if (parsed._lang && parsed._lang !== 'fre') continue;
+
+        candidates.push(parsed);
+      }
+
+      // Regrouper les rééditions d'un même tome (par numéro de tome, sinon par titre normalisé)
+      const byVolumeKey = new Map<string, Array<ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }>>();
+      for (const cand of candidates) {
+        const volKey = cand.seriesNumber
+          ? `num:${normalizeSeriesNumber(cand.seriesNumber)}`
+          : `title:${normalizeTextKey(cand.title)}`;
+        const list = byVolumeKey.get(volKey) || [];
+        list.push(cand);
+        byVolumeKey.set(volKey, list);
+      }
+
+      const scoreCandidate = (c: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }): number => {
+        let score = 0;
+        if (c._lang === 'fre') score += 20;
+        if (c.isbn.startsWith('9782') || c.isbn.startsWith('97910')) score += 15;
+        if (c.coverUrl) score += 10;
+        if (c._hasPrimaryIsbn) score += 5;
+        if (c.authors.length > 0) score += 5;
+        if (c.publishDate) score += 2;
+        return score;
+      };
+
+      const elected: ExternalBookMetadata[] = [];
+      for (const group of byVolumeKey.values()) {
+        group.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+        const top = group[0];
+        elected.push({
+          isbn: top.isbn,
+          title: top.title,
+          authors: top.authors,
+          publisher: top.publisher,
+          publishDate: top.publishDate,
+          pageCount: top.pageCount,
+          coverUrl: top.coverUrl,
+          series: top.series,
+          seriesNumber: top.seriesNumber
+        });
+      }
+
+      elected.sort((a, b) => {
+        const numA = parseFloat(a.seriesNumber || '');
+        const numB = parseFloat(b.seriesNumber || '');
+        if (!Number.isNaN(numA) && !Number.isNaN(numB)) return numA - numB;
+        if (!Number.isNaN(numA)) return -1;
+        if (!Number.isNaN(numB)) return 1;
+        return a.title.localeCompare(b.title);
+      });
+
+      return elected;
+    } catch (e: any) {
+      console.warn(`[BNF RESOLVER] Erreur searchSeriesVolumes (${seriesName}):`, e?.message || e);
+      return [];
     }
   }
 };

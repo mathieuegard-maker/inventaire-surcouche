@@ -3,12 +3,14 @@ import { ref, onMounted, computed, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { connectionService } from './core/orchestrators/connection.orchestrator';
 import { queueService } from './core/orchestrators/queue.orchestrator';
+import { backgroundCreationOrchestrator } from './core/orchestrators/background-creation.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
 
 const isOffline = computed(() => connectionState.isOffline.value);
+const bgStatus = backgroundCreationOrchestrator.status;
 const isInitializing = ref(true);
 const router = useRouter(); 
 const route = useRoute(); // Permet de lire l'URL actuelle demandée
@@ -22,6 +24,7 @@ watch(isOffline, async (newOfflineVal) => {
       router.push('/login');
     } else {
       queueService.processQueue();
+      backgroundCreationOrchestrator.resumePendingJobs();
       if (route.path === '/login') {
         router.push('/dashboard');
       }
@@ -41,6 +44,7 @@ onMounted(async () => {
     const isConnected = await connectionService.initializeApp();
     
     if (isConnected) {
+      backgroundCreationOrchestrator.resumePendingJobs();
       // On ne force le retour à l'accueil que si l'utilisateur arrive de la racine ou du login
       if (route.path === '/login' || route.path === '/') {
         router.push('/dashboard');
@@ -67,6 +71,30 @@ onMounted(async () => {
   <div v-else class="app-main-layout">
     <div v-if="isOffline" class="offline-global-banner">
       ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
+    </div>
+
+    <div
+      v-if="bgStatus.isActive || bgStatus.lastError"
+      style="margin: 8px 16px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px;"
+      :style="bgStatus.lastError && !bgStatus.isActive ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;' : 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'"
+    >
+      <span>
+        <template v-if="bgStatus.isActive">
+          ⏳ {{ bgStatus.stepLabel || 'Création en cours sur inventaire.io...' }}
+          <strong v-if="bgStatus.pendingCount > 1">({{ bgStatus.pendingCount }} en file)</strong>
+        </template>
+        <template v-else-if="bgStatus.lastError">
+          ⚠️ {{ bgStatus.lastError }}
+        </template>
+      </span>
+      <button
+        v-if="!bgStatus.isActive && bgStatus.lastError"
+        @click="bgStatus.lastError = null"
+        style="background:none;border:none;cursor:pointer;font-weight:bold;color:inherit;"
+        aria-label="Fermer"
+      >
+        ✕
+      </button>
     </div>
 
     <!-- Volet de Scan Global -->

@@ -28,55 +28,36 @@ export const bookSemanticOrchestrator = {
     noSeries: boolean,
     originalBook?: HumanizedBook | null
   ): Promise<ResolutionStep[]> {
-    const steps: ResolutionStep[] = [];
-
-    // 1. ANALYSE DE LA SÉRIE
     const seriesName = noSeries ? '' : series.trim();
     const originalSeriesName = originalBook?.series || '';
     const hasSeriesChanged = seriesName.toLowerCase() !== originalSeriesName.toLowerCase();
 
-    if (seriesName && (!originalBook || hasSeriesChanged)) {
+    const seriesTask = (async (): Promise<ResolutionStep | null> => {
+      if (!seriesName || (originalBook && !hasSeriesChanged)) return null;
       console.log(`[BOOK SEMANTIC ORCHESTRATOR] Analyse de la série : ${seriesName}`);
       const exactUri = await inventaireSyncService.searchEntity(seriesName, 'series');
-      if (!exactUri) {
-        const matches = await inventaireSyncService.findSimilarSeries(seriesName);
-        if (matches.length > 0) {
-          steps.push({
-            type: 'series',
-            name: seriesName,
-            matches
-          });
-        }
-      }
-    }
+      if (exactUri) return null;
+      const matches = await inventaireSyncService.findSimilarSeries(seriesName);
+      return matches.length > 0 ? { type: 'series', name: seriesName, matches } : null;
+    })();
 
-    // 2. ANALYSE DES AUTEURS
     const authorsList = authors.split(',').map(a => a.trim()).filter(Boolean);
     const originalAuthors = originalBook?.authors || [];
 
-    for (const authorName of authorsList) {
-      // Pour l'édition, on n'analyse que les nouveaux auteurs
+    const authorTasks = authorsList.map(async (authorName): Promise<ResolutionStep | null> => {
       const isNewAuthor = !originalBook || !originalAuthors.find(
         a => a.toLowerCase().trim() === authorName.toLowerCase()
       );
+      if (!isNewAuthor) return null;
+      console.log(`[BOOK SEMANTIC ORCHESTRATOR] Analyse de l'auteur : ${authorName}`);
+      const exactUri = await inventaireSyncService.searchEntity(authorName, 'humans');
+      if (exactUri) return null;
+      const matches = await inventaireSyncService.findSimilarAuthors(authorName);
+      return matches.length > 0 ? { type: 'author', name: authorName, matches } : null;
+    });
 
-      if (isNewAuthor) {
-        console.log(`[BOOK SEMANTIC ORCHESTRATOR] Analyse de l'auteur : ${authorName}`);
-        const exactUri = await inventaireSyncService.searchEntity(authorName, 'humans');
-        if (!exactUri) {
-          const matches = await inventaireSyncService.findSimilarAuthors(authorName);
-          if (matches.length > 0) {
-            steps.push({
-              type: 'author',
-              name: authorName,
-              matches
-            });
-          }
-        }
-      }
-    }
-
-    return steps;
+    const results = await Promise.all([seriesTask, ...authorTasks]);
+    return results.filter((step): step is ResolutionStep => step !== null);
   },
 
   /**
