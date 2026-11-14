@@ -15,6 +15,7 @@ import WireframePagination from '../components/WireframePagination.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { scannerState } from '../../state/scanner';
 
 const allWishBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
@@ -76,6 +77,13 @@ onMounted(async () => {
     }, 100);
   }
 });
+
+watch(
+  () => scannerState.lastUpdatedTick.value,
+  () => {
+    fetchWishlist();
+  }
+);
 
 const fetchWishlist = async () => {
   isLoading.value = true;

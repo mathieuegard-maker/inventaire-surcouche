@@ -76,7 +76,7 @@ export const barcodeIsbnProvider = {
         config,
         async (decodedText) => {
           const cleanIsbn = isbnUtil.normalize(decodedText.trim());
-          if (!cleanIsbn || !isbnUtil.isValidFormat(cleanIsbn)) {
+          if (!cleanIsbn || !isbnUtil.isValidBookBarcode(cleanIsbn)) {
             return;
           }
 

@@ -19,6 +19,22 @@ export const isbnUtil = {
   },
 
   /**
+   * Vérifie si un ISBN-13 possède un préfixe livre valide (978 ou 979) et une clé de contrôle EAN-13 valide.
+   * Indispensable pour le scanner caméra afin d'éliminer les lectures floues (ex: 578..., 9780025...).
+   */
+  isValidBookBarcode(isbn: string): boolean {
+    const clean = this.normalize(isbn);
+    if (!/^(978|979)\d{10}$/.test(clean)) return false;
+    let sum = 0;
+    for (let i = 0; i < 12; i++) {
+      const digit = parseInt(clean[i], 10);
+      sum += i % 2 === 0 ? digit : digit * 3;
+    }
+    const expectedCheck = (10 - (sum % 10)) % 10;
+    return expectedCheck === parseInt(clean[12], 10);
+  },
+
+  /**
    * Convertit un ISBN-10 en ISBN-13
    */
   toIsbn13(isbn10: string): string {

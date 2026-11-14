@@ -19,6 +19,8 @@ import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
 import { imageUtil } from '../../core/utils/image.util';
+import { scannerState } from '../../state/scanner';
+import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
 
 const router = useRouter();
 const route = useRoute();
@@ -94,11 +96,24 @@ onMounted(async () => {
   }
 });
 
+watch(
+  () => scannerState.lastUpdatedTick.value,
+  () => {
+    fetchCatalogue();
+  }
+);
+
 const fetchCatalogue = async () => {
   isLoading.value = true;
   try {
-    const cached = await databaseService.getAllBooksFromCache();
-    const owned = cached.filter(b => b.ownershipStatus === 'owned');
+    let cached = await databaseService.getAllBooksFromCache();
+    let owned = cached.filter(b => b.ownershipStatus === 'owned');
+    const registryUris = await databaseService.getAllRegistryUris('inventory');
+    if (registryUris.length > owned.length) {
+      await syncOrchestrator.hydrateCacheInBackground();
+      cached = await databaseService.getAllBooksFromCache();
+      owned = cached.filter(b => b.ownershipStatus === 'owned');
+    }
     
     for (const livre of owned) {
       const activeLoan = await databaseService.getLoan(livre.uri);

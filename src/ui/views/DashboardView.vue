@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
@@ -65,6 +65,13 @@ const loadStats = async () => {
 onMounted(async () => {
   await loadStats();
 });
+
+watch(
+  () => scannerState.lastUpdatedTick.value,
+  () => {
+    loadStats();
+  }
+);
 </script>
 
 <template>
@@ -79,8 +86,16 @@ onMounted(async () => {
       @keywords-detected="handleKeywordsSearch" 
     />
 
-    <!-- Barre d'actions rapides V2 : Modes de Scan & Partage Familial -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.6rem; margin: 1rem 0;">
+    <!-- Barre d'actions rapides V2 : 4 Modes de Scan & Partage Familial -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 0.6rem; margin: 1rem 0;">
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #2563eb; color: #fff; font-weight: 800; padding: 0.65rem;"
+        @click="scannerState.startScan(router, 'simple')"
+      >
+        📖 Scan Simple (Fiche &amp; Série)
+      </button>
       <button
         type="button"
         class="wireframe-btn"
@@ -103,7 +118,7 @@ onMounted(async () => {
         style="background: #f8fafc; font-weight: 800; padding: 0.65rem;"
         @click="scannerState.startScan(router, 'photo')"
       >
-        📸 Photo Couv / Étagère
+        📸 Photo Étagère / Couv
       </button>
       <button
         type="button"

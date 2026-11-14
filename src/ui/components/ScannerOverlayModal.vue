@@ -105,12 +105,14 @@ async function quickAddFromCheck(target: 'owned' | 'wish') {
       r.ownership.isEditionOwned = true;
       r.ownership.isWorkOwned = true;
     }
+    scannerState.notifyCatalogChanged();
     quickActionFeedback.value = 'Ajouté à votre collection ✓';
   } else {
     await queueService.enqueueAction('ADD_WISHLIST', uri);
     if (r.ownership) {
       r.ownership.isWished = true;
     }
+    scannerState.notifyCatalogChanged();
     quickActionFeedback.value = 'Ajouté à votre Wishlist ✓';
   }
   setTimeout(() => {
@@ -236,9 +238,17 @@ async function confirmAndSaveCandidates() {
 <template>
   <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop">
     <div class="scanner-modal-card">
-      <!-- En-tête + Sélecteur des 3 Modes -->
+      <!-- En-tête + Sélecteur des 4 Modes -->
       <div class="scanner-header">
         <div class="mode-tabs">
+          <button
+            type="button"
+            class="mode-tab"
+            :class="{ active: activeMode === 'simple' }"
+            @click="scannerState.switchMode('simple')"
+          >
+            📖 Mode Simple
+          </button>
           <button
             type="button"
             class="mode-tab"
@@ -261,7 +271,7 @@ async function confirmAndSaveCandidates() {
             :class="{ active: activeMode === 'photo' }"
             @click="scannerState.switchMode('photo')"
           >
-            📸 Photo Couv / Étagère
+            📸 Photo Étagère / Couv
           </button>
         </div>
         <button type="button" class="close-scan-btn" @click="scannerState.stopScan()">
@@ -270,9 +280,15 @@ async function confirmAndSaveCandidates() {
       </div>
 
       <!-- ================================================================ -->
-      <!-- FLUX CAMÉRA CODE-BARRES (Partagé entre Vérif Magasin et Rafale) -->
+      <!-- FLUX CAMÉRA CODE-BARRES (Partagé entre Simple, Vérif et Rafale) -->
       <!-- ================================================================ -->
       <div v-show="activeMode !== 'photo' && !checkRes" class="camera-section">
+        <div v-if="activeMode === 'simple'" class="burst-toolbar">
+          <span class="burst-label">
+            📖 <strong>Mode Simple :</strong> Scannez un livre pour ouvrir directement sa fiche complète et sélectionner toute sa série à la main.
+          </span>
+        </div>
+
         <div v-if="activeMode === 'burst'" class="burst-toolbar">
           <span class="burst-label">Enregistrer à la volée dans :</span>
           <div class="burst-target-switch">
@@ -328,7 +344,7 @@ async function confirmAndSaveCandidates() {
           </button>
         </div>
 
-        <!-- Historique de la session Rafale -->
+        <!-- Historique de la session Rafale + Bouton de validation finale -->
         <div v-if="activeMode === 'burst' && scannerState.burstHistory.value.length > 0" class="burst-history-box">
           <div class="burst-history-header">
             <strong>Session rafale : {{ scannerState.burstHistory.value.length }} livre(s) scanné(s)</strong>
@@ -337,7 +353,7 @@ async function confirmAndSaveCandidates() {
             </button>
           </div>
           <ul class="burst-list">
-            <li v-for="item in scannerState.burstHistory.value.slice(0, 6)" :key="item.timestamp">
+            <li v-for="item in scannerState.burstHistory.value.slice(0, 10)" :key="item.timestamp">
               <span>
                 {{ item.status === 'already_owned' ? '⚠️' : '✅' }}
                 <strong>{{ item.title }}</strong>
@@ -353,6 +369,14 @@ async function confirmAndSaveCandidates() {
               </button>
             </li>
           </ul>
+          <button
+            type="button"
+            class="action-btn primary full-width"
+            style="margin-top: 0.65rem;"
+            @click="scannerState.finishAndOpenBurstTarget(router)"
+          >
+            ✅ Valider et voir mes {{ scannerState.burstHistory.value.length }} livre(s) dans {{ burstTarget === 'owned' ? 'Ma Collection' : 'Ma Wishlist' }}
+          </button>
         </div>
       </div>
 

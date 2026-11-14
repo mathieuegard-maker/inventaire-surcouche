@@ -11,12 +11,16 @@ import {
   cleanAuthor,
   cleanPublisher,
   cleanPublishDate,
+  cleanSeriesName,
   cleanTitle,
   normalizeSeriesNumber,
-  normalizeTextKey
+  normalizeTextKey,
+  parseIntermarcRecord,
+  parseSeriesFromTitle
 } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
 
@@ -195,23 +199,30 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
 
     for (const f of fields) {
       const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
-      if (f.tag === '245') {
+      if (f.tag === '950') {
+        const coverId = getSf('a');
+        if (coverId) {
+          coverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
+        }
+      } else if (f.tag === '245') {
         const a = cleanTitle(getSf('a'));
         const e = cleanTitle(getSf('e'));
+        const u = getSf('u');
         const n = getSf('n');
         const p = cleanTitle(getSf('p'));
         if (p && a) {
-          seriesTitle = seriesTitle || a;
+          seriesTitle = seriesTitle || cleanSeriesName(a);
           title = p;
-          if (n) seriesNumber = seriesNumber || normalizeSeriesNumber(n);
+          if (n || u) seriesNumber = seriesNumber || normalizeSeriesNumber(n || u);
         } else {
           title = title || a;
+          if (u) seriesNumber = seriesNumber || normalizeSeriesNumber(u);
           if (e && !seriesTitle && /^(tome|vol|épisode|\d+)/i.test(e)) {
             seriesNumber = seriesNumber || normalizeSeriesNumber(e);
           }
         }
       } else if (f.tag === '460' || f.tag === '461' || f.tag === '290' || f.tag === '410') {
-        const sTitle = cleanTitle(getSf('t') || getSf('a'));
+        const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
         const sVol = normalizeSeriesNumber(getSf('v'));
         if (sTitle && !seriesTitle) {
           seriesTitle = sTitle;
@@ -299,6 +310,18 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
 
   if (!title) return null;
 
+  // Si le titre contient "Tome X" ou ", tome X", on en extrait proprement le numéro et la série
+  const parsedFromTitle = parseSeriesFromTitle(title);
+  if (parsedFromTitle.seriesNumber && !seriesNumber) {
+    seriesNumber = normalizeSeriesNumber(parsedFromTitle.seriesNumber);
+  }
+  if (parsedFromTitle.series && !seriesTitle) {
+    seriesTitle = cleanSeriesName(parsedFromTitle.series);
+  }
+  if (parsedFromTitle.title) {
+    title = parsedFromTitle.title;
+  }
+
   return {
     isbn13,
     title,
@@ -316,6 +339,174 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
     deweyCode: deweyCode || undefined,
     rawSubjects
   };
+}
+
+/**
+ * Découvre et indexe dans D1 tous les tomes d'une série via la BnF SRU InterMarc
+ * afin que l'ouverture d'une série ou d'une fiche permette immédiatement la sélection multiple de tous les tomes.
+ */
+export async function expandSeriesVolumesInD1(
+  db: DatabaseBinding,
+  seriesUri: string,
+  seriesTitle?: string,
+  authorHint?: string
+): Promise<void> {
+  try {
+    let targetTitle = seriesTitle;
+    if (!targetTitle) {
+      const sRow = await db
+        .prepare('SELECT label FROM catalog_entities WHERE uri = ? LIMIT 1')
+        .bind(seriesUri)
+        .first<{ label: string }>();
+      targetTitle = sRow?.label;
+    }
+    if (!targetTitle) return;
+
+    const cleanTargetSeries = cleanSeriesName(targetTitle);
+    const targetSeriesKey = normalizeTextKey(cleanTargetSeries);
+    if (!targetSeriesKey) return;
+
+    const cleanSeriesQuery = cleanTargetSeries.replace(/["()]/g, ' ').trim();
+    const cleanAuthorQuery = authorHint ? authorHint.replace(/["()]/g, ' ').trim() : '';
+
+    const fetchBnfSeriesXml = async (withAuthor?: string): Promise<string[]> => {
+      const cql = withAuthor
+        ? `(bib.title all "${cleanSeriesQuery}") and (bib.author all "${withAuthor}")`
+        : `bib.title all "${cleanSeriesQuery}"`;
+      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=60&startRecord=1`;
+      const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      if (!res.ok) return [];
+      const xml = await res.text();
+      return xml.split('<srw:record>').slice(1);
+    };
+
+    let rawRecords = await fetchBnfSeriesXml(cleanAuthorQuery || undefined);
+    if (rawRecords.length < 2 && cleanAuthorQuery) {
+      const fallback = await fetchBnfSeriesXml();
+      if (fallback.length > rawRecords.length) {
+        rawRecords = fallback;
+      }
+    }
+
+    const candidates: Array<NonNullable<ReturnType<typeof parseIntermarcRecord>>> = [];
+    for (const recXml of rawRecords) {
+      const parsed = parseIntermarcRecord(recXml);
+      if (!parsed || !parsed.series) continue;
+      const candSeriesKey = normalizeTextKey(parsed.series);
+      const isMatch =
+        candSeriesKey === targetSeriesKey ||
+        (candSeriesKey.length >= 4 && getLevenshteinDistance(candSeriesKey, targetSeriesKey) <= 2);
+      if (!isMatch) continue;
+      if (parsed._lang && parsed._lang !== 'fre') continue;
+      candidates.push(parsed);
+    }
+
+    // Dédoublonnage par numéro de tome ou titre normalisé
+    const byVolumeKey = new Map<string, typeof candidates>();
+    for (const cand of candidates) {
+      const volKey = cand.seriesNumber
+        ? `num:${normalizeSeriesNumber(cand.seriesNumber)}`
+        : `title:${normalizeTextKey(cand.title)}`;
+      const list = byVolumeKey.get(volKey) || [];
+      list.push(cand);
+      byVolumeKey.set(volKey, list);
+    }
+
+    const existingRows = await db
+      .prepare('SELECT isbn13, series_number FROM catalog_entities WHERE series_uri = ?')
+      .bind(seriesUri)
+      .all<{ isbn13: string | null; series_number: string | null }>();
+
+    const existingIsbns = new Set(
+      (existingRows.results || []).map((r) => r.isbn13).filter(Boolean) as string[]
+    );
+    const existingVolNums = new Set(
+      (existingRows.results || [])
+        .map((r) => (r.series_number ? normalizeSeriesNumber(r.series_number) : ''))
+        .filter(Boolean)
+    );
+
+    for (const group of byVolumeKey.values()) {
+      group.sort((a, b) => {
+        const score = (c: (typeof group)[0]) =>
+          (c._lang === 'fre' ? 20 : 0) +
+          (c.isbn.startsWith('9782') || c.isbn.startsWith('97910') ? 15 : 0) +
+          (c.coverUrl ? 10 : 0) +
+          (c._hasPrimaryIsbn ? 5 : 0);
+        return score(b) - score(a);
+      });
+      const top = group[0];
+      const normNum = top.seriesNumber ? normalizeSeriesNumber(top.seriesNumber) : '';
+      if (existingIsbns.has(top.isbn) || (normNum && existingVolNums.has(normNum))) {
+        continue;
+      }
+
+      const authorUris: string[] = [];
+      for (const aName of top.authors) {
+        const aUri = await upsertCatalogEntity(db, {
+          entityType: 'human',
+          label: aName,
+          claims: { 'wdt:P31': ['wd:Q5'] }
+        });
+        authorUris.push(aUri);
+      }
+
+      let publisherUri: string | undefined;
+      if (top.publisher) {
+        publisherUri = await upsertCatalogEntity(db, {
+          entityType: 'publisher',
+          label: top.publisher,
+          claims: {}
+        });
+      }
+
+      const workClaims: Record<string, unknown[]> = {
+        'wdt:P31': ['wd:Q47461344'],
+        'wdt:P179': [seriesUri]
+      };
+      if (authorUris.length) workClaims['wdt:P50'] = authorUris;
+      if (normNum) workClaims['wdt:P1545'] = [normNum];
+
+      const workUri = await upsertCatalogEntity(db, {
+        entityType: 'work',
+        label: top.title,
+        seriesUri,
+        seriesNumber: normNum || undefined,
+        authorUris,
+        mainCategory: 'BD',
+        imageUrl: top.coverUrl,
+        claims: workClaims
+      });
+
+      const editionClaims: Record<string, unknown[]> = {
+        'wdt:P629': [workUri],
+        'wdt:P212': [top.isbn],
+        'wdt:P1476': [top.title]
+      };
+      if (publisherUri) editionClaims['wdt:P123'] = [publisherUri];
+      if (top.publishDate) editionClaims['wdt:P577'] = [top.publishDate];
+      if (top.pageCount) editionClaims['wdt:P1104'] = [top.pageCount];
+
+      await upsertCatalogEntity(db, {
+        uri: `isbn:${top.isbn}`,
+        entityType: 'edition',
+        label: top.title,
+        isbn13: top.isbn,
+        workUri,
+        seriesUri,
+        seriesNumber: normNum || undefined,
+        authorUris,
+        mainCategory: 'BD',
+        imageUrl: top.coverUrl,
+        claims: editionClaims
+      });
+
+      existingIsbns.add(top.isbn);
+      if (normNum) existingVolNums.add(normNum);
+    }
+  } catch (e) {
+    console.warn('[D1 SERIES EXPAND] Erreur expansion automatique de série :', e);
+  }
 }
 
 /**

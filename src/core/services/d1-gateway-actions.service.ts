@@ -7,6 +7,7 @@ import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolv
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
 import {
+  expandSeriesVolumesInD1,
   resolveAndStoreIsbnInD1,
   resolveAuthSession,
   upsertCatalogEntity
@@ -370,10 +371,6 @@ export async function handleD1GatewayAction(
 
       const itemId = existing?.id || `itm_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
       if (!existing) {
-        // S'assure que le work et l'edition existent pour respecter l'intégrité ou stocke l'URI
-        await db
-          .prepare(' PRAGMA foreign_keys = OFF ')
-          .run();
         await db
           .prepare(
             `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, acquired_at, created_at, updated_at)
@@ -392,12 +389,23 @@ export async function handleD1GatewayAction(
       const uris: string[] = Array.isArray(body?.uris) ? body.uris : [];
       if (!uris.length) return jsonResp({ error: 'Tableau uris requis' }, 400);
 
-      await db.prepare('PRAGMA foreign_keys = OFF').run();
       const addedItems: Array<{ uri: string; itemId: string }> = [];
 
       for (const rawUri of uris) {
         const entityUri = String(rawUri || '').trim();
         if (!entityUri) continue;
+        const existing = await db
+          .prepare(
+            "SELECT id FROM library_items WHERE library_id = ? AND (edition_id = ? OR work_id = ?) AND ownership_status = 'owned' AND deleted_at IS NULL LIMIT 1"
+          )
+          .bind(libraryId, entityUri, entityUri)
+          .first<{ id: string }>();
+
+        if (existing?.id) {
+          addedItems.push({ uri: entityUri, itemId: existing.id });
+          continue;
+        }
+
         const itemId = `itm_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
         await db
           .prepare(
@@ -818,12 +826,25 @@ export async function handleD1GatewayAction(
       if (!value) return jsonResp({ uris: [] });
 
       if (property === 'wdt:P179') {
-        const rows = await db
+        let rows = await db
           .prepare(
             "SELECT uri FROM catalog_entities WHERE series_uri = ? AND entity_type = 'work' ORDER BY sort_order ASC, label ASC"
           )
           .bind(value)
           .all<{ uri: string }>();
+
+        // Si la série a moins de 2 tomes en base D1, on déclenche automatiquement l'expansion BnF SRU InterMarc
+        // pour que l'utilisateur puisse immédiatement sélectionner toute la série à la main !
+        if ((rows.results || []).length < 2) {
+          await expandSeriesVolumesInD1(db, value);
+          rows = await db
+            .prepare(
+              "SELECT uri FROM catalog_entities WHERE series_uri = ? AND entity_type = 'work' ORDER BY sort_order ASC, label ASC"
+            )
+            .bind(value)
+            .all<{ uri: string }>();
+        }
+
         return jsonResp({ uris: (rows.results || []).map((r) => r.uri) });
       }
 
