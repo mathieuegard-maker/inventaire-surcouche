@@ -57,7 +57,7 @@ watch(seriesInput, (val) => {
 
 onMounted(async () => {
   try {
-    loadingStatus.value = "Chargement des données actuelles depuis inventaire.io...";
+    loadingStatus.value = "Chargement des données actuelles...";
     let currentBook = await databaseService.getBookFromCache(uri);
     if (!currentBook) {
       currentBook = await entityResolver.resolvePhysicalEntity(uri);
@@ -203,7 +203,7 @@ const confirmResolutionStep = async () => {
 const saveChanges = async () => {
   if (!originalBook.value) return;
   isLoading.value = true;
-  loadingStatus.value = "Enregistrement des modifications sur inventaire.io...";
+  loadingStatus.value = "Enregistrement des modifications...";
   errorMsg.value = null;
 
   try {

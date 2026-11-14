@@ -25,9 +25,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg}'] // On retire .wasm de la liste
       },
       manifest: {
-        name: 'Inventaire Surcouche',
-        short_name: 'Inventaire',
-        description: 'Surcouche mobile optimisée pour Inventaire.io',
+        name: 'Ma Bibliothèque Cloud',
+        short_name: 'Ma Biblio',
+        description: 'Gestionnaire de bibliothèque personnelle et familiale',
         theme_color: '#4f46e5',
         background_color: '#ffffff',
         display: 'standalone',

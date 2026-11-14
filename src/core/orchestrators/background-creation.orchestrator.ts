@@ -166,7 +166,7 @@ export const backgroundCreationOrchestrator = {
           ...status.value,
           isActive: true,
           pendingCount: remainingRunnable,
-          stepLabel: `Création sur inventaire.io : « ${nextJob.tempBook.title} »`,
+          stepLabel: `Enregistrement : « ${nextJob.tempBook.title} »`,
           current: 0,
           total: 1,
           lastError: null
@@ -183,7 +183,7 @@ export const backgroundCreationOrchestrator = {
             ...status.value,
             pendingCount: remaining.filter(j => j.status === 'pending' || j.status === 'processing').length,
             lastCompletedAt: Date.now(),
-            lastSuccessMsg: `« ${nextJob.tempBook.title} » synchronisé sur inventaire.io`
+            lastSuccessMsg: `« ${nextJob.tempBook.title} » synchronisé dans le catalogue`
           };
         } catch (err: any) {
           if (connectionState.isOffline.value) {
@@ -492,7 +492,7 @@ export const backgroundCreationOrchestrator = {
 
     status.value = {
       ...status.value,
-      stepLabel: `Création de la série « ${seriesName} » sur inventaire.io`,
+      stepLabel: `Enrichissement de la série « ${seriesName} »`,
       current: 0,
       total: missingCandidates.length
     };

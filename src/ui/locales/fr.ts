@@ -2,9 +2,9 @@
 
 export const TEXTS = {
   app: {
-    name: "Inventaire PWA",
-    description: "Description de l'application",
-    offlineGlobalBanner: "MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)"
+    name: "Ma Bibliothèque Cloud",
+    description: "Gestionnaire de bibliothèque personnelle et familiale",
+    offlineGlobalBanner: "MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)"
   },
   status: {
     initializing: "Chargement en cours...",
@@ -12,10 +12,10 @@ export const TEXTS = {
   },
   onboarding: {
     title: "Bienvenue !",
-    description: "Cette application est une surcouche optimisée et indépendante qui se connecte directement au service ouvert et citoyen Inventaire.io.",
-    requirement: "Un compte sur Inventaire.io est indispensable pour pouvoir utiliser cette application et synchroniser vos livres.",
-    actionLink: "Créer un compte sur Inventaire.io",
-    actionClose: "J'ai compris"
+    description: "Gérez votre collection de BD, mangas et livres en toute autonomie, avec synchronisation cloud et partage familial.",
+    requirement: "Créez votre compte ou rejoignez une bibliothèque familiale existante en un clic.",
+    actionLink: "",
+    actionClose: "Commencer"
   },
   login: {
     title: "Connexion",
@@ -24,8 +24,8 @@ export const TEXTS = {
     passwordLabel: "Mot de passe",
     passwordPlaceholder: "Saisissez votre mot de passe",
     showPasswordLabel: "Afficher le mot de passe",
-    noticeText: "Cette application n'est qu'une surcouche indépendante. Vous devez obligatoirement posséder un compte sur Inventaire.io pour pouvoir l'utiliser et synchroniser vos ouvrages.",
-    noticeLink: "Visiter Inventaire.io",
+    noticeText: "Connectez-vous ou créez automatiquement votre compte personnel / familial.",
+    noticeLink: "",
     submitButton: "Se connecter",
     loading: "Connexion au serveur...",
     errorInvalid: "Identifiants invalides ou compte inconnu.",
@@ -42,7 +42,7 @@ export const TEXTS = {
     addWishlistSuccess: "L'ouvrage a été ajouté à votre liste d'envies !",
     errorGeneral: "Erreur lors du traitement de l'ouvrage.",
     errorQueue: "Erreur lors de la mise en file d'attente.",
-    notFound: "Ouvrage introuvable sur les serveurs d'Inventaire.io."
+    notFound: "Ouvrage introuvable dans les bases bibliographiques."
   },
   pwa: {
     updateReady: "Une nouvelle version de l'application est disponible !",
@@ -103,8 +103,8 @@ export const TEXTS = {
     btnDeleteWish: "Retirer de la liste d'envies",
     deleteSuccess: "L'ouvrage a bien été supprimé.",
     deleteConfirmTitle: "Confirmer la suppression",
-    deleteConfirmMsg: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
-    deleteConfirmWishMsg: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
+    deleteConfirmMsg: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive.",
+    deleteConfirmWishMsg: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive.",
     btnDeleteConfirm: "Supprimer",
     btnDeleteCancel: "Annuler"
   },
@@ -157,17 +157,17 @@ export const TEXTS = {
     btnToggleWishlistGroup: "Basculer vers la Wishlist",
     btnDeleteGroup: "Supprimer le lot sélectionné",
     deleteConfirmTitle: "Confirmer la suppression",
-    deleteConfirmMsgSingular: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
-    deleteConfirmMsgPlural: "Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.",
-    deleteConfirmWishMsgSingular: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.",
-    deleteConfirmWishMsgPlural: "Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d'envies ? Cette action est définitive et les retirera également de votre compte inventaire.io.",
+    deleteConfirmMsgSingular: "Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive.",
+    deleteConfirmMsgPlural: "Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive.",
+    deleteConfirmWishMsgSingular: "Voulez-vous vraiment retirer cet ouvrage de votre liste d'envies ? Cette action est définitive.",
+    deleteConfirmWishMsgPlural: "Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d'envies ? Cette action est définitive.",
     btnDeleteConfirm: "Supprimer",
     btnDeleteCancel: "Annuler",
     offlineActionsBlocked: "Les actions groupées sont désactivées en mode hors-ligne."
   },
   baseLoading: {
     message: "Chargement des données en cours...",
-    seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le serveur sémantique..."
+    seriesHydration: "Découverte d'une nouvelle saga... Récupération de l'intégralité des tomes sur le catalogue..."
   },
   wishlistView: {
     title: "Ma Wishlist",
@@ -192,7 +192,7 @@ export const TEXTS = {
   seriesProgress: {
     loadingTitle: "Téléchargement de la saga",
     statusLabel: "Statut :",
-    pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le serveur sémantique. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
+    pedagogicNotice: "Cette série n'a pas encore été consultée. Elle est en cours de rapatriement depuis le catalogue. Une fois cette étape franchie, son affichage sera instantané pour tous vos prochains usages.",
     completeSuccess: "Téléchargement terminé."
   },
   searchBar: {
@@ -203,7 +203,7 @@ export const TEXTS = {
   },
   searchResults: {
     title: "RÉSULTATS DE RECHERCHE",
-    emptyResults: "AUCUN RÉSULTAT CORRESPONDANT À VOS MOTS-CLÉS SUR LES SERVEURS SÉMANTIQUES.",
+    emptyResults: "AUCUN RÉSULTAT CORRESPONDANT À VOS MOTS-CLÉS DANS LES BASES BIBLIOGRAPHIQUES.",
     errorEmptyQuery: "LA REQUÊTE DE RECHERCHE EST VIDE.",
     errorFetch: "IMPOSSIBLE DE RÉCUPÉRER LES RÉSULTATS DEPUIS LE SERVEUR.",
     errorLocalSearch: "IMPOSSIBLE D'EFFECTUER LA RECHERCHE LOCALEMENT EN MODE HORS-LIGNE.",
@@ -218,14 +218,14 @@ export const TEXTS = {
   },
   authorView: {
     title: "PROFIL AUTEUR",
-    errorFetch: "IMPOSSIBLE DE CHARGER LES DONNÉES DE L'AUTEUR.",
+    errorFetch: "IMPOSSIBLE DE CHARGER LES DONNNÉES DE L'AUTEUR.",
     emptyWorks: "AUCUNE ŒUVRE TROUVÉE POUR CET AUTEUR.",
     sectionWorks: "ŒUVRES DE CET AUTEUR",
     badgeWork: "ALBM",
     unknownTitle: "TITRE INCONNU"
   },
   home: {
-    title: "Inventaire PWA - Accueil"
+    title: "Ma Bibliothèque Cloud - Accueil"
   },
   header: {
     back: "RETOUR",
@@ -268,8 +268,8 @@ export const TEXTS = {
   dedupModal: {
     titleSeries: "DÉDUPLICATION DES SÉRIES",
     titleAuthors: "DÉDUPLICATION DES AUTEURS",
-    seriesMsg: "Des séries avec un nom proche de \"{name}\" ont été détectées sur inventaire.io. Souhaitez-vous lier votre livre à une série existante, ou créer une nouvelle série ?",
-    authorsMsg: "Des auteurs avec un nom proche de \"{name}\" ont été détectés sur inventaire.io. Souhaitez-vous lier votre livre à un auteur existant, ou créer un nouvel auteur ?",
+    seriesMsg: "Des séries avec un nom proche de \"{name}\" ont été détectées dans le catalogue. Souhaitez-vous lier votre livre à une série existante, ou créer une nouvelle série ?",
+    authorsMsg: "Des auteurs avec un nom proche de \"{name}\" ont été détectés dans le catalogue. Souhaitez-vous lier votre livre à un auteur existant, ou créer un nouvel auteur ?",
     linkExisting: "Lier à l'entité existante :",
     distance: "distance Levenshtein:",
     createNew: "Créer une nouvelle entité :",

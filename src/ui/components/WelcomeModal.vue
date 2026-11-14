@@ -21,15 +21,6 @@ const emit = defineEmits<{
       <p class="modal-text highlight">{{ TEXTS.onboarding.requirement }}</p>
       
       <div class="modal-actions">
-        <a 
-          href="https://inventaire.io" 
-          target="_blank" 
-          rel="noopener noreferrer" 
-          class="btn-link"
-        >
-          {{ TEXTS.onboarding.actionLink }}
-        </a>
-        
         <button @click="emit('close')" class="btn-close">
           {{ TEXTS.onboarding.actionClose }}
         </button>

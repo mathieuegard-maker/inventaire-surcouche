@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import WelcomeModal from '../components/WelcomeModal.vue';
 import BaseInput from '../components/BaseInput.vue';
 import BaseButton from '../components/BaseButton.vue';
 import BaseTitle from '../components/BaseTitle.vue';
@@ -10,7 +9,6 @@ import { connectionService } from '../../core/orchestrators/connection.orchestra
 
 const router = useRouter();
 const route = useRoute();
-const showWelcome = ref(false);
 
 const username = ref('');
 const password = ref('');
@@ -21,21 +19,12 @@ const isLoading = ref(false);
 const errorMessage = ref('');
 
 onMounted(() => {
-  const hasSeenWelcome = localStorage.getItem('has_seen_welcome');
-  if (!hasSeenWelcome) {
-    showWelcome.value = true;
-  }
   const queryInvite = route.query.invite as string | undefined;
   if (queryInvite) {
     inviteCode.value = queryInvite.trim().toUpperCase();
     showInviteField.value = true;
   }
 });
-
-const handleCloseWelcome = () => {
-  localStorage.setItem('has_seen_welcome', 'true');
-  showWelcome.value = false;
-};
 
 const handleLogin = async () => {
   if (!username.value || !password.value) return;
@@ -97,7 +86,7 @@ const handleLogin = async () => {
 
         <div class="checkbox-group">
           <input id="toggle-password" type="checkbox" v-model="showPassword" />
-          <label for="toggle-password">{{ TEXTS.login.showPassword }}</label>
+          <label for="toggle-password">{{ TEXTS.login.showPasswordLabel }}</label>
         </div>
 
         <div class="invite-toggle">
@@ -128,12 +117,10 @@ const handleLogin = async () => {
           variant="primary"
           :disabled="isLoading || !username || !password"
         >
-          {{ isLoading ? TEXTS.login.loadingButton : 'Entrer dans ma bibliothèque' }}
+          {{ isLoading ? TEXTS.login.loading : 'Entrer dans ma bibliothèque' }}
         </BaseButton>
       </form>
     </div>
-
-    <WelcomeModal :show="showWelcome" @close="handleCloseWelcome" />
   </div>
 </template>
 
