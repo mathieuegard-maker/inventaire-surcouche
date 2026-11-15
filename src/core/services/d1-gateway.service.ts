@@ -470,6 +470,14 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       if (olBook.cover?.large || olBook.cover?.medium) {
         olCoverUrl = olBook.cover.large || olBook.cover.medium;
       }
+      if (Array.isArray(olBook.subjects)) {
+        for (const s of olBook.subjects) {
+          const sName = typeof s === 'string' ? s : s?.name;
+          if (typeof sName === 'string' && sName.trim()) {
+            rawSubjects.push(sName.trim());
+          }
+        }
+      }
     }
   }
 

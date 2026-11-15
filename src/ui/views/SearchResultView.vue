@@ -1,30 +1,43 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
+import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
-import { inventaireSearchProvider, type SearchResultItem } from '../../core/providers/inventaire-search.provider';
-import { semanticBucketMapper } from '../../core/resolvers/mapper';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
-import { databaseService } from '../../core/database/database.service';
 import { connectionState } from '../../state/connection';
+import {
+  keywordSearchService,
+  type GroupedKeywordSearchResult,
+  type KeywordBookEntry,
+  type KeywordSeriesGroup,
+  type KeywordAuthorEntry
+} from '../../core/services/keyword-search.service';
 
 const route = useRoute();
 const router = useRouter();
 
 const isLoading = ref(true);
 const errorMessage = ref('');
+const inlineQuery = ref(String(route.query.q || ''));
+const selectedCategory = ref<string>('ALL');
+const selectedSection = ref<'ALL' | 'series' | 'volumes' | 'standalone' | 'authors'>('ALL');
+const expandedSeriesKeys = ref<Record<string, boolean>>({});
 
-// États réactifs volatiles stockés exclusivement en RAM (Zéro écriture Dexie)
-const authorResults = ref<SearchResultItem[]>([]);
-const seriesResults = ref<SearchResultItem[]>([]);
-const workResults = ref<SearchResultItem[]>([]);
+const grouped = ref<GroupedKeywordSearchResult>({
+  categories: [],
+  series: [],
+  volumes: [],
+  standaloneWorks: [],
+  authors: []
+});
 
 const executeSemanticSearch = async () => {
-  const query = route.query.q as string;
+  const query = String(route.query.q || '').trim();
+  inlineQuery.value = query;
   if (!query) {
     errorMessage.value = TEXTS.searchResults.errorEmptyQuery;
     isLoading.value = false;
@@ -33,42 +46,14 @@ const executeSemanticSearch = async () => {
 
   isLoading.value = true;
   errorMessage.value = '';
-
-  const isOffline = connectionState.isOffline.value;
-
-  if (isOffline) {
-    try {
-      console.log(`[SEARCH RESULT VIEW] Mode hors-ligne actif. Recherche locale pour : ${query}`);
-      const localBooks = await databaseService.searchBooksLocally(query);
-      workResults.value = localBooks.map(book => ({
-        uri: book.uri,
-        type: 'work',
-        label: book.title,
-        description: book.authors?.join(', ') || book.series || undefined,
-        coverUrl: book.localCover || book.coverUrl
-      }));
-      authorResults.value = [];
-      seriesResults.value = [];
-    } catch (e) {
-      console.error('[SEARCH RESULT VIEW] Échec de la recherche locale :', e);
-      errorMessage.value = TEXTS.searchResults.errorLocalSearch || "Erreur de recherche locale hors-ligne.";
-    } finally {
-      isLoading.value = false;
-    }
-    return;
-  }
+  selectedCategory.value = 'ALL';
+  selectedSection.value = 'ALL';
+  expandedSeriesKeys.value = {};
 
   try {
-    const rawItems = await inventaireSearchProvider.searchByKeywords(query);
-    
-    // Partitionnement des résultats via le mapper mutualisé
-    const buckets = semanticBucketMapper.partition(rawItems);
-    
-    authorResults.value = buckets.authors;
-    seriesResults.value = buckets.series;
-    workResults.value = buckets.works;
+    grouped.value = await keywordSearchService.searchGrouped(query, connectionState.isOffline.value);
   } catch (error) {
-    console.error('[SEARCH RESULT VIEW] Échec de la recherche sémantique :', error);
+    console.error('[SEARCH RESULT VIEW] Échec de la recherche multi-sources :', error);
     errorMessage.value = TEXTS.searchResults.errorFetch;
   } finally {
     isLoading.value = false;
@@ -79,39 +64,102 @@ onMounted(async () => {
   await executeSemanticSearch();
 });
 
-// Ré-exécution automatique si l'utilisateur saisit une nouvelle recherche textuelle depuis la barre
-watch(() => route.query.q, async () => {
-  await executeSemanticSearch();
+watch(
+  () => route.query.q,
+  async () => {
+    await executeSemanticSearch();
+  }
+);
+
+const filteredSeries = computed(() => {
+  if (selectedCategory.value === 'ALL') return grouped.value.series;
+  return grouped.value.series.filter((s) => s.genres.includes(selectedCategory.value));
 });
 
-const handleSelectAuthor = (uri: string) => {
-  router.push({ name: 'AuthorView', params: { id: uri } });
+const filteredVolumes = computed(() => {
+  if (selectedCategory.value === 'ALL') return grouped.value.volumes;
+  return grouped.value.volumes.filter((v) => v.genres.includes(selectedCategory.value));
+});
+
+const filteredStandalone = computed(() => {
+  if (selectedCategory.value === 'ALL') return grouped.value.standaloneWorks;
+  return grouped.value.standaloneWorks.filter((w) => w.genres.includes(selectedCategory.value));
+});
+
+// Groupement des œuvres uniques par sous-catégorie pour un affichage ordonné
+const standaloneByCategory = computed(() => {
+  const map = new Map<string, KeywordBookEntry[]>();
+  for (const w of filteredStandalone.value) {
+    const cat = w.category || 'Autre';
+    const list = map.get(cat) || [];
+    list.push(w);
+    map.set(cat, list);
+  }
+  return Array.from(map.entries()).map(([category, items]) => ({ category, items }));
+});
+
+const hasAnyResult = computed(
+  () =>
+    grouped.value.series.length > 0 ||
+    grouped.value.volumes.length > 0 ||
+    grouped.value.standaloneWorks.length > 0 ||
+    grouped.value.authors.length > 0
+);
+
+function handleInlineKeywords(q: string) {
+  if (q.trim()) {
+    router.push({ name: 'SearchResultView', query: { q: q.trim() } });
+  }
+}
+
+function handleInlineIsbn(isbn: string) {
+  router.push(`/book/${encodeURIComponent(isbn)}`);
+}
+
+function toggleSeriesExpand(key: string) {
+  expandedSeriesKeys.value = {
+    ...expandedSeriesKeys.value,
+    [key]: !expandedSeriesKeys.value[key]
+  };
+}
+
+const handleSelectSeries = (series: KeywordSeriesGroup) => {
+  if (series.uri && !series.uri.startsWith('local:')) {
+    router.push({ name: 'SeriesView', params: { id: series.uri } });
+  } else {
+    toggleSeriesExpand(series.key);
+  }
 };
 
-const handleSelectSeries = (uri: string) => {
-  router.push({ name: 'SeriesView', params: { id: uri } });
+const handleSelectAuthor = (author: KeywordAuthorEntry) => {
+  if (author.uri) {
+    router.push({ name: 'AuthorView', params: { id: author.uri } });
+  } else {
+    router.push({ name: 'SearchResultView', query: { q: author.name } });
+  }
 };
 
-const handleSelectWork = async (uri: string) => {
-  const isOffline = connectionState.isOffline.value;
-  if (isOffline) {
-    console.log(`[SEARCH RESULT VIEW] Redirection directe hors-ligne pour l'URI : ${uri}`);
-    router.push(`/book/${encodeURIComponent(uri)}`);
+const handleSelectBook = async (entry: KeywordBookEntry) => {
+  if (entry.isbn13) {
+    router.push(`/book/${encodeURIComponent(entry.isbn13)}`);
+    return;
+  }
+  if (!entry.uri) return;
+
+  if (connectionState.isOffline.value) {
+    router.push(`/book/${encodeURIComponent(entry.uri)}`);
     return;
   }
 
   isLoading.value = true;
   try {
-    // Le Pivot ISBN : Résolution de l'édition physique canonique en tâche de fond
-    const isbn = await workUriResolver.resolveIsbnFromWorkUri(uri);
+    const isbn = await workUriResolver.resolveIsbnFromWorkUri(entry.uri);
     if (isbn) {
       router.push(`/book/${encodeURIComponent(isbn)}`);
     } else {
-      alert(TEXTS.searchResults.errorNoPhysicalEdition);
-      isLoading.value = false;
+      router.push(`/book/${encodeURIComponent(entry.uri)}`);
     }
-  } catch (error) {
-    console.error('[SEARCH RESULT VIEW] Échec du pivot ISBN :', error);
+  } catch {
     alert(TEXTS.searchResults.errorPivot);
     isLoading.value = false;
   }
@@ -123,80 +171,401 @@ const handleSelectWork = async (uri: string) => {
     <BaseHeader />
     <BaseTitle :text="TEXTS.searchResults.title" level="h2" />
 
+    <div style="margin-bottom: 0.75rem;">
+      <SmartSearchBar
+        v-model="inlineQuery"
+        @isbn-detected="handleInlineIsbn"
+        @keywords-detected="handleInlineKeywords"
+      />
+    </div>
+
     <BaseLoading v-if="isLoading" />
 
     <div v-else class="main-content-wrapper">
       <BaseBanner v-if="errorMessage" type="error" :message="errorMessage" />
-      
-      <BaseBanner 
-        v-if="!authorResults.length && !seriesResults.length && !workResults.length && !errorMessage" 
-        type="error" 
-        :message="TEXTS.searchResults.emptyResults" 
+
+      <BaseBanner
+        v-if="!hasAnyResult && !errorMessage"
+        type="error"
+        :message="TEXTS.searchResults.emptyResults"
       />
 
-      <!-- SEAU SÉMANTIQUE 1 : LES SAGAS / SÉRIES -->
-      <div v-if="seriesResults.length" class="semantic-bucket-section">
-        <div class="wishlist-section-header">{{ TEXTS.searchResults.sectionSeries }}</div>
-        <div class="wireframe-table-container">
-          <div 
-            v-for="item in seriesResults" 
-            :key="item.uri" 
-            class="mini-card-row card-row-clickable"
-            @click="handleSelectSeries(item.uri)"
-          >
-            <div class="row-cover-container row-macaron-container">
-              <span class="row-macaron-label">{{ TEXTS.searchResults.badgeSeries }}</span>
-            </div>
-            <div class="row-info-content">
-              <p class="row-title">{{ item.label }}</p>
-              <p v-if="item.description" class="row-series-meta">{{ item.description }}</p>
+      <template v-if="hasAnyResult">
+        <!-- Filtres ordonnés par Type & Sous-catégorie / Genre -->
+        <div class="search-filters-panel">
+          <div class="filter-pills-row">
+            <button
+              type="button"
+              class="filter-pill"
+              :class="{ active: selectedSection === 'ALL' }"
+              @click="selectedSection = 'ALL'"
+            >
+              Tout voir
+            </button>
+            <button
+              v-if="grouped.series.length"
+              type="button"
+              class="filter-pill"
+              :class="{ active: selectedSection === 'series' }"
+              @click="selectedSection = 'series'"
+            >
+              📚 Séries ({{ filteredSeries.length }})
+            </button>
+            <button
+              v-if="grouped.volumes.length"
+              type="button"
+              class="filter-pill"
+              :class="{ active: selectedSection === 'volumes' }"
+              @click="selectedSection = 'volumes'"
+            >
+              📖 Tomes ({{ filteredVolumes.length }})
+            </button>
+            <button
+              v-if="grouped.standaloneWorks.length"
+              type="button"
+              class="filter-pill"
+              :class="{ active: selectedSection === 'standalone' }"
+              @click="selectedSection = 'standalone'"
+            >
+              📕 Œuvres uniques ({{ filteredStandalone.length }})
+            </button>
+            <button
+              v-if="grouped.authors.length"
+              type="button"
+              class="filter-pill"
+              :class="{ active: selectedSection === 'authors' }"
+              @click="selectedSection = 'authors'"
+            >
+              ✍️ Auteurs ({{ grouped.authors.length }})
+            </button>
+          </div>
+
+          <div v-if="grouped.categories.length > 0" class="filter-pills-row subcat-row">
+            <span class="subcat-label">Sous-catégorie :</span>
+            <button
+              type="button"
+              class="filter-pill sub"
+              :class="{ active: selectedCategory === 'ALL' }"
+              @click="selectedCategory = 'ALL'"
+            >
+              Toutes
+            </button>
+            <button
+              v-for="cat in grouped.categories"
+              :key="cat.label"
+              type="button"
+              class="filter-pill sub"
+              :class="{ active: selectedCategory === cat.label }"
+              @click="selectedCategory = cat.label"
+            >
+              {{ cat.label }} ({{ cat.count }})
+            </button>
+          </div>
+        </div>
+
+        <!-- 1. SÉRIES -->
+        <div
+          v-if="(selectedSection === 'ALL' || selectedSection === 'series') && filteredSeries.length"
+          class="semantic-bucket-section"
+        >
+          <div class="wishlist-section-header">
+            📚 Séries ({{ filteredSeries.length }})
+          </div>
+          <div class="wireframe-table-container">
+            <div v-for="series in filteredSeries" :key="series.key" class="series-result-block">
+              <div class="mini-card-row card-row-clickable" @click="handleSelectSeries(series)">
+                <div class="row-cover-container row-macaron-container">
+                  <span class="row-macaron-label">SÉRIE</span>
+                </div>
+                <div class="row-info-content">
+                  <p class="row-title">
+                    {{ series.name }}
+                    <span class="mini-tag">{{ series.category }}</span>
+                  </p>
+                  <p class="row-series-meta">
+                    <span v-if="series.authors.length">{{ series.authors.join(', ') }} • </span>
+                    {{ series.volumes.length }} tome(s) trouvé(s)
+                  </p>
+                </div>
+                <button
+                  v-if="series.volumes.length > 0"
+                  type="button"
+                  class="wireframe-btn expand-tomes-btn"
+                  @click.stop="toggleSeriesExpand(series.key)"
+                >
+                  {{ expandedSeriesKeys[series.key] ? '▴ Masquer tomes' : '▾ Voir tomes' }}
+                </button>
+              </div>
+
+              <div v-if="expandedSeriesKeys[series.key] && series.volumes.length" class="nested-tomes-list">
+                <div
+                  v-for="vol in series.volumes"
+                  :key="vol.id"
+                  class="mini-card-row card-row-clickable nested-vol"
+                  @click="handleSelectBook(vol)"
+                >
+                  <img v-if="vol.coverUrl" :src="vol.coverUrl" :alt="vol.title" class="search-thumb" />
+                  <div v-else class="search-thumb-fallback">📖</div>
+                  <div class="row-info-content">
+                    <p class="row-title">
+                      <strong v-if="vol.seriesNumber">T.{{ vol.seriesNumber }} — </strong>
+                      {{ vol.title }}
+                    </p>
+                    <p class="row-series-meta">
+                      {{ vol.authors.join(', ') || 'Auteur inconnu' }}
+                      <template v-if="vol.publisher"> • {{ vol.publisher }}</template>
+                      <template v-if="vol.publishDate"> ({{ vol.publishDate }})</template>
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- SEAU SÉMANTIQUE 2 : LES AUTEURS -->
-      <div v-if="authorResults.length" class="semantic-bucket-section">
-        <div class="wishlist-section-header">{{ TEXTS.searchResults.sectionAuthors }}</div>
-        <div class="wireframe-table-container">
-          <div 
-            v-for="item in authorResults" 
-            :key="item.uri" 
-            class="mini-card-row card-row-clickable"
-            @click="handleSelectAuthor(item.uri)"
-          >
-            <div class="row-cover-container row-macaron-container">
-              <span class="row-macaron-label">{{ TEXTS.searchResults.badgeAuthor }}</span>
-            </div>
-            <div class="row-info-content">
-              <p class="row-title">{{ item.label }}</p>
-              <p v-if="item.description" class="row-series-meta">{{ item.description }}</p>
+        <!-- 2. TOMES DE SÉRIES (ORDONNÉS PAR SÉRIE & NUMÉRO) -->
+        <div
+          v-if="(selectedSection === 'ALL' || selectedSection === 'volumes') && filteredVolumes.length"
+          class="semantic-bucket-section"
+        >
+          <div class="wishlist-section-header">
+            📖 Tomes ({{ filteredVolumes.length }})
+          </div>
+          <div class="wireframe-table-container">
+            <div
+              v-for="vol in filteredVolumes"
+              :key="vol.id"
+              class="mini-card-row card-row-clickable"
+              @click="handleSelectBook(vol)"
+            >
+              <img v-if="vol.coverUrl" :src="vol.coverUrl" :alt="vol.title" class="search-thumb" />
+              <div v-else class="search-thumb-fallback">📖</div>
+              <div class="row-info-content">
+                <p class="row-title">
+                  <span class="mini-tag">{{ vol.series }}<template v-if="vol.seriesNumber"> T.{{ vol.seriesNumber }}</template></span>
+                  {{ vol.title }}
+                </p>
+                <p class="row-series-meta">
+                  {{ vol.authors.join(', ') || 'Auteur inconnu' }}
+                  <template v-if="vol.publisher"> • {{ vol.publisher }}</template>
+                  <template v-if="vol.publishDate"> ({{ vol.publishDate }})</template>
+                </p>
+                <div class="badges-inline">
+                  <span v-for="g in vol.genres.slice(0, 3)" :key="g" class="genre-pill">{{ g }}</span>
+                  <span v-for="src in vol.sources" :key="src" class="source-pill">{{ src }}</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- SEAU SÉMANTIQUE 3 : LES LIVRES / TOMES ISOLÉS -->
-      <div v-if="workResults.length" class="semantic-bucket-section">
-        <div class="wishlist-section-header">{{ TEXTS.searchResults.sectionWorks }}</div>
-        <div class="wireframe-table-container">
-          <div 
-            v-for="item in workResults" 
-            :key="item.uri" 
-            class="mini-card-row card-row-clickable"
-            @click="handleSelectWork(item.uri)"
-          >
-            <div class="row-cover-container row-macaron-container">
-              <span class="row-macaron-label">{{ TEXTS.searchResults.badgeWork }}</span>
-            </div>
-            <div class="row-info-content">
-              <p class="row-title">{{ item.label }}</p>
-              <p v-if="item.description" class="row-series-meta">{{ item.description }}</p>
+        <!-- 3. ŒUVRES UNIQUES (CLASSÉES PAR SOUS-CATÉGORIE) -->
+        <div
+          v-if="(selectedSection === 'ALL' || selectedSection === 'standalone') && standaloneByCategory.length"
+          class="semantic-bucket-section"
+        >
+          <div class="wishlist-section-header">
+            📕 Œuvres uniques par sous-catégorie ({{ filteredStandalone.length }})
+          </div>
+          <div v-for="group in standaloneByCategory" :key="group.category" class="subcat-group-box">
+            <div class="subcat-group-title">{{ group.category }} ({{ group.items.length }})</div>
+            <div class="wireframe-table-container">
+              <div
+                v-for="work in group.items"
+                :key="work.id"
+                class="mini-card-row card-row-clickable"
+                @click="handleSelectBook(work)"
+              >
+                <img v-if="work.coverUrl" :src="work.coverUrl" :alt="work.title" class="search-thumb" />
+                <div v-else class="search-thumb-fallback">📕</div>
+                <div class="row-info-content">
+                  <p class="row-title">{{ work.title }}</p>
+                  <p class="row-series-meta">
+                    {{ work.authors.join(', ') || 'Auteur inconnu' }}
+                    <template v-if="work.publisher"> • {{ work.publisher }}</template>
+                    <template v-if="work.publishDate"> ({{ work.publishDate }})</template>
+                  </p>
+                  <div class="badges-inline">
+                    <span v-for="g in work.genres.slice(0, 4)" :key="g" class="genre-pill">{{ g }}</span>
+                    <span v-for="src in work.sources" :key="src" class="source-pill">{{ src }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
+        <!-- 4. AUTEURS -->
+        <div
+          v-if="(selectedSection === 'ALL' || selectedSection === 'authors') && grouped.authors.length"
+          class="semantic-bucket-section"
+        >
+          <div class="wishlist-section-header">
+            ✍️ Auteurs ({{ grouped.authors.length }})
+          </div>
+          <div class="wireframe-table-container">
+            <div
+              v-for="author in grouped.authors"
+              :key="author.key"
+              class="mini-card-row card-row-clickable"
+              @click="handleSelectAuthor(author)"
+            >
+              <div class="row-cover-container row-macaron-container">
+                <span class="row-macaron-label">{{ TEXTS.searchResults.badgeAuthor }}</span>
+              </div>
+              <div class="row-info-content">
+                <p class="row-title">{{ author.name }}</p>
+                <p class="row-series-meta">
+                  {{ author.description || `${author.matchCount} notice(s) trouvée(s)` }}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.search-filters-panel {
+  border: 2px solid #0f172a;
+  background: #f8fafc;
+  padding: 0.65rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.filter-pills-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.subcat-label {
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: #475569;
+  text-transform: uppercase;
+}
+
+.filter-pill {
+  border: 1.5px solid #0f172a;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.filter-pill.active {
+  background: #0f172a;
+  color: #ffffff;
+}
+
+.filter-pill.sub {
+  border-color: #64748b;
+  font-size: 0.74rem;
+}
+
+.filter-pill.sub.active {
+  background: #4338ca;
+  border-color: #4338ca;
+  color: #ffffff;
+}
+
+.series-result-block {
+  border-bottom: 1px solid #cbd5e1;
+}
+
+.expand-tomes-btn {
+  width: auto;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.74rem;
+  flex-shrink: 0;
+}
+
+.nested-tomes-list {
+  padding-left: 1rem;
+  background: #f8fafc;
+  border-top: 1px dashed #cbd5e1;
+}
+
+.nested-vol {
+  padding-top: 0.35rem;
+  padding-bottom: 0.35rem;
+}
+
+.search-thumb {
+  width: 38px;
+  height: 54px;
+  object-fit: cover;
+  border: 1px solid #94a3b8;
+  flex-shrink: 0;
+}
+
+.search-thumb-fallback {
+  width: 38px;
+  height: 54px;
+  background: #e2e8f0;
+  border: 1px solid #94a3b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.mini-tag {
+  display: inline-block;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  margin-right: 4px;
+}
+
+.badges-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.genre-pill {
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 1px 5px;
+}
+
+.source-pill {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+  font-size: 0.66rem;
+  font-weight: 700;
+  padding: 1px 5px;
+}
+
+.subcat-group-box {
+  margin-bottom: 0.75rem;
+}
+
+.subcat-group-title {
+  background: #e2e8f0;
+  color: #0f172a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 0.3rem 0.55rem;
+  border: 1.5px solid #0f172a;
+  border-bottom: none;
+}
+</style>

@@ -37,6 +37,10 @@ function extractVolumeMetadata(isbn: string, volumeInfo: any): ExternalBookMetad
     }
   }
 
+  const rawSubjects = Array.isArray(volumeInfo.categories)
+    ? volumeInfo.categories.map((c: unknown) => String(c).trim()).filter(Boolean)
+    : [];
+
   return {
     isbn,
     title,
@@ -44,7 +48,8 @@ function extractVolumeMetadata(isbn: string, volumeInfo: any): ExternalBookMetad
     publisher,
     publishDate,
     pageCount,
-    coverUrl
+    coverUrl,
+    ...(rawSubjects.length ? { rawSubjects } : {})
   };
 }
 

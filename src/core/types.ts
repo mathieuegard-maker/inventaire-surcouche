@@ -126,4 +126,8 @@ export interface ExternalBookMetadata {
   coverUrl?: string;
   series?: string;
   seriesNumber?: string;
+  collection?: string;
+  genres?: string[];
+  rawSubjects?: string[];
+  deweyCode?: string;
 }

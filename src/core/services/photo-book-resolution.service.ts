@@ -16,11 +16,25 @@ import { isbnUtil } from '../utils/isbn.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 
+export interface PhotoResolutionOption {
+  isbn13: string;
+  title: string;
+  authors: string[];
+  publisher?: string;
+  publishDate?: string;
+  pageCount?: number;
+  coverUrl?: string;
+  series?: string;
+  seriesNumber?: string;
+  score: number;
+  sourcesCount: number;
+}
+
 export interface ResolvedPhotoItem {
   id: string;
   sourceKind: 'detected' | 'series_extra';
   rawCandidate: RecognizedBookCandidate;
-  status: 'resolved' | 'unresolved';
+  status: 'resolved' | 'doubt' | 'unresolved';
   selected: boolean;
   alreadyOwned: boolean;
   alreadyWished: boolean;
@@ -38,6 +52,8 @@ export interface ResolvedPhotoItem {
   failureReason?: string;
   correctedFromAi?: boolean;
   sourcesCount?: number;
+  alternatives?: PhotoResolutionOption[];
+  selectedAlternativeIsbn?: string;
 }
 
 export interface PhotoBatchResolutionResult {
@@ -123,6 +139,8 @@ interface ShelfSeriesNeighbor {
 }
 
 const CONSENSUS_SCORE_THRESHOLD = 28;
+const DOUBT_MIN_SCORE_THRESHOLD = 18;
+const DOUBT_COMPETITOR_GAP = 10;
 const MULTI_SOURCE_ISBN_BONUS = 22;
 const MULTI_SOURCE_WORK_BONUS = 14;
 const BNF_AUTHORITY_TIEBREAK = 6;
@@ -189,11 +207,18 @@ function detectAiCorrection(
   return false;
 }
 
-async function discoverConsensusByHints(hints: BnfHintQuery): Promise<{
+async function discoverConsensusByHints(
+  hints: BnfHintQuery,
+  aiConfidence?: 'high' | 'medium' | 'low',
+  onExternalLookup?: (delta: number) => void
+): Promise<{
   isbn13?: string;
   meta?: ExternalBookMetadata;
   sourcesCount: number;
+  isDoubt: boolean;
+  alternatives: PhotoResolutionOption[];
 }> {
+  onExternalLookup?.(3);
   const [bnfMatches, gbMatches, olMatches] = await Promise.all([
     bnfResolver.searchCandidatesByHints(hints, 12).catch(() => []),
     googleBooksResolver.searchCandidatesByHints(hints, 8).catch(() => []),
@@ -261,33 +286,63 @@ async function discoverConsensusByHints(hints: BnfHintQuery): Promise<{
     addCandidate('openlibrary', meta);
   }
 
-  let winner: ConsensusBucket | null = null;
-  let winnerFinalScore = -Infinity;
-  let winnerSourcesCount = 0;
+  const ranked = Array.from(buckets.values())
+    .map((bucket) => {
+      const wkSourceCount = bucket.workKey ? (workKeySources.get(bucket.workKey)?.size ?? 1) : 1;
+      const effectiveSources = Math.max(bucket.sources.size, wkSourceCount);
+      const isbnConsensusBonus = Math.max(0, bucket.sources.size - 1) * MULTI_SOURCE_ISBN_BONUS;
+      const workConsensusBonus = Math.max(0, wkSourceCount - bucket.sources.size) * MULTI_SOURCE_WORK_BONUS;
+      const tieBreak = bucket.fromBnf ? BNF_AUTHORITY_TIEBREAK : 0;
+      const finalScore = bucket.bestScore + isbnConsensusBonus + workConsensusBonus + tieBreak;
+      return { bucket, effectiveSources, finalScore };
+    })
+    .sort((a, b) => b.finalScore - a.finalScore);
 
-  for (const bucket of buckets.values()) {
-    const wkSourceCount = bucket.workKey ? (workKeySources.get(bucket.workKey)?.size ?? 1) : 1;
-    const effectiveSources = Math.max(bucket.sources.size, wkSourceCount);
-    const isbnConsensusBonus = Math.max(0, bucket.sources.size - 1) * MULTI_SOURCE_ISBN_BONUS;
-    const workConsensusBonus = Math.max(0, wkSourceCount - bucket.sources.size) * MULTI_SOURCE_WORK_BONUS;
-    const tieBreak = bucket.fromBnf ? BNF_AUTHORITY_TIEBREAK : 0;
-    const finalScore = bucket.bestScore + isbnConsensusBonus + workConsensusBonus + tieBreak;
-
-    if (finalScore > winnerFinalScore) {
-      winnerFinalScore = finalScore;
-      winner = bucket;
-      winnerSourcesCount = effectiveSources;
-    }
+  const top = ranked[0];
+  if (!top || top.finalScore < DOUBT_MIN_SCORE_THRESHOLD) {
+    return { sourcesCount: 0, isDoubt: false, alternatives: [] };
   }
 
-  if (!winner || winnerFinalScore < CONSENSUS_SCORE_THRESHOLD) {
-    return { sourcesCount: 0 };
+  // Construire jusqu'à 3 pistes distinctes pour arbitrage utilisateur si doute
+  const distinctWorkKeys = new Set<string>();
+  const topAlternatives: PhotoResolutionOption[] = [];
+  for (const entry of ranked) {
+    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 2) break;
+    const wk = entry.bucket.workKey || `isbn:${entry.bucket.isbn13}`;
+    if (distinctWorkKeys.has(wk)) continue;
+    distinctWorkKeys.add(wk);
+    topAlternatives.push({
+      isbn13: entry.bucket.isbn13,
+      title: entry.bucket.bestMeta.title || hints.title || 'Titre inconnu',
+      authors: entry.bucket.bestMeta.authors || [],
+      publisher: entry.bucket.bestMeta.publisher,
+      publishDate: entry.bucket.bestMeta.publishDate,
+      pageCount: entry.bucket.bestMeta.pageCount,
+      coverUrl: entry.bucket.bestMeta.coverUrl,
+      series: entry.bucket.bestMeta.series,
+      seriesNumber: entry.bucket.bestMeta.seriesNumber,
+      score: entry.finalScore,
+      sourcesCount: entry.effectiveSources
+    });
+    if (topAlternatives.length >= 3) break;
   }
+
+  const secondDistinct = topAlternatives[1];
+  const hasCompetingWork =
+    Boolean(secondDistinct) &&
+    top.effectiveSources < 2 &&
+    top.finalScore - secondDistinct.score <= DOUBT_COMPETITOR_GAP;
+  const isBorderlineScore = top.finalScore < CONSENSUS_SCORE_THRESHOLD;
+  const isLowConfidenceSingle = aiConfidence === 'low' && top.effectiveSources < 2;
+
+  const isDoubt = isBorderlineScore || hasCompetingWork || isLowConfidenceSingle;
 
   return {
-    isbn13: winner.isbn13,
-    meta: winner.bestMeta,
-    sourcesCount: winnerSourcesCount
+    isbn13: top.bucket.isbn13,
+    meta: top.bucket.bestMeta,
+    sourcesCount: top.effectiveSources,
+    isDoubt,
+    alternatives: topAlternatives
   };
 }
 
@@ -330,7 +385,11 @@ export const photoBookResolutionService = {
    * croisée parallèle (BnF + Google Books + Open Library) avec consensus multi-sources,
    * puis exécute le flux classique complet par ISBN (BnF + Open Library + Google Books + D1).
    */
-  async resolveSingleCandidate(cand: RecognizedBookCandidate, idPrefix = 'det'): Promise<ResolvedPhotoItem> {
+  async resolveSingleCandidate(
+    cand: RecognizedBookCandidate,
+    idPrefix = 'det',
+    onExternalLookup?: (delta: number) => void
+  ): Promise<ResolvedPhotoItem> {
     const uid = `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     try {
@@ -338,12 +397,20 @@ export const photoBookResolutionService = {
       let isbn13 = normalizeToIsbn13(cand.isbn);
       let hintMatchMeta: ExternalBookMetadata | undefined;
       let sourcesCount = isbn13 ? 1 : 0;
+      let isDoubt = false;
+      let alternatives: PhotoResolutionOption[] = [];
 
       if (!isbn13) {
-        const consensus = await discoverConsensusByHints(buildHintQuery(cand));
+        const consensus = await discoverConsensusByHints(
+          buildHintQuery(cand),
+          cand.confidence,
+          onExternalLookup
+        );
         isbn13 = consensus.isbn13;
         hintMatchMeta = consensus.meta;
         sourcesCount = consensus.sourcesCount;
+        isDoubt = consensus.isDoubt;
+        alternatives = consensus.alternatives;
       }
 
       if (!isbn13) {
@@ -365,11 +432,47 @@ export const photoBookResolutionService = {
       }
 
       // 2. Flux classique complet par ISBN : BnF -> Open Library -> Google Books + vérification D1 / cache local
+      onExternalLookup?.(1);
       const [externalMeta, ownership, d1Entity] = await Promise.all([
         externalMetadataService.fetchFromExternalSources(isbn13),
         checkOwnershipByIsbn(isbn13),
         entityResolver.resolvePhysicalEntity(`isbn:${isbn13}`).catch(() => null)
       ]);
+
+      // Si doute : enrichir brièvement les alternatives 2..3 (couverture/série/auteur BnF) si nécessaire
+      if (isDoubt && alternatives.length > 0) {
+        const enrichedAlternatives = await Promise.all(
+          alternatives.map(async (alt, idx) => {
+            if (idx === 0) {
+              return {
+                ...alt,
+                title: externalMeta?.title?.trim() || d1Entity?.title?.trim() || alt.title,
+                authors: externalMeta?.authors?.length ? externalMeta.authors : alt.authors,
+                publisher: externalMeta?.publisher || alt.publisher,
+                publishDate: externalMeta?.publishDate || alt.publishDate,
+                pageCount: externalMeta?.pageCount || alt.pageCount,
+                coverUrl: externalMeta?.coverUrl || ownership.cachedCover || d1Entity?.coverUrl || alt.coverUrl,
+                series: externalMeta?.series || alt.series,
+                seriesNumber: externalMeta?.seriesNumber || alt.seriesNumber
+              };
+            }
+            onExternalLookup?.(1);
+            const altExt = await externalMetadataService.fetchFromExternalSources(alt.isbn13).catch(() => null);
+            return {
+              ...alt,
+              title: altExt?.title?.trim() || alt.title,
+              authors: altExt?.authors?.length ? altExt.authors : alt.authors,
+              publisher: altExt?.publisher || alt.publisher,
+              publishDate: altExt?.publishDate || alt.publishDate,
+              pageCount: altExt?.pageCount || alt.pageCount,
+              coverUrl: altExt?.coverUrl || alt.coverUrl,
+              series: altExt?.series || alt.series,
+              seriesNumber: altExt?.seriesNumber || alt.seriesNumber
+            };
+          })
+        );
+        alternatives = enrichedAlternatives;
+      }
 
       const mergedTitle =
         externalMeta?.title?.trim() ||
@@ -409,8 +512,8 @@ export const photoBookResolutionService = {
         id: uid,
         sourceKind: 'detected',
         rawCandidate: { ...cand },
-        status: 'resolved',
-        selected: !ownership.alreadyOwned,
+        status: isDoubt ? 'doubt' : 'resolved',
+        selected: !isDoubt && !ownership.alreadyOwned,
         alreadyOwned: ownership.alreadyOwned,
         alreadyWished: ownership.alreadyWished,
         isbn13,
@@ -425,7 +528,10 @@ export const photoBookResolutionService = {
         existingUri: ownership.existingUri || d1Entity?.uri,
         existingWorkUri: ownership.existingWorkUri || d1Entity?.workUri,
         correctedFromAi,
-        sourcesCount
+        sourcesCount,
+        ...(isDoubt && alternatives.length > 0
+          ? { alternatives, selectedAlternativeIsbn: alternatives[0].isbn13 }
+          : {})
       };
     } catch (err: unknown) {
       return {
@@ -454,13 +560,14 @@ export const photoBookResolutionService = {
    */
   async resolveCandidatesAndDiscoverSeries(
     candidates: RecognizedBookCandidate[],
-    onStatus?: (msg: string) => void
+    onStatus?: (msg: string) => void,
+    onExternalLookup?: (delta: number) => void
   ): Promise<PhotoBatchResolutionResult> {
     let completed = 0;
     onStatus?.(`Identification multi-sources & BnF (0/${candidates.length})...`);
 
     const resolvedRaw = await runWithConcurrency(candidates, 3, async (cand, idx) => {
-      const item = await this.resolveSingleCandidate(cand, `det-${idx}`);
+      const item = await this.resolveSingleCandidate(cand, `det-${idx}`, onExternalLookup);
       completed++;
       onStatus?.(`Identification multi-sources & BnF (${completed}/${candidates.length})...`);
       return item;
@@ -497,7 +604,7 @@ export const photoBookResolutionService = {
           publisher: item.rawCandidate.publisher || neighbor.publisher
         };
 
-        const rescuedItem = await this.resolveSingleCandidate(rescuedCand, `rescue-${idx}`);
+        const rescuedItem = await this.resolveSingleCandidate(rescuedCand, `rescue-${idx}`, onExternalLookup);
         if (rescuedItem.status === 'resolved') {
           resolvedRaw[idx] = {
             ...rescuedItem,
@@ -545,6 +652,7 @@ export const photoBookResolutionService = {
       detectedSeriesNames.push(seriesName);
       onStatus?.(`Recherche des autres tomes de la série « ${seriesName} » sur la BnF...`);
 
+      onExternalLookup?.(1);
       const bnfVolumes = await bnfResolver.searchSeriesVolumes(seriesName, author);
       const knownVols = knownVolKeysBySeries.get(seriesKey) || new Set<string>();
 
@@ -573,6 +681,7 @@ export const photoBookResolutionService = {
 
         // S'il n'y a pas encore de couverture depuis la BnF, passage par le flux classique (OpenLibrary / Google Books)
         if (!vol.coverUrl && !ownership.cachedCover) {
+          onExternalLookup?.(1);
           const ext = await externalMetadataService.fetchFromExternalSources(vol.isbn).catch(() => null);
           if (ext) {
             finalMeta = {

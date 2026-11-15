@@ -254,8 +254,16 @@ export const byokVisionService = {
     }
   },
 
+  async compressForMode(fileOrBlob: Blob | File, mode: 'cover' | 'shelf'): Promise<string> {
+    return compressImageToWebpDataUrl(fileOrBlob, {
+      maxWidth: mode === 'shelf' ? 2048 : 1024,
+      maxHeight: mode === 'shelf' ? 2048 : 1280,
+      quality: mode === 'shelf' ? 0.88 : 0.86
+    });
+  },
+
   async analyzePhoto(
-    fileOrBlob: Blob | File,
+    fileOrDataUrl: Blob | File | string,
     mode: 'cover' | 'shelf',
     onStatus?: (msg: string) => void
   ): Promise<RecognizedBookCandidate[]> {
@@ -264,12 +272,13 @@ export const byokVisionService = {
       throw new Error("Aucune clé API configurée. Configurez votre clé gratuite dans l'assistant.");
     }
 
-    onStatus?.('Compression WebP haute netteté de la photo en cours...');
-    const dataUrl = await compressImageToWebpDataUrl(fileOrBlob, {
-      maxWidth: mode === 'shelf' ? 2048 : 1024,
-      maxHeight: mode === 'shelf' ? 2048 : 1280,
-      quality: mode === 'shelf' ? 0.88 : 0.86
-    });
+    let dataUrl: string;
+    if (typeof fileOrDataUrl === 'string' && fileOrDataUrl.startsWith('data:')) {
+      dataUrl = fileOrDataUrl;
+    } else {
+      onStatus?.('Compression WebP haute netteté de la photo en cours...');
+      dataUrl = await this.compressForMode(fileOrDataUrl as Blob | File, mode);
+    }
 
     const base64Data = dataUrl.split(',')[1] || '';
     const mimeMatch = /^data:([^;]+);base64,/.exec(dataUrl);

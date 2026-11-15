@@ -70,6 +70,17 @@ export const openLibraryResolver = {
         coverUrl = bookData.cover.large || bookData.cover.medium || bookData.cover.small;
       }
 
+      // Extraction des sujets pour croisement multi-sources des genres
+      const rawSubjects: string[] = [];
+      if (Array.isArray(bookData.subjects)) {
+        for (const s of bookData.subjects) {
+          const label = typeof s === 'string' ? s : s?.name;
+          if (typeof label === 'string' && label.trim()) {
+            rawSubjects.push(label.trim());
+          }
+        }
+      }
+
       return {
         isbn,
         title: bookData.title?.trim() || '',
@@ -77,7 +88,8 @@ export const openLibraryResolver = {
         publisher,
         publishDate,
         pageCount: bookData.number_of_pages ? parseInt(bookData.number_of_pages, 10) : undefined,
-        coverUrl
+        coverUrl,
+        ...(rawSubjects.length ? { rawSubjects } : {})
       };
     } catch (e: any) {
       console.error(`[OPEN LIBRARY RESOLVER] Erreur lors de la résolution de l'ISBN ${isbn}:`, e.message);

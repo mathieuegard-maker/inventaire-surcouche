@@ -664,7 +664,7 @@ const confirmDelete = async () => {
           @return="handleReturn"
           @delete="handleDelete"
         />
-        <div v-if="book.ownershipStatus === 'owned'" style="margin-top: var(--spacing-sm); width: 100%; display: flex; justify-content: center;">
+        <div style="margin-top: var(--spacing-sm); width: 100%; display: flex; justify-content: center;">
           <BaseButton 
             type="primary" 
             style="width: 100%;"

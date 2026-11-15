@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyBookMetadata } from './category-classifier.util';
+import { classifyBookMetadata, buildCombinedGenres } from './category-classifier.util';
 
 describe('classifyBookMetadata (V2 Fine Category & Subgenre Classifier)', () => {
   it('classe correctement une BD franco-belge avec sous-genre Historique / Humour', () => {
@@ -46,5 +46,33 @@ describe('classifyBookMetadata (V2 Fine Category & Subgenre Classifier)', () => 
     });
     expect(res.mainCategory).toBe('Essai');
     expect(res.subgenres).toContain('Sciences & Nature');
+  });
+
+  it('ne classe pas un livre pour enfants en Roman malgré "Juvenile Fiction" ou Dewey 843', () => {
+    const res = classifyBookMetadata({
+      title: 'Chien Pourri',
+      publisher: "L'École des loisirs",
+      deweyCode: '843.92',
+      rawSubjects: ['Juvenile Fiction', 'Chiens -- Ouvrages pour la jeunesse', 'Humour']
+    });
+    expect(res.mainCategory).toBe('Jeunesse');
+    expect(res.subgenres).toContain('Humour');
+    expect(buildCombinedGenres(res)).toContain('Jeunesse');
+  });
+
+  it('combine plusieurs genres sur une BD fantastique pour enfants', () => {
+    const res = classifyBookMetadata({
+      title: 'Zombillénium',
+      series: 'Zombillénium',
+      publisher: 'Dupuis',
+      collection: 'BD Kids',
+      rawSubjects: ['Bandes dessinées pour la jeunesse', 'Fantastique', 'Humour']
+    });
+    expect(res.mainCategory).toBe('BD');
+    const genres = buildCombinedGenres(res);
+    expect(genres).toContain('BD');
+    expect(genres).toContain('Jeunesse');
+    expect(genres).toContain('Fantasy / Fantastique');
+    expect(genres).toContain('Humour');
   });
 });

@@ -1,6 +1,7 @@
 // src/core/database/database.service.ts
 import Dexie, { type Table } from 'dexie';
 import type { HumanizedBook, LoanRecord, RegistryEntry, QueueActionPayload } from '../types';
+import type { PhotoBatchResolutionResult } from '../services/photo-book-resolution.service';
 
 export interface PendingAction {
   id?: number;
@@ -23,6 +24,19 @@ export interface PendingCreation {
   createdAt: number;
 }
 
+export interface PhotoScanJobRecord {
+  id?: number;
+  mode: 'cover' | 'shelf';
+  imageDataUrl: string;
+  status: 'pending' | 'ai_running' | 'resolving' | 'done' | 'error';
+  errorMessage?: string;
+  candidatesCount?: number;
+  externalLookupsCount?: number;
+  result?: PhotoBatchResolutionResult;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export class AppDatabase extends Dexie {
   inventory!: Table<RegistryEntry, string>;
   wishlist!: Table<RegistryEntry, string>;
@@ -30,6 +44,7 @@ export class AppDatabase extends Dexie {
   loans!: Table<LoanRecord, string>; // Table pour le carnet de prêt
   pending_actions!: Table<PendingAction, number>; // NOUVELLE TABLE : File d'attente
   pending_creations!: Table<PendingCreation, number>; // File de créations distantes en tâche de fond
+  photo_scan_jobs!: Table<PhotoScanJobRecord, number>; // File persistante d'analyse photo en arrière-plan
 
   constructor() {
     super('InventaireLocalDBV2');
@@ -59,6 +74,17 @@ export class AppDatabase extends Dexie {
       loans: 'uri, friendName',
       pending_actions: '++id, action, uri, status, createdAt',
       pending_creations: '++id, status, createdAt'
+    });
+
+    // Version 6 : File persistante d'analyse photo étagère / couverture en arrière-plan
+    this.version(6).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName',
+      pending_actions: '++id, action, uri, status, createdAt',
+      pending_creations: '++id, status, createdAt',
+      photo_scan_jobs: '++id, status, createdAt'
     });
   }
 }
@@ -331,13 +357,45 @@ export const databaseService = {
     await db.pending_creations.delete(id);
   },
 
+  // --- FILE PERSISTANTE D'ANALYSE PHOTO EN ARRIÈRE-PLAN ---
+
+  async addPhotoScanJob(job: Omit<PhotoScanJobRecord, 'id'>): Promise<number> {
+    const plainJob = JSON.parse(JSON.stringify(job));
+    return await db.photo_scan_jobs.add(plainJob);
+  },
+
+  async getPhotoScanJobs(): Promise<PhotoScanJobRecord[]> {
+    return await db.photo_scan_jobs.orderBy('createdAt').toArray();
+  },
+
+  async updatePhotoScanJob(id: number, patch: Partial<PhotoScanJobRecord>): Promise<void> {
+    const plainPatch = JSON.parse(JSON.stringify(patch));
+    await db.photo_scan_jobs.update(id, plainPatch);
+  },
+
+  async deletePhotoScanJob(id: number): Promise<void> {
+    await db.photo_scan_jobs.delete(id);
+  },
+
+  async clearPhotoScanJobs(): Promise<void> {
+    await db.photo_scan_jobs.clear();
+  },
+
   /**
    * Vide intégralement toutes les tables locales IndexedDB (livres en cache, inventaire, wishlist, prêts, files d'attente)
    */
   async clearAllBookData(): Promise<void> {
     await db.transaction(
       'rw',
-      [db.inventory, db.wishlist, db.cache_books, db.loans, db.pending_actions, db.pending_creations],
+      [
+        db.inventory,
+        db.wishlist,
+        db.cache_books,
+        db.loans,
+        db.pending_actions,
+        db.pending_creations,
+        db.photo_scan_jobs
+      ],
       async () => {
         await Promise.all([
           db.inventory.clear(),
@@ -345,7 +403,8 @@ export const databaseService = {
           db.cache_books.clear(),
           db.loans.clear(),
           db.pending_actions.clear(),
-          db.pending_creations.clear()
+          db.pending_creations.clear(),
+          db.photo_scan_jobs.clear()
         ]);
       }
     );

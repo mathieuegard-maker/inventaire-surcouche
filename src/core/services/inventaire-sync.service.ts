@@ -406,6 +406,7 @@ export const inventaireSyncService = {
       publishDate: string;
       pageCount?: number;
       coverUrl: string;
+      genres?: string[];
     },
     chosenSeriesUri?: string,
     chosenAuthorUris?: Record<string, string>
@@ -508,6 +509,27 @@ export const inventaireSyncService = {
     const newPublishDate = updatedData.publishDate || undefined;
     if (oldPublishDate !== newPublishDate) {
       await this.updateClaim(editionUri, 'wdt:P577', oldPublishDate, newPublishDate);
+    }
+
+    // 5. Mettre à jour les genres multiples si modifiés
+    if (Array.isArray(updatedData.genres)) {
+      const oldGenres = (originalBook.genres || []).join('|');
+      const newGenres = updatedData.genres.join('|');
+      if (oldGenres !== newGenres) {
+        try {
+          await fetchWithTimeout('/api/gateway?action=entities-update-genres', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uri: editionUri,
+              workUri: finalWorkUri,
+              genres: updatedData.genres
+            })
+          });
+        } catch (err) {
+          console.warn('[INVENTAIRE SYNC] Échec mise à jour genres :', err);
+        }
+      }
     }
 
     return { editionUri, workUri: finalWorkUri, seriesUri };

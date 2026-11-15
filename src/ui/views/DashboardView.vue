@@ -86,7 +86,7 @@ watch(
       @keywords-detected="handleKeywordsSearch" 
     />
 
-    <!-- Barre d'actions rapides V2 : 4 Modes de Scan & Partage Familial -->
+    <!-- Barre d'actions rapides : Scan, Photo Étagère & Partage -->
     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 0.6rem; margin: 1rem 0;">
       <button
         type="button"
@@ -94,23 +94,7 @@ watch(
         style="background: #2563eb; color: #fff; font-weight: 800; padding: 0.65rem;"
         @click="scannerState.startScan(router, 'simple')"
       >
-        📖 Scan Simple (Fiche &amp; Série)
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #4f46e5; color: #fff; font-weight: 800; padding: 0.65rem;"
-        @click="scannerState.startScan(router, 'check')"
-      >
-        🏪 Scan Magasin (&lt;1s)
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #0f172a; color: #fff; font-weight: 800; padding: 0.65rem;"
-        @click="scannerState.startScan(router, 'burst')"
-      >
-        ⚡ Scan en Rafale
+        📷 Scanner un livre
       </button>
       <button
         type="button"

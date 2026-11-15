@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { scannerState } from '../../state/scanner';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
@@ -10,8 +10,10 @@ import {
 } from '../../core/services/byok-vision.service';
 import {
   photoBookResolutionService,
-  type ResolvedPhotoItem
+  type ResolvedPhotoItem,
+  type PhotoResolutionOption
 } from '../../core/services/photo-book-resolution.service';
+import { photoBatchQueueService } from '../../core/services/photo-batch-queue.service';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 
 const router = useRouter();
@@ -152,10 +154,12 @@ const showByokSetup = ref<boolean>(!existingByok?.apiKey);
 const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
 const isTestingKey = ref(false);
 
-const isAnalyzingPhoto = ref(false);
-const photoLoadingStatus = ref('Compression WebP et analyse visuelle des livres en cours...');
+const photoStats = photoBatchQueueService.stats;
+const isPhotoProcessing = photoBatchQueueService.isProcessing;
+const photoLoadingStatus = photoBatchQueueService.currentStatusMessage;
 const photoError = ref('');
 const resolvedDetectedItems = ref<ResolvedPhotoItem[]>([]);
+const doubtItems = ref<ResolvedPhotoItem[]>([]);
 const unresolvedItems = ref<ResolvedPhotoItem[]>([]);
 const seriesExtraItems = ref<ResolvedPhotoItem[]>([]);
 const detectedSeriesNames = ref<string[]>([]);
@@ -164,6 +168,78 @@ const photoTargetStatus = ref<'owned' | 'wish'>('owned');
 const seriesExtraTarget = ref<'none' | 'wish' | 'owned'>('none');
 const expandedSeriesKeys = ref<Record<string, boolean>>({});
 const photoSavingFeedback = ref('');
+
+function syncValidationFromQueue() {
+  const agg = photoBatchQueueService.getAggregatedResults();
+
+  const knownResolvedIds = new Set(resolvedDetectedItems.value.map((i) => i.id));
+  const knownResolvedIsbns = new Set(resolvedDetectedItems.value.map((i) => i.isbn13).filter(Boolean));
+  for (const item of agg.sureItems) {
+    if (knownResolvedIds.has(item.id) || (item.isbn13 && knownResolvedIsbns.has(item.isbn13))) continue;
+    resolvedDetectedItems.value.push(JSON.parse(JSON.stringify(item)));
+    knownResolvedIds.add(item.id);
+    if (item.isbn13) knownResolvedIsbns.add(item.isbn13);
+  }
+
+  const knownDoubtIds = new Set(doubtItems.value.map((i) => i.id));
+  for (const d of agg.doubtItems) {
+    if (!knownDoubtIds.has(d.id)) {
+      doubtItems.value.push(JSON.parse(JSON.stringify(d)));
+      knownDoubtIds.add(d.id);
+    }
+  }
+
+  const knownUnresolvedIds = new Set(unresolvedItems.value.map((i) => i.id));
+  for (const u of agg.unresolvedItems) {
+    if (!knownUnresolvedIds.has(u.id)) {
+      unresolvedItems.value.push(JSON.parse(JSON.stringify(u)));
+      knownUnresolvedIds.add(u.id);
+    }
+  }
+
+  const knownExtraIsbns = new Set(seriesExtraItems.value.map((i) => i.isbn13).filter(Boolean));
+  for (const e of agg.seriesExtraItems) {
+    if (e.isbn13 && (knownResolvedIsbns.has(e.isbn13) || knownExtraIsbns.has(e.isbn13))) continue;
+    seriesExtraItems.value.push(JSON.parse(JSON.stringify(e)));
+    if (e.isbn13) knownExtraIsbns.add(e.isbn13);
+  }
+
+  const knownSeriesKeys = new Set(detectedSeriesNames.value.map((s) => normalizeTextKey(s)));
+  for (const sName of agg.detectedSeriesNames) {
+    const sk = normalizeTextKey(sName);
+    if (sk && !knownSeriesKeys.has(sk)) {
+      detectedSeriesNames.value.push(sName);
+      knownSeriesKeys.add(sk);
+    }
+  }
+}
+
+watch(
+  () => photoBatchQueueService.jobs.value,
+  () => {
+    syncValidationFromQueue();
+  },
+  { deep: true, immediate: true }
+);
+
+function selectDoubtOption(item: ResolvedPhotoItem, option: PhotoResolutionOption | null) {
+  if (!option) {
+    item.selectedAlternativeIsbn = '__ignore__';
+    item.selected = false;
+    return;
+  }
+  item.selectedAlternativeIsbn = option.isbn13;
+  item.isbn13 = option.isbn13;
+  item.title = option.title;
+  item.authors = option.authors;
+  item.publisher = option.publisher;
+  item.publishDate = option.publishDate;
+  item.pageCount = option.pageCount;
+  item.coverUrl = option.coverUrl;
+  item.series = option.series;
+  item.seriesNumber = option.seriesNumber;
+  item.selected = true;
+}
 
 async function handleSaveAndTestByok() {
   isTestingKey.value = true;
@@ -187,55 +263,42 @@ async function handleSaveAndTestByok() {
 
 async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
+  const files = input.files ? Array.from(input.files) : [];
+  if (files.length === 0) return;
 
   photoError.value = '';
-  resolvedDetectedItems.value = [];
-  unresolvedItems.value = [];
-  seriesExtraItems.value = [];
-  detectedSeriesNames.value = [];
-  expandedSeriesKeys.value = {};
-  isAnalyzingPhoto.value = true;
-  photoLoadingStatus.value = 'Compression WebP et analyse visuelle des livres en cours...';
-
   try {
-    const rawCandidates = await byokVisionService.analyzePhoto(file, mode, (msg) => {
-      photoLoadingStatus.value = msg;
-    });
-    if (!rawCandidates.length) {
-      photoError.value = "Aucun titre lisible n'a été détecté sur la photo. Réessayez avec plus de lumière.";
-    } else {
-      const batch = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries(
-        rawCandidates,
-        (msg) => {
-          photoLoadingStatus.value = msg;
-        }
-      );
-      resolvedDetectedItems.value = batch.detectedItems.filter((i) => i.status === 'resolved');
-      unresolvedItems.value = batch.detectedItems.filter((i) => i.status === 'unresolved');
-      seriesExtraItems.value = batch.seriesExtraItems;
-      detectedSeriesNames.value = batch.detectedSeriesNames;
+    if (!byokVisionService.getSettings()) {
+      throw new Error("Aucune clé API configurée. Configurez votre clé gratuite ci-dessus.");
     }
+    const count = await photoBatchQueueService.enqueuePhotos(files, mode);
+    photoSavingFeedback.value = `${count} photo(s) ajoutée(s) à la file ! Vous pouvez continuer à prendre d'autres photos pendant le traitement en arrière-fond.`;
+    setTimeout(() => {
+      photoSavingFeedback.value = '';
+    }, 4500);
   } catch (err: unknown) {
-    photoError.value = err instanceof Error ? err.message : 'Erreur lors de la lecture de la photo.';
+    photoError.value = err instanceof Error ? err.message : "Erreur lors de l'ajout des photos.";
   } finally {
-    isAnalyzingPhoto.value = false;
     input.value = '';
   }
 }
 
 async function retryUnresolvedItem(item: ResolvedPhotoItem) {
-  if (!item.rawCandidate.title.trim() && !item.rawCandidate.isbn?.trim()) return;
+  if (!item.rawCandidate.title.trim() && !item.rawCandidate.isbn?.trim() && !item.rawCandidate.series?.trim()) return;
   retryingItemId.value = item.id;
   try {
     const resolved = await photoBookResolutionService.resolveSingleCandidate(item.rawCandidate, 'retry');
-    if (resolved.status !== 'resolved') {
+    if (resolved.status === 'unresolved') {
       item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
       return;
     }
 
     unresolvedItems.value = unresolvedItems.value.filter((u) => u.id !== item.id);
+    if (resolved.status === 'doubt') {
+      doubtItems.value.push(resolved);
+      return;
+    }
+
     const alreadyExists = resolved.isbn13 && resolvedDetectedItems.value.some((d) => d.isbn13 === resolved.isbn13);
     if (!alreadyExists) {
       resolvedDetectedItems.value.push(resolved);
@@ -309,8 +372,15 @@ const groupedSeriesExtras = computed(() => {
   }));
 });
 
+const selectedDoubtCount = computed(
+  () =>
+    doubtItems.value.filter(
+      (c) => c.selected && c.isbn13 && c.selectedAlternativeIsbn !== '__ignore__'
+    ).length
+);
+
 const selectedDetectedCount = computed(
-  () => resolvedDetectedItems.value.filter((c) => c.selected).length
+  () => resolvedDetectedItems.value.filter((c) => c.selected).length + selectedDoubtCount.value
 );
 
 const selectedSeriesCount = computed(
@@ -355,7 +425,11 @@ async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'w
 }
 
 async function confirmAndSaveCandidates() {
-  const detectedToSave = resolvedDetectedItems.value.filter((c) => c.selected && c.isbn13);
+  const sureToSave = resolvedDetectedItems.value.filter((c) => c.selected && c.isbn13);
+  const doubtsToSave = doubtItems.value.filter(
+    (c) => c.selected && c.isbn13 && c.selectedAlternativeIsbn !== '__ignore__'
+  );
+  const detectedToSave = [...sureToSave, ...doubtsToSave];
   const extrasToSave = seriesExtraItems.value.filter((c) => c.selected && c.isbn13);
   if (!detectedToSave.length && !extrasToSave.length) return;
 
@@ -372,9 +446,11 @@ async function confirmAndSaveCandidates() {
     await enqueueResolvedItem(extra, seriesExtraTarget.value);
   }
 
+  await photoBatchQueueService.clearCompletedJobs();
   scannerState.notifyCatalogChanged();
   photoSavingFeedback.value = `${detectedToSave.length} livre(s) + ${extrasToSave.length} tome(s) de série validé(s) et envoyé(s) dans le flux catalogue ✓`;
   resolvedDetectedItems.value = [];
+  doubtItems.value = [];
   unresolvedItems.value = [];
   seriesExtraItems.value = [];
   detectedSeriesNames.value = [];
@@ -382,37 +458,30 @@ async function confirmAndSaveCandidates() {
     photoSavingFeedback.value = '';
   }, 4000);
 }
+
+async function clearPhotoQueueAndForm() {
+  await photoBatchQueueService.clearAllJobs();
+  resolvedDetectedItems.value = [];
+  doubtItems.value = [];
+  unresolvedItems.value = [];
+  seriesExtraItems.value = [];
+  detectedSeriesNames.value = [];
+}
 </script>
 
 <template>
   <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop">
     <div class="scanner-modal-card">
-      <!-- En-tête + Sélecteur des 4 Modes -->
+      <!-- En-tête + Sélecteur 2 Onglets (Code-Barres avec Simple/Rafale ou Photo) -->
       <div class="scanner-header">
         <div class="mode-tabs">
           <button
             type="button"
             class="mode-tab"
-            :class="{ active: activeMode === 'simple' }"
-            @click="scannerState.switchMode('simple')"
+            :class="{ active: activeMode !== 'photo' }"
+            @click="scannerState.switchMode(activeMode === 'burst' ? 'burst' : 'simple')"
           >
-            📖 Mode Simple
-          </button>
-          <button
-            type="button"
-            class="mode-tab"
-            :class="{ active: activeMode === 'check' }"
-            @click="scannerState.switchMode('check')"
-          >
-            🏪 Vérif Magasin
-          </button>
-          <button
-            type="button"
-            class="mode-tab"
-            :class="{ active: activeMode === 'burst' }"
-            @click="scannerState.switchMode('burst')"
-          >
-            ⚡ Mode Rafale
+            📷 Scan Code-Barres
           </button>
           <button
             type="button"
@@ -421,6 +490,7 @@ async function confirmAndSaveCandidates() {
             @click="scannerState.switchMode('photo')"
           >
             📸 Photo Étagère / Couv
+            <span v-if="photoStats.totalPhotos > 0" class="tab-count-badge">{{ photoStats.totalPhotos }}</span>
           </button>
         </div>
         <button type="button" class="close-scan-btn" @click="scannerState.stopScan()">
@@ -429,15 +499,29 @@ async function confirmAndSaveCandidates() {
       </div>
 
       <!-- ================================================================ -->
-      <!-- FLUX CAMÉRA CODE-BARRES (Partagé entre Simple, Vérif et Rafale) -->
+      <!-- FLUX CAMÉRA CODE-BARRES (Switch Simple / Rafale intégré)         -->
       <!-- ================================================================ -->
-      <div v-show="activeMode !== 'photo' && !checkRes" class="camera-section">
-        <div v-if="activeMode === 'simple'" class="burst-toolbar">
-          <span class="burst-label">
-            📖 <strong>Mode Simple :</strong> Scannez un livre pour ouvrir directement sa fiche complète et sélectionner toute sa série à la main.
-          </span>
+      <div v-if="activeMode !== 'photo'" class="burst-toolbar mode-switch-bar">
+        <span class="burst-label">Mode de scan :</span>
+        <div class="burst-target-switch">
+          <button
+            type="button"
+            :class="{ active: activeMode === 'simple' }"
+            @click="scannerState.switchMode('simple')"
+          >
+            📖 Simple (Vérif + Fiche)
+          </button>
+          <button
+            type="button"
+            :class="{ active: activeMode === 'burst' }"
+            @click="scannerState.switchMode('burst')"
+          >
+            ⚡ Rafale continu
+          </button>
         </div>
+      </div>
 
+      <div v-show="activeMode !== 'photo' && !checkRes" class="camera-section">
         <div v-if="activeMode === 'burst'" class="burst-toolbar">
           <span class="burst-label">Enregistrer à la volée dans :</span>
           <div class="burst-target-switch">
@@ -530,9 +614,9 @@ async function confirmAndSaveCandidates() {
       </div>
 
       <!-- ================================================================ -->
-      <!-- RÉSULTAT INSTANTANÉ MODE VÉRIF MAGASIN (< 1 s)                   -->
+      <!-- RÉSULTAT INSTANTANÉ MODE SIMPLE (Vérif + Actions immédiates)    -->
       <!-- ================================================================ -->
-      <div v-if="activeMode === 'check' && checkRes && checkStatusBanner" class="check-result-box">
+      <div v-if="activeMode === 'simple' && checkRes && checkStatusBanner" class="check-result-box">
         <div class="verdict-banner" :class="checkStatusBanner.color">
           <div class="verdict-badge">{{ checkStatusBanner.badge }}</div>
           <h3 class="verdict-title">{{ checkStatusBanner.headline }}</h3>
@@ -652,51 +736,111 @@ async function confirmAndSaveCandidates() {
           </div>
         </div>
 
-        <!-- Boutons de capture photo -->
+        <!-- Boutons de capture photo (rafale d'appareils photo ou multi-sélection galerie) -->
         <div class="photo-triggers-grid">
-          <label class="photo-trigger-card">
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              hidden
-              @change="(e) => handlePhotoSelected(e, 'cover')"
-            />
-            <span class="trigger-icon">📕</span>
-            <strong>Photographier une Couverture</strong>
-            <small>Identifie un livre sans code-barres (titre, série, auteur)</small>
-          </label>
+          <div class="photo-trigger-group">
+            <label class="photo-trigger-card">
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                @change="(e) => handlePhotoSelected(e, 'cover')"
+              />
+              <span class="trigger-icon">📕</span>
+              <strong>Photo Couverture (Appareil)</strong>
+              <small>Enchaînez les couvertures — ajout au lot en arrière-fond</small>
+            </label>
+            <label class="photo-gallery-btn">
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                @change="(e) => handlePhotoSelected(e, 'cover')"
+              />
+              🖼️ Importer plusieurs couvertures (galerie)
+            </label>
+          </div>
 
-          <label class="photo-trigger-card">
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              hidden
-              @change="(e) => handlePhotoSelected(e, 'shelf')"
-            />
-            <span class="trigger-icon">📚</span>
-            <strong>Photographier une Étagère / Pile</strong>
-            <small>Détecte plusieurs BD/livres d'un coup avec validation un par un</small>
-          </label>
+          <div class="photo-trigger-group">
+            <label class="photo-trigger-card">
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                @change="(e) => handlePhotoSelected(e, 'shelf')"
+              />
+              <span class="trigger-icon">📚</span>
+              <strong>Photo Étagère / Pile (Appareil)</strong>
+              <small>Prenez plusieurs étagères d’affilée, tout est analysé en file</small>
+            </label>
+            <label class="photo-gallery-btn">
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                @change="(e) => handlePhotoSelected(e, 'shelf')"
+              />
+              🖼️ Importer plusieurs étagères (galerie)
+            </label>
+          </div>
         </div>
 
-        <div v-if="isAnalyzingPhoto" class="photo-loading">
-          ⏳ {{ photoLoadingStatus }}
+        <!-- Panneau d'avancement détaillé du lot arrière-fond -->
+        <div v-if="photoStats.totalPhotos > 0" class="photo-queue-progress-card">
+          <div class="queue-progress-header">
+            <strong>
+              {{ isPhotoProcessing ? '⏳ Traitement IA & BnF en arrière-fond' : '📦 Résumé du lot photo' }}
+            </strong>
+            <div style="display: flex; gap: 0.4rem;">
+              <button
+                v-if="photoStats.errorPhotos > 0"
+                type="button"
+                class="link-btn"
+                @click="photoBatchQueueService.retryFailedJobs()"
+              >
+                🔄 Relancer erreurs ({{ photoStats.errorPhotos }})
+              </button>
+              <button
+                type="button"
+                class="link-btn"
+                @click="clearPhotoQueueAndForm"
+              >
+                🗑️ Vider le lot
+              </button>
+            </div>
+          </div>
+
+          <div class="queue-metrics-grid">
+            <span>📸 <strong>{{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }}</strong> photos lues par l'IA</span>
+            <span>📚 <strong>{{ photoStats.totalBooksDetected }}</strong> tranches/livres extraits</span>
+            <span>🔍 <strong>{{ photoStats.totalExternalLookups }}</strong> recherches multi-sources</span>
+            <span>✅ <strong>{{ photoStats.sureCount }}</strong> sûr(s) • 🤔 <strong>{{ photoStats.doubtCount }}</strong> doute(s) • ⚠️ <strong>{{ photoStats.unresolvedCount }}</strong> non trouvé(s)</span>
+          </div>
+
+          <div v-if="isPhotoProcessing" class="queue-live-step">
+            <div>{{ photoLoadingStatus }}</div>
+            <small class="keep-awake-notice">
+              💡 Gardez l'application allumée pendant le traitement (un gros lot peut prendre plusieurs minutes à plusieurs heures). Vous pouvez naviguer dans l'appli, tout reste prêt à valider ici.
+            </small>
+          </div>
         </div>
 
         <div v-if="photoError" class="error-banner">{{ photoError }}</div>
         <div v-if="photoSavingFeedback" class="quick-feedback">{{ photoSavingFeedback }}</div>
 
-        <!-- Validation après résolution BnF / ISBN / Couvertures + Découverte séries -->
+        <!-- Validation après résolution BnF / ISBN / Couvertures + Doutes + Découverte séries -->
         <div
-          v-if="resolvedDetectedItems.length > 0 || unresolvedItems.length > 0 || seriesExtraItems.length > 0"
+          v-if="resolvedDetectedItems.length > 0 || doubtItems.length > 0 || unresolvedItems.length > 0 || seriesExtraItems.length > 0"
           class="candidates-validation-box"
         >
-          <!-- SECTION 1 : LIVRES PHYSIQUEMENT DÉTECTÉS SUR LA PHOTO -->
+          <!-- SECTION 1 : LIVRES IDENTIFIÉS AVEC CERTITUDE -->
           <div v-if="resolvedDetectedItems.length > 0" class="validation-section">
             <div class="validation-header">
-              <h4>📸 Présents sur la photo ({{ selectedDetectedCount }}/{{ resolvedDetectedItems.length }})</h4>
+              <h4>✅ Identifiés sur les photos ({{ resolvedDetectedItems.filter(c => c.selected).length }}/{{ resolvedDetectedItems.length }})</h4>
               <select v-model="photoTargetStatus" class="provider-select">
                 <option value="owned">Ajouter à ma Collection</option>
                 <option value="wish">Ajouter à ma Wishlist</option>
@@ -738,6 +882,69 @@ async function confirmAndSaveCandidates() {
                     <span v-if="item.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
                     <span v-else-if="item.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
                     <span v-if="!item.coverUrl" class="mini-badge warn">Sans couverture trouvée</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SECTION 1B : DOUTES (ARBITRAGE ENTRE 2–3 PISTES CROISÉES) -->
+          <div v-if="doubtItems.length > 0" class="validation-section doubt-section">
+            <div class="validation-header">
+              <h4>🤔 Doutes à arbitrer ({{ selectedDoubtCount }}/{{ doubtItems.length }})</h4>
+            </div>
+            <div class="candidates-list doubt-list">
+              <div v-for="d in doubtItems" :key="d.id" class="candidate-row doubt-row">
+                <div class="cand-meta" style="width: 100%;">
+                  <div class="doubt-ai-header">
+                    <strong>Lecture IA : « {{ d.rawCandidate.title || d.rawCandidate.rawSpineText }} »</strong>
+                    <small v-if="d.rawCandidate.rawSpineText && d.rawCandidate.rawSpineText !== d.rawCandidate.title" class="spine-ocr-preview">
+                      Tranche : {{ d.rawCandidate.rawSpineText }}
+                    </small>
+                  </div>
+
+                  <div class="doubt-options-list">
+                    <label
+                      v-for="opt in d.alternatives || []"
+                      :key="opt.isbn13"
+                      class="doubt-option-card"
+                      :class="{ chosen: d.selectedAlternativeIsbn === opt.isbn13 && d.selected }"
+                    >
+                      <input
+                        type="radio"
+                        :name="`doubt-${d.id}`"
+                        :checked="d.selectedAlternativeIsbn === opt.isbn13 && d.selected"
+                        @change="selectDoubtOption(d, opt)"
+                      />
+                      <img v-if="opt.coverUrl" :src="opt.coverUrl" :alt="opt.title" class="cand-cover-thumb small-thumb" />
+                      <div v-else class="cand-cover-fallback small-thumb">📖</div>
+                      <div class="doubt-opt-meta">
+                        <div>
+                          <span v-if="opt.series" class="cand-series-pill">
+                            {{ opt.series }}<template v-if="opt.seriesNumber"> T.{{ opt.seriesNumber }}</template>
+                          </span>
+                          <strong>{{ opt.title }}</strong>
+                        </div>
+                        <small>
+                          {{ opt.authors.join(', ') || 'Auteur inconnu' }}
+                          <template v-if="opt.publisher"> • {{ opt.publisher }}</template>
+                          ({{ opt.isbn13 }} • {{ opt.sourcesCount }} source(s))
+                        </small>
+                      </div>
+                    </label>
+
+                    <label
+                      class="doubt-option-card ignore-opt"
+                      :class="{ chosen: d.selectedAlternativeIsbn === '__ignore__' || !d.selected }"
+                    >
+                      <input
+                        type="radio"
+                        :name="`doubt-${d.id}`"
+                        :checked="d.selectedAlternativeIsbn === '__ignore__' || !d.selected"
+                        @change="selectDoubtOption(d, null)"
+                      />
+                      <span>Ignorer ce résultat pour le moment</span>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -862,7 +1069,7 @@ async function confirmAndSaveCandidates() {
           </div>
 
           <button
-            v-if="resolvedDetectedItems.length > 0 || seriesExtraItems.length > 0"
+            v-if="resolvedDetectedItems.length > 0 || doubtItems.length > 0 || seriesExtraItems.length > 0"
             type="button"
             class="action-btn primary full-width"
             :disabled="totalSelectedToSave === 0"
@@ -1578,5 +1785,138 @@ async function confirmAndSaveCandidates() {
   color: #991b1b;
   font-weight: 700;
   font-size: 0.85rem;
+}
+
+.tab-count-badge {
+  display: inline-block;
+  margin-left: 4px;
+  background: #f59e0b;
+  color: #000;
+  border-radius: 999px;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.mode-switch-bar {
+  margin-bottom: 0.55rem;
+}
+
+.photo-trigger-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.photo-gallery-btn {
+  display: block;
+  text-align: center;
+  padding: 0.38rem 0.5rem;
+  border: 1.5px dashed #475569;
+  background: #f1f5f9;
+  color: #1e293b;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.photo-queue-progress-card {
+  border: 2px solid #0f172a;
+  background: #fffbeb;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.queue-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.86rem;
+}
+
+.queue-metrics-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 0.9rem;
+  font-size: 0.78rem;
+  color: #334155;
+}
+
+.queue-live-step {
+  border-top: 1px dashed #cbd5e1;
+  padding-top: 0.4rem;
+  font-size: 0.78rem;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
+.keep-awake-notice {
+  display: block;
+  color: #92400e;
+  font-weight: 600;
+  margin-top: 0.2rem;
+}
+
+.doubt-section {
+  border-top: 2px dashed #6366f1;
+  padding-top: 0.65rem;
+}
+
+.doubt-row {
+  background: #eef2ff;
+  border-color: #818cf8;
+}
+
+.doubt-ai-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.4rem;
+  font-size: 0.82rem;
+}
+
+.doubt-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.doubt-option-card {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  background: #ffffff;
+  border: 1.5px solid #cbd5e1;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.doubt-option-card.chosen {
+  border-color: #4f46e5;
+  background: #f5f3ff;
+}
+
+.doubt-option-card.ignore-opt {
+  color: #64748b;
+  font-style: italic;
+}
+
+.small-thumb {
+  width: 30px;
+  height: 44px;
+}
+
+.doubt-opt-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 </style>

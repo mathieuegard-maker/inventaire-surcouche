@@ -114,6 +114,7 @@ export const bookSemanticOrchestrator = {
       publishDate: string;
       pageCount?: number;
       coverUrl: string;
+      genres?: string[];
     },
     resolvedSeriesUri: string | undefined,
     resolvedAuthorUris: Record<string, string>
@@ -144,6 +145,7 @@ export const bookSemanticOrchestrator = {
       pageCount: updatedData.pageCount,
       coverUrl: newCoverUrl,
       localCover: coverChanged ? undefined : originalBook.localCover,
+      genres: Array.isArray(updatedData.genres) ? updatedData.genres : originalBook.genres,
       workUri: res.workUri,
       isLocallyEdited: true
     };

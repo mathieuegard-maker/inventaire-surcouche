@@ -1023,6 +1023,55 @@ export async function handleD1GatewayAction(
       return jsonResp({ ok: true });
     }
 
+    case 'entities-update-genres': {
+      const targetUris = Array.from(
+        new Set([String(body?.uri || '').trim(), String(body?.workUri || '').trim()].filter(Boolean))
+      );
+      const cleanGenres: string[] = Array.isArray(body?.genres)
+        ? body.genres.map((g: unknown) => String(g).trim()).filter(Boolean)
+        : [];
+      if (targetUris.length === 0) return jsonResp({ error: 'uri requis' }, 400);
+
+      const genreUris: string[] = [];
+      for (const gLabel of cleanGenres) {
+        const gUri = await upsertCatalogEntity(db, {
+          entityType: 'genre',
+          label: gLabel,
+          claims: {}
+        });
+        genreUris.push(gUri);
+      }
+
+      const mainCategory = cleanGenres[0] || 'Autre';
+      const subgenres = cleanGenres.slice(1);
+      const subgenresJson = JSON.stringify(subgenres);
+
+      for (const targetUri of targetUris) {
+        const row = await db
+          .prepare('SELECT entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+          .bind(targetUri)
+          .first<{ entity_json: string }>();
+        if (!row) continue;
+
+        const entityObj = JSON.parse(row.entity_json);
+        entityObj.claims = entityObj.claims || {};
+        if (genreUris.length > 0) {
+          entityObj.claims['wdt:P136'] = genreUris;
+        } else {
+          delete entityObj.claims['wdt:P136'];
+        }
+
+        await db
+          .prepare(
+            'UPDATE catalog_entities SET main_category = ?, subgenres_json = ?, entity_json = ?, updated_at = ? WHERE uri = ?'
+          )
+          .bind(mainCategory, subgenresJson, JSON.stringify(entityObj), now, targetUri)
+          .run();
+      }
+
+      return jsonResp({ ok: true, genres: cleanGenres, genreUris });
+    }
+
     case 'reverse-claims':
     case 'series-list': {
       const property =

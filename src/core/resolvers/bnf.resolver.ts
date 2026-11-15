@@ -520,12 +520,28 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     }
   }
 
-  // 5. Éditeur, date, pagination, couverture, langue
+  // 5. Éditeur, date, pagination, couverture, langue, collection, Dewey, RAMEAU
   const f260 = fields.find(f => f.tag === '260');
   const publisher = f260 ? getSubfield(f260, 'c')?.trim() : undefined;
   const rawDate = f260 ? getSubfield(f260, 'd') : undefined;
   const publishDate = rawDate ? (cleanPublishDate(rawDate) || undefined) : undefined;
   const pageCount = paginationRaw ? cleanPageCount(paginationRaw) : undefined;
+
+  const fCol = fields.find(f => (f.tag === '290' || f.tag === '410') && !getSubfield(f, 'v'));
+  const collection = fCol ? (getSubfield(fCol, 't') || getSubfield(fCol, 'a'))?.trim() : undefined;
+
+  const f676 = fields.find(f => f.tag === '676');
+  const deweyCode = f676 ? getSubfield(f676, 'a')?.trim() : undefined;
+
+  const rawSubjects: string[] = [];
+  for (const f of fields) {
+    if (f.tag === '606' || f.tag === '608' || f.tag === '610') {
+      const a = getSubfield(f, 'a')?.trim();
+      const x = getSubfield(f, 'x')?.trim();
+      if (a) rawSubjects.push(a);
+      if (x) rawSubjects.push(x);
+    }
+  }
 
   const f950 = fields.find(f => f.tag === '950');
   const coverId = f950 ? getSubfield(f950, 'a') : undefined;
@@ -544,6 +560,9 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     coverUrl,
     series: series || undefined,
     seriesNumber,
+    collection: collection || undefined,
+    deweyCode: deweyCode || undefined,
+    ...(rawSubjects.length ? { rawSubjects } : {}),
     _lang: langCode || undefined,
     _hasPrimaryIsbn: hasPrimaryIsbn,
     _bnfEnsembleId: bnfEnsembleId

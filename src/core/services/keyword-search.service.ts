@@ -1,0 +1,429 @@
+// src/core/services/keyword-search.service.ts
+// Recherche par mots-clés multi-sources (BnF, Google Books, Open Library, D1/Inventaire & cache local)
+// avec fusion par ISBN-13, classification multi-genres et tri structuré par sous-catégorie, série, tome, œuvre unique et auteur.
+
+import { databaseService } from '../database/database.service';
+import { inventaireSearchProvider, type SearchResultItem } from '../providers/inventaire-search.provider';
+import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
+import { googleBooksResolver } from '../resolvers/googlebooks.resolver';
+import { openLibraryResolver } from '../resolvers/openlibrary.resolver';
+import { buildCombinedGenres, classifyBookMetadata } from '../utils/category-classifier.util';
+import { isbnUtil } from '../utils/isbn.util';
+import type { ExternalBookMetadata } from '../types';
+
+export interface KeywordBookEntry {
+  id: string;
+  uri?: string;
+  isbn13?: string;
+  title: string;
+  authors: string[];
+  series?: string;
+  seriesNumber?: string;
+  publisher?: string;
+  publishDate?: string;
+  coverUrl?: string;
+  category: string;
+  genres: string[];
+  sources: string[];
+}
+
+export interface KeywordSeriesGroup {
+  key: string;
+  name: string;
+  uri?: string;
+  category: string;
+  genres: string[];
+  authors: string[];
+  volumes: KeywordBookEntry[];
+}
+
+export interface KeywordAuthorEntry {
+  key: string;
+  name: string;
+  uri?: string;
+  description?: string;
+  matchCount: number;
+}
+
+export interface KeywordCategorySummary {
+  label: string;
+  count: number;
+}
+
+export interface GroupedKeywordSearchResult {
+  categories: KeywordCategorySummary[];
+  series: KeywordSeriesGroup[];
+  volumes: KeywordBookEntry[];
+  standaloneWorks: KeywordBookEntry[];
+  authors: KeywordAuthorEntry[];
+}
+
+function normalizeIsbn13(raw?: string): string | undefined {
+  if (!raw || !isbnUtil.isValidFormat(raw)) return undefined;
+  const norm = isbnUtil.normalize(raw);
+  if (!norm) return undefined;
+  return norm.length === 10 ? isbnUtil.toIsbn13(norm) : norm;
+}
+
+function compareVolumeNumbers(a?: string, b?: string): number {
+  const numA = a ? parseFloat(a) : NaN;
+  const numB = b ? parseFloat(b) : NaN;
+  if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+  if (!isNaN(numA)) return -1;
+  if (!isNaN(numB)) return 1;
+  return (a || '').localeCompare(b || '');
+}
+
+function classifyEntry(meta: {
+  title: string;
+  series?: string;
+  publisher?: string;
+  collection?: string;
+  deweyCode?: string;
+  rawSubjects?: string[];
+  existingGenres?: string[];
+}): { category: string; genres: string[] } {
+  const res = classifyBookMetadata({
+    title: meta.title,
+    series: meta.series,
+    publisher: meta.publisher,
+    collection: meta.collection,
+    deweyCode: meta.deweyCode,
+    rawSubjects: [...(meta.rawSubjects || []), ...(meta.existingGenres || [])]
+  });
+  const genres = buildCombinedGenres(res);
+  return {
+    category: res.mainCategory,
+    genres: genres.length > 0 ? genres : [res.mainCategory]
+  };
+}
+
+export const keywordSearchService = {
+  /**
+   * Lance une recherche croisée BnF + Google Books + Open Library + D1/Inventaire + cache local,
+   * et structure les résultats de façon ordonnée : sous-catégories, séries, tomes, œuvres uniques, auteurs.
+   */
+  async searchGrouped(query: string, isOffline = false): Promise<GroupedKeywordSearchResult> {
+    const cleanQ = query.trim();
+    if (!cleanQ) {
+      return { categories: [], series: [], volumes: [], standaloneWorks: [], authors: [] };
+    }
+
+    const localBooks = await databaseService.searchBooksLocally(cleanQ).catch(() => []);
+
+    let d1Items: SearchResultItem[] = [];
+    let bnfCandidates: Array<{ score: number; meta: ExternalBookMetadata }> = [];
+    let gbCandidates: ExternalBookMetadata[] = [];
+    let olCandidates: ExternalBookMetadata[] = [];
+
+    if (!isOffline) {
+      const [d1Res, bnfRes, gbRes, olRes] = await Promise.allSettled([
+        inventaireSearchProvider.searchByKeywords(cleanQ),
+        bnfResolver.searchCandidatesByHints({ title: cleanQ }, 18),
+        googleBooksResolver.searchCandidatesByHints({ title: cleanQ }, 10),
+        openLibraryResolver.searchCandidatesByHints({ title: cleanQ }, 10)
+      ]);
+
+      if (d1Res.status === 'fulfilled') d1Items = d1Res.value;
+      if (bnfRes.status === 'fulfilled') bnfCandidates = bnfRes.value;
+      if (gbRes.status === 'fulfilled') gbCandidates = gbRes.value;
+      if (olRes.status === 'fulfilled') olCandidates = olRes.value;
+    }
+
+    // 1. Fusion & dédoublonnage des livres/tomes par ISBN-13 (ou titre+auteur normalisé si sans ISBN)
+    const bookMap = new Map<string, KeywordBookEntry & { _rawSubjects: string[]; _dewey?: string; _collection?: string }>();
+
+    const upsertBook = (
+      source: string,
+      input: {
+        uri?: string;
+        isbn?: string;
+        title: string;
+        authors?: string[];
+        series?: string;
+        seriesNumber?: string;
+        publisher?: string;
+        publishDate?: string;
+        coverUrl?: string;
+        collection?: string;
+        deweyCode?: string;
+        rawSubjects?: string[];
+        existingGenres?: string[];
+      }
+    ) => {
+      const isbn13 = normalizeIsbn13(input.isbn);
+      const normTitle = normalizeTextKey(input.title);
+      const normFirstAuthor = normalizeTextKey(input.authors?.[0] || '');
+      const key = isbn13 ? `isbn:${isbn13}` : input.uri ? `uri:${input.uri}` : `work:${normTitle}|${normFirstAuthor}`;
+      if (!input.title.trim()) return;
+
+      const existing = bookMap.get(key);
+      if (!existing) {
+        const cls = classifyEntry({
+          title: input.title,
+          series: input.series,
+          publisher: input.publisher,
+          collection: input.collection,
+          deweyCode: input.deweyCode,
+          rawSubjects: input.rawSubjects,
+          existingGenres: input.existingGenres
+        });
+        bookMap.set(key, {
+          id: key,
+          uri: input.uri || (isbn13 ? `isbn:${isbn13}` : undefined),
+          isbn13,
+          title: input.title.trim(),
+          authors: (input.authors || []).filter(Boolean),
+          series: input.series?.trim() || undefined,
+          seriesNumber: input.seriesNumber ? normalizeSeriesNumber(input.seriesNumber) : undefined,
+          publisher: input.publisher?.trim() || undefined,
+          publishDate: input.publishDate,
+          coverUrl: input.coverUrl,
+          category: cls.category,
+          genres: cls.genres,
+          sources: [source],
+          _rawSubjects: [...(input.rawSubjects || []), ...(input.existingGenres || [])],
+          _dewey: input.deweyCode,
+          _collection: input.collection
+        });
+        return;
+      }
+
+      if (!existing.sources.includes(source)) existing.sources.push(source);
+      if (!existing.uri && input.uri) existing.uri = input.uri;
+      if (!existing.coverUrl && input.coverUrl) existing.coverUrl = input.coverUrl;
+      if (!existing.series && input.series) existing.series = input.series.trim();
+      if (!existing.seriesNumber && input.seriesNumber) {
+        existing.seriesNumber = normalizeSeriesNumber(input.seriesNumber);
+      }
+      if (!existing.publisher && input.publisher) existing.publisher = input.publisher.trim();
+      if (!existing.publishDate && input.publishDate) existing.publishDate = input.publishDate;
+      if (existing.authors.length === 0 && input.authors?.length) {
+        existing.authors = input.authors.filter(Boolean);
+      }
+      if (input.rawSubjects?.length || input.existingGenres?.length) {
+        existing._rawSubjects.push(...(input.rawSubjects || []), ...(input.existingGenres || []));
+      }
+      if (!existing._dewey && input.deweyCode) existing._dewey = input.deweyCode;
+      if (!existing._collection && input.collection) existing._collection = input.collection;
+
+      const reCls = classifyEntry({
+        title: existing.title,
+        series: existing.series,
+        publisher: existing.publisher,
+        collection: existing._collection,
+        deweyCode: existing._dewey,
+        rawSubjects: existing._rawSubjects
+      });
+      existing.category = reCls.category;
+      existing.genres = reCls.genres;
+    };
+
+    for (const lb of localBooks) {
+      upsertBook('Ma Biblio', {
+        uri: lb.uri,
+        isbn: lb.isbn13 || lb.isbn10,
+        title: lb.title,
+        authors: lb.authors,
+        series: lb.series,
+        seriesNumber: lb.seriesNumber,
+        publisher: lb.publisher,
+        publishDate: lb.publishDate,
+        coverUrl: lb.localCover || lb.coverUrl,
+        existingGenres: lb.genres
+      });
+    }
+
+    for (const c of bnfCandidates) {
+      upsertBook('BnF', {
+        isbn: c.meta.isbn,
+        title: c.meta.title,
+        authors: c.meta.authors,
+        series: c.meta.series,
+        seriesNumber: c.meta.seriesNumber,
+        publisher: c.meta.publisher,
+        publishDate: c.meta.publishDate,
+        coverUrl: c.meta.coverUrl,
+        collection: c.meta.collection,
+        deweyCode: c.meta.deweyCode,
+        rawSubjects: c.meta.rawSubjects
+      });
+    }
+
+    for (const g of gbCandidates) {
+      upsertBook('Google Books', {
+        isbn: g.isbn,
+        title: g.title,
+        authors: g.authors,
+        series: g.series,
+        seriesNumber: g.seriesNumber,
+        publisher: g.publisher,
+        publishDate: g.publishDate,
+        coverUrl: g.coverUrl,
+        rawSubjects: g.rawSubjects
+      });
+    }
+
+    for (const ol of olCandidates) {
+      upsertBook('Open Library', {
+        isbn: ol.isbn,
+        title: ol.title,
+        authors: ol.authors,
+        series: ol.series,
+        seriesNumber: ol.seriesNumber,
+        publisher: ol.publisher,
+        publishDate: ol.publishDate,
+        coverUrl: ol.coverUrl,
+        rawSubjects: ol.rawSubjects
+      });
+    }
+
+    // Ajouter les œuvres retournées uniquement par D1 / Inventaire (sans doublon d'URI ou titre exact)
+    for (const item of d1Items) {
+      if (item.type === 'work' || item.type === 'unknown') {
+        const uriIsbn = item.uri?.startsWith('isbn:') ? item.uri.slice(5) : undefined;
+        upsertBook('Catalogue D1', {
+          uri: item.uri,
+          isbn: uriIsbn,
+          title: item.label,
+          coverUrl: item.coverUrl
+        });
+      }
+    }
+
+    const allBooks = Array.from(bookMap.values()).map(({ _rawSubjects, _dewey, _collection, ...clean }) => clean);
+
+    // 2. Séparer Tomes de série vs Œuvres uniques & construire les groupes de Séries
+    const seriesGroupMap = new Map<string, KeywordSeriesGroup>();
+
+    for (const item of d1Items) {
+      if (item.type !== 'series') continue;
+      const sk = normalizeTextKey(item.label);
+      if (!sk) continue;
+      if (!seriesGroupMap.has(sk)) {
+        const cls = classifyEntry({ title: item.label, series: item.label });
+        seriesGroupMap.set(sk, {
+          key: sk,
+          name: item.label,
+          uri: item.uri,
+          category: cls.category,
+          genres: cls.genres,
+          authors: [],
+          volumes: []
+        });
+      }
+    }
+
+    const volumes: KeywordBookEntry[] = [];
+    const standaloneWorks: KeywordBookEntry[] = [];
+
+    for (const book of allBooks) {
+      if (book.series) {
+        volumes.push(book);
+        const sk = normalizeTextKey(book.series);
+        if (sk) {
+          const existingGroup = seriesGroupMap.get(sk);
+          if (!existingGroup) {
+            seriesGroupMap.set(sk, {
+              key: sk,
+              name: book.series,
+              category: book.category,
+              genres: [...book.genres],
+              authors: [...book.authors],
+              volumes: [book]
+            });
+          } else {
+            existingGroup.volumes.push(book);
+            for (const a of book.authors) {
+              if (!existingGroup.authors.includes(a)) existingGroup.authors.push(a);
+            }
+            for (const g of book.genres) {
+              if (!existingGroup.genres.includes(g)) existingGroup.genres.push(g);
+            }
+            existingGroup.category = existingGroup.genres[0] || existingGroup.category;
+          }
+        }
+      } else {
+        standaloneWorks.push(book);
+      }
+    }
+
+    // Ordonner les tomes de chaque série numériquement (T.1, T.2, ...)
+    const series = Array.from(seriesGroupMap.values())
+      .map((s) => ({
+        ...s,
+        volumes: [...s.volumes].sort((a, b) => compareVolumeNumbers(a.seriesNumber, b.seriesNumber))
+      }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+
+    volumes.sort(
+      (a, b) =>
+        a.category.localeCompare(b.category) ||
+        (a.series || '').localeCompare(b.series || '') ||
+        compareVolumeNumbers(a.seriesNumber, b.seriesNumber) ||
+        a.title.localeCompare(b.title)
+    );
+
+    standaloneWorks.sort(
+      (a, b) => a.category.localeCompare(b.category) || b.sources.length - a.sources.length || a.title.localeCompare(b.title)
+    );
+
+    // 3. Construire la liste ordonnée des Auteurs (D1/Inventaire + auteurs des notices trouvées)
+    const authorMap = new Map<string, KeywordAuthorEntry>();
+    for (const item of d1Items) {
+      if (item.type !== 'author') continue;
+      const ak = normalizeTextKey(item.label);
+      if (!ak) continue;
+      authorMap.set(ak, {
+        key: ak,
+        name: item.label,
+        uri: item.uri,
+        description: item.description,
+        matchCount: 1
+      });
+    }
+    for (const book of allBooks) {
+      for (const aName of book.authors) {
+        const ak = normalizeTextKey(aName);
+        if (!ak) continue;
+        const existing = authorMap.get(ak);
+        if (existing) {
+          existing.matchCount++;
+        } else {
+          authorMap.set(ak, {
+            key: ak,
+            name: aName,
+            matchCount: 1
+          });
+        }
+      }
+    }
+    const normQ = normalizeTextKey(cleanQ);
+    const authors = Array.from(authorMap.values()).sort((a, b) => {
+      const aDirect = a.key.includes(normQ) || normQ.includes(a.key) ? 1 : 0;
+      const bDirect = b.key.includes(normQ) || normQ.includes(b.key) ? 1 : 0;
+      if (aDirect !== bDirect) return bDirect - aDirect;
+      if (a.matchCount !== b.matchCount) return b.matchCount - a.matchCount;
+      return a.name.localeCompare(b.name);
+    });
+
+    // 4. Comptage ordonné des sous-catégories / genres
+    const catCount = new Map<string, number>();
+    for (const book of allBooks) {
+      for (const g of book.genres) {
+        catCount.set(g, (catCount.get(g) || 0) + 1);
+      }
+    }
+    const categories: KeywordCategorySummary[] = Array.from(catCount.entries())
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+
+    return {
+      categories,
+      series,
+      volumes,
+      standaloneWorks,
+      authors
+    };
+  }
+};

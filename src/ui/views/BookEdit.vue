@@ -10,6 +10,7 @@ import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
+import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
@@ -36,7 +37,30 @@ const publisherInput = ref('');
 const publishDateInput = ref('');
 const pageCountInput = ref<number | undefined>(undefined);
 const coverUrlInput = ref('');
+const genresInput = ref<string[]>([]);
+const customGenreInput = ref('');
 const noSeries = ref(false);
+
+const toggleGenreTag = (tag: string) => {
+  const idx = genresInput.value.findIndex((g) => g.toLowerCase() === tag.toLowerCase());
+  if (idx >= 0) {
+    genresInput.value = genresInput.value.filter((_, i) => i !== idx);
+  } else {
+    genresInput.value = [...genresInput.value, tag];
+  }
+};
+
+const addCustomGenreTag = () => {
+  const clean = customGenreInput.value.trim();
+  if (!clean) return;
+  if (!genresInput.value.some((g) => g.toLowerCase() === clean.toLowerCase())) {
+    genresInput.value = [...genresInput.value, clean];
+  }
+  customGenreInput.value = '';
+};
+
+const isGenreSelected = (tag: string) =>
+  genresInput.value.some((g) => g.toLowerCase() === tag.toLowerCase());
 
 // Suggestions de la BNF/OL (droite)
 const suggestions = ref<any>(null);
@@ -81,6 +105,9 @@ onMounted(async () => {
     publishDateInput.value = currentBook.publishDate || '';
     pageCountInput.value = currentBook.pageCount;
     coverUrlInput.value = currentBook.coverUrl || '';
+    genresInput.value = Array.isArray(currentBook.genres)
+      ? currentBook.genres.filter((g) => !g.startsWith('wd:') && !g.startsWith('inv:'))
+      : [];
 
     isLoading.value = false;
 
@@ -129,6 +156,8 @@ const applySuggestion = (field: string) => {
     pageCountInput.value = suggestions.value.pageCount;
   } else if (field === 'coverUrl') {
     coverUrlInput.value = suggestions.value.coverUrl || '';
+  } else if (field === 'genres' && Array.isArray(suggestions.value.genres)) {
+    genresInput.value = [...suggestions.value.genres];
   }
 };
 
@@ -142,6 +171,7 @@ const applyAllSuggestions = () => {
   applySuggestion('publishDate');
   applySuggestion('pageCount');
   applySuggestion('coverUrl');
+  applySuggestion('genres');
 };
 
 const {
@@ -220,7 +250,8 @@ const saveChanges = async () => {
       publisher: publisherInput.value.trim(),
       publishDate: publishDateInput.value.trim(),
       pageCount: pageCountInput.value,
-      coverUrl: coverUrlInput.value.trim()
+      coverUrl: coverUrlInput.value.trim(),
+      genres: genresInput.value
     };
 
     await bookSemanticOrchestrator.saveEditedBook(
@@ -495,6 +526,60 @@ const saveChanges = async () => {
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
+
+          <!-- Genre(s) multiples -->
+          <div class="comparison-row">
+            <div class="form-group">
+              <label class="form-label">Genre(s) (choix multiple : ex. BD + Jeunesse + Fantastique)</label>
+              <div v-if="genresInput.length > 0" class="selected-genres-row">
+                <span v-for="g in genresInput" :key="g" class="genre-active-chip">
+                  {{ g }}
+                  <button type="button" class="chip-remove-btn" @click="toggleGenreTag(g)" title="Retirer">×</button>
+                </span>
+              </div>
+              <div class="genres-picker-grid">
+                <button
+                  v-for="chip in SUGGESTED_GENRE_CHIPS"
+                  :key="chip"
+                  type="button"
+                  class="genre-toggle-chip"
+                  :class="{ active: isGenreSelected(chip) }"
+                  @click="toggleGenreTag(chip)"
+                >
+                  {{ isGenreSelected(chip) ? '✓ ' : '+ ' }}{{ chip }}
+                </button>
+              </div>
+              <div class="custom-genre-add-row">
+                <input
+                  type="text"
+                  v-model="customGenreInput"
+                  placeholder="Ajouter un genre personnalisé..."
+                  class="wireframe-input"
+                  @keydown.enter.prevent="addCustomGenreTag"
+                />
+                <BaseButton @click="addCustomGenreTag" class="apply-btn-inline">+ Ajouter</BaseButton>
+              </div>
+            </div>
+
+            <div class="suggestion-group">
+              <label class="form-label">Genre(s) croisés (BnF + Open Library + Google Books)</label>
+              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Croisement multi-sources...</div>
+              <div v-else-if="suggestions && suggestions.genres?.length" class="suggestion-content-inline">
+                <span class="suggestion-value-text" :title="suggestions.genres.join(', ')">
+                  {{ suggestions.genres.join(' • ') }}
+                </span>
+                <BaseButton
+                  v-if="suggestions.genres.join('|') !== genresInput.join('|')"
+                  @click="applySuggestion('genres')"
+                  class="apply-btn-inline"
+                >
+                  [ ➔ COPIER ]
+                </BaseButton>
+                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+              </div>
+              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
+            </div>
+          </div>
         </div>
 
         <div class="form-actions-row">
@@ -680,5 +765,68 @@ const saveChanges = async () => {
     gap: var(--spacing-sm) !important;
     padding-bottom: var(--spacing-sm) !important;
   }
+}
+
+.selected-genres-row {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin-bottom: 6px !important;
+}
+
+.genre-active-chip {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  background: #1e293b !important;
+  color: #ffffff !important;
+  padding: 3px 8px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  border: 1.5px solid #0f172a !important;
+}
+
+.chip-remove-btn {
+  background: none !important;
+  border: none !important;
+  color: #fca5a5 !important;
+  font-weight: 900 !important;
+  cursor: pointer !important;
+  padding: 0 2px !important;
+}
+
+.genres-picker-grid {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 5px !important;
+  max-height: 150px !important;
+  overflow-y: auto !important;
+  padding: 6px !important;
+  border: 1px solid #cbd5e1 !important;
+  background: #f8fafc !important;
+}
+
+.genre-toggle-chip {
+  background: #ffffff !important;
+  color: #0f172a !important;
+  border: 1px solid #94a3b8 !important;
+  padding: 3px 7px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+}
+
+.genre-toggle-chip.active {
+  background: #dcfce7 !important;
+  color: #166534 !important;
+  border-color: #166534 !important;
+  font-weight: 800 !important;
+}
+
+.custom-genre-add-row {
+  display: flex !important;
+  gap: 6px !important;
+  align-items: center !important;
+  margin-top: 6px !important;
 }
 </style>

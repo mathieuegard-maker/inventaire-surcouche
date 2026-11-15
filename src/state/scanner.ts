@@ -1,9 +1,8 @@
 // src/state/scanner.ts
-// État réactif global du Scanner 4 Modes :
-// 1. 'simple' : Mode Simple (ouvre directement la fiche complète du livre et de sa série pour sélectionner à la main)
-// 2. 'check'  : Mode Vérif Magasin (< 1s, affiche le verdict immédiat + tomes manquants sans quitter le scanner)
-// 3. 'burst'  : Mode Rafale continu (empile les livres scannés en direct sous la caméra + bouton Valider & Transférer)
-// 4. 'photo'  : Mode Photo Étagère / Couverture (lecture des tranches de BD via clé IA gratuite BYOK + validation par cases)
+// État réactif global du Scanner unifié :
+// 1. 'simple' : Scan unitaire avec vérif instantanée (déjà possédé / prêté / wishlist / tomes manquants) + ouverture fiche
+// 2. 'burst'  : Scan en Rafale continu (empile les livres scannés en direct sous la caméra)
+// 3. 'photo'  : Photo Étagère / Couverture (lot multi-photos traité en arrière-fond tant que l'appli reste ouverte)
 
 import { ref } from 'vue';
 import type { Router } from 'vue-router';
@@ -14,7 +13,7 @@ import { externalMetadataService } from '../core/services/external-metadata.serv
 import { databaseService } from '../core/database/database.service';
 import type { SearchResponse } from '../core/types';
 
-export type ScannerMode = 'simple' | 'check' | 'burst' | 'photo';
+export type ScannerMode = 'simple' | 'burst' | 'photo';
 export type BurstTarget = 'owned' | 'wishlist';
 
 export interface BurstScannedEntry {
@@ -79,25 +78,7 @@ export const scannerState = {
               return;
             }
 
-            // Mode 'simple' : ouvre directement la fiche complète du livre (ou la création s'il est inconnu)
-            if (activeMode.value === 'simple') {
-              isSearching.value = false;
-              playScanBeep('success');
-              await this.stopScan();
-              const cleanIsbn = rawIsbn || response?.isbn || response?.mainBook?.isbn13;
-              if (response?.isUnknown && cleanIsbn) {
-                router.push({ name: 'BookCreateUnknown', query: { isbn: cleanIsbn } });
-              } else if (response?.mainBook?.uri) {
-                router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
-              } else if (cleanIsbn) {
-                router.push({ name: 'BookCreateUnknown', query: { isbn: cleanIsbn } });
-              } else {
-                errorMessage.value = 'Ouvrage non trouvé.';
-              }
-              return;
-            }
-
-            // Mode 'check' (Vérif Magasin < 1s)
+            // Mode 'simple' unifié : vérif instantanée (collection/wishlist/prêt/série manquante) sans recherche superflue si déjà présent
             isSearching.value = false;
             if (response) {
               playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
@@ -274,7 +255,7 @@ export const scannerState = {
   async resumeCameraInCheckMode() {
     lastCheckResult.value = null;
     if (activeRouter) {
-      await this.startScan(activeRouter, 'check');
+      await this.startScan(activeRouter, 'simple');
     }
   },
 

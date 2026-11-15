@@ -361,6 +361,59 @@ describe('photoBookResolutionService', () => {
     });
   });
 
+  it('marque le livre comme doubt avec alternatives si deux œuvres distinctes sont très proches sur une seule source', async () => {
+    vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockResolvedValue([
+      {
+        score: 32,
+        meta: {
+          isbn: '9782070612758',
+          title: 'Les Royaumes du Nord',
+          authors: ['Philip Pullman'],
+          publisher: 'Gallimard Jeunesse',
+          series: 'À la croisée des mondes',
+          seriesNumber: '1'
+        }
+      },
+      {
+        score: 28,
+        meta: {
+          isbn: '9782070584925',
+          title: 'La Tour des Anges',
+          authors: ['Philip Pullman'],
+          publisher: 'Gallimard Jeunesse',
+          series: 'À la croisée des mondes',
+          seriesNumber: '2'
+        }
+      }
+    ]);
+    vi.spyOn(googleBooksResolver, 'searchCandidatesByHints').mockResolvedValue([]);
+    vi.spyOn(openLibraryResolver, 'searchCandidatesByHints').mockResolvedValue([]);
+    vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockImplementation(async (isbn) => ({
+      isbn,
+      title: isbn === '9782070612758' ? 'Les Royaumes du Nord' : 'La Tour des Anges',
+      authors: ['Philip Pullman'],
+      publisher: 'Gallimard Jeunesse',
+      series: 'À la croisée des mondes',
+      seriesNumber: isbn === '9782070612758' ? '1' : '2',
+      coverUrl: `https://covers.example/${isbn}.jpg`
+    }));
+    vi.spyOn(bnfResolver, 'searchSeriesVolumes').mockResolvedValue([]);
+
+    const result = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries([
+      {
+        title: 'Les Royaumes',
+        author: 'Pullman',
+        confidence: 'medium'
+      }
+    ]);
+
+    expect(result.detectedItems).toHaveLength(1);
+    expect(result.detectedItems[0].status).toBe('doubt');
+    expect(result.detectedItems[0].selected).toBe(false);
+    expect(result.detectedItems[0].alternatives?.length).toBeGreaterThanOrEqual(2);
+    expect(result.detectedItems[0].alternatives?.[0].isbn13).toBe('9782070612758');
+  });
+
   it('marque le livre comme unresolved (non validable) si aucun ISBN n’est trouvé', async () => {
     const result = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries([
       { title: 'Tranche illisible xyz' }
