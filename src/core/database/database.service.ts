@@ -328,5 +328,25 @@ export const databaseService = {
 
   async deletePendingCreation(id: number): Promise<void> {
     await db.pending_creations.delete(id);
+  },
+
+  /**
+   * Vide intégralement toutes les tables locales IndexedDB (livres en cache, inventaire, wishlist, prêts, files d'attente)
+   */
+  async clearAllBookData(): Promise<void> {
+    await db.transaction(
+      'rw',
+      [db.inventory, db.wishlist, db.cache_books, db.loans, db.pending_actions, db.pending_creations],
+      async () => {
+        await Promise.all([
+          db.inventory.clear(),
+          db.wishlist.clear(),
+          db.cache_books.clear(),
+          db.loans.clear(),
+          db.pending_actions.clear(),
+          db.pending_creations.clear()
+        ]);
+      }
+    );
   }
 };
