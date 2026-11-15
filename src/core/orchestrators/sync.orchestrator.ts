@@ -110,7 +110,7 @@ export const syncOrchestrator = {
   async hydrateCacheInBackground(): Promise<void> {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const DB_RESET_TOKEN = 'reset_2026_11_15_clean_slate_v3';
+      const DB_RESET_TOKEN = 'reset_2026_11_15_clean_slate_v4';
       if (
         typeof localStorage !== 'undefined' &&
         localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&

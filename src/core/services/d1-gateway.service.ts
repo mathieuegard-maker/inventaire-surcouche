@@ -257,6 +257,7 @@ interface ExternalResolvedBook {
   seriesTitle?: string;
   seriesNumber?: string;
   bnfEnsembleId?: string;
+  externalSeriesUri?: string;
   authors: string[];
   illustrators: string[];
   scriptwriters: string[];
@@ -316,6 +317,10 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
   let seriesTitle = '';
   let seriesNumber = '';
   let bnfEnsembleId = '';
+  let externalSeriesUri = '';
+  let invSeriesTitle = '';
+  let invSeriesNumber = '';
+  let gbDescription = '';
   let unnumberedEnsembleTitle = '';
   let unnumberedEnsembleId = '';
   const authors: string[] = [];
@@ -432,7 +437,10 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       publisher = publisher || cleanPublisher(info.publisher || '');
       publishDate = publishDate || cleanPublishDate(info.publishedDate || '');
       pageCount = pageCount || info.pageCount;
-      description = description || info.description || '';
+      if (typeof info.description === 'string' && info.description.trim()) {
+        gbDescription = info.description.trim();
+      }
+      description = description || gbDescription;
       if (Array.isArray(info.categories)) {
         rawSubjects.push(...info.categories);
       }
@@ -465,7 +473,7 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
     }
   }
 
-  // 4. Complément Graphe Ouvert (Wikidata / Inventaire public par ISBN)
+  // 4. Croisement Graphe Ouvert (Wikidata / Inventaire public par ISBN)
   if (invRes.status === 'fulfilled' && invRes.value?.entities) {
     const ents = invRes.value.entities as Record<string, any>;
     const edEnt =
@@ -486,19 +494,46 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       const workUri = edEnt.claims?.['wdt:P629']?.[0];
       const workEnt = workUri ? ents[workUri] : undefined;
       if (workEnt) {
+        if (!invCoverUrl && typeof workEnt.image?.url === 'string' && workEnt.image.url.trim()) {
+          const hash = workEnt.image.url.split('/').pop();
+          if (hash) {
+            invCoverUrl = `https://inventaire.io/img/entities/300x300/${hash}`;
+          }
+        }
         const ord = workEnt.claims?.['wdt:P1545']?.[0];
-        if (ord && !seriesNumber) {
-          seriesNumber = normalizeSeriesNumber(String(ord));
+        if (ord) {
+          invSeriesNumber = normalizeSeriesNumber(String(ord));
         }
         const serieUri = workEnt.claims?.['wdt:P179']?.[0];
+        if (typeof serieUri === 'string' && serieUri.trim()) {
+          externalSeriesUri = serieUri.trim();
+        }
         const serieEnt = serieUri ? ents[serieUri] : undefined;
-        if (serieEnt && !seriesTitle) {
+        if (serieEnt) {
           const sLabel = cleanSeriesName(
             serieEnt.labels?.fr || serieEnt.labels?.en || serieEnt.label || ''
           );
-          if (sLabel) seriesTitle = sLabel;
+          if (sLabel) invSeriesTitle = sLabel;
         }
       }
+    }
+  }
+
+  // Contrôle de cohérence croisée BnF <-> Google Books <-> Inventaire/Wikidata :
+  // - Privilégier le résumé Google Books s'il est sensiblement plus riche que la note 830$a BnF
+  if (gbDescription && (!description || gbDescription.length > description.length + 30)) {
+    description = gbDescription;
+  }
+  // - Compléter ou confirmer Série / Tome si Inventaire/Wikidata apporte une liaison wdt:P179 fiable
+  if (!seriesNumber && invSeriesNumber) {
+    seriesNumber = invSeriesNumber;
+  }
+  if (!seriesTitle && invSeriesTitle) {
+    seriesTitle = invSeriesTitle;
+  } else if (seriesTitle && invSeriesTitle) {
+    // Si les deux sources nomment la même série, préférer la forme propre d'Inventaire si la BnF a un suffixe ou inversement
+    if (normalizeTextKey(seriesTitle) === normalizeTextKey(invSeriesTitle) && invSeriesTitle.length <= seriesTitle.length) {
+      seriesTitle = invSeriesTitle;
     }
   }
 
@@ -547,6 +582,7 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
     seriesTitle: seriesTitle || undefined,
     seriesNumber: seriesNumber || undefined,
     bnfEnsembleId: bnfEnsembleId || undefined,
+    externalSeriesUri: externalSeriesUri || undefined,
     authors,
     illustrators,
     scriptwriters,
@@ -562,8 +598,10 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
 }
 
 /**
- * Découvre et indexe dans D1 tous les tomes d'une série via les identifiants relationnels d'ensemble BnF (460$3 + bib.ens2bib + bib.recordtype="ens")
- * afin que l'ouverture d'une série ou d'une fiche permette immédiatement la sélection multiple de tous les tomes.
+ * Découvre et indexe dans D1 tous les tomes d'une série en croisant :
+ * 1. Les notices d'ensemble BnF (`FRBNF...` + `bib.recordtype="ens"` + `bib.ens2bib`)
+ * 2. Les données Wikidata / Inventaire (`wdt:P179` + `wdt:P1545`)
+ * avec contrôle de cohérence d'auteur pour éliminer les erreurs de catalogage BnF.
  */
 export async function expandSeriesVolumesInD1(
   db: DatabaseBinding,
@@ -593,6 +631,7 @@ export async function expandSeriesVolumesInD1(
     if (!targetSeriesKey) return;
 
     const ensembleIds = new Set<string>();
+    let externalSeriesUri = '';
     let serieClaims: Record<string, unknown[]> = {};
     if (sRow?.entity_json) {
       try {
@@ -603,8 +642,12 @@ export async function expandSeriesVolumesInD1(
           if (Array.isArray(storedEns)) {
             for (const id of storedEns) {
               const cleanId = String(id).replace(/\D/g, '');
-              if (cleanId.length >= 8) ensembleIds.add(cleanId.slice(-8));
+              if (cleanId.length === 8) ensembleIds.add(cleanId);
             }
+          }
+          const storedExt = parsedEnt.claims['invp:wikidataSeriesUri']?.[0];
+          if (typeof storedExt === 'string' && storedExt.trim()) {
+            externalSeriesUri = storedExt.trim();
           }
         }
       } catch {
@@ -612,43 +655,59 @@ export async function expandSeriesVolumesInD1(
       }
     }
 
-    // Résolution automatique du nom de l'auteur principal si non fourni (crucial pour filtrer les notices d'ensemble homonymes comme "Mélusine")
-    let resolvedAuthorHint = authorHint || '';
-    if (!resolvedAuthorHint) {
-      let authorUris: string[] = [];
+    // Collecte de tous les auteurs connus de la série (pour filtrer les homonymes et notices d'ensemble/tomes mal rattachés)
+    const knownAuthorNames: string[] = [];
+    if (authorHint) knownAuthorNames.push(authorHint);
+
+    const seriesAuthorTokens = new Set<string>();
+    const addAuthorTokens = (rawName: string) => {
+      if (!rawName) return;
+      // BnF utilise souvent "Nom, Prénom" ou "Prénom Nom" ; on indexe les tokens significatifs (> 2 lettres)
+      const cleaned = rawName.replace(/\([^)]*\)/g, ' ').trim();
+      for (const tok of normalizeTextKey(cleaned).split(/[^a-z0-9]+/)) {
+        if (tok.length >= 3 && !['des', 'les', 'van', 'von', 'der', 'del', 'studio'].includes(tok)) {
+          seriesAuthorTokens.add(tok);
+        }
+      }
+    };
+    if (authorHint) addAuthorTokens(authorHint);
+
+    let authorUris: string[] = [];
+    try {
+      authorUris = JSON.parse(sRow?.author_uris_json || '[]');
+    } catch {
+      authorUris = [];
+    }
+    if (!authorUris.length) {
+      const wRow = await db
+        .prepare('SELECT author_uris_json FROM catalog_entities WHERE series_uri = ? LIMIT 1')
+        .bind(seriesUri)
+        .first<{ author_uris_json: string | null }>();
       try {
-        authorUris = JSON.parse(sRow?.author_uris_json || '[]');
+        authorUris = JSON.parse(wRow?.author_uris_json || '[]');
       } catch {
         authorUris = [];
       }
-      if (!authorUris.length) {
-        const wRow = await db
-          .prepare('SELECT author_uris_json FROM catalog_entities WHERE series_uri = ? LIMIT 1')
-          .bind(seriesUri)
-          .first<{ author_uris_json: string | null }>();
-        try {
-          authorUris = JSON.parse(wRow?.author_uris_json || '[]');
-        } catch {
-          authorUris = [];
-        }
-      }
-      if (authorUris[0]) {
-        const aRow = await db
-          .prepare('SELECT label FROM catalog_entities WHERE uri = ? LIMIT 1')
-          .bind(authorUris[0])
-          .first<{ label: string }>();
-        if (aRow?.label) {
-          resolvedAuthorHint = aRow.label.split(',')[0].trim();
-        }
+    }
+    for (const aUri of authorUris.slice(0, 6)) {
+      const aRow = await db
+        .prepare('SELECT label FROM catalog_entities WHERE uri = ? LIMIT 1')
+        .bind(aUri)
+        .first<{ label: string }>();
+      if (aRow?.label) {
+        knownAuthorNames.push(aRow.label);
+        addAuthorTokens(aRow.label);
       }
     }
 
     const cleanSeriesQuery = cleanTargetSeries.replace(/["()]/g, ' ').trim();
+    const resolvedAuthorHint = knownAuthorNames[0] || '';
     const cleanAuthorQuery = resolvedAuthorHint
       ? resolvedAuthorHint.split(',')[0].replace(/["()]/g, ' ').trim()
       : '';
 
-    // 1. Recherche des Notices d'Ensemble (bib.recordtype all "ens") de la série (couvre aussi les séries qui ont changé d'éditeur comme Les Schtroumpfs Dupuis -> Lombard)
+    // 1. Recherche des Notices d'Ensemble BnF (`bib.recordtype all "ens"`)
+    // IMPORTANT : Dans InterMarc XML BnF, 001 est au format `FRBNF392661500000001` (8 chiffres juste après FRBNF).
     const fetchEnsembleIds = async (withAuthor?: string): Promise<string[]> => {
       const cql = withAuthor
         ? `(bib.title all "${cleanSeriesQuery}") and (bib.author all "${withAuthor}") and (bib.recordtype all "ens")`
@@ -660,9 +719,10 @@ export async function expandSeriesVolumesInD1(
       const records = xml.split('<srw:record>').slice(1);
       const found: string[] = [];
       for (const recXml of records) {
-        const idMatch = /<(?:[\w-]+:)?controlfield\s+[^>]*tag="001"[^>]*>(\d{8,})<\/(?:[\w-]+:)?controlfield>/i.exec(recXml);
+        const idMatch =
+          /FRBNF(\d{8})/i.exec(recXml) || /ark:\/12148\/cb(\d{8})/i.exec(recXml);
         if (!idMatch) continue;
-        const nnb = idMatch[1].slice(-8);
+        const nnb = idMatch[1];
         const fields = parseMarcFieldsFromXml(recXml);
         const f245 = fields.find((f) => f.tag === '245');
         const rawEnsTitle = f245?.subfields.find((s) => s.code === 'a')?.value || '';
@@ -673,12 +733,85 @@ export async function expandSeriesVolumesInD1(
             (ensKey.length >= 5 && getLevenshteinDistance(ensKey, targetSeriesKey) <= 1))
         ) {
           found.push(nnb);
+          // Enrichir la liste des auteurs légitimes avec ceux de la notice d'ensemble valide (ex. continuateurs)
+          for (const af of fields) {
+            if (af.tag === '100' || af.tag === '700') {
+              const aName = af.subfields.find((s) => s.code === 'a')?.value || '';
+              if (aName) addAuthorTokens(aName);
+            }
+          }
         }
       }
       return found;
     };
 
-    let discoveredEns = await fetchEnsembleIds(cleanAuthorQuery || undefined);
+    // 2. En parallèle : découverte des IDs d'ensemble BnF + récupération des tomes Wikidata/Inventaire
+    const fetchWikidataSeriesWorks = async (): Promise<
+      Map<string, { uri: string; title: string; imageUrl?: string }>
+    > => {
+      const map = new Map<string, { uri: string; title: string; imageUrl?: string }>();
+      let wdUri = externalSeriesUri;
+      if (!wdUri) {
+        // Recherche de la série sur Inventaire.io si le tome initial n'avait pas fourni l'URI Wikidata
+        try {
+          const searchUrl = `https://inventaire.io/api/search?types=series&search=${encodeURIComponent(cleanTargetSeries)}&lang=fr&limit=5`;
+          const sRes = await fetch(searchUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+          if (sRes.ok) {
+            const sJson = (await sRes.json()) as { results?: Array<{ uri?: string; label?: string }> };
+            const exact = (sJson.results || []).find(
+              (r) => normalizeTextKey(cleanSeriesName(r.label || '')) === targetSeriesKey
+            );
+            if (exact?.uri) wdUri = exact.uri;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!wdUri) return map;
+      externalSeriesUri = wdUri;
+      try {
+        const revUrl = `https://inventaire.io/api/entities?action=reverse-claims&property=wdt:P179&value=${encodeURIComponent(wdUri)}`;
+        const revRes = await fetch(revUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+        if (!revRes.ok) return map;
+        const revJson = (await revRes.json()) as { uris?: string[] };
+        const workUris = Array.isArray(revJson.uris) ? revJson.uris.slice(0, 100) : [];
+        for (let i = 0; i < workUris.length; i += 50) {
+          const chunk = workUris.slice(i, i + 50);
+          const entUrl = `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(chunk.join('|'))}&attributes=info|labels|claims|image`;
+          const entRes = await fetch(entUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+          if (!entRes.ok) continue;
+          const entJson = (await entRes.json()) as { entities?: Record<string, any> };
+          for (const [uri, w] of Object.entries(entJson.entities || {})) {
+            if (!w || w.type !== 'work') continue;
+            const ordRaw = w.claims?.['wdt:P1545']?.[0];
+            if (!ordRaw) continue;
+            const normOrd = normalizeSeriesNumber(String(ordRaw));
+            if (!normOrd || map.has(normOrd)) continue;
+            const titleFr = cleanTitle(
+              w.claims?.['wdt:P1476']?.[0] || w.labels?.fr || w.labels?.en || ''
+            );
+            if (!titleFr) continue;
+            let imgUrl: string | undefined;
+            const rawImg = w.image?.url || w.claims?.['invp:P2']?.[0];
+            if (typeof rawImg === 'string' && rawImg.trim()) {
+              const hash = rawImg.split('/').pop();
+              if (hash) imgUrl = `https://inventaire.io/img/entities/300x300/${hash}`;
+            }
+            map.set(normOrd, { uri, title: titleFr, imageUrl: imgUrl });
+          }
+        }
+      } catch {
+        // ignore Inventaire errors gracefully
+      }
+      return map;
+    };
+
+    const [discoveredEnsWithAuthor, wdWorksByNum] = await Promise.all([
+      fetchEnsembleIds(cleanAuthorQuery || undefined),
+      fetchWikidataSeriesWorks()
+    ]);
+
+    let discoveredEns = discoveredEnsWithAuthor;
     if (discoveredEns.length === 0 && cleanAuthorQuery) {
       discoveredEns = await fetchEnsembleIds();
     }
@@ -686,10 +819,10 @@ export async function expandSeriesVolumesInD1(
       ensembleIds.add(id);
     }
 
-    // 2. Récupération de toutes les notices bibliographiques liées par bib.ens2bib (ou repli par titre si aucune notice d'ensemble)
+    // 3. Récupération de toutes les notices bibliographiques liées par `bib.ens2bib`
     let rawRecords: string[] = [];
     if (ensembleIds.size > 0) {
-      const ensList = Array.from(ensembleIds).slice(0, 12).join(' ');
+      const ensList = Array.from(ensembleIds).slice(0, 18).join(' ');
       const cql = `bib.ens2bib any "${ensList}"`;
       const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=100&startRecord=1`;
       const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
@@ -729,19 +862,53 @@ export async function expandSeriesVolumesInD1(
       );
 
       if (!linkedByEnsId && !isSeriesNameMatch) continue;
-      // Si un tome lié par bib.ens2bib n'avait pas de sous-zone titre de série explicite, on lui affecte la série cible
+
+      // Contrôle de cohérence croisée (auteur de la série OU correspondance de titre Wikidata pour ce tome)
+      // Élimine les erreurs de lien 460$3 BnF comme "Cultures, contre-cultures" (Henri Béhar) dans Mélusine !
+      const normNum = parsed.seriesNumber ? normalizeSeriesNumber(parsed.seriesNumber) : '';
+      const wdMatch = normNum ? wdWorksByNum.get(normNum) : undefined;
+      const wdTitleMatches = Boolean(
+        wdMatch &&
+          (normalizeTextKey(wdMatch.title) === normalizeTextKey(parsed.title) ||
+            getLevenshteinDistance(normalizeTextKey(wdMatch.title), normalizeTextKey(parsed.title)) <= 3)
+      );
+
+      let authorMatches = true;
+      if (seriesAuthorTokens.size > 0 && parsed.authors.length > 0) {
+        authorMatches = parsed.authors.some((a) =>
+          normalizeTextKey(a)
+            .split(/[^a-z0-9]+/)
+            .some((tok) => tok.length >= 3 && seriesAuthorTokens.has(tok))
+        );
+      }
+
+      if (!authorMatches && !wdTitleMatches) {
+        continue;
+      }
+
       if (!parsed.series) {
         parsed.series = cleanTargetSeries;
       }
       candidates.push(parsed);
     }
 
-    // Dédoublonnage par numéro de tome ou titre normalisé
+    // Dédoublonnage par numéro de tome d'abord, puis par titre normalisé (en écartant un non-numéroté s'il duplique un tome numéroté)
+    const numberedTitleKeys = new Set<string>();
+    for (const cand of candidates) {
+      if (cand.seriesNumber) {
+        numberedTitleKeys.add(normalizeTextKey(cand.title));
+      }
+    }
+
     const byVolumeKey = new Map<string, typeof candidates>();
     for (const cand of candidates) {
+      const titleKey = normalizeTextKey(cand.title);
+      if (!cand.seriesNumber && numberedTitleKeys.has(titleKey)) {
+        continue;
+      }
       const volKey = cand.seriesNumber
         ? `num:${normalizeSeriesNumber(cand.seriesNumber)}`
-        : `title:${normalizeTextKey(cand.title)}`;
+        : `title:${titleKey}`;
       const list = byVolumeKey.get(volKey) || [];
       list.push(cand);
       byVolumeKey.set(volKey, list);
@@ -784,22 +951,27 @@ export async function expandSeriesVolumesInD1(
         continue;
       }
 
-      // Couverture déterministe sans sous-requêtes réseau (évite la limite de 50 subrequests Cloudflare Workers sur les séries de 40+ tomes)
+      const wdMatch = normNum ? wdWorksByNum.get(normNum) : undefined;
+      const finalTitle = top.title || wdMatch?.title || cleanTargetSeries;
+
+      // Couverture par ordre de fiabilité sans exploser les sous-requêtes Cloudflare Workers :
+      // 1. BnF 950$a -> 2. Inventaire/Wikidata vérifié -> 3. Amazon CDN ISBN-10 -> 4. Eyrolles H1400
       const isbn10 = isbn13ToIsbn10(top.isbn);
       const resolvedCoverUrl =
         top.coverUrl ||
+        wdMatch?.imageUrl ||
         (isbn10
           ? `https://images-eu.ssl-images-amazon.com/images/P/${isbn10}.08.LZZZZZZZ.jpg`
           : `https://servimg.eyrolles.com/static/media/${top.isbn.slice(-4)}/${top.isbn}_internet_h1400.jpg`);
 
-      const authorUris: string[] = [];
+      const volAuthorUris: string[] = [];
       for (const aName of top.authors) {
         const aUri = await upsertCatalogEntity(db, {
           entityType: 'human',
           label: aName,
           claims: { 'wdt:P31': ['wd:Q5'] }
         });
-        authorUris.push(aUri);
+        volAuthorUris.push(aUri);
       }
 
       let publisherUri: string | undefined;
@@ -815,15 +987,16 @@ export async function expandSeriesVolumesInD1(
         'wdt:P31': ['wd:Q47461344'],
         'wdt:P179': [seriesUri]
       };
-      if (authorUris.length) workClaims['wdt:P50'] = authorUris;
+      if (volAuthorUris.length) workClaims['wdt:P50'] = volAuthorUris;
       if (normNum) workClaims['wdt:P1545'] = [normNum];
+      if (wdMatch?.uri) workClaims['owl:sameAs'] = [wdMatch.uri];
 
       const workUri = await upsertCatalogEntity(db, {
         entityType: 'work',
-        label: top.title,
+        label: finalTitle,
         seriesUri,
         seriesNumber: normNum || undefined,
-        authorUris,
+        authorUris: volAuthorUris,
         mainCategory: seriesCategory,
         subgenres: seriesSubgenres,
         imageUrl: resolvedCoverUrl,
@@ -833,7 +1006,7 @@ export async function expandSeriesVolumesInD1(
       const editionClaims: Record<string, unknown[]> = {
         'wdt:P629': [workUri],
         'wdt:P212': [top.isbn],
-        'wdt:P1476': [top.title]
+        'wdt:P1476': [finalTitle]
       };
       if (publisherUri) editionClaims['wdt:P123'] = [publisherUri];
       if (top.publishDate) editionClaims['wdt:P577'] = [top.publishDate];
@@ -842,12 +1015,12 @@ export async function expandSeriesVolumesInD1(
       await upsertCatalogEntity(db, {
         uri: `isbn:${top.isbn}`,
         entityType: 'edition',
-        label: top.title,
+        label: finalTitle,
         isbn13: top.isbn,
         workUri,
         seriesUri,
         seriesNumber: normNum || undefined,
-        authorUris,
+        authorUris: volAuthorUris,
         mainCategory: seriesCategory,
         subgenres: seriesSubgenres,
         imageUrl: resolvedCoverUrl,
@@ -858,25 +1031,44 @@ export async function expandSeriesVolumesInD1(
       if (normNum) existingVolNums.add(normNum);
     }
 
-    // Marquer la série comme expansée et persister les identifiants d'ensemble BnF (wdt:P268)
-    let existingSeriesAuthors: string[] = [];
-    try {
-      existingSeriesAuthors = JSON.parse(sRow?.author_uris_json || '[]');
-    } catch {
-      existingSeriesAuthors = [];
+    // 4. Complétion mutuelle depuis Wikidata/Inventaire pour tout tome absent côté BnF
+    for (const [normNum, wdItem] of wdWorksByNum.entries()) {
+      if (existingVolNums.has(normNum)) continue;
+      const workClaims: Record<string, unknown[]> = {
+        'wdt:P31': ['wd:Q47461344'],
+        'wdt:P179': [seriesUri],
+        'wdt:P1545': [normNum],
+        'owl:sameAs': [wdItem.uri]
+      };
+      if (authorUris.length) workClaims['wdt:P50'] = authorUris;
+      await upsertCatalogEntity(db, {
+        entityType: 'work',
+        label: wdItem.title,
+        seriesUri,
+        seriesNumber: normNum,
+        authorUris,
+        mainCategory: seriesCategory,
+        subgenres: seriesSubgenres,
+        imageUrl: wdItem.imageUrl,
+        claims: workClaims
+      });
+      existingVolNums.add(normNum);
     }
+
+    // Marquer la série comme expansée et persister les identifiants d'ensemble BnF (wdt:P268) + Wikidata
     await upsertCatalogEntity(db, {
       uri: seriesUri,
       entityType: 'serie',
       label: cleanTargetSeries,
       mainCategory: seriesCategory,
       subgenres: seriesSubgenres,
-      authorUris: existingSeriesAuthors,
+      authorUris,
       claims: {
         ...serieClaims,
         'wdt:P31': ['wd:Q277759'],
-        ...(existingSeriesAuthors.length ? { 'wdt:P50': existingSeriesAuthors } : {}),
+        ...(authorUris.length ? { 'wdt:P50': authorUris } : {}),
         ...(ensembleIds.size ? { 'wdt:P268': Array.from(ensembleIds) } : {}),
+        ...(externalSeriesUri ? { 'invp:wikidataSeriesUri': [externalSeriesUri] } : {}),
         'invp:bnfExpanded': ['true']
       }
     });
@@ -1066,7 +1258,7 @@ export async function resolveAndStoreIsbnInD1(
     });
   }
 
-  // 4. Création/récupération de la Série si présente (avec identifiant d'ensemble BnF wdt:P268 si disponible)
+  // 4. Création/récupération de la Série si présente (avec identifiant d'ensemble BnF wdt:P268 et URI Wikidata si disponibles)
   let seriesUri: string | undefined;
   if (ext.seriesTitle) {
     seriesUri = await upsertCatalogEntity(db, {
@@ -1078,7 +1270,8 @@ export async function resolveAndStoreIsbnInD1(
       claims: {
         'wdt:P31': ['wd:Q277759'],
         ...(authorUris.length ? { 'wdt:P50': authorUris } : {}),
-        ...(ext.bnfEnsembleId ? { 'wdt:P268': [ext.bnfEnsembleId] } : {})
+        ...(ext.bnfEnsembleId ? { 'wdt:P268': [ext.bnfEnsembleId] } : {}),
+        ...(ext.externalSeriesUri ? { 'invp:wikidataSeriesUri': [ext.externalSeriesUri] } : {})
       }
     });
   }
