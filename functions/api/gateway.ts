@@ -118,6 +118,21 @@ export const onRequest = async (context: {
 
         if (source === 'bnf') {
           const recordSchema = schema === 'intermarc' ? 'intermarcxchange' : 'dublincore';
+          const ensIds = url.searchParams.get('ensIds');
+          if (ensIds && ensIds.trim()) {
+            const cleanIds = ensIds.replace(/[^0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+            const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 80, 1), 100);
+            const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
+            const cql = `bib.ens2bib any "${cleanIds}"`;
+            const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
+            const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+            const bnfText = await bnfRes.text();
+            return new Response(bnfText, {
+              status: bnfRes.status,
+              headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+            });
+          }
+
           if (series && series.trim()) {
             const cleanSeries = series.replace(/["()]/g, ' ').trim();
             const cleanAuthor = author ? author.replace(/["()]/g, ' ').trim() : '';
@@ -206,6 +221,9 @@ export const onRequest = async (context: {
         }
 
         const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength < 800 || arrayBuffer.byteLength === 63601) {
+          return jsonResp({ error: 'Image placeholder vide ou générique rejetée' }, 404);
+        }
         if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
           return jsonResp({ error: 'Image trop volumineuse' }, 413);
         }

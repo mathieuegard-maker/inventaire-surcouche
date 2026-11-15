@@ -19,7 +19,10 @@ export function normalizeTextKey(value: string): string {
 export function normalizeSeriesNumber(raw?: string): string {
   if (!raw) return '';
   const cleaned = raw
+    .replace(/^\[|\]$/g, '')
     .replace(/^(tome|vol\.?|volume|t\.?|n°|#)\s*/i, '')
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '')
     .trim();
   if (cleaned.length > 12 || /\s/.test(cleaned)) return '';
   const numeric = /^\d+$/.test(cleaned) ? String(parseInt(cleaned, 10)) : cleaned;
@@ -120,6 +123,7 @@ export function cleanSeriesName(series: string): string {
   return series
     .replace(/\|/g, '')
     .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/\.+$/, '')
     .trim();
 }
 
@@ -286,7 +290,7 @@ function extractControlField(xml: string, tag: string): string {
   return match ? match[1] : '';
 }
 
-export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }) | null {
+export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean; _bnfEnsembleId?: string }) | null {
   const fields = parseMarcFields(recordXml);
   if (fields.length === 0) return null;
 
@@ -345,8 +349,10 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
   // 3. Série & numéro de tome (460 -> 290/410 uniquement si sous-zone $v présente)
   let imSeries: string | undefined;
   let imSeriesNumber: string | undefined;
+  let bnfEnsembleId: string | undefined;
   const f460 = fields.find(f => f.tag === '460' || f.tag === '461');
   if (f460) {
+    bnfEnsembleId = getSubfield(f460, '3');
     imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a');
     imSeriesNumber = getSubfield(f460, 'v');
   }
@@ -413,7 +419,8 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     series: series || undefined,
     seriesNumber,
     _lang: langCode || undefined,
-    _hasPrimaryIsbn: hasPrimaryIsbn
+    _hasPrimaryIsbn: hasPrimaryIsbn,
+    _bnfEnsembleId: bnfEnsembleId
   };
 }
 

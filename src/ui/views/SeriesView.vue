@@ -65,8 +65,6 @@ const loadLocalData = async () => {
   if (context && context.tomes.length > 0) {
     seriesTomes.value = context.tomes;
   } else {
-    // CACHE VIDE : On déclenche l'hydratation et on récupère le titre manuellement
-    seriesOrchestrator.startBackgroundHydration(seriesId.value);
     await fetchSeriesMetadata();
   }
 };
@@ -75,12 +73,23 @@ onMounted(async () => {
   isLoading.value = true;
   try {
     await loadLocalData();
+    // Toujours lancer l'hydratation en arrière-plan pour récupérer tous les tomes manquants de la série via BnF (460$3 / bib.ens2bib)
+    seriesOrchestrator.startBackgroundHydration(seriesId.value);
   } catch (e) {
     console.error("Erreur lors du chargement :", e);
   } finally {
     isLoading.value = false;
   }
 });
+
+watch(
+  () => seriesId.value,
+  async (newId) => {
+    if (!newId) return;
+    await loadLocalData();
+    seriesOrchestrator.startBackgroundHydration(newId);
+  }
+);
 
 watch(
   () => [progressState.value.current, progressState.value.isActive],

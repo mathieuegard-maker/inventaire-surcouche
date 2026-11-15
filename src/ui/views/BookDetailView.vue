@@ -5,6 +5,7 @@ import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
+import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
@@ -100,8 +101,58 @@ const isLent = computed(() => !!book.value?.loan);
 const hasSeries = computed(() => !!book.value?.seriesId || !!book.value?.series);
 const seriesIdentifier = computed(() => book.value?.seriesId || book.value?.series || '');
 
-// Navigation dans la série
+// Navigation et sélection rapide dans la série (Mode Simple)
 const seriesTomes = ref<HumanizedBook[]>([]);
+const selectedSeriesTomeUris = ref<string[]>([]);
+const hydratedSeriesIds = new Set<string>();
+
+const seriesProgress = computed(() => {
+  const sid = book.value?.seriesId || '';
+  return sid ? seriesOrchestrator.getProgress(sid).value : { current: 0, total: 0, isActive: false };
+});
+
+const missingSeriesTomes = computed(() =>
+  seriesTomes.value.filter((t) => t.ownershipStatus !== 'owned')
+);
+
+const toggleSeriesTomeSelection = (uri: string) => {
+  const idx = selectedSeriesTomeUris.value.indexOf(uri);
+  if (idx > -1) {
+    selectedSeriesTomeUris.value.splice(idx, 1);
+  } else {
+    selectedSeriesTomeUris.value.push(uri);
+  }
+};
+
+const selectAllMissingSeriesTomes = () => {
+  const missingUris = missingSeriesTomes.value.map((t) => t.uri);
+  if (selectedSeriesTomeUris.value.length === missingUris.length) {
+    selectedSeriesTomeUris.value = [];
+  } else {
+    selectedSeriesTomeUris.value = [...missingUris];
+  }
+};
+
+const addSelectedSeriesTomesToCollection = async () => {
+  if (selectedSeriesTomeUris.value.length === 0) return;
+  try {
+    const targets = [...selectedSeriesTomeUris.value];
+    for (const uri of targets) {
+      await queueService.enqueueAction('ADD_INVENTORY', uri);
+    }
+    seriesTomes.value = seriesTomes.value.map((t) =>
+      targets.includes(t.uri) ? { ...t, ownershipStatus: 'owned' } : t
+    );
+    if (book.value && targets.includes(book.value.uri)) {
+      book.value.ownershipStatus = 'owned';
+    }
+    selectedSeriesTomeUris.value = [];
+    successMessage.value = `${targets.length} tome(s) de la série ajouté(s) à votre collection ✓`;
+  } catch (e) {
+    console.error(e);
+    errorMsg.value = "Erreur lors de l'ajout des tomes sélectionnés.";
+  }
+};
 
 const currentTomeIndex = computed(() => {
   if (!book.value || seriesTomes.value.length === 0) return -1;
@@ -122,14 +173,13 @@ const nextBook = computed(() => {
 
 const loadSeriesContext = async () => {
   if (book.value?.seriesId) {
-    const tomes = await databaseService.getBooksBySeriesId(book.value.seriesId);
-    // Tri numérique par numéro de tome
-    tomes.sort((a, b) => {
-      const numA = parseFloat(a.seriesNumber || '0') || 0;
-      const numB = parseFloat(b.seriesNumber || '0') || 0;
-      return numA - numB;
-    });
-    seriesTomes.value = tomes;
+    const sid = book.value.seriesId;
+    const context = await seriesOrchestrator.getCompleteSeriesForUI(sid, book.value.series);
+    seriesTomes.value = context?.tomes || [];
+    if (!hydratedSeriesIds.has(sid)) {
+      hydratedSeriesIds.add(sid);
+      seriesOrchestrator.startBackgroundHydration(sid);
+    }
   } else if (book.value?.series) {
     const tomes = await databaseService.findLocalSeriesMatches(book.value.series);
     tomes.sort((a, b) => {
@@ -142,6 +192,19 @@ const loadSeriesContext = async () => {
     seriesTomes.value = [];
   }
 };
+
+watch(
+  () => [seriesProgress.value.current, seriesProgress.value.isActive],
+  async () => {
+    if (book.value?.seriesId) {
+      const context = await seriesOrchestrator.getCompleteSeriesForUI(
+        book.value.seriesId,
+        book.value.series
+      );
+      seriesTomes.value = context?.tomes || [];
+    }
+  }
+);
 
 const navigateToBook = (uri: string) => {
   router.push({ name: 'BookDetail', params: { uri } });
@@ -278,6 +341,9 @@ const handleAddInventory = async () => {
   successMessage.value = '';
   try {
     book.value.ownershipStatus = 'owned';
+    seriesTomes.value = seriesTomes.value.map((t) =>
+      t.uri === book.value?.uri ? { ...t, ownershipStatus: 'owned' } : t
+    );
     successMessage.value = TEXTS.scanner?.addInventorySuccess || "Ajouté à l'inventaire";
     await queueService.enqueueAction('ADD_INVENTORY', book.value.uri);
   } catch (error) {
@@ -346,6 +412,9 @@ const confirmDelete = async () => {
       await wishlistService.removeFromWishlist([book.value.uri]);
     }
     book.value.ownershipStatus = 'none';
+    seriesTomes.value = seriesTomes.value.map((t) =>
+      t.uri === book.value?.uri ? { ...t, ownershipStatus: 'none' } : t
+    );
     if (book.value.loan) {
       delete book.value.loan;
     }
@@ -466,10 +535,81 @@ const confirmDelete = async () => {
         </div>
       </div>
 
-      <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%;">
-        <button class="wireframe-btn" @click="navigateToSeries">
-          [ {{ TEXTS.bookDetail.btnSeries.toUpperCase() }} : {{ book.series || 'SAGA' }} ]
-        </button>
+      <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%; border: 2px solid #000; background: #fff; padding: 0.75rem;">
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.6rem;">
+          <strong style="font-size: 0.95rem;">
+            📚 Série : {{ book.series || 'SAGA' }} ({{ seriesTomes.length }} tome{{ seriesTomes.length > 1 ? 's' : '' }})
+          </strong>
+          <button class="wireframe-btn" style="width: auto; padding: 0.3rem 0.65rem; font-size: 0.8rem;" @click="navigateToSeries">
+            [ {{ TEXTS.bookDetail.btnSeries.toUpperCase() }} ]
+          </button>
+        </div>
+
+        <div v-if="seriesProgress.isActive" style="font-size: 0.82rem; font-weight: 700; color: #1d4ed8; margin-bottom: 0.6rem; padding: 0.4rem 0.6rem; background: #eff6ff; border: 1px dashed #1d4ed8;">
+          ⏳ Récupération automatique de tous les tomes de la série via BnF ({{ seriesProgress.current }} / {{ seriesProgress.total || '...' }})...
+        </div>
+
+        <div v-if="seriesTomes.length > 0" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
+          <button
+            v-if="missingSeriesTomes.length > 0"
+            type="button"
+            class="wireframe-btn"
+            style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.8rem;"
+            @click="selectAllMissingSeriesTomes"
+          >
+            {{ selectedSeriesTomeUris.length === missingSeriesTomes.length ? 'Tout décocher' : `Tout cocher (${missingSeriesTomes.length} manquant${missingSeriesTomes.length > 1 ? 's' : ''})` }}
+          </button>
+          <button
+            v-if="selectedSeriesTomeUris.length > 0"
+            type="button"
+            class="wireframe-btn btn-primary"
+            style="width: auto; padding: 0.35rem 0.75rem; font-size: 0.82rem; font-weight: 800;"
+            @click="addSelectedSeriesTomesToCollection"
+          >
+            + Ajouter les {{ selectedSeriesTomeUris.length }} tome(s) coché(s) à ma collection
+          </button>
+        </div>
+
+        <div v-if="seriesTomes.length > 0" style="max-height: 260px; overflow-y: auto; border-top: 1px solid #cbd5e1; padding-top: 0.4rem; display: flex; flex-direction: column; gap: 0.35rem;">
+          <div
+            v-for="tome in seriesTomes"
+            :key="tome.uri"
+            style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.5rem; border: 1px solid #cbd5e1; background: #f8fafc;"
+            :style="tome.uri === book.uri ? 'border: 2px solid #000; background: #fef9c3;' : ''"
+          >
+            <label style="display: flex; align-items: center; gap: 0.5rem; flex: 1; cursor: pointer; font-size: 0.85rem;">
+              <input
+                v-if="tome.ownershipStatus !== 'owned'"
+                type="checkbox"
+                :checked="selectedSeriesTomeUris.includes(tome.uri)"
+                @change="toggleSeriesTomeSelection(tome.uri)"
+                style="width: 18px; height: 18px; cursor: pointer;"
+              />
+              <span v-else style="color: #15803d; font-weight: 800; font-size: 0.8rem; min-width: 18px; text-align: center;">✓</span>
+              <span>
+                <strong v-if="tome.seriesNumber">T.{{ tome.seriesNumber }} — </strong>
+                <span>{{ tome.title }}</span>
+              </span>
+            </label>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <span
+                v-if="tome.ownershipStatus === 'owned'"
+                style="font-size: 0.72rem; font-weight: 800; background: #dcfce7; color: #166534; padding: 0.15rem 0.4rem; border: 1px solid #166534;"
+              >
+                Possédé
+              </span>
+              <button
+                v-if="tome.uri !== book.uri"
+                type="button"
+                class="wireframe-btn"
+                style="width: auto; padding: 0.2rem 0.45rem; font-size: 0.75rem;"
+                @click="navigateToBook(tome.uri)"
+              >
+                Voir
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="book-description" v-if="book.description">

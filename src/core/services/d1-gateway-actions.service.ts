@@ -845,6 +845,21 @@ export async function handleD1GatewayAction(
       if (!value) return jsonResp({ uris: [] });
 
       if (property === 'wdt:P179') {
+        const sRow = await db
+          .prepare('SELECT entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+          .bind(value)
+          .first<{ entity_json: string | null }>();
+
+        let isAlreadyExpanded = false;
+        if (sRow?.entity_json) {
+          try {
+            const parsedS = JSON.parse(sRow.entity_json);
+            isAlreadyExpanded = parsedS?.claims?.['invp:bnfExpanded']?.[0] === 'true';
+          } catch {
+            isAlreadyExpanded = false;
+          }
+        }
+
         let rows = await db
           .prepare(
             "SELECT uri FROM catalog_entities WHERE series_uri = ? AND entity_type = 'work' ORDER BY sort_order ASC, label ASC"
@@ -852,9 +867,10 @@ export async function handleD1GatewayAction(
           .bind(value)
           .all<{ uri: string }>();
 
-        // Si la série a moins de 2 tomes en base D1, on déclenche automatiquement l'expansion BnF SRU InterMarc
+        // Si la série n'a pas encore été expansée via BnF (ou a moins de 2 tomes en base D1),
+        // on déclenche automatiquement l'expansion relationnelle BnF (460$3 / bib.ens2bib / bib.recordtype="ens")
         // pour que l'utilisateur puisse immédiatement sélectionner toute la série à la main !
-        if ((rows.results || []).length < 2) {
+        if (!isAlreadyExpanded || (rows.results || []).length < 2) {
           await expandSeriesVolumesInD1(db, value);
           rows = await db
             .prepare(

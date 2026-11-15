@@ -110,7 +110,7 @@ export const syncOrchestrator = {
   async hydrateCacheInBackground(): Promise<void> {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const DB_RESET_TOKEN = 'reset_2026_11_15_clean_slate_v1';
+      const DB_RESET_TOKEN = 'reset_2026_11_15_clean_slate_v2';
       if (
         typeof localStorage !== 'undefined' &&
         localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&
@@ -125,12 +125,7 @@ export const syncOrchestrator = {
       const inventoryRaw = await databaseService.getAllRegistryUris('inventory');
       const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
 
-      if (
-        inventoryRaw.length === 0 &&
-        wishlistRaw.length === 0 &&
-        typeof (databaseService as any).clearAllBookData === 'function'
-      ) {
-        await databaseService.clearAllBookData();
+      if (inventoryRaw.length === 0 && wishlistRaw.length === 0) {
         return;
       }
       
