@@ -162,6 +162,7 @@ const detectedSeriesNames = ref<string[]>([]);
 const retryingItemId = ref<string | null>(null);
 const photoTargetStatus = ref<'owned' | 'wish'>('owned');
 const seriesExtraTarget = ref<'none' | 'wish' | 'owned'>('none');
+const expandedSeriesKeys = ref<Record<string, boolean>>({});
 const photoSavingFeedback = ref('');
 
 async function handleSaveAndTestByok() {
@@ -194,6 +195,7 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   unresolvedItems.value = [];
   seriesExtraItems.value = [];
   detectedSeriesNames.value = [];
+  expandedSeriesKeys.value = {};
   isAnalyzingPhoto.value = true;
   photoLoadingStatus.value = 'Compression WebP et analyse visuelle des livres en cours...';
 
@@ -265,6 +267,22 @@ async function retryUnresolvedItem(item: ResolvedPhotoItem) {
   }
 }
 
+function toggleSeriesAccordion(seriesKey: string) {
+  expandedSeriesKeys.value = {
+    ...expandedSeriesKeys.value,
+    [seriesKey]: !expandedSeriesKeys.value[seriesKey]
+  };
+}
+
+function toggleGroupSeriesExtras(seriesKey: string, selectAll: boolean) {
+  for (const item of seriesExtraItems.value) {
+    const key = normalizeTextKey(item.series || 'Autres');
+    if (key === seriesKey && !item.alreadyOwned) {
+      item.selected = selectAll;
+    }
+  }
+}
+
 function toggleAllSeriesExtras(selectAll: boolean) {
   for (const item of seriesExtraItems.value) {
     if (!item.alreadyOwned) {
@@ -272,6 +290,24 @@ function toggleAllSeriesExtras(selectAll: boolean) {
     }
   }
 }
+
+const groupedSeriesExtras = computed(() => {
+  const map = new Map<string, { seriesKey: string; seriesName: string; items: ResolvedPhotoItem[] }>();
+  for (const item of seriesExtraItems.value) {
+    const seriesName = item.series?.trim() || 'Autres';
+    const seriesKey = normalizeTextKey(seriesName) || 'autres';
+    const existing = map.get(seriesKey);
+    if (existing) {
+      existing.items.push(item);
+    } else {
+      map.set(seriesKey, { seriesKey, seriesName, items: [item] });
+    }
+  }
+  return Array.from(map.values()).map((g) => ({
+    ...g,
+    selectedCount: g.items.filter((i) => i.selected).length
+  }));
+});
 
 const selectedDetectedCount = computed(
   () => resolvedDetectedItems.value.filter((c) => c.selected).length
@@ -657,17 +693,17 @@ async function confirmAndSaveCandidates() {
           v-if="resolvedDetectedItems.length > 0 || unresolvedItems.length > 0 || seriesExtraItems.length > 0"
           class="candidates-validation-box"
         >
-          <!-- SECTION 1 : LIVRES IDENTIFIÉS (BNF + COUVERTURE) -->
+          <!-- SECTION 1 : LIVRES PHYSIQUEMENT DÉTECTÉS SUR LA PHOTO -->
           <div v-if="resolvedDetectedItems.length > 0" class="validation-section">
             <div class="validation-header">
-              <h4>✅ Identifiés via BnF/ISBN ({{ selectedDetectedCount }}/{{ resolvedDetectedItems.length }})</h4>
+              <h4>📸 Présents sur la photo ({{ selectedDetectedCount }}/{{ resolvedDetectedItems.length }})</h4>
               <select v-model="photoTargetStatus" class="provider-select">
                 <option value="owned">Ajouter à ma Collection</option>
                 <option value="wish">Ajouter à ma Wishlist</option>
               </select>
             </div>
 
-            <div class="candidates-list">
+            <div class="candidates-list primary-detected-list">
               <div
                 v-for="item in resolvedDetectedItems"
                 :key="item.id"
@@ -704,10 +740,10 @@ async function confirmAndSaveCandidates() {
             </div>
           </div>
 
-          <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES -->
-          <div v-if="seriesExtraItems.length > 0" class="validation-section series-extras-section">
+          <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES (FERMÉES PAR DÉFAUT) -->
+          <div v-if="groupedSeriesExtras.length > 0" class="validation-section series-extras-section">
             <div class="validation-header">
-              <h4>📚 Autres tomes trouvés ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
+              <h4>📚 Autres tomes des séries ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
               <div class="series-controls-inline">
                 <select v-model="seriesExtraTarget" class="provider-select">
                   <option value="none">Fiches série (catalogue seul)</option>
@@ -719,36 +755,63 @@ async function confirmAndSaveCandidates() {
               </div>
             </div>
 
-            <div class="candidates-list">
+            <div class="series-accordions-list">
               <div
-                v-for="extra in seriesExtraItems"
-                :key="extra.id"
-                class="candidate-row resolved-row"
+                v-for="group in groupedSeriesExtras"
+                :key="group.seriesKey"
+                class="series-accordion-card"
               >
-                <input type="checkbox" v-model="extra.selected" class="cand-check" />
-                <img
-                  v-if="extra.coverUrl"
-                  :src="extra.coverUrl"
-                  :alt="extra.title"
-                  class="cand-cover-thumb"
-                />
-                <div v-else class="cand-cover-fallback">📖</div>
-                <div class="cand-meta">
-                  <div class="cand-title-line">
-                    <span v-if="extra.series" class="cand-series-pill">
-                      {{ extra.series }}<template v-if="extra.seriesNumber"> T.{{ extra.seriesNumber }}</template>
+                <div class="series-accordion-header">
+                  <button
+                    type="button"
+                    class="series-accordion-toggle"
+                    @click="toggleSeriesAccordion(group.seriesKey)"
+                    :aria-expanded="Boolean(expandedSeriesKeys[group.seriesKey])"
+                  >
+                    <span class="accordion-arrow">{{ expandedSeriesKeys[group.seriesKey] ? '▾' : '▸' }}</span>
+                    <span class="accordion-title">{{ group.seriesName }}</span>
+                    <span class="accordion-count">
+                      {{ group.selectedCount }}/{{ group.items.length }} tome(s)
                     </span>
-                    <strong>{{ extra.title }}</strong>
+                  </button>
+                  <div class="series-group-actions">
+                    <button type="button" class="link-btn" @click="toggleGroupSeriesExtras(group.seriesKey, true)">Tout</button>
+                    <button type="button" class="link-btn" @click="toggleGroupSeriesExtras(group.seriesKey, false)">Aucun</button>
                   </div>
-                  <div class="cand-sub-meta">
-                    <span v-if="extra.authors.length">{{ extra.authors.join(', ') }}</span>
-                    <span v-if="extra.publisher"> • {{ extra.publisher }}</span>
-                    <span v-if="extra.publishDate"> ({{ extra.publishDate }})</span>
-                  </div>
-                  <div class="cand-badges">
-                    <code class="isbn-tag">{{ extra.isbn13 }}</code>
-                    <span v-if="extra.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
-                    <span v-else-if="extra.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                </div>
+
+                <div v-if="expandedSeriesKeys[group.seriesKey]" class="candidates-list series-inner-list">
+                  <div
+                    v-for="extra in group.items"
+                    :key="extra.id"
+                    class="candidate-row resolved-row"
+                  >
+                    <input type="checkbox" v-model="extra.selected" class="cand-check" />
+                    <img
+                      v-if="extra.coverUrl"
+                      :src="extra.coverUrl"
+                      :alt="extra.title"
+                      class="cand-cover-thumb"
+                    />
+                    <div v-else class="cand-cover-fallback">📖</div>
+                    <div class="cand-meta">
+                      <div class="cand-title-line">
+                        <span v-if="extra.series" class="cand-series-pill">
+                          {{ extra.series }}<template v-if="extra.seriesNumber"> T.{{ extra.seriesNumber }}</template>
+                        </span>
+                        <strong>{{ extra.title }}</strong>
+                      </div>
+                      <div class="cand-sub-meta">
+                        <span v-if="extra.authors.length">{{ extra.authors.join(', ') }}</span>
+                        <span v-if="extra.publisher"> • {{ extra.publisher }}</span>
+                        <span v-if="extra.publishDate"> ({{ extra.publishDate }})</span>
+                      </div>
+                      <div class="cand-badges">
+                        <code class="isbn-tag">{{ extra.isbn13 }}</code>
+                        <span v-if="extra.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
+                        <span v-else-if="extra.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1274,6 +1337,84 @@ async function confirmAndSaveCandidates() {
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
+}
+
+.primary-detected-list {
+  max-height: 320px;
+}
+
+.series-accordions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+
+.series-accordion-card {
+  border: 1.5px solid #94a3b8;
+  background: #ffffff;
+}
+
+.series-accordion-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  background: #eef2ff;
+}
+
+.series-accordion-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  text-align: left;
+  cursor: pointer;
+  color: #1e1b4b;
+}
+
+.accordion-arrow {
+  font-size: 0.9rem;
+  font-weight: 900;
+  width: 14px;
+}
+
+.accordion-title {
+  font-weight: 800;
+  font-size: 0.84rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accordion-count {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #4338ca;
+  background: #ffffff;
+  border: 1px solid #c7d2fe;
+  padding: 0.05rem 0.35rem;
+  white-space: nowrap;
+}
+
+.series-group-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+.series-inner-list {
+  max-height: 220px;
+  margin-bottom: 0;
+  padding: 0.4rem;
+  border-top: 1px solid #cbd5e1;
+  background: #f8fafc;
 }
 
 .unresolved-section {
