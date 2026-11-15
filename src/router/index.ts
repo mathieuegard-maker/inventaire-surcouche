@@ -47,6 +47,11 @@ export const router = createRouter({
       component: LoansView
     },
     {
+      path: '/friends',
+      name: 'FriendsView',
+      component: () => import('../ui/views/FriendsView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView

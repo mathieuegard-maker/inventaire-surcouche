@@ -1,236 +1,235 @@
+<template>
+  <div class="public-share-page">
+    <div v-if="loading" class="state-card">Chargement de la bibliothèque partagée...</div>
+
+    <div v-else-if="errorMsg" class="state-card error-card">
+      <h2>Lien invalide ou indisponible</h2>
+      <p>{{ errorMsg }}</p>
+      <button type="button" class="action-btn primary" @click="router.push('/login')">
+        Accéder à l'application
+      </button>
+    </div>
+
+    <template v-else-if="library">
+      <!-- Barre d'action contextuelle (connecté vs visiteur) -->
+      <div class="invite-banner">
+        <template v-if="isLoggedIn">
+          <div class="banner-text">
+            <strong>Connecté en tant que {{ currentUsername || 'Membre' }}</strong>
+            <span v-if="isOwnLibrary"> — Vous consultez votre propre vitrine publique.</span>
+            <span v-else> — Ajoutez cette bibliothèque à votre page Amis pour la retrouver facilement.</span>
+          </div>
+          <div class="banner-actions">
+            <button
+              v-if="!isOwnLibrary && !addedAsFriend"
+              type="button"
+              class="action-btn success"
+              :disabled="addingFriend"
+              @click="handleAddFriend"
+            >
+              {{ addingFriend ? 'Ajout...' : '👥 Ajouter à mes Amis' }}
+            </button>
+            <button
+              v-if="addedAsFriend"
+              type="button"
+              class="action-btn success"
+              @click="router.push('/friends')"
+            >
+              ✓ Ajouté — Voir mes Amis →
+            </button>
+            <button type="button" class="action-btn" @click="router.push('/dashboard')">
+              🏠 Mon tableau de bord
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="banner-text">
+            <strong>📖 Découvrez l'application Biblio</strong>
+            <span> — Consultez les albums et la wishlist ci-dessous, ou créez votre compte personnel pour suivre cet ami dans votre onglet Amis.</span>
+          </div>
+          <div class="banner-actions">
+            <button
+              v-if="canInstallPwa"
+              type="button"
+              class="action-btn"
+              @click="handleInstall"
+            >
+              📲 Installer l'app
+            </button>
+            <button type="button" class="action-btn success" @click="goToCreateAccount">
+              🚀 Créer mon compte &amp; suivre cet ami
+            </button>
+          </div>
+          <p v-if="iosHint" class="ios-hint">
+            Sur iPhone/iPad : appuyez sur Partager ⬆️ puis « Sur l'écran d'accueil » pour installer l'app.
+          </p>
+        </template>
+
+        <p v-if="friendStatusMsg" class="friend-status">{{ friendStatusMsg }}</p>
+      </div>
+
+      <SharedLibraryBrowser :library="library" />
+    </template>
+  </div>
+</template>
+
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { sessionStore } from '../../state/session';
+import { userService, type PublicSharePayload } from '../../core/services/user.service';
+import { canInstallPwa, isAppInstalled, isIosDevice, promptPwaInstall } from '../../core/utils/pwa-install.util';
+import SharedLibraryBrowser from '../components/SharedLibraryBrowser.vue';
 
 const route = useRoute();
 const router = useRouter();
 
-const isLoading = ref(true);
+const loading = ref(true);
 const errorMsg = ref('');
-const libraryName = ref('Bibliothèque partagée');
-const items = ref<Array<Record<string, any>>>([]);
-const filterText = ref('');
-const filterCategory = ref('ALL');
+const library = ref<PublicSharePayload | null>(null);
+const addingFriend = ref(false);
+const addedAsFriend = ref(false);
+const friendStatusMsg = ref('');
 
-onMounted(async () => {
-  const token = String(route.params.token || '').trim();
-  if (!token) {
+const cleanToken = computed(() => String(route.params.token || '').trim());
+const isLoggedIn = computed(() => Boolean(sessionStore.state.user?.uri || sessionStore.getUserUri()));
+const currentUsername = computed(() => sessionStore.state.user?.username || '');
+const isOwnLibrary = computed(
+  () => Boolean(library.value && sessionStore.state.user?.libraryId && library.value.libraryId === sessionStore.state.user.libraryId)
+);
+const iosHint = computed(() => isIosDevice() && !isAppInstalled.value && !canInstallPwa.value);
+
+const loadShare = async () => {
+  loading.value = true;
+  errorMsg.value = '';
+  addedAsFriend.value = false;
+  friendStatusMsg.value = '';
+  sessionStore.restoreSessionFromLocalStorage();
+
+  if (!cleanToken.value) {
     errorMsg.value = 'Jeton de partage manquant.';
-    isLoading.value = false;
+    loading.value = false;
     return;
   }
-  try {
-    const res = await fetch(`/api/gateway?action=public-share-get&token=${encodeURIComponent(token)}`);
-    const data = await res.json();
-    if (!res.ok) {
-      errorMsg.value = data.error || 'Lien de partage introuvable.';
-    } else {
-      libraryName.value = data.libraryName || 'Bibliothèque partagée';
-      items.value = data.items || [];
-    }
-  } catch {
-    errorMsg.value = 'Impossible de charger la bibliothèque partagée.';
-  } finally {
-    isLoading.value = false;
-  }
-});
 
-const filteredItems = computed(() => {
-  const q = filterText.value.toLowerCase().trim();
-  return items.value.filter((item) => {
-    if (filterCategory.value !== 'ALL' && item.main_category !== filterCategory.value) {
-      return false;
+  try {
+    library.value = await userService.fetchPublicLibrary(cleanToken.value);
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Impossible de charger cette bibliothèque.';
+  } finally {
+    loading.value = false;
+  }
+};
+
+const handleAddFriend = async () => {
+  if (!cleanToken.value) return;
+  addingFriend.value = true;
+  friendStatusMsg.value = '';
+  try {
+    const res = await userService.addFriend(cleanToken.value);
+    if (!res.ok) {
+      friendStatusMsg.value = res.error || "Impossible d'ajouter cet ami.";
+    } else {
+      addedAsFriend.value = true;
+      friendStatusMsg.value = `${library.value?.libraryName || 'Bibliothèque'} ajoutée à votre page Amis !`;
     }
-    if (!q) return true;
-    return String(item.title || '').toLowerCase().includes(q);
-  });
-});
+  } finally {
+    addingFriend.value = false;
+  }
+};
+
+const handleInstall = async () => {
+  await promptPwaInstall();
+};
+
+const goToCreateAccount = () => {
+  router.push({ path: '/login', query: { friend: cleanToken.value } });
+};
+
+onMounted(loadShare);
+watch(() => route.params.token, loadShare);
 </script>
 
-<template>
-  <div class="shared-view-container">
-    <div class="shared-header">
-      <div>
-        <h2>📚 {{ libraryName }} (Lecture seule)</h2>
-        <p>{{ items.length }} ouvrage(s) partagé(s)</p>
-      </div>
-      <button type="button" class="nav-btn" @click="router.push('/login')">
-        Ouvrir mon application
-      </button>
-    </div>
-
-    <div class="shared-filters">
-      <input
-        v-model="filterText"
-        placeholder="Rechercher un titre dans cette collection..."
-        class="search-input"
-      />
-      <select v-model="filterCategory" class="cat-select">
-        <option value="ALL">Toutes catégories</option>
-        <option value="BD">BD</option>
-        <option value="Manga">Manga</option>
-        <option value="Comics">Comics</option>
-        <option value="Roman">Roman</option>
-        <option value="Essai">Essai</option>
-        <option value="Jeunesse">Jeunesse</option>
-      </select>
-    </div>
-
-    <div v-if="isLoading" class="status-box">Chargement de la collection...</div>
-    <div v-else-if="errorMsg" class="status-box err">{{ errorMsg }}</div>
-    <div v-else-if="filteredItems.length === 0" class="status-box">
-      Aucun livre trouvé pour ce filtre.
-    </div>
-
-    <div v-else class="shared-grid">
-      <div v-for="(item, idx) in filteredItems" :key="idx" class="shared-card">
-        <div class="card-badges">
-          <span class="cat-badge">{{ item.main_category || 'Livre' }}</span>
-          <span v-if="item.ownership_status === 'wishlist'" class="status-badge wish">
-            💙 Wishlist
-          </span>
-          <span v-else-if="Number(item.is_lent) > 0" class="status-badge lent">
-            🟠 Déjà prêté
-          </span>
-          <span v-else class="status-badge avail">
-            ✅ Disponible
-          </span>
-        </div>
-        <h4 class="book-title">
-          {{ item.title || item.edition_id }}
-          <span v-if="item.series_number" class="vol-pill">T.{{ item.series_number }}</span>
-        </h4>
-      </div>
-    </div>
-  </div>
-</template>
-
 <style scoped>
-.shared-view-container {
-  max-width: 900px;
+.public-share-page {
+  max-width: 960px;
   margin: 0 auto;
   padding: 1rem;
-}
-
-.shared-header {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border: 2px solid #000;
-  background: #fff;
-  padding: 1rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.9rem;
 }
 
-.shared-header h2 {
-  margin: 0 0 0.25rem;
-}
-
-.shared-header p {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #475569;
-}
-
-.nav-btn {
-  border: 2px solid #000;
-  background: #4f46e5;
-  color: #fff;
-  padding: 0.5rem 0.85rem;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.shared-filters {
-  display: flex;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
-  flex-wrap: wrap;
-}
-
-.search-input {
-  flex: 1;
-  min-width: 220px;
-  border: 2px solid #000;
-  padding: 0.5rem;
-}
-
-.cat-select {
-  border: 2px solid #000;
-  padding: 0.5rem;
-  background: #fff;
-  font-weight: 700;
-}
-
-.shared-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 0.75rem;
-}
-
-.shared-card {
-  border: 2px solid #000;
-  background: #fff;
-  padding: 0.75rem;
-}
-
-.card-badges {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 0.4rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
-.cat-badge {
-  background: #f1f5f9;
-  border: 1px solid #000;
-  padding: 0.1rem 0.4rem;
-}
-
-.status-badge {
-  padding: 0.1rem 0.4rem;
-  border: 1px solid #000;
-}
-
-.status-badge.avail {
-  background: #dcfce7;
-  color: #14532d;
-}
-
-.status-badge.lent {
-  background: #ffedd5;
-  color: #7c2d12;
-}
-
-.status-badge.wish {
-  background: #dbeafe;
-  color: #1e3a8a;
-}
-
-.book-title {
-  margin: 0;
-  font-size: 0.95rem;
-}
-
-.vol-pill {
-  font-size: 0.8rem;
-  color: #4f46e5;
-  margin-left: 0.3rem;
-}
-
-.status-box {
-  border: 2px solid #000;
+.state-card {
+  border: 2.5px solid #111827;
   background: #fff;
   padding: 1.5rem;
   text-align: center;
-  font-weight: 700;
+  box-shadow: 4px 4px 0 #111827;
 }
 
-.status-box.err {
-  background: #fee2e2;
+.error-card {
+  background: #fef2f2;
   color: #991b1b;
+}
+
+.invite-banner {
+  border: 2px solid #111827;
+  background: #fffbeb;
+  padding: 0.8rem 0.9rem;
+  box-shadow: 3px 3px 0 #111827;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.banner-text {
+  font-size: 0.86rem;
+  color: #1f2937;
+  line-height: 1.4;
+}
+
+.banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.action-btn {
+  border: 2px solid #111827;
+  background: #fff;
+  padding: 0.48rem 0.85rem;
+  font-weight: 800;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.action-btn.primary {
+  background: #4f46e5;
+  color: #fff;
+}
+
+.action-btn.success {
+  background: #059669;
+  color: #fff;
+}
+
+.action-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.ios-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: #6b7280;
+}
+
+.friend-status {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #065f46;
 }
 </style>

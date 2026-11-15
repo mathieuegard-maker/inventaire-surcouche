@@ -12,6 +12,7 @@ const handleHome = () => { isMenuOpen.value = false; router.push('/dashboard'); 
 const handleCollection = () => { isMenuOpen.value = false; router.push('/collection'); };
 const handleWishlist = () => { isMenuOpen.value = false; router.push('/wishlist'); };
 const handleLoans = () => { isMenuOpen.value = false; router.push('/loans'); };
+const handleFriends = () => { isMenuOpen.value = false; router.push('/friends'); };
 
 const toggleScan = () => {
   isMenuOpen.value = false;
@@ -33,6 +34,9 @@ const toggleScan = () => {
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleLoans">
         {{ TEXTS.header?.loans || 'PRÊTS' }}
+      </button>
+      <button class="wireframe-btn header-nav-btn" @click="handleFriends">
+        AMIS
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleHome">
         {{ TEXTS.header?.home || 'ACCUEIL' }}
@@ -64,6 +68,9 @@ const toggleScan = () => {
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleLoans">
           {{ TEXTS.header?.loans || 'PRÊTS' }}
+        </button>
+        <button class="wireframe-btn menu-drawer-item" @click="handleFriends">
+          AMIS
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleHome">
           {{ TEXTS.header?.home || 'ACCUEIL' }}

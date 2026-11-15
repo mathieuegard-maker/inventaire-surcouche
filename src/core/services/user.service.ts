@@ -2,6 +2,45 @@
 import { sessionStore } from '../../state/session';
 import { fetchWithTimeout } from '../../state/connection';
 
+export interface FriendLibrarySummary {
+  libraryId: string;
+  libraryName: string;
+  ownerName: string | null;
+  shareToken: string;
+  createdAt?: string;
+  ownedCount: number;
+  wishlistCount: number;
+}
+
+export interface LoanContact {
+  name: string;
+  source: 'friend_share' | 'borrower';
+}
+
+export interface SharedLibraryItem {
+  edition_id: string;
+  work_id?: string | null;
+  ownership_status: 'owned' | 'wishlist';
+  location?: string | null;
+  title?: string | null;
+  series_uri?: string | null;
+  series_name?: string | null;
+  series_number?: number | string | null;
+  sort_order?: number | null;
+  image_url?: string | null;
+  main_category?: string | null;
+  is_lent?: number | boolean;
+}
+
+export interface PublicSharePayload {
+  libraryId: string;
+  libraryName: string;
+  ownerName?: string | null;
+  token?: string;
+  tokenType: string;
+  items: SharedLibraryItem[];
+}
+
 export const userService = {
   /**
    * Récupère le profil de l'utilisateur actuellement connecté (cookie ou URI de bibliothèque en repli)
@@ -25,14 +64,20 @@ export const userService = {
   /**
    * Authentification ou création de compte V2 autonome sur Cloudflare D1
    * Supporte optionnellement un code d'invitation famille (`inviteCode`)
+   * et/ou un jeton ami à suivre (`friendToken`)
    */
-  async login(username: string, password: string, inviteCode?: string): Promise<boolean> {
+  async login(username: string, password: string, inviteCode?: string, friendToken?: string): Promise<boolean> {
     const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ username, password, ...(inviteCode ? { inviteCode } : {}) })
+      body: JSON.stringify({
+        username,
+        password,
+        ...(inviteCode ? { inviteCode } : {}),
+        ...(friendToken ? { friendToken } : {})
+      })
     });
 
     const data = await res.json();
@@ -72,5 +117,71 @@ export const userService = {
       });
     }
     return { ok: true };
+  },
+
+  /**
+   * Liste les bibliothèques d'amis suivies par l'utilisateur connecté
+   */
+  async listFriends(): Promise<FriendLibrarySummary[]> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=friends-list${query}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.friends) ? data.friends : [];
+  },
+
+  /**
+   * Ajoute un ami à partir d'un code PUB-... ou d'un lien /shared/PUB-...
+   */
+  async addFriend(tokenOrUrl: string): Promise<{ ok: boolean; friend?: FriendLibrarySummary; error?: string }> {
+    const userUri = sessionStore.getUserUri();
+    const res = await fetchWithTimeout('/api/gateway?action=friends-add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenOrUrl.trim(), userUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.ok) {
+      return { ok: false, error: data?.error || 'Code ou lien ami invalide.' };
+    }
+    return { ok: true, friend: data.friend };
+  },
+
+  /**
+   * Retire un ami de la liste suivie (révocable sans impacter la bibliothèque de l'ami)
+   */
+  async removeFriend(targetLibraryId: string): Promise<boolean> {
+    const userUri = sessionStore.getUserUri();
+    const res = await fetchWithTimeout('/api/gateway?action=friends-remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetLibraryId, userUri })
+    });
+    return res.ok;
+  },
+
+  /**
+   * Charge la vitrine lecture seule d'un ami via son jeton PUB-...
+   */
+  async fetchPublicLibrary(token: string): Promise<PublicSharePayload> {
+    const res = await fetchWithTimeout(`/api/gateway?action=public-share-get&token=${encodeURIComponent(token.trim())}`);
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || 'Lien de partage introuvable ou expiré.');
+    }
+    return data as PublicSharePayload;
+  },
+
+  /**
+   * Récupère la liste des contacts de prêt (amis partagés + emprunteurs enregistrés)
+   */
+  async listLoanContacts(): Promise<LoanContact[]> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=loan-contacts-list${query}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.contacts) ? data.contacts : [];
   }
 };

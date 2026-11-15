@@ -46,6 +46,56 @@ function jsonResp(
   });
 }
 
+function extractShareToken(raw: string): string {
+  const trimmed = String(raw || '').trim();
+  const match = /((?:PUB|FAM)-[A-Z0-9]{4,12})/i.exec(trimmed);
+  return (match ? match[1] : trimmed).toUpperCase();
+}
+
+async function addFriendConnectionForUser(
+  db: DatabaseBinding,
+  userId: string,
+  rawToken: string
+): Promise<{ ok: boolean; error?: string; friend?: Record<string, unknown> }> {
+  const shareToken = extractShareToken(rawToken);
+  if (!shareToken) return { ok: false, error: 'Code ou lien ami requis.' };
+
+  const tokenRow = await db
+    .prepare(
+      `SELECT s.token, s.library_id, l.name as library_name, u.display_name as owner_name
+       FROM share_tokens s
+       JOIN libraries l ON l.id = s.library_id
+       LEFT JOIN users u ON u.id = l.owner_user_id
+       WHERE UPPER(s.token) = ? AND s.token_type = 'public_collection_readonly'
+       LIMIT 1`
+    )
+    .bind(shareToken)
+    .first<{ token: string; library_id: string; library_name: string; owner_name: string | null }>();
+
+  if (!tokenRow) {
+    return { ok: false, error: 'Lien ou code Vitrine Amis introuvable.' };
+  }
+
+  const now = new Date().toISOString();
+  await db
+    .prepare(
+      `INSERT OR REPLACE INTO friend_connections (user_id, target_library_id, share_token, display_label, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    )
+    .bind(userId, tokenRow.library_id, tokenRow.token, tokenRow.library_name, now)
+    .run();
+
+  return {
+    ok: true,
+    friend: {
+      libraryId: tokenRow.library_id,
+      libraryName: tokenRow.library_name,
+      ownerName: tokenRow.owner_name || tokenRow.library_name,
+      shareToken: tokenRow.token
+    }
+  };
+}
+
 async function getOrCreateShareTokens(
   db: DatabaseBinding,
   libraryId: string,
@@ -206,6 +256,17 @@ export async function handleD1GatewayAction(
         .bind(tokenHash, userRow.id, expiresAt, now)
         .run();
 
+      // Si l'utilisateur arrive depuis un QR code "Vitrine Amis", on mémorise cet ami sur son compte
+      // sans jamais mélanger sa collection personnelle avec celle de son ami
+      const friendToken = String(body?.friendToken || '').trim();
+      let followedFriend: Record<string, unknown> | undefined;
+      if (friendToken) {
+        const res = await addFriendConnectionForUser(db, userRow.id, friendToken);
+        if (res.ok && res.friend) {
+          followedFriend = res.friend;
+        }
+      }
+
       const tokens = await getOrCreateShareTokens(db, targetLibraryId, userRow.id);
       const isHttps = url.protocol === 'https:';
       const cookieStr = `biblio_session=${rawSessionToken}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isHttps ? '; Secure' : ''}`;
@@ -218,7 +279,8 @@ export async function handleD1GatewayAction(
           libraryId: targetLibraryId,
           sessionToken: rawSessionToken,
           inviteCode: tokens.inviteCode,
-          publicReadonlyToken: tokens.publicReadonlyToken
+          publicReadonlyToken: tokens.publicReadonlyToken,
+          ...(followedFriend ? { followedFriend } : {})
         },
         200,
         { 'Set-Cookie': cookieStr }
@@ -294,36 +356,154 @@ export async function handleD1GatewayAction(
     }
 
     case 'public-share-get': {
-      const shareToken = String(url.searchParams.get('token') || '').trim().toUpperCase();
+      const shareToken = extractShareToken(String(url.searchParams.get('token') || ''));
       if (!shareToken) return jsonResp({ error: 'Jeton requis' }, 400);
 
       const tokenRow = await db
         .prepare(
-          'SELECT s.library_id, s.token_type, l.name as library_name FROM share_tokens s JOIN libraries l ON l.id = s.library_id WHERE UPPER(s.token) = ? LIMIT 1'
+          `SELECT s.library_id, s.token_type, s.token, l.name as library_name, u.display_name as owner_name
+           FROM share_tokens s
+           JOIN libraries l ON l.id = s.library_id
+           LEFT JOIN users u ON u.id = l.owner_user_id
+           WHERE UPPER(s.token) = ? LIMIT 1`
         )
         .bind(shareToken)
-        .first<{ library_id: string; token_type: string; library_name: string }>();
+        .first<{ library_id: string; token_type: string; token: string; library_name: string; owner_name: string | null }>();
 
       if (!tokenRow) return jsonResp({ error: 'Lien de partage invalide' }, 404);
 
       const items = await db
         .prepare(
           `SELECT li.edition_id, li.work_id, li.ownership_status, li.location,
-                  ce.label as title, ce.series_uri, ce.series_number, ce.image_url, ce.main_category, ce.entity_json,
+                  ce.label as title, ce.series_uri, se.label as series_name,
+                  ce.series_number, ce.sort_order, ce.image_url, ce.main_category,
                   (SELECT COUNT(*) FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent
            FROM library_items li
            LEFT JOIN catalog_entities ce ON ce.uri = COALESCE(li.edition_id, li.work_id)
+           LEFT JOIN catalog_entities se ON se.uri = ce.series_uri
            WHERE li.library_id = ? AND li.deleted_at IS NULL
-           ORDER BY ce.label ASC`
+           ORDER BY COALESCE(se.label, ce.label) ASC, ce.sort_order ASC, ce.label ASC`
         )
         .bind(tokenRow.library_id)
         .all();
 
       return jsonResp({
+        libraryId: tokenRow.library_id,
         libraryName: tokenRow.library_name,
+        ownerName: tokenRow.owner_name || tokenRow.library_name,
+        token: tokenRow.token,
         tokenType: tokenRow.token_type,
         items: items.results || []
       });
+    }
+
+    case 'friends-list': {
+      const auth = await resolveAuthSession(db, request, url.searchParams.get('uri'));
+      if (!auth) return jsonResp({ error: 'Session invalide' }, 401);
+
+      const rows = await db
+        .prepare(
+          `SELECT fc.target_library_id as libraryId,
+                  COALESCE(fc.display_label, l.name) as libraryName,
+                  u.display_name as ownerName,
+                  fc.share_token as shareToken,
+                  fc.created_at as createdAt,
+                  (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'owned' AND li.deleted_at IS NULL) as ownedCount,
+                  (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'wishlist' AND li.deleted_at IS NULL) as wishlistCount
+           FROM friend_connections fc
+           JOIN libraries l ON l.id = fc.target_library_id
+           LEFT JOIN users u ON u.id = l.owner_user_id
+           WHERE fc.user_id = ?
+           ORDER BY fc.created_at DESC`
+        )
+        .bind(auth.userId)
+        .all();
+
+      return jsonResp({ friends: rows.results || [] });
+    }
+
+    case 'friends-add': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) return jsonResp({ error: 'Session invalide' }, 401);
+      const token = String(body?.token || body?.shareToken || '');
+      const result = await addFriendConnectionForUser(db, auth.userId, token);
+      if (!result.ok) {
+        return jsonResp({ error: result.error || 'Code ami invalide.' }, 400);
+      }
+      return jsonResp(result);
+    }
+
+    case 'friends-remove': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) return jsonResp({ error: 'Session invalide' }, 401);
+      const targetLibraryId = String(body?.targetLibraryId || '').trim();
+      if (targetLibraryId) {
+        await db
+          .prepare('DELETE FROM friend_connections WHERE user_id = ? AND target_library_id = ?')
+          .bind(auth.userId, targetLibraryId)
+          .run();
+      }
+      return jsonResp({ ok: true });
+    }
+
+    case 'loan-contacts-list': {
+      const auth = await resolveAuthSession(db, request, url.searchParams.get('uri'));
+      if (!auth) return jsonResp({ contacts: [] });
+
+      const contactMap = new Map<string, { name: string; source: 'friend_share' | 'borrower' }>();
+      const addContact = (rawName: string | null | undefined, source: 'friend_share' | 'borrower') => {
+        const clean = String(rawName || '').trim();
+        if (!clean || clean.toLowerCase() === auth.username.toLowerCase()) return;
+        const key = clean.toLowerCase();
+        const existing = contactMap.get(key);
+        if (!existing || (source === 'friend_share' && existing.source !== 'friend_share')) {
+          contactMap.set(key, { name: clean, source });
+        }
+      };
+
+      // 1. Amis connus par partage (bibliothèques suivies + personnes qui suivent ma bibliothèque)
+      const followedOwners = await db
+        .prepare(
+          `SELECT u.display_name as name
+           FROM friend_connections fc
+           JOIN libraries l ON l.id = fc.target_library_id
+           JOIN users u ON u.id = l.owner_user_id
+           WHERE fc.user_id = ?`
+        )
+        .bind(auth.userId)
+        .all<{ name: string }>();
+      for (const r of followedOwners.results || []) addContact(r.name, 'friend_share');
+
+      const followers = await db
+        .prepare(
+          `SELECT u.display_name as name
+           FROM friend_connections fc
+           JOIN users u ON u.id = fc.user_id
+           WHERE fc.target_library_id = ?`
+        )
+        .bind(auth.libraryId)
+        .all<{ name: string }>();
+      for (const r of followers.results || []) addContact(r.name, 'friend_share');
+
+      // 2. Personnes déjà enregistrées dans le carnet ou sur d'anciens prêts
+      const savedContacts = await db
+        .prepare('SELECT name, source FROM borrower_contacts WHERE library_id = ? ORDER BY name ASC')
+        .bind(auth.libraryId)
+        .all<{ name: string; source: 'friend_share' | 'borrower' }>();
+      for (const r of savedContacts.results || []) {
+        addContact(r.name, r.source === 'friend_share' ? 'friend_share' : 'borrower');
+      }
+
+      const prevLoans = await db
+        .prepare('SELECT DISTINCT borrower_name FROM loans WHERE library_id = ? AND deleted_at IS NULL')
+        .bind(auth.libraryId)
+        .all<{ borrower_name: string }>();
+      for (const r of prevLoans.results || []) addContact(r.borrower_name, 'borrower');
+
+      const contacts = Array.from(contactMap.values()).sort((a, b) =>
+        a.name.localeCompare(b.name, 'fr')
+      );
+      return jsonResp({ contacts });
     }
 
     // ========================================================================
@@ -601,6 +781,16 @@ export async function handleD1GatewayAction(
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(loanId, libraryId, itemRef, borrowerName, now, description, now, now)
+          .run();
+
+        // Mémorise automatiquement l'emprunteur dans le carnet de contacts de la bibliothèque
+        const contactId = `cnt_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        await db
+          .prepare(
+            `INSERT OR IGNORE INTO borrower_contacts (id, library_id, name, source, created_at)
+             VALUES (?, ?, ?, 'manual', ?)`
+          )
+          .bind(contactId, libraryId, borrowerName, now)
           .run();
 
         return jsonResp({

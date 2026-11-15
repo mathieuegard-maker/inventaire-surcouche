@@ -128,6 +128,14 @@ watch(
       >
         👨‍👩‍👧‍👦 Foyer &amp; Partage
       </button>
+      <button
+        type="button"
+        class="wireframe-btn"
+        style="background: #f0f9ff; color: #0369a1; font-weight: 800; padding: 0.65rem;"
+        @click="router.push('/friends')"
+      >
+        👥 Mes Amis
+      </button>
     </div>
 
     <FamilyShareModal :show="showFamilyModal" @close="showFamilyModal = false" />
