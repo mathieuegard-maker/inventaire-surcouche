@@ -6,9 +6,13 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import {
   byokVisionService,
-  type ByokProvider,
-  type RecognizedBookCandidate
+  type ByokProvider
 } from '../../core/services/byok-vision.service';
+import {
+  photoBookResolutionService,
+  type ResolvedPhotoItem
+} from '../../core/services/photo-book-resolution.service';
+import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 
 const router = useRouter();
 
@@ -151,8 +155,13 @@ const isTestingKey = ref(false);
 const isAnalyzingPhoto = ref(false);
 const photoLoadingStatus = ref('Compression WebP et analyse visuelle des livres en cours...');
 const photoError = ref('');
-const recognizedCandidates = ref<RecognizedBookCandidate[]>([]);
+const resolvedDetectedItems = ref<ResolvedPhotoItem[]>([]);
+const unresolvedItems = ref<ResolvedPhotoItem[]>([]);
+const seriesExtraItems = ref<ResolvedPhotoItem[]>([]);
+const detectedSeriesNames = ref<string[]>([]);
+const retryingItemId = ref<string | null>(null);
 const photoTargetStatus = ref<'owned' | 'wish'>('owned');
+const seriesExtraTarget = ref<'none' | 'wish' | 'owned'>('none');
 const photoSavingFeedback = ref('');
 
 async function handleSaveAndTestByok() {
@@ -181,18 +190,30 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   if (!file) return;
 
   photoError.value = '';
-  recognizedCandidates.value = [];
+  resolvedDetectedItems.value = [];
+  unresolvedItems.value = [];
+  seriesExtraItems.value = [];
+  detectedSeriesNames.value = [];
   isAnalyzingPhoto.value = true;
   photoLoadingStatus.value = 'Compression WebP et analyse visuelle des livres en cours...';
 
   try {
-    const candidates = await byokVisionService.analyzePhoto(file, mode, (msg) => {
+    const rawCandidates = await byokVisionService.analyzePhoto(file, mode, (msg) => {
       photoLoadingStatus.value = msg;
     });
-    if (!candidates.length) {
+    if (!rawCandidates.length) {
       photoError.value = "Aucun titre lisible n'a été détecté sur la photo. Réessayez avec plus de lumière.";
     } else {
-      recognizedCandidates.value = candidates;
+      const batch = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries(
+        rawCandidates,
+        (msg) => {
+          photoLoadingStatus.value = msg;
+        }
+      );
+      resolvedDetectedItems.value = batch.detectedItems.filter((i) => i.status === 'resolved');
+      unresolvedItems.value = batch.detectedItems.filter((i) => i.status === 'unresolved');
+      seriesExtraItems.value = batch.seriesExtraItems;
+      detectedSeriesNames.value = batch.detectedSeriesNames;
     }
   } catch (err: unknown) {
     photoError.value = err instanceof Error ? err.message : 'Erreur lors de la lecture de la photo.';
@@ -202,40 +223,128 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   }
 }
 
-const selectedCandidatesCount = computed(
-  () => recognizedCandidates.value.filter((c) => c.selected).length
+async function retryUnresolvedItem(item: ResolvedPhotoItem) {
+  if (!item.rawCandidate.title.trim() && !item.rawCandidate.isbn?.trim()) return;
+  retryingItemId.value = item.id;
+  try {
+    const resolved = await photoBookResolutionService.resolveSingleCandidate(item.rawCandidate, 'retry');
+    if (resolved.status !== 'resolved') {
+      item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
+      return;
+    }
+
+    unresolvedItems.value = unresolvedItems.value.filter((u) => u.id !== item.id);
+    const alreadyExists = resolved.isbn13 && resolvedDetectedItems.value.some((d) => d.isbn13 === resolved.isbn13);
+    if (!alreadyExists) {
+      resolvedDetectedItems.value.push(resolved);
+    }
+
+    // Si une nouvelle série est découverte, proposer aussi ses autres tomes dans la liste finale
+    if (resolved.series?.trim()) {
+      const sKey = normalizeTextKey(resolved.series);
+      const alreadyHasSeries = detectedSeriesNames.value.some((s) => normalizeTextKey(s) === sKey);
+      if (!alreadyHasSeries) {
+        const batch = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries([
+          resolved.rawCandidate
+        ]);
+        const existingIsbns = new Set([
+          ...resolvedDetectedItems.value.map((d) => d.isbn13).filter(Boolean),
+          ...seriesExtraItems.value.map((e) => e.isbn13).filter(Boolean)
+        ]);
+        for (const extra of batch.seriesExtraItems) {
+          if (extra.isbn13 && !existingIsbns.has(extra.isbn13)) {
+            seriesExtraItems.value.push(extra);
+            existingIsbns.add(extra.isbn13);
+          }
+        }
+        detectedSeriesNames.value.push(...batch.detectedSeriesNames);
+      }
+    }
+  } finally {
+    retryingItemId.value = null;
+  }
+}
+
+function toggleAllSeriesExtras(selectAll: boolean) {
+  for (const item of seriesExtraItems.value) {
+    if (!item.alreadyOwned) {
+      item.selected = selectAll;
+    }
+  }
+}
+
+const selectedDetectedCount = computed(
+  () => resolvedDetectedItems.value.filter((c) => c.selected).length
 );
 
-async function confirmAndSaveCandidates() {
-  const toSave = recognizedCandidates.value.filter((c) => c.selected && c.title.trim());
-  if (!toSave.length) return;
+const selectedSeriesCount = computed(
+  () => seriesExtraItems.value.filter((c) => c.selected).length
+);
 
-  for (const cand of toSave) {
-    const syntheticIsbn = cand.isbn || `PHOTO-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    await backgroundCreationOrchestrator.enqueueBookCreation({
-      tempBook: {
-        uri: `local:photo:${syntheticIsbn}`,
-        type: 'edition',
-        isbn13: cand.isbn,
-        title: cand.title.trim(),
-        authors: cand.author?.trim() ? [cand.author.trim()] : ['Auteur non précisé'],
-        illustrators: [],
-        scriptwriters: [],
-        publisher: cand.publisher?.trim() || '',
-        series: cand.series?.trim() || undefined,
-        seriesNumber: cand.volumeNumber?.trim() || undefined,
-        genres: [],
-        ownershipStatus: photoTargetStatus.value
-      },
-      expandSeries: false
-    });
+const totalSelectedToSave = computed(
+  () => selectedDetectedCount.value + selectedSeriesCount.value
+);
+
+async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'wish' | 'none') {
+  if (!item.isbn13) return;
+
+  if (item.existingUri && (target === 'owned' || target === 'wish')) {
+    await queueService.enqueueAction(target === 'owned' ? 'ADD_INVENTORY' : 'ADD_WISHLIST', item.existingUri);
+    return;
   }
 
-  photoSavingFeedback.value = `${toSave.length} livre(s) ajouté(s) en tâche de fond ✓`;
-  recognizedCandidates.value = [];
+  await backgroundCreationOrchestrator.enqueueBookCreation({
+    tempBook: {
+      uri: item.existingUri || `isbn:${item.isbn13}`,
+      workUri: item.existingWorkUri,
+      type: 'edition',
+      isbn13: item.isbn13,
+      title: item.title,
+      authors: item.authors.length ? item.authors : ['Auteur inconnu'],
+      illustrators: [],
+      scriptwriters: [],
+      publisher: item.publisher || '',
+      publishDate: item.publishDate,
+      pageCount: item.pageCount,
+      coverUrl: item.coverUrl,
+      series: item.series,
+      seriesNumber: item.seriesNumber,
+      genres: [],
+      ownershipStatus: target
+    },
+    ownershipTarget: target,
+    // Les tomes de la série sont déjà extraits et validés explicitement ci-dessous
+    expandSeries: false
+  });
+}
+
+async function confirmAndSaveCandidates() {
+  const detectedToSave = resolvedDetectedItems.value.filter((c) => c.selected && c.isbn13);
+  const extrasToSave = seriesExtraItems.value.filter((c) => c.selected && c.isbn13);
+  if (!detectedToSave.length && !extrasToSave.length) return;
+
+  const processedIsbns = new Set<string>();
+  for (const item of detectedToSave) {
+    if (!item.isbn13 || processedIsbns.has(item.isbn13)) continue;
+    processedIsbns.add(item.isbn13);
+    await enqueueResolvedItem(item, photoTargetStatus.value);
+  }
+
+  for (const extra of extrasToSave) {
+    if (!extra.isbn13 || processedIsbns.has(extra.isbn13)) continue;
+    processedIsbns.add(extra.isbn13);
+    await enqueueResolvedItem(extra, seriesExtraTarget.value);
+  }
+
+  scannerState.notifyCatalogChanged();
+  photoSavingFeedback.value = `${detectedToSave.length} livre(s) + ${extrasToSave.length} tome(s) de série validé(s) et envoyé(s) dans le flux catalogue ✓`;
+  resolvedDetectedItems.value = [];
+  unresolvedItems.value = [];
+  seriesExtraItems.value = [];
+  detectedSeriesNames.value = [];
   setTimeout(() => {
     photoSavingFeedback.value = '';
-  }, 3000);
+  }, 4000);
 }
 </script>
 
@@ -543,41 +652,153 @@ async function confirmAndSaveCandidates() {
         <div v-if="photoError" class="error-banner">{{ photoError }}</div>
         <div v-if="photoSavingFeedback" class="quick-feedback">{{ photoSavingFeedback }}</div>
 
-        <!-- Validation livre par livre -->
-        <div v-if="recognizedCandidates.length > 0" class="candidates-validation-box">
-          <div class="validation-header">
-            <h4>Validation livre par livre ({{ selectedCandidatesCount }}/{{ recognizedCandidates.length }} cochés)</h4>
-            <select v-model="photoTargetStatus" class="provider-select">
-              <option value="owned">Ajouter à ma Collection</option>
-              <option value="wish">Ajouter à ma Wishlist</option>
-            </select>
+        <!-- Validation après résolution BnF / ISBN / Couvertures + Découverte séries -->
+        <div
+          v-if="resolvedDetectedItems.length > 0 || unresolvedItems.length > 0 || seriesExtraItems.length > 0"
+          class="candidates-validation-box"
+        >
+          <!-- SECTION 1 : LIVRES IDENTIFIÉS (BNF + COUVERTURE) -->
+          <div v-if="resolvedDetectedItems.length > 0" class="validation-section">
+            <div class="validation-header">
+              <h4>✅ Identifiés via BnF/ISBN ({{ selectedDetectedCount }}/{{ resolvedDetectedItems.length }})</h4>
+              <select v-model="photoTargetStatus" class="provider-select">
+                <option value="owned">Ajouter à ma Collection</option>
+                <option value="wish">Ajouter à ma Wishlist</option>
+              </select>
+            </div>
+
+            <div class="candidates-list">
+              <div
+                v-for="item in resolvedDetectedItems"
+                :key="item.id"
+                class="candidate-row resolved-row"
+              >
+                <input type="checkbox" v-model="item.selected" class="cand-check" />
+                <img
+                  v-if="item.coverUrl"
+                  :src="item.coverUrl"
+                  :alt="item.title"
+                  class="cand-cover-thumb"
+                />
+                <div v-else class="cand-cover-fallback">📖</div>
+                <div class="cand-meta">
+                  <div class="cand-title-line">
+                    <span v-if="item.series" class="cand-series-pill">
+                      {{ item.series }}<template v-if="item.seriesNumber"> T.{{ item.seriesNumber }}</template>
+                    </span>
+                    <strong>{{ item.title }}</strong>
+                  </div>
+                  <div class="cand-sub-meta">
+                    <span v-if="item.authors.length">{{ item.authors.join(', ') }}</span>
+                    <span v-if="item.publisher"> • {{ item.publisher }}</span>
+                    <span v-if="item.publishDate"> ({{ item.publishDate }})</span>
+                  </div>
+                  <div class="cand-badges">
+                    <code class="isbn-tag">{{ item.isbn13 }}</code>
+                    <span v-if="item.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
+                    <span v-else-if="item.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                    <span v-if="!item.coverUrl" class="mini-badge warn">Sans couverture trouvée</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div class="candidates-list">
-            <div
-              v-for="(cand, idx) in recognizedCandidates"
-              :key="idx"
-              class="candidate-row"
-            >
-              <input type="checkbox" v-model="cand.selected" class="cand-check" />
-              <div class="cand-fields">
-                <input v-model="cand.title" placeholder="Titre du livre" class="cand-input bold" />
-                <div class="cand-sub-row">
-                  <input v-model="cand.series" placeholder="Série (si BD/saga)" class="cand-input" />
-                  <input v-model="cand.volumeNumber" placeholder="Tome" class="cand-input small" />
-                  <input v-model="cand.author" placeholder="Auteur" class="cand-input" />
+          <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES -->
+          <div v-if="seriesExtraItems.length > 0" class="validation-section series-extras-section">
+            <div class="validation-header">
+              <h4>📚 Autres tomes trouvés ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
+              <div class="series-controls-inline">
+                <select v-model="seriesExtraTarget" class="provider-select">
+                  <option value="none">Fiches série (catalogue seul)</option>
+                  <option value="wish">Ajouter en Wishlist</option>
+                  <option value="owned">Ajouter en Collection</option>
+                </select>
+                <button type="button" class="link-btn" @click="toggleAllSeriesExtras(true)">Tout</button>
+                <button type="button" class="link-btn" @click="toggleAllSeriesExtras(false)">Aucun</button>
+              </div>
+            </div>
+
+            <div class="candidates-list">
+              <div
+                v-for="extra in seriesExtraItems"
+                :key="extra.id"
+                class="candidate-row resolved-row"
+              >
+                <input type="checkbox" v-model="extra.selected" class="cand-check" />
+                <img
+                  v-if="extra.coverUrl"
+                  :src="extra.coverUrl"
+                  :alt="extra.title"
+                  class="cand-cover-thumb"
+                />
+                <div v-else class="cand-cover-fallback">📖</div>
+                <div class="cand-meta">
+                  <div class="cand-title-line">
+                    <span v-if="extra.series" class="cand-series-pill">
+                      {{ extra.series }}<template v-if="extra.seriesNumber"> T.{{ extra.seriesNumber }}</template>
+                    </span>
+                    <strong>{{ extra.title }}</strong>
+                  </div>
+                  <div class="cand-sub-meta">
+                    <span v-if="extra.authors.length">{{ extra.authors.join(', ') }}</span>
+                    <span v-if="extra.publisher"> • {{ extra.publisher }}</span>
+                    <span v-if="extra.publishDate"> ({{ extra.publishDate }})</span>
+                  </div>
+                  <div class="cand-badges">
+                    <code class="isbn-tag">{{ extra.isbn13 }}</code>
+                    <span v-if="extra.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
+                    <span v-else-if="extra.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- SECTION 3 : NON IDENTIFIÉS SUR BNF / GOOGLE BOOKS (NON VALIDABLES TEL QUEL) -->
+          <div v-if="unresolvedItems.length > 0" class="validation-section unresolved-section">
+            <div class="validation-header">
+              <h4>⚠️ Non identifiés sur BnF ({{ unresolvedItems.length }}) — Non validables sans notice</h4>
+            </div>
+            <div class="candidates-list unresolved-list">
+              <div
+                v-for="u in unresolvedItems"
+                :key="u.id"
+                class="candidate-row unresolved-row"
+              >
+                <div class="cand-fields">
+                  <input v-model="u.rawCandidate.title" placeholder="Titre du livre" class="cand-input bold" />
+                  <div class="cand-sub-row">
+                    <input v-model="u.rawCandidate.series" placeholder="Série" class="cand-input" />
+                    <input v-model="u.rawCandidate.volumeNumber" placeholder="Tome" class="cand-input small" />
+                    <input v-model="u.rawCandidate.author" placeholder="Auteur" class="cand-input" />
+                  </div>
+                  <div class="cand-sub-row">
+                    <input v-model="u.rawCandidate.publisher" placeholder="Éditeur" class="cand-input" />
+                    <input v-model="u.rawCandidate.isbn" placeholder="ISBN (optionnel)" class="cand-input" />
+                    <button
+                      type="button"
+                      class="action-btn retry-bnf-btn"
+                      :disabled="retryingItemId === u.id"
+                      @click="retryUnresolvedItem(u)"
+                    >
+                      {{ retryingItemId === u.id ? 'Recherche...' : '🔍 BnF' }}
+                    </button>
+                  </div>
+                  <small v-if="u.failureReason" class="unresolved-msg">{{ u.failureReason }}</small>
                 </div>
               </div>
             </div>
           </div>
 
           <button
+            v-if="resolvedDetectedItems.length > 0 || seriesExtraItems.length > 0"
             type="button"
             class="action-btn primary full-width"
-            :disabled="selectedCandidatesCount === 0"
+            :disabled="totalSelectedToSave === 0"
             @click="confirmAndSaveCandidates"
           >
-            ✅ Valider et enregistrer les {{ selectedCandidatesCount }} livre(s) coché(s)
+            ✅ Valider {{ selectedDetectedCount }} livre(s) + {{ selectedSeriesCount }} tome(s) de série
           </button>
         </div>
       </div>
@@ -1037,6 +1258,135 @@ async function confirmAndSaveCandidates() {
 
 .cand-input.small {
   max-width: 70px;
+}
+
+.validation-section {
+  margin-bottom: 0.75rem;
+}
+
+.series-extras-section {
+  border-top: 2px dashed #cbd5e1;
+  padding-top: 0.65rem;
+}
+
+.series-controls-inline {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.unresolved-section {
+  border-top: 2px dashed #f59e0b;
+  padding-top: 0.65rem;
+}
+
+.resolved-row {
+  align-items: center;
+}
+
+.cand-cover-thumb {
+  width: 42px;
+  height: 58px;
+  object-fit: cover;
+  border: 1px solid #0f172a;
+  flex-shrink: 0;
+  background: #f1f5f9;
+}
+
+.cand-cover-fallback {
+  width: 42px;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cbd5e1;
+  background: #f1f5f9;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+
+.cand-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.cand-title-line {
+  font-size: 0.84rem;
+  line-height: 1.25;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.cand-series-pill {
+  background: #eef2ff;
+  color: #3730a3;
+  border: 1px solid #c7d2fe;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.08rem 0.35rem;
+}
+
+.cand-sub-meta {
+  font-size: 0.75rem;
+  color: #475569;
+}
+
+.cand-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.isbn-tag {
+  font-size: 0.7rem;
+  background: #f1f5f9;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid #cbd5e1;
+}
+
+.mini-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.08rem 0.32rem;
+}
+
+.mini-badge.owned {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.mini-badge.wish {
+  background: #fce7f3;
+  color: #9d174d;
+}
+
+.mini-badge.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.unresolved-row {
+  background: #fffbeb;
+  border-color: #fbbf24;
+}
+
+.retry-bnf-btn {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.unresolved-msg {
+  color: #92400e;
+  font-size: 0.72rem;
+  font-weight: 600;
 }
 
 .full-width {

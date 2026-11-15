@@ -271,8 +271,8 @@ export const byokVisionService = {
 
     const prompt =
       mode === 'cover'
-        ? `Analyse cette couverture de livre ou bande dessinée. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"title":"Titre exact","series":"Nom de la série si BD/saga ou vide","volumeNumber":"Numéro de tome si présent ou vide","author":"Auteur principal","publisher":"Éditeur si lisible"}]. Aucun texte autour.`
-        : `Analyse cette photo d'étagère ou de pile de livres/BD. Liste chaque livre lisible sur les tranches ou couvertures. Réponds UNIQUEMENT avec un tableau JSON valide au format : [{"title":"Titre du livre ou tome","series":"Nom de la série si applicable","volumeNumber":"Numéro de tome si lisible","author":"Auteur si lisible","publisher":"Éditeur si lisible"}]. Aucun texte autour.`;
+        ? `Analyse cette couverture (ou 4e de couverture) de livre ou bande dessinée. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"title":"Titre exact de l'album ou du livre","series":"Nom de la série si BD/saga ou vide","volumeNumber":"Numéro de tome en chiffres si présent ou vide","author":"Auteur ou dessinateur/scénariste principal","publisher":"Éditeur si lisible (ex: Dupuis, Dargaud, Glénat, Gallimard...)","isbn":"ISBN-13 ou ISBN-10 si visible ou vide"}]. Aucun texte autour.`
+        : `Analyse cette photo d'étagère ou de pile de livres/BD. Liste chaque livre lisible sur les tranches ou couvertures en séparant bien la série, le numéro de tome et le titre. Réponds UNIQUEMENT avec un tableau JSON valide au format : [{"title":"Titre du livre ou de l'album","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres si lisible ou vide","author":"Auteur/dessinateur si lisible","publisher":"Éditeur si lisible","isbn":"ISBN si visible ou vide"}]. Aucun texte autour.`;
 
     onStatus?.('Analyse visuelle des livres par l’IA...');
 
@@ -359,6 +359,7 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
       volumeNumber: item.volumeNumber ? String(item.volumeNumber).trim() : undefined,
       author: item.author ? String(item.author).trim() : undefined,
       publisher: item.publisher ? String(item.publisher).trim() : undefined,
+      isbn: item.isbn ? String(item.isbn).replace(/[^0-9Xx]/g, '').trim() : undefined,
       selected: true
     }));
 }

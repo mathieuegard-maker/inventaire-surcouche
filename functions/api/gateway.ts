@@ -133,6 +133,33 @@ export const onRequest = async (context: {
             });
           }
 
+          const title = url.searchParams.get('title');
+          const publisher = url.searchParams.get('publisher');
+          const queryMode = url.searchParams.get('queryMode');
+
+          if (title && title.trim()) {
+            const cleanTerm = (val: string) => val.replace(/["()]/g, ' ').replace(/\s+/g, ' ').trim();
+            const cleanTitle = cleanTerm(title);
+            const cleanAuthor = author ? cleanTerm(author) : '';
+            const cleanPublisher = publisher ? cleanTerm(publisher) : '';
+            const field = queryMode === 'anywhere' ? 'bib.anywhere' : 'bib.title';
+
+            const clauses = [`(${field} all "${cleanTitle}")`];
+            if (cleanAuthor) clauses.push(`(bib.author all "${cleanAuthor}")`);
+            if (cleanPublisher) clauses.push(`(bib.publisher all "${cleanPublisher}")`);
+
+            const cql = clauses.length === 1 ? clauses[0].slice(1, -1) : clauses.join(' and ');
+            const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 25, 1), 100);
+            const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
+            const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
+            const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+            const bnfText = await bnfRes.text();
+            return new Response(bnfText, {
+              status: bnfRes.status,
+              headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+            });
+          }
+
           if (series && series.trim()) {
             const cleanSeries = series.replace(/["()]/g, ' ').trim();
             const cleanAuthor = author ? author.replace(/["()]/g, ' ').trim() : '';

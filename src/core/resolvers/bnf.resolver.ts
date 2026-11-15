@@ -29,6 +29,101 @@ export function normalizeSeriesNumber(raw?: string): string {
   return numeric;
 }
 
+/**
+ * Note la qualité et la fraîcheur d'une édition (langue française, ISBN FR, couverture, année récente).
+ */
+export function scoreEditionCandidate(
+  c: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }
+): number {
+  let score = 0;
+  if (c._lang === 'fre') score += 20;
+  else if (c._lang && c._lang !== 'fre') score -= 30;
+  if (c.isbn.startsWith('9782') || c.isbn.startsWith('97910')) score += 15;
+  if (c.coverUrl) score += 12;
+  if (c._hasPrimaryIsbn) score += 6;
+  if (c.authors.length > 0) score += 5;
+  if (c.publisher) score += 2;
+  if (c.publishDate) {
+    score += 2;
+    const yearNum = parseInt(c.publishDate, 10);
+    if (!Number.isNaN(yearNum)) {
+      const clampedYear = Math.min(Math.max(yearNum, 1900), 2035);
+      score += (clampedYear - 1900) * 0.25;
+    }
+  }
+  return score;
+}
+
+function tokenOverlapRatio(needle: string, haystack: string): number {
+  const needleTokens = normalizeTextKey(needle).split(' ').filter((t) => t.length >= 2);
+  const hayTokens = new Set(normalizeTextKey(haystack).split(' ').filter((t) => t.length >= 2));
+  if (needleTokens.length === 0 || hayTokens.size === 0) return 0;
+  let hits = 0;
+  for (const tok of needleTokens) {
+    if (hayTokens.has(tok)) hits++;
+  }
+  return hits / needleTokens.length;
+}
+
+/**
+ * Évalue la pertinence d'une notice BnF face aux indices extraits par l'IA (titre, série, tome, auteur, éditeur).
+ */
+export function scoreHintMatch(
+  cand: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean },
+  hints: { title?: string; series?: string; volumeNumber?: string; author?: string; publisher?: string }
+): number {
+  let score = 0;
+
+  const hintTitleNorm = normalizeTextKey(hints.title || '');
+  const hintSeriesNorm = normalizeTextKey(hints.series || '');
+  const candTitleNorm = normalizeTextKey(cand.title || '');
+  const candSeriesNorm = normalizeTextKey(cand.series || '');
+  const combinedCandText = `${cand.series || ''} ${cand.title || ''}`.trim();
+
+  // 1. Numéro de tome
+  const hintVol = normalizeSeriesNumber(hints.volumeNumber);
+  if (hintVol) {
+    const candVol = normalizeSeriesNumber(cand.seriesNumber);
+    if (candVol === hintVol) {
+      score += 40;
+    } else if (candVol && candVol !== hintVol) {
+      score -= 55;
+    }
+  }
+
+  // 2. Titre & série
+  if (hintTitleNorm) {
+    if (candTitleNorm === hintTitleNorm) score += 40;
+    else if (candTitleNorm.includes(hintTitleNorm) || hintTitleNorm.includes(candTitleNorm)) score += 28;
+    else score += Math.round(tokenOverlapRatio(hints.title || '', combinedCandText) * 30);
+  }
+
+  if (hintSeriesNorm) {
+    if (candSeriesNorm === hintSeriesNorm) score += 30;
+    else if (candSeriesNorm.includes(hintSeriesNorm) || candTitleNorm.includes(hintSeriesNorm)) score += 20;
+    else score += Math.round(tokenOverlapRatio(hints.series || '', combinedCandText) * 20);
+  }
+
+  // 3. Auteur
+  if (hints.author?.trim() && cand.authors.length > 0) {
+    const candAuthorsJoined = cand.authors.join(' ');
+    const ratio = tokenOverlapRatio(hints.author, candAuthorsJoined);
+    if (ratio >= 0.5) score += 25;
+    else if (ratio > 0) score += 12;
+    else score -= 12;
+  }
+
+  // 4. Éditeur
+  if (hints.publisher?.trim() && cand.publisher) {
+    const ratio = tokenOverlapRatio(hints.publisher, cand.publisher);
+    if (ratio > 0) score += 10;
+  }
+
+  // 5. Qualité et récence de l'édition ("meilleure édition, la dernière")
+  score += scoreEditionCandidate(cand) * 0.45;
+  return score;
+}
+
 export interface MarcSubfield {
   code: string;
   value: string;
@@ -645,16 +740,8 @@ export const bnfResolver = {
         byVolumeKey.set(volKey, list);
       }
 
-      const scoreCandidate = (c: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }): number => {
-        let score = 0;
-        if (c._lang === 'fre') score += 20;
-        if (c.isbn.startsWith('9782') || c.isbn.startsWith('97910')) score += 15;
-        if (c.coverUrl) score += 10;
-        if (c._hasPrimaryIsbn) score += 5;
-        if (c.authors.length > 0) score += 5;
-        if (c.publishDate) score += 2;
-        return score;
-      };
+      const scoreCandidate = (c: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }): number =>
+        scoreEditionCandidate(c);
 
       const elected: ExternalBookMetadata[] = [];
       for (const group of byVolumeKey.values()) {
@@ -686,6 +773,146 @@ export const bnfResolver = {
     } catch (e: any) {
       console.warn(`[BNF RESOLVER] Erreur searchSeriesVolumes (${seriesName}):`, e?.message || e);
       return [];
+    }
+  },
+
+  /**
+   * Recherche l'édition BnF la plus pertinente et la plus récente à partir d'indices visuels
+   * (titre, série, numéro de tome, auteur, éditeur) afin de retrouver l'ISBN-13 officiel.
+   */
+  async searchBestMatchByHints(hints: {
+    title?: string;
+    series?: string;
+    volumeNumber?: string;
+    author?: string;
+    publisher?: string;
+  }): Promise<ExternalBookMetadata | null> {
+    const cleanTitleHint = hints.title?.trim() || '';
+    const cleanSeriesHint = hints.series ? cleanSeriesName(hints.series) : '';
+    const cleanVolHint = normalizeSeriesNumber(hints.volumeNumber);
+    const cleanAuthorHint = hints.author?.trim() || '';
+    const cleanPublisherHint = hints.publisher?.trim() || '';
+
+    const combinedTitleTokens: string[] = [];
+    const seenTokens = new Set<string>();
+    for (const part of [cleanSeriesHint, cleanTitleHint, cleanVolHint]) {
+      for (const tok of part.split(/\s+/).filter(Boolean)) {
+        const key = normalizeTextKey(tok);
+        if (key && !seenTokens.has(key)) {
+          seenTokens.add(key);
+          combinedTitleTokens.push(tok);
+        }
+      }
+    }
+    const combinedQueryTitle = combinedTitleTokens.join(' ').trim();
+    if (!combinedQueryTitle) return null;
+
+    const runSruQuery = async (opts: {
+      titleQuery: string;
+      authorQuery?: string;
+      publisherQuery?: string;
+      queryMode?: 'title' | 'anywhere';
+    }): Promise<string[]> => {
+      const params = new URLSearchParams({
+        action: 'external-lookup',
+        source: 'bnf',
+        schema: 'intermarc',
+        title: opts.titleQuery,
+        maxRecords: '25'
+      });
+      if (opts.authorQuery) params.set('author', opts.authorQuery);
+      if (opts.publisherQuery) params.set('publisher', opts.publisherQuery);
+      if (opts.queryMode === 'anywhere') params.set('queryMode', 'anywhere');
+
+      const res = await fetchWithTimeout(`/api/gateway?${params.toString()}`);
+      if (!res.ok) return [];
+      const xml = await res.text();
+      return xml.split('<srw:record>').slice(1);
+    };
+
+    const seriesAndVolQuery = [cleanSeriesHint, cleanVolHint].filter(Boolean).join(' ').trim();
+    const queryPlans: Array<{
+      titleQuery: string;
+      authorQuery?: string;
+      publisherQuery?: string;
+      queryMode?: 'title' | 'anywhere';
+    }> = [];
+
+    if (cleanAuthorHint && cleanPublisherHint) {
+      queryPlans.push({
+        titleQuery: combinedQueryTitle,
+        authorQuery: cleanAuthorHint,
+        publisherQuery: cleanPublisherHint
+      });
+    }
+    if (cleanAuthorHint) {
+      queryPlans.push({ titleQuery: combinedQueryTitle, authorQuery: cleanAuthorHint });
+    }
+    if (seriesAndVolQuery && normalizeTextKey(seriesAndVolQuery) !== normalizeTextKey(combinedQueryTitle)) {
+      if (cleanAuthorHint) {
+        queryPlans.push({ titleQuery: seriesAndVolQuery, authorQuery: cleanAuthorHint });
+      }
+      queryPlans.push({ titleQuery: seriesAndVolQuery });
+    }
+    if (!cleanAuthorHint || normalizeTextKey(cleanTitleHint) !== normalizeTextKey(combinedQueryTitle)) {
+      queryPlans.push({ titleQuery: combinedQueryTitle });
+    } else {
+      queryPlans.push({ titleQuery: combinedQueryTitle });
+    }
+    if (cleanTitleHint) {
+      queryPlans.push({
+        titleQuery: cleanTitleHint,
+        authorQuery: cleanAuthorHint || undefined,
+        queryMode: 'anywhere'
+      });
+    }
+
+    let bestOverall: { score: number; meta: ExternalBookMetadata } | null = null;
+    const seenPlanKeys = new Set<string>();
+
+    try {
+      for (const plan of queryPlans) {
+        const planKey = `${plan.queryMode || 'title'}|${plan.titleQuery}|${plan.authorQuery || ''}|${plan.publisherQuery || ''}`;
+        if (seenPlanKeys.has(planKey)) continue;
+        seenPlanKeys.add(planKey);
+
+        const rawRecords = await runSruQuery(plan);
+        for (const recXml of rawRecords) {
+          const parsed = parseIntermarcRecord(recXml);
+          if (!parsed) continue;
+          if (parsed._lang && parsed._lang !== 'fre') continue;
+
+          const score = scoreHintMatch(parsed, hints);
+          if (score < 30) continue;
+
+          if (!bestOverall || score > bestOverall.score) {
+            bestOverall = {
+              score,
+              meta: {
+                isbn: parsed.isbn,
+                title: parsed.title,
+                authors: parsed.authors,
+                publisher: parsed.publisher,
+                publishDate: parsed.publishDate,
+                pageCount: parsed.pageCount,
+                coverUrl: parsed.coverUrl,
+                series: parsed.series,
+                seriesNumber: parsed.seriesNumber
+              }
+            };
+          }
+        }
+
+        // Arrêt précoce dès qu'on a un match très fiable (dont bon tome si demandé)
+        if (bestOverall && bestOverall.score >= 70) {
+          break;
+        }
+      }
+
+      return bestOverall ? bestOverall.meta : null;
+    } catch (e: any) {
+      console.warn(`[BNF RESOLVER] Erreur searchBestMatchByHints (${combinedQueryTitle}):`, e?.message || e);
+      return bestOverall ? bestOverall.meta : null;
     }
   }
 };

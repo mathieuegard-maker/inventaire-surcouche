@@ -17,6 +17,7 @@ export interface PendingCreation {
   resolvedSeriesUri?: string;
   resolvedAuthorUris: Record<string, string>;
   expandSeries: boolean;
+  ownershipTarget?: 'owned' | 'wish' | 'none';
   status: 'pending' | 'processing' | 'failed';
   errorMessage?: string;
   createdAt: number;

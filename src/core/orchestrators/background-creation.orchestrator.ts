@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { databaseService, type PendingCreation } from '../database/database.service';
 import { inventaireSyncService } from '../services/inventaire-sync.service';
 import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
 import { bookCacheService } from '../services/book-cache.service';
 import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
@@ -73,12 +74,14 @@ export const backgroundCreationOrchestrator = {
     resolvedSeriesUri?: string;
     resolvedAuthorUris?: Record<string, string>;
     expandSeries?: boolean;
+    ownershipTarget?: 'owned' | 'wish' | 'none';
   }): Promise<HumanizedBook> {
     const {
       tempBook,
       resolvedSeriesUri,
       resolvedAuthorUris = {},
-      expandSeries = true
+      expandSeries = true,
+      ownershipTarget = 'owned'
     } = params;
 
     // 1. Pré-attachement local si la série existe déjà en cache IndexedDB
@@ -94,16 +97,20 @@ export const backgroundCreationOrchestrator = {
     const optimisticBook: HumanizedBook = {
       ...tempBook,
       seriesId: effectiveSeriesUri || tempBook.seriesId,
-      ownershipStatus: 'owned'
+      ownershipStatus: ownershipTarget
     };
 
-    // 2. Persistance immédiate dans IndexedDB + registre d'inventaire
+    // 2. Persistance immédiate dans IndexedDB + registre approprié
     await databaseService.saveBookToCache(optimisticBook);
-    await databaseService.addRegistryEntry('inventory', optimisticBook.uri);
+    if (ownershipTarget === 'owned') {
+      await databaseService.addRegistryEntry('inventory', optimisticBook.uri);
+    } else if (ownershipTarget === 'wish') {
+      await databaseService.addRegistryEntry('wishlist', optimisticBook.uri);
+    }
 
     // Mise en cache image en non-bloquant
     if (optimisticBook.coverUrl) {
-      bookCacheService.saveAndProcessImage(optimisticBook, 'owned').catch(() => {});
+      bookCacheService.saveAndProcessImage(optimisticBook, ownershipTarget).catch(() => {});
     }
 
     // 3. Ajout dans la file persistante de création distante
@@ -112,6 +119,7 @@ export const backgroundCreationOrchestrator = {
       resolvedSeriesUri: effectiveSeriesUri,
       resolvedAuthorUris,
       expandSeries,
+      ownershipTarget,
       status: 'pending',
       createdAt: Date.now()
     });
@@ -223,29 +231,35 @@ export const backgroundCreationOrchestrator = {
 
   async processSingleJob(job: PendingCreation): Promise<void> {
     const tempBook = job.tempBook;
+    const ownershipTarget = job.ownershipTarget || 'owned';
 
-    // 1. Création / liaison de l'ouvrage principal sur inventaire.io
+    // 1. Création / liaison de l'ouvrage principal sur inventaire.io / D1
     const syncResult = await inventaireSyncService.syncBookToInventaire(
       tempBook,
       job.resolvedSeriesUri,
       job.resolvedAuthorUris
     );
 
-    // 2. Ajout à l'inventaire personnel
-    await inventoryService.addToLibrary(syncResult.editionUri);
-
     const finalBook: HumanizedBook = {
       ...tempBook,
       uri: syncResult.editionUri,
       workUri: syncResult.workUri,
       seriesId: syncResult.seriesUri || tempBook.seriesId,
-      ownershipStatus: 'owned'
+      ownershipStatus: ownershipTarget
     };
 
-    // 3. Remplacement atomique isbn:... -> inv:... en base locale
+    // 2. Remplacement atomique isbn:... -> inv:... en base locale
     const savedBook = await databaseService.replaceBookUri(tempBook.uri, finalBook);
+
+    // 3. Rattachement au registre distant (Inventaire ou Wishlist)
+    if (ownershipTarget === 'owned') {
+      await inventoryService.addToLibrary(syncResult.editionUri);
+    } else if (ownershipTarget === 'wish') {
+      await wishlistService.addToWishlist(syncResult.editionUri);
+    }
+
     if (savedBook.coverUrl && !savedBook.localCover) {
-      bookCacheService.saveAndProcessImage(savedBook, 'owned').catch(() => {});
+      bookCacheService.saveAndProcessImage(savedBook, ownershipTarget).catch(() => {});
     }
 
     status.value = {
