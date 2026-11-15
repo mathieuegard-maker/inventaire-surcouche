@@ -188,7 +188,17 @@ export const onRequest = async (context: {
         }
 
         if (source === 'openlibrary') {
-          if (!isbn) return jsonResp({ error: 'ISBN requis' }, 400);
+          const olQuery = url.searchParams.get('q');
+          if (olQuery && olQuery.trim()) {
+            const olSearchUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery.trim())}&fields=key,title,author_name,publisher,first_publish_year,isbn,cover_i,language&limit=10`;
+            const olRes = await resilientFetch(olSearchUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+            const olText = await olRes.text();
+            return new Response(olText, {
+              status: olRes.status,
+              headers: { 'Content-Type': 'application/json; charset=utf-8' }
+            });
+          }
+          if (!isbn) return jsonResp({ error: 'ISBN ou requête q requis' }, 400);
           const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn)}&jscmd=data&format=json`;
           const olRes = await resilientFetch(olUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
           const olText = await olRes.text();

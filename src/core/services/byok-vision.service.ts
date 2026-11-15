@@ -15,12 +15,18 @@ export interface ByokSettings {
 }
 
 export interface RecognizedBookCandidate {
+  spineIndex?: number;
+  rawSpineText?: string;
   title: string;
+  subtitle?: string;
   series?: string;
   volumeNumber?: string;
   author?: string;
+  illustrator?: string;
   publisher?: string;
+  collection?: string;
   isbn?: string;
+  confidence?: 'high' | 'medium' | 'low';
   selected?: boolean;
 }
 
@@ -258,11 +264,11 @@ export const byokVisionService = {
       throw new Error("Aucune clé API configurée. Configurez votre clé gratuite dans l'assistant.");
     }
 
-    onStatus?.('Compression WebP de la photo en cours...');
+    onStatus?.('Compression WebP haute netteté de la photo en cours...');
     const dataUrl = await compressImageToWebpDataUrl(fileOrBlob, {
-      maxWidth: mode === 'shelf' ? 1280 : 800,
-      maxHeight: mode === 'shelf' ? 1280 : 1000,
-      quality: 0.82
+      maxWidth: mode === 'shelf' ? 2048 : 1024,
+      maxHeight: mode === 'shelf' ? 2048 : 1280,
+      quality: mode === 'shelf' ? 0.88 : 0.86
     });
 
     const base64Data = dataUrl.split(',')[1] || '';
@@ -271,8 +277,8 @@ export const byokVisionService = {
 
     const prompt =
       mode === 'cover'
-        ? `Analyse cette couverture (ou 4e de couverture) de livre ou bande dessinée. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"title":"Titre exact de l'album ou du livre","series":"Nom de la série si BD/saga ou vide","volumeNumber":"Numéro de tome en chiffres si présent ou vide","author":"Auteur ou dessinateur/scénariste principal","publisher":"Éditeur si lisible (ex: Dupuis, Dargaud, Glénat, Gallimard...)","isbn":"ISBN-13 ou ISBN-10 si visible ou vide"}]. Aucun texte autour.`
-        : `Analyse cette photo d'étagère ou de pile de livres/BD. Liste chaque livre lisible sur les tranches ou couvertures en séparant bien la série, le numéro de tome et le titre. Réponds UNIQUEMENT avec un tableau JSON valide au format : [{"title":"Titre du livre ou de l'album","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres si lisible ou vide","author":"Auteur/dessinateur si lisible","publisher":"Éditeur si lisible","isbn":"ISBN si visible ou vide"}]. Aucun texte autour.`;
+        ? `Analyse cette couverture (ou 4e de couverture) de livre ou bande dessinée. Extrais TOUS les éléments textuels visibles sans rien inventer de mémoire. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"spineIndex":1,"rawSpineText":"Tout le texte exact visible sur la couverture/tranche","title":"Titre exact de l'album ou du livre","subtitle":"Sous-titre éventuel ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres si visible ou vide","author":"Auteur ou scénariste visible ou vide","illustrator":"Dessinateur si distinct et visible ou vide","publisher":"Éditeur ou logo visible (Dupuis, Dargaud, Glénat, Lombard, Delcourt, Soleil, Casterman, Gallimard...) ou vide","collection":"Nom de collection éditoriale si distinct de la série (ex: Aire Libre, Repérages) ou vide","isbn":"ISBN-13 ou ISBN-10 si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : si un champ n'est pas lisible sur l'image, laisse "" ; n'invente jamais un auteur.`
+        : `Analyse cette photo d'étagère ou de pile de livres/BD en travaillant STRICTEMENT TRANCHE PAR TRANCHE (de gauche à droite, ou de haut en bas pour une pile), sans jamais mélanger les informations de deux tranches voisines. Pour CHAQUE tranche, extrais d'abord TOUT le texte lisible sur cette tranche (y compris logos d'éditeur, numéros, sous-titres, auteurs/dessinateurs) dans rawSpineText, puis remplis les champs structurés. Réponds UNIQUEMENT avec un tableau JSON valide : [{"spineIndex":1,"rawSpineText":"Texte intégral lu sur cette tranche uniquement","title":"Titre du tome ou livre","subtitle":"Sous-titre si présent ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres ou vide","author":"Auteur/scénariste lisible sur CETTE tranche ou vide","illustrator":"Dessinateur si lisible ou vide","publisher":"Éditeur ou logo visible sur CETTE tranche ou vide","collection":"Collection éditoriale si visible ou vide","isbn":"ISBN si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : n'invente et ne devine JAMAIS un auteur ou un titre absent/illisible ; laisse "" si tu n'es pas sûr.`;
 
     onStatus?.('Analyse visuelle des livres par l’IA...');
 
@@ -352,14 +358,25 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
   const parsed = JSON.parse(jsonSlice);
   const list = Array.isArray(parsed) ? parsed : [parsed];
   return list
-    .filter((item) => item && (item.title || item.series))
-    .map((item) => ({
-      title: String(item.title || item.series || '').trim(),
-      series: item.series ? String(item.series).trim() : undefined,
-      volumeNumber: item.volumeNumber ? String(item.volumeNumber).trim() : undefined,
-      author: item.author ? String(item.author).trim() : undefined,
-      publisher: item.publisher ? String(item.publisher).trim() : undefined,
-      isbn: item.isbn ? String(item.isbn).replace(/[^0-9Xx]/g, '').trim() : undefined,
-      selected: true
-    }));
+    .filter((item) => item && (item.title || item.series || item.rawSpineText))
+    .map((item, idx) => {
+      const conf = item.confidence === 'low' || item.confidence === 'medium' || item.confidence === 'high'
+        ? item.confidence
+        : undefined;
+      return {
+        spineIndex: typeof item.spineIndex === 'number' ? item.spineIndex : idx + 1,
+        rawSpineText: item.rawSpineText ? String(item.rawSpineText).trim() : undefined,
+        title: String(item.title || item.series || item.rawSpineText || '').trim(),
+        subtitle: item.subtitle ? String(item.subtitle).trim() : undefined,
+        series: item.series ? String(item.series).trim() : undefined,
+        volumeNumber: item.volumeNumber ? String(item.volumeNumber).trim() : undefined,
+        author: item.author ? String(item.author).trim() : undefined,
+        illustrator: item.illustrator ? String(item.illustrator).trim() : undefined,
+        publisher: item.publisher ? String(item.publisher).trim() : undefined,
+        collection: item.collection ? String(item.collection).trim() : undefined,
+        isbn: item.isbn ? String(item.isbn).replace(/[^0-9Xx]/g, '').trim() : undefined,
+        confidence: conf,
+        selected: true
+      };
+    });
 }

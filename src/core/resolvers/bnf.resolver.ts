@@ -65,16 +65,29 @@ function tokenOverlapRatio(needle: string, haystack: string): number {
   return hits / needleTokens.length;
 }
 
+export interface BnfHintQuery {
+  title?: string;
+  subtitle?: string;
+  series?: string;
+  volumeNumber?: string;
+  author?: string;
+  illustrator?: string;
+  publisher?: string;
+  collection?: string;
+  rawSpineText?: string;
+}
+
 /**
- * Évalue la pertinence d'une notice BnF face aux indices extraits par l'IA (titre, série, tome, auteur, éditeur).
+ * Évalue la pertinence d'une notice BnF (ou d'un candidat multi-source) face aux indices extraits par l'IA.
  */
 export function scoreHintMatch(
   cand: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean },
-  hints: { title?: string; series?: string; volumeNumber?: string; author?: string; publisher?: string }
+  hints: BnfHintQuery
 ): number {
   let score = 0;
 
-  const hintTitleNorm = normalizeTextKey(hints.title || '');
+  const hintTitleNorm = normalizeTextKey([hints.title, hints.subtitle].filter(Boolean).join(' '));
+  const hintMainTitleNorm = normalizeTextKey(hints.title || '');
   const hintSeriesNorm = normalizeTextKey(hints.series || '');
   const candTitleNorm = normalizeTextKey(cand.title || '');
   const candSeriesNorm = normalizeTextKey(cand.series || '');
@@ -85,41 +98,59 @@ export function scoreHintMatch(
   if (hintVol) {
     const candVol = normalizeSeriesNumber(cand.seriesNumber);
     if (candVol === hintVol) {
-      score += 40;
+      score += 42;
     } else if (candVol && candVol !== hintVol) {
       score -= 55;
+    } else {
+      // Sur Google Books / Open Library, le numéro de tome figure souvent dans le titre
+      const escapedVol = hintVol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`\\b0*${escapedVol}\\b`, 'i').test(cand.title || '')) {
+        score += 22;
+      }
     }
   }
 
   // 2. Titre & série
-  if (hintTitleNorm) {
-    if (candTitleNorm === hintTitleNorm) score += 40;
-    else if (candTitleNorm.includes(hintTitleNorm) || hintTitleNorm.includes(candTitleNorm)) score += 28;
-    else score += Math.round(tokenOverlapRatio(hints.title || '', combinedCandText) * 30);
+  if (hintMainTitleNorm) {
+    if (candTitleNorm === hintMainTitleNorm || candTitleNorm === hintTitleNorm) score += 42;
+    else if (candTitleNorm.includes(hintMainTitleNorm) || hintMainTitleNorm.includes(candTitleNorm)) score += 30;
+    else score += Math.round(tokenOverlapRatio(hints.title || '', combinedCandText) * 32);
   }
 
   if (hintSeriesNorm) {
-    if (candSeriesNorm === hintSeriesNorm) score += 30;
-    else if (candSeriesNorm.includes(hintSeriesNorm) || candTitleNorm.includes(hintSeriesNorm)) score += 20;
-    else score += Math.round(tokenOverlapRatio(hints.series || '', combinedCandText) * 20);
+    if (candSeriesNorm === hintSeriesNorm) score += 32;
+    else if (candSeriesNorm.includes(hintSeriesNorm) || candTitleNorm.includes(hintSeriesNorm)) score += 22;
+    else score += Math.round(tokenOverlapRatio(hints.series || '', combinedCandText) * 22);
   }
 
-  // 3. Auteur
-  if (hints.author?.trim() && cand.authors.length > 0) {
+  // 3. Auteur & dessinateur (pénalité modérée si désaccord, pour rattraper les mauvais auteurs lus par l'IA)
+  const hintPeople = [hints.author, hints.illustrator].filter((v) => v && v.trim()).join(' ');
+  if (hintPeople && cand.authors.length > 0) {
     const candAuthorsJoined = cand.authors.join(' ');
-    const ratio = tokenOverlapRatio(hints.author, candAuthorsJoined);
-    if (ratio >= 0.5) score += 25;
+    const ratio = Math.max(
+      hints.author ? tokenOverlapRatio(hints.author, candAuthorsJoined) : 0,
+      hints.illustrator ? tokenOverlapRatio(hints.illustrator, candAuthorsJoined) : 0
+    );
+    if (ratio >= 0.5) score += 24;
     else if (ratio > 0) score += 12;
-    else score -= 12;
+    else score -= 8;
   }
 
-  // 4. Éditeur
-  if (hints.publisher?.trim() && cand.publisher) {
-    const ratio = tokenOverlapRatio(hints.publisher, cand.publisher);
-    if (ratio > 0) score += 10;
+  // 4. Éditeur & collection
+  const hintPublisherJoined = [hints.publisher, hints.collection].filter(Boolean).join(' ');
+  if (hintPublisherJoined.trim() && cand.publisher) {
+    const ratio = tokenOverlapRatio(hintPublisherJoined, cand.publisher);
+    if (ratio > 0) score += 12;
   }
 
-  // 5. Qualité et récence de l'édition ("meilleure édition, la dernière")
+  // 5. Recoupement avec le texte brut intégral lu sur la tranche
+  if (hints.rawSpineText?.trim()) {
+    const candAllText = `${combinedCandText} ${cand.authors.join(' ')} ${cand.publisher || ''}`;
+    const rawRatio = tokenOverlapRatio(hints.rawSpineText, candAllText);
+    score += Math.round(rawRatio * 18);
+  }
+
+  // 6. Qualité et récence de l'édition ("meilleure édition, la dernière")
   score += scoreEditionCandidate(cand) * 0.45;
   return score;
 }
@@ -777,25 +808,24 @@ export const bnfResolver = {
   },
 
   /**
-   * Recherche l'édition BnF la plus pertinente et la plus récente à partir d'indices visuels
-   * (titre, série, numéro de tome, auteur, éditeur) afin de retrouver l'ISBN-13 officiel.
+   * Recherche plusieurs candidats BnF pertinents (avec et sans contrainte d'auteur)
+   * pour alimenter le recoupement croisé multi-réseaux.
    */
-  async searchBestMatchByHints(hints: {
-    title?: string;
-    series?: string;
-    volumeNumber?: string;
-    author?: string;
-    publisher?: string;
-  }): Promise<ExternalBookMetadata | null> {
+  async searchCandidatesByHints(
+    hints: BnfHintQuery,
+    maxCandidates = 12
+  ): Promise<Array<{ score: number; meta: ExternalBookMetadata }>> {
     const cleanTitleHint = hints.title?.trim() || '';
+    const cleanSubtitleHint = hints.subtitle?.trim() || '';
     const cleanSeriesHint = hints.series ? cleanSeriesName(hints.series) : '';
     const cleanVolHint = normalizeSeriesNumber(hints.volumeNumber);
     const cleanAuthorHint = hints.author?.trim() || '';
+    const cleanIllustratorHint = hints.illustrator?.trim() || '';
     const cleanPublisherHint = hints.publisher?.trim() || '';
 
     const combinedTitleTokens: string[] = [];
     const seenTokens = new Set<string>();
-    for (const part of [cleanSeriesHint, cleanTitleHint, cleanVolHint]) {
+    for (const part of [cleanSeriesHint, cleanTitleHint, cleanSubtitleHint, cleanVolHint]) {
       for (const tok of part.split(/\s+/).filter(Boolean)) {
         const key = normalizeTextKey(tok);
         if (key && !seenTokens.has(key)) {
@@ -805,7 +835,8 @@ export const bnfResolver = {
       }
     }
     const combinedQueryTitle = combinedTitleTokens.join(' ').trim();
-    if (!combinedQueryTitle) return null;
+    const fallbackRawTitle = hints.rawSpineText?.trim() || cleanTitleHint;
+    if (!combinedQueryTitle && !fallbackRawTitle) return [];
 
     const runSruQuery = async (opts: {
       titleQuery: string;
@@ -831,6 +862,8 @@ export const bnfResolver = {
     };
 
     const seriesAndVolQuery = [cleanSeriesHint, cleanVolHint].filter(Boolean).join(' ').trim();
+    const mainAuthorOrIllus = cleanAuthorHint || cleanIllustratorHint;
+
     const queryPlans: Array<{
       titleQuery: string;
       authorQuery?: string;
@@ -838,37 +871,45 @@ export const bnfResolver = {
       queryMode?: 'title' | 'anywhere';
     }> = [];
 
-    if (cleanAuthorHint && cleanPublisherHint) {
+    if (combinedQueryTitle) {
+      if (mainAuthorOrIllus && cleanPublisherHint) {
+        queryPlans.push({
+          titleQuery: combinedQueryTitle,
+          authorQuery: mainAuthorOrIllus,
+          publisherQuery: cleanPublisherHint
+        });
+      }
+      if (mainAuthorOrIllus) {
+        queryPlans.push({ titleQuery: combinedQueryTitle, authorQuery: mainAuthorOrIllus });
+      }
+      // Passe systématique SANS contrainte d'auteur (rattrape les mauvais auteurs IA)
       queryPlans.push({
         titleQuery: combinedQueryTitle,
-        authorQuery: cleanAuthorHint,
-        publisherQuery: cleanPublisherHint
+        publisherQuery: cleanPublisherHint || undefined
       });
+      if (cleanPublisherHint) {
+        queryPlans.push({ titleQuery: combinedQueryTitle });
+      }
     }
-    if (cleanAuthorHint) {
-      queryPlans.push({ titleQuery: combinedQueryTitle, authorQuery: cleanAuthorHint });
-    }
+
     if (seriesAndVolQuery && normalizeTextKey(seriesAndVolQuery) !== normalizeTextKey(combinedQueryTitle)) {
-      if (cleanAuthorHint) {
-        queryPlans.push({ titleQuery: seriesAndVolQuery, authorQuery: cleanAuthorHint });
+      if (mainAuthorOrIllus) {
+        queryPlans.push({ titleQuery: seriesAndVolQuery, authorQuery: mainAuthorOrIllus });
       }
       queryPlans.push({ titleQuery: seriesAndVolQuery });
     }
-    if (!cleanAuthorHint || normalizeTextKey(cleanTitleHint) !== normalizeTextKey(combinedQueryTitle)) {
-      queryPlans.push({ titleQuery: combinedQueryTitle });
-    } else {
-      queryPlans.push({ titleQuery: combinedQueryTitle });
-    }
+
     if (cleanTitleHint) {
-      queryPlans.push({
-        titleQuery: cleanTitleHint,
-        authorQuery: cleanAuthorHint || undefined,
-        queryMode: 'anywhere'
-      });
+      queryPlans.push({ titleQuery: cleanTitleHint, queryMode: 'anywhere' });
+    }
+    if (fallbackRawTitle && normalizeTextKey(fallbackRawTitle) !== normalizeTextKey(cleanTitleHint)) {
+      queryPlans.push({ titleQuery: fallbackRawTitle, queryMode: 'anywhere' });
     }
 
-    let bestOverall: { score: number; meta: ExternalBookMetadata } | null = null;
+    const bestByIsbn = new Map<string, { score: number; meta: ExternalBookMetadata }>();
     const seenPlanKeys = new Set<string>();
+    let bestScoreSoFar = 0;
+    let matchedWithAuthor = false;
 
     try {
       for (const plan of queryPlans) {
@@ -883,10 +924,16 @@ export const bnfResolver = {
           if (parsed._lang && parsed._lang !== 'fre') continue;
 
           const score = scoreHintMatch(parsed, hints);
-          if (score < 30) continue;
+          if (score < 26) continue;
 
-          if (!bestOverall || score > bestOverall.score) {
-            bestOverall = {
+          if (score > bestScoreSoFar) {
+            bestScoreSoFar = score;
+            if (plan.authorQuery) matchedWithAuthor = true;
+          }
+
+          const existing = bestByIsbn.get(parsed.isbn);
+          if (!existing || score > existing.score) {
+            bestByIsbn.set(parsed.isbn, {
               score,
               meta: {
                 isbn: parsed.isbn,
@@ -899,20 +946,31 @@ export const bnfResolver = {
                 series: parsed.series,
                 seriesNumber: parsed.seriesNumber
               }
-            };
+            });
           }
         }
 
-        // Arrêt précoce dès qu'on a un match très fiable (dont bon tome si demandé)
-        if (bestOverall && bestOverall.score >= 70) {
+        if (matchedWithAuthor && bestScoreSoFar >= 92 && bestByIsbn.size >= 2) {
           break;
         }
       }
 
-      return bestOverall ? bestOverall.meta : null;
+      return Array.from(bestByIsbn.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxCandidates);
     } catch (e: any) {
-      console.warn(`[BNF RESOLVER] Erreur searchBestMatchByHints (${combinedQueryTitle}):`, e?.message || e);
-      return bestOverall ? bestOverall.meta : null;
+      console.warn(`[BNF RESOLVER] Erreur searchCandidatesByHints (${combinedQueryTitle}):`, e?.message || e);
+      return Array.from(bestByIsbn.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxCandidates);
     }
+  },
+
+  /**
+   * Recherche l'édition BnF la plus pertinente et la plus récente à partir d'indices visuels.
+   */
+  async searchBestMatchByHints(hints: BnfHintQuery): Promise<ExternalBookMetadata | null> {
+    const candidates = await this.searchCandidatesByHints(hints, 5);
+    return candidates[0]?.meta || null;
   }
 };

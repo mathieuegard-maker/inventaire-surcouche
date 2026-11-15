@@ -731,6 +731,10 @@ async function confirmAndSaveCandidates() {
                   </div>
                   <div class="cand-badges">
                     <code class="isbn-tag">{{ item.isbn13 }}</code>
+                    <span v-if="item.correctedFromAi" class="mini-badge corrected">✨ Corrigé par BnF</span>
+                    <span v-if="item.sourcesCount && item.sourcesCount > 1" class="mini-badge consensus">
+                      {{ item.sourcesCount }} sources
+                    </span>
                     <span v-if="item.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
                     <span v-else-if="item.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
                     <span v-if="!item.coverUrl" class="mini-badge warn">Sans couverture trouvée</span>
@@ -848,6 +852,9 @@ async function confirmAndSaveCandidates() {
                       {{ retryingItemId === u.id ? 'Recherche...' : '🔍 BnF' }}
                     </button>
                   </div>
+                  <small v-if="u.rawCandidate.rawSpineText" class="spine-ocr-preview">
+                    Texte lu sur tranche : « {{ u.rawCandidate.rawSpineText }} »
+                  </small>
                   <small v-if="u.failureReason" class="unresolved-msg">{{ u.failureReason }}</small>
                 </div>
               </div>
@@ -1511,6 +1518,25 @@ async function confirmAndSaveCandidates() {
 .mini-badge.warn {
   background: #fef3c7;
   color: #92400e;
+}
+
+.mini-badge.corrected {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.mini-badge.consensus {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.spine-ocr-preview {
+  color: #475569;
+  font-size: 0.72rem;
+  font-style: italic;
+  background: #f1f5f9;
+  padding: 0.2rem 0.4rem;
+  border-left: 2px solid #94a3b8;
 }
 
 .unresolved-row {
