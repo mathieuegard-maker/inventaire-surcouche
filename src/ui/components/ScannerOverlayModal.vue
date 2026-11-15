@@ -149,6 +149,7 @@ const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
 const isTestingKey = ref(false);
 
 const isAnalyzingPhoto = ref(false);
+const photoLoadingStatus = ref('Compression WebP et analyse visuelle des livres en cours...');
 const photoError = ref('');
 const recognizedCandidates = ref<RecognizedBookCandidate[]>([]);
 const photoTargetStatus = ref<'owned' | 'wish'>('owned');
@@ -182,9 +183,12 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   photoError.value = '';
   recognizedCandidates.value = [];
   isAnalyzingPhoto.value = true;
+  photoLoadingStatus.value = 'Compression WebP et analyse visuelle des livres en cours...';
 
   try {
-    const candidates = await byokVisionService.analyzePhoto(file, mode);
+    const candidates = await byokVisionService.analyzePhoto(file, mode, (msg) => {
+      photoLoadingStatus.value = msg;
+    });
     if (!candidates.length) {
       photoError.value = "Aucun titre lisible n'a été détecté sur la photo. Réessayez avec plus de lumière.";
     } else {
@@ -533,7 +537,7 @@ async function confirmAndSaveCandidates() {
         </div>
 
         <div v-if="isAnalyzingPhoto" class="photo-loading">
-          ⏳ Compression WebP et analyse visuelle des livres en cours...
+          ⏳ {{ photoLoadingStatus }}
         </div>
 
         <div v-if="photoError" class="error-banner">{{ photoError }}</div>

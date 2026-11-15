@@ -41,9 +41,17 @@ const PREFERRED_GROQ_MODELS = [
   'qwen/qwen3.8-27b'
 ];
 
+const TRANSIENT_STATUSES = new Set([429, 500, 502, 503, 504]);
+const RETRY_DELAYS_MS = [1500, 3000, 5500];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function formatApiError(provider: ByokProvider, status: number, rawBody: string): string {
   if (status === 402 || rawBody.includes('prepayment credits are depleted')) {
     return `${provider === 'gemini' ? 'Gemini' : 'Groq'} (402) : Crédits prépayés épuisés sur ce projet Cloud. Utilisez un projet sans facturation (Free Tier) ou Groq.`;
+  }
+  if (status === 503 || status === 502 || status === 504) {
+    return `${provider === 'gemini' ? 'Gemini' : 'Groq'} (${status}) : Serveurs temporairement saturés même après plusieurs tentatives automatiques. Réessayez dans quelques secondes ou utilisez Groq.`;
   }
   if (status === 429) {
     return `${provider === 'gemini' ? 'Gemini' : 'Groq'} (429) : Quota gratuit dépassé ou non disponible sur ce projet dans cette région. Essayez Groq (gratuit) dans le sélecteur ci-dessus.`;
@@ -52,6 +60,81 @@ function formatApiError(provider: ByokProvider, status: number, rawBody: string)
     return `${provider === 'gemini' ? 'Gemini' : 'Groq'} (403) : Clé refusée ou API non activée sur ce projet.`;
   }
   return `Erreur API ${provider === 'gemini' ? 'Gemini' : 'Groq'} (${status}): ${rawBody.slice(0, 180)}`;
+}
+
+async function callModelsWithRetry(params: {
+  provider: ByokProvider;
+  models: string[];
+  requestForModel: (modelId: string) => Promise<Response>;
+  extractText: (json: any) => string;
+  onStatus?: (msg: string) => void;
+}): Promise<RecognizedBookCandidate[]> {
+  let activeModels = [...params.models];
+  let lastStatus = 503;
+  let lastErrText = 'Serveur temporairement indisponible.';
+  const maxCycles = RETRY_DELAYS_MS.length + 1;
+
+  for (let cycle = 0; cycle < maxCycles && activeModels.length > 0; cycle++) {
+    if (cycle > 0) {
+      const waitMs = RETRY_DELAYS_MS[cycle - 1] ?? 5500;
+      params.onStatus?.(
+        `Serveur ${params.provider === 'gemini' ? 'Gemini' : 'Groq'} saturé (${lastStatus}) — nouvelle tentative ${cycle + 1}/${maxCycles} dans ${Math.round(waitMs / 100) / 10}s...`
+      );
+      await sleep(waitMs);
+    }
+
+    const nextCycleModels: string[] = [];
+    for (let idx = 0; idx < activeModels.length; idx++) {
+      const modelId = activeModels[idx];
+      try {
+        const res = await params.requestForModel(modelId);
+        if (res.ok) {
+          const json = await res.json();
+          return parseCandidatesJson(params.extractText(json));
+        }
+
+        lastStatus = res.status;
+        lastErrText = await res.text();
+
+        // 404 = modèle indisponible pour cette clé -> bascule immédiate sans le réessayer au cycle suivant
+        if (res.status === 404) {
+          continue;
+        }
+
+        // Erreurs bloquantes (clé invalide, crédits prépayés épuisés, etc.) -> arrêt immédiat
+        if (!TRANSIENT_STATUSES.has(res.status)) {
+          throw new Error(formatApiError(params.provider, res.status, lastErrText));
+        }
+
+        nextCycleModels.push(modelId);
+        // Petite pause avant d'essayer un modèle alternatif sur le même cycle
+        if (idx < activeModels.length - 1) {
+          params.onStatus?.(
+            `Modèle ${modelId} occupé (${res.status}), essai d'un modèle alternatif...`
+          );
+          await sleep(450);
+        }
+      } catch (err: any) {
+        // Relance immédiate si c'est une erreur métier déjà formatée
+        if (err instanceof Error && err.message.startsWith('Erreur API')) {
+          throw err;
+        }
+        if (
+          err instanceof Error &&
+          /(402|403|Crédits prépayés|Clé refusée)/.test(err.message)
+        ) {
+          throw err;
+        }
+        lastStatus = 503;
+        lastErrText = err instanceof Error ? err.message : 'Erreur réseau';
+        nextCycleModels.push(modelId);
+      }
+    }
+
+    activeModels = nextCycleModels;
+  }
+
+  throw new Error(formatApiError(params.provider, lastStatus, lastErrText));
 }
 
 async function resolveAvailableGeminiModels(apiKey: string): Promise<string[]> {
@@ -167,13 +250,15 @@ export const byokVisionService = {
 
   async analyzePhoto(
     fileOrBlob: Blob | File,
-    mode: 'cover' | 'shelf'
+    mode: 'cover' | 'shelf',
+    onStatus?: (msg: string) => void
   ): Promise<RecognizedBookCandidate[]> {
     const settings = this.getSettings();
     if (!settings) {
       throw new Error("Aucune clé API configurée. Configurez votre clé gratuite dans l'assistant.");
     }
 
+    onStatus?.('Compression WebP de la photo en cours...');
     const dataUrl = await compressImageToWebpDataUrl(fileOrBlob, {
       maxWidth: mode === 'shelf' ? 1280 : 800,
       maxHeight: mode === 'shelf' ? 1280 : 1000,
@@ -189,89 +274,66 @@ export const byokVisionService = {
         ? `Analyse cette couverture de livre ou bande dessinée. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"title":"Titre exact","series":"Nom de la série si BD/saga ou vide","volumeNumber":"Numéro de tome si présent ou vide","author":"Auteur principal","publisher":"Éditeur si lisible"}]. Aucun texte autour.`
         : `Analyse cette photo d'étagère ou de pile de livres/BD. Liste chaque livre lisible sur les tranches ou couvertures. Réponds UNIQUEMENT avec un tableau JSON valide au format : [{"title":"Titre du livre ou tome","series":"Nom de la série si applicable","volumeNumber":"Numéro de tome si lisible","author":"Auteur si lisible","publisher":"Éditeur si lisible"}]. Aucun texte autour.`;
 
-    if (settings.provider === 'gemini') {
-      const candidateModels = await resolveAvailableGeminiModels(settings.apiKey);
-      let lastStatus = 404;
-      let lastErrText = 'Aucun modèle Gemini compatible trouvé.';
+    onStatus?.('Analyse visuelle des livres par l’IA...');
 
-      for (const modelId of candidateModels.slice(0, 6)) {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`,
-          {
+    if (settings.provider === 'gemini') {
+      const candidateModels = (await resolveAvailableGeminiModels(settings.apiKey)).slice(0, 4);
+      return callModelsWithRetry({
+        provider: 'gemini',
+        models: candidateModels,
+        onStatus,
+        requestForModel: (modelId) =>
+          fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(settings.apiKey)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [
+                  {
+                    parts: [
+                      { text: prompt },
+                      { inline_data: { mime_type: mimeType, data: base64Data } }
+                    ]
+                  }
+                ],
+                generationConfig: {
+                  temperature: 0.1,
+                  responseMimeType: 'application/json'
+                }
+              })
+            }
+          ),
+        extractText: (json) => json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]'
+      });
+    } else {
+      return callModelsWithRetry({
+        provider: 'groq',
+        models: PREFERRED_GROQ_MODELS,
+        onStatus,
+        requestForModel: (modelId) =>
+          fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${settings.apiKey}`
+            },
             body: JSON.stringify({
-              contents: [
+              model: modelId,
+              temperature: 0.1,
+              messages: [
                 {
-                  parts: [
-                    { text: prompt },
-                    { inline_data: { mime_type: mimeType, data: base64Data } }
+                  role: 'user',
+                  content: [
+                    { type: 'text', text: prompt },
+                    { type: 'image_url', image_url: { url: dataUrl } }
                   ]
                 }
-              ],
-              generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json'
-              }
+              ]
             })
-          }
-        );
-
-        if (res.ok) {
-          const json = await res.json();
-          const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-          return parseCandidatesJson(rawText);
-        }
-
-        lastStatus = res.status;
-        lastErrText = await res.text();
-        // Si le modèle est obsolète / non accessible pour cette clé (404), on essaie automatiquement le suivant
-        if (res.status !== 404) {
-          throw new Error(formatApiError('gemini', res.status, lastErrText));
-        }
-      }
-
-      throw new Error(formatApiError('gemini', lastStatus, lastErrText));
-    } else {
-      let lastStatus = 404;
-      let lastErrText = 'Aucun modèle Groq vision compatible trouvé.';
-
-      for (const modelId of PREFERRED_GROQ_MODELS) {
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${settings.apiKey}`
-          },
-          body: JSON.stringify({
-            model: modelId,
-            temperature: 0.1,
-            messages: [
-              {
-                role: 'user',
-                content: [
-                  { type: 'text', text: prompt },
-                  { type: 'image_url', image_url: { url: dataUrl } }
-                ]
-              }
-            ]
-          })
-        });
-
-        if (res.ok) {
-          const json = await res.json();
-          const rawText = json?.choices?.[0]?.message?.content || '[]';
-          return parseCandidatesJson(rawText);
-        }
-
-        lastStatus = res.status;
-        lastErrText = await res.text();
-        if (res.status !== 404) {
-          throw new Error(formatApiError('groq', res.status, lastErrText));
-        }
-      }
-
-      throw new Error(formatApiError('groq', lastStatus, lastErrText));
+          }),
+        extractText: (json) => json?.choices?.[0]?.message?.content || '[]'
+      });
     }
   }
 };
