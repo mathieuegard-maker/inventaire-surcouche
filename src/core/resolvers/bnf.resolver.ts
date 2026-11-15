@@ -21,6 +21,7 @@ export function normalizeSeriesNumber(raw?: string): string {
   const cleaned = raw
     .replace(/^(tome|vol\.?|volume|t\.?|n°|#)\s*/i, '')
     .trim();
+  if (cleaned.length > 12 || /\s/.test(cleaned)) return '';
   const numeric = /^\d+$/.test(cleaned) ? String(parseInt(cleaned, 10)) : cleaned;
   return numeric;
 }
@@ -61,7 +62,7 @@ function extractTagContents(xml: string, tagName: string): string[] {
  */
 export function cleanTitle(rawTitle: string): string {
   if (!rawTitle) return '';
-  return rawTitle.split('/')[0].trim();
+  return rawTitle.replace(/\|/g, '').split('/')[0].trim();
 }
 
 /**
@@ -116,7 +117,10 @@ export function cleanPageCount(rawFormat: string): number | undefined {
  */
 export function cleanSeriesName(series: string): string {
   if (!series) return '';
-  return series.replace(/\s*\([^)]*\)\s*$/, '').trim();
+  return series
+    .replace(/\|/g, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim();
 }
 
 /**
@@ -286,16 +290,27 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
   const fields = parseMarcFields(recordXml);
   if (fields.length === 0) return null;
 
-  // 1. ISBN (020$a prioritaire sur 020$z)
+  // 1. ISBN (038$a EAN-13 ou 020$a prioritaire sur 020$z)
+  const f038List = fields.filter(f => f.tag === '038');
   const f020List = fields.filter(f => f.tag === '020');
   let rawIsbn = '';
   let hasPrimaryIsbn = false;
-  for (const f020 of f020List) {
-    const a = getSubfield(f020, 'a');
+  for (const f038 of f038List) {
+    const a = getSubfield(f038, 'a');
     if (a && isbnUtil.isValidFormat(a)) {
       rawIsbn = a;
       hasPrimaryIsbn = true;
       break;
+    }
+  }
+  if (!rawIsbn) {
+    for (const f020 of f020List) {
+      const a = getSubfield(f020, 'a');
+      if (a && isbnUtil.isValidFormat(a)) {
+        rawIsbn = a;
+        hasPrimaryIsbn = true;
+        break;
+      }
     }
   }
   if (!rawIsbn) {
@@ -313,7 +328,7 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
 
   // 2. Titre & filtre anti-compilation / double-album
   const f245 = fields.find(f => f.tag === '245');
-  const rawImTitle = f245 ? getSubfield(f245, 'a') : '';
+  const rawImTitle = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
   if (!rawImTitle) return null;
   const imVolumeNumber = f245 ? getSubfield(f245, 'u') : undefined;
   const secondTitleInSameVol = f245 ? getSubfield(f245, 'b') : undefined;
@@ -327,26 +342,28 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     return null;
   }
 
-  // 3. Série & numéro de tome (460 -> 290 -> 410)
+  // 3. Série & numéro de tome (460 -> 290/410 uniquement si sous-zone $v présente)
   let imSeries: string | undefined;
   let imSeriesNumber: string | undefined;
-  const f460 = fields.find(f => f.tag === '460');
+  const f460 = fields.find(f => f.tag === '460' || f.tag === '461');
   if (f460) {
-    imSeries = getSubfield(f460, 't');
+    imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a');
     imSeriesNumber = getSubfield(f460, 'v');
   }
   if (!imSeries) {
     const f290 = fields.find(f => f.tag === '290');
-    if (f290) {
-      imSeries = getSubfield(f290, 'a');
-      imSeriesNumber = getSubfield(f290, 'v');
+    const v290 = f290 ? getSubfield(f290, 'v') : undefined;
+    if (f290 && v290) {
+      imSeries = getSubfield(f290, 'a') || getSubfield(f290, 't');
+      imSeriesNumber = v290;
     }
   }
   if (!imSeries) {
     const f410 = fields.find(f => f.tag === '410');
-    if (f410) {
-      imSeries = getSubfield(f410, 't');
-      imSeriesNumber = getSubfield(f410, 'v');
+    const v410 = f410 ? getSubfield(f410, 'v') : undefined;
+    if (f410 && v410) {
+      imSeries = getSubfield(f410, 't') || getSubfield(f410, 'a');
+      imSeriesNumber = v410;
     }
   }
 
@@ -466,32 +483,35 @@ export const bnfResolver = {
           // 2. Titre & volume
           const f245 = imFields.find(f => f.tag === '245');
           if (f245) {
-            imTitle = getSubfield(f245, 'a');
+            const rawA = getSubfield(f245, 'a');
+            imTitle = rawA ? cleanTitle(rawA) : undefined;
             imVolumeNumber = getSubfield(f245, 'u');
           }
 
-          // 3. Série (Tag 460 - Notice d'ensemble)
-          const f460 = imFields.find(f => f.tag === '460');
+          // 3. Série (Tag 460/461 - Notice d'ensemble)
+          const f460 = imFields.find(f => f.tag === '460' || f.tag === '461');
           if (f460) {
-            imSeries = getSubfield(f460, 't');
+            imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a');
             imSeriesNumber = getSubfield(f460, 'v');
           }
 
-          // 4. Série (Tag 290 - Titre d'ensemble local)
+          // 4. Série (Tag 290 - Titre d'ensemble local avec numéro de tome $v)
           if (!imSeries) {
             const f290 = imFields.find(f => f.tag === '290');
-            if (f290) {
-              imSeries = getSubfield(f290, 'a');
-              imSeriesNumber = getSubfield(f290, 'v');
+            const v290 = f290 ? getSubfield(f290, 'v') : undefined;
+            if (f290 && v290) {
+              imSeries = getSubfield(f290, 'a') || getSubfield(f290, 't');
+              imSeriesNumber = v290;
             }
           }
 
-          // 5. Série (Tag 410 - Collection)
+          // 5. Série (Tag 410 - Collection uniquement si numérotée avec $v)
           if (!imSeries) {
             const f410 = imFields.find(f => f.tag === '410');
-            if (f410) {
-              imSeries = getSubfield(f410, 't');
-              imSeriesNumber = getSubfield(f410, 'v');
+            const v410 = f410 ? getSubfield(f410, 'v') : undefined;
+            if (f410 && v410) {
+              imSeries = getSubfield(f410, 't') || getSubfield(f410, 'a');
+              imSeriesNumber = v410;
             }
           }
 
@@ -522,11 +542,14 @@ export const bnfResolver = {
       for (const text of allTexts) {
         const parsed = parseSeriesFromString(text);
         if (parsed && parsed.series) {
-          dcSeries = parsed.series;
-          if (parsed.seriesNumber) {
-            dcSeriesNumber = parsed.seriesNumber;
+          const isEnsemble = /^Titre d'ensemble/i.test(text.trim());
+          if (parsed.seriesNumber || isEnsemble) {
+            dcSeries = parsed.series;
+            if (parsed.seriesNumber) {
+              dcSeriesNumber = parsed.seriesNumber;
+            }
+            break;
           }
-          break;
         }
       }
 

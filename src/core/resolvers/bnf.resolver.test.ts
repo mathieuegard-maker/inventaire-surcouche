@@ -49,8 +49,9 @@ describe('BNF Resolver & Parsers', () => {
   });
 
   describe('cleanSeriesName', () => {
-    it('doit nettoyer les parentheses de disambiguation', () => {
+    it('doit nettoyer les parentheses de disambiguation et les pipes de tri BNF', () => {
       expect(cleanSeriesName('Ex-libris (Paris. 2007)')).toBe('Ex-libris');
+      expect(cleanSeriesName('Les |Arènes BD')).toBe('Les Arènes BD');
       expect(cleanSeriesName('Thorgal')).toBe('Thorgal');
       expect(cleanSeriesName('')).toBe('');
     });
@@ -468,6 +469,40 @@ describe('BNF Resolver & Parsers', () => {
       expect(volumes[0].coverUrl).toContain('idImage=12345');
       expect(volumes[1].seriesNumber).toBe('14');
       expect(volumes[1].title).toBe('Les protecteurs');
+    });
+
+    it('doit extraire l EAN-13 en zone 038$a (ex: Mélusine / Les Schtroumpfs années 1990)', async () => {
+      const mockMelusineXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>1</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">970515s 1997                 befre     d  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">2-8001-2447-4</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="038"><mxc:subfield code="a">9782800124476</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="100"><mxc:subfield code="a">Clarke</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">Histoires à lire au coin du feu</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">46 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Mélusine</mxc:subfield><mxc:subfield code="v">4</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve(mockMelusineXml)
+      }));
+
+      const volumes = await bnfResolver.searchSeriesVolumes('Mélusine', 'Clarke');
+      expect(volumes).toHaveLength(1);
+      expect(volumes[0].isbn).toBe('9782800124476');
+      expect(volumes[0].title).toBe('Histoires à lire au coin du feu');
+      expect(volumes[0].series).toBe('Mélusine');
+      expect(volumes[0].seriesNumber).toBe('4');
     });
   });
 });

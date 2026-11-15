@@ -120,11 +120,25 @@ export const syncOrchestrator = {
       const wishlistPhysicalUris = await workUriResolver.resolveBulk(wishlistRaw);
 
       const missingItems: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
+      const CATALOG_SYNC_VERSION = 'v2.4-covers-series';
+      const needsGlobalCatalogRefresh =
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem('biblio_catalog_sync_version') !== CATALOG_SYNC_VERSION;
+
+      const needsBookRefresh = (livre: any): boolean => {
+        if (!livre?.uri?.startsWith('isbn:')) return false;
+        if (needsGlobalCatalogRefresh) return true;
+        if (livre.coverUrl && livre.coverUrl.includes('idArk=')) return true;
+        if (livre.series && livre.series.includes('|')) return true;
+        if (livre.title && livre.title.includes('|')) return true;
+        if (!livre.localCover && livre.coverUrl) return true;
+        return false;
+      };
 
       // 3. Analyse du delta Local vs Inventaire
       for (const uri of inventoryPhysicalUris) {
         const livre = await databaseService.getBookFromCache(uri);
-        if (!livre) {
+        if (!livre || needsBookRefresh(livre)) {
           missingItems.push({ uri, status: 'owned' });
         } else if (livre.ownershipStatus !== 'owned') {
            await bookCacheService.saveAndProcessImage(livre, 'owned');
@@ -136,7 +150,7 @@ export const syncOrchestrator = {
          if (inventoryPhysicalUris.includes(uri)) continue;
 
          const livre = await databaseService.getBookFromCache(uri);
-         if (!livre) {
+         if (!livre || needsBookRefresh(livre)) {
            missingItems.push({ uri, status: 'wish' });
          } else if (livre.ownershipStatus !== 'wish') {
            await bookCacheService.saveAndProcessImage(livre, 'wish');
@@ -147,6 +161,9 @@ export const syncOrchestrator = {
       console.log(`[HYDRATATION] ${missingItems.length} nouvelles éditions physiques à télécharger...`);
       if (missingItems.length > 0) {
          await this.hydrateRemainingPhysicalEntities(missingItems);
+      }
+      if (needsGlobalCatalogRefresh && typeof localStorage !== 'undefined') {
+        localStorage.setItem('biblio_catalog_sync_version', CATALOG_SYNC_VERSION);
       }
 
       // 6. Nettoyage du cache pour les livres retirés à distance

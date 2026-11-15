@@ -136,7 +136,7 @@ export const onRequest = async (context: {
           }
 
           if (!isbn) return jsonResp({ error: 'ISBN ou série requis' }, 400);
-          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn)}%22&recordSchema=${recordSchema}`;
+          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn)}%22&recordSchema=${recordSchema}`;
           const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
           const bnfText = await bnfRes.text();
           return new Response(bnfText, {
@@ -184,7 +184,15 @@ export const onRequest = async (context: {
           return jsonResp({ error: 'URL image invalide ou interdite' }, 400);
         }
 
-        const response = await resilientFetch(validatedUrl.toString());
+        const response = await resilientFetch(validatedUrl.toString(), {
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+            Referer: `${validatedUrl.protocol}//${validatedUrl.host}/`
+          }
+        });
         if (!response.ok) {
           return jsonResp({ error: `Erreur réseau distante: ${response.status}` }, 502);
         }

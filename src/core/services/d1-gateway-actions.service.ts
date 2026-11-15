@@ -8,6 +8,7 @@ import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
 import {
   expandSeriesVolumesInD1,
+  rehydrateAllCatalogEntitiesInD1,
   resolveAndStoreIsbnInD1,
   resolveAuthSession,
   upsertCatalogEntity
@@ -636,31 +637,49 @@ export async function handleD1GatewayAction(
     // ========================================================================
     // 5. CATALOGUE COMMUN, ENTITÉS, RECHERCHE & SÉRIES DANS D1
     // ========================================================================
+    case 'rehydrate-catalog': {
+      const offset = Number(url.searchParams.get('offset') || 0);
+      const limit = Number(url.searchParams.get('limit') || 6);
+      const result = await rehydrateAllCatalogEntitiesInD1(db, { offset, limit });
+      return jsonResp({ ok: true, ...result });
+    }
+
     case 'entities-by-uris': {
       const rawUris = (url.searchParams.get('uris') || '')
         .split('|')
         .map((u) => u.trim())
         .filter(Boolean);
       const relatives = (url.searchParams.get('relatives') || '').includes('P629');
+      const forceRefresh = url.searchParams.get('refresh') === '1';
 
       const entities: Record<string, any> = {};
 
       for (const requestedUri of rawUris) {
         let row = await db
-          .prepare('SELECT uri, work_uri, entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+          .prepare('SELECT uri, isbn13, work_uri, image_url, entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
           .bind(requestedUri)
-          .first<{ uri: string; work_uri: string | null; entity_json: string }>();
+          .first<{ uri: string; isbn13: string | null; work_uri: string | null; image_url: string | null; entity_json: string }>();
 
-        // Si on cherche par ISBN et qu'il n'est pas encore dans D1, auto-résolution immédiate (BnF + Google + OpenLibrary) !
-        if (!row && requestedUri.startsWith('isbn:')) {
-          const rawIsbn = requestedUri.slice(5);
+        const hasBrokenArkCover = Boolean(row?.image_url && row.image_url.includes('idArk='));
+
+        // Si on cherche par ISBN et qu'il n'est pas encore dans D1 (ou si refresh=1 / couverture idArk cassée), auto-résolution !
+        if ((!row || forceRefresh || hasBrokenArkCover) && (requestedUri.startsWith('isbn:') || row?.isbn13)) {
+          const rawIsbn = requestedUri.startsWith('isbn:') ? requestedUri.slice(5) : (row?.isbn13 || '');
           const normIsbn13 = isbnUtil.toIsbn13(isbnUtil.normalize(rawIsbn)) || isbnUtil.normalize(rawIsbn);
-          row = await db
-            .prepare('SELECT uri, work_uri, entity_json FROM catalog_entities WHERE isbn13 = ? OR uri = ? LIMIT 1')
-            .bind(normIsbn13, `isbn:${normIsbn13}`)
-            .first<{ uri: string; work_uri: string | null; entity_json: string }>();
-
           if (!row) {
+            row = await db
+              .prepare('SELECT uri, isbn13, work_uri, image_url, entity_json FROM catalog_entities WHERE isbn13 = ? OR uri = ? LIMIT 1')
+              .bind(normIsbn13, `isbn:${normIsbn13}`)
+              .first<{ uri: string; isbn13: string | null; work_uri: string | null; image_url: string | null; entity_json: string }>();
+          }
+
+          if (!row || forceRefresh || (row.image_url && row.image_url.includes('idArk='))) {
+            if (row?.image_url && row.image_url.includes('idArk=')) {
+              await db
+                .prepare("UPDATE catalog_entities SET image_url = NULL WHERE uri = ? OR uri = ?")
+                .bind(row.uri, row.work_uri || '')
+                .run();
+            }
             const autoResolved = await resolveAndStoreIsbnInD1(db, normIsbn13);
             if (autoResolved) {
               entities[requestedUri] = autoResolved;

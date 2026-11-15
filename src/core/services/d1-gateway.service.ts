@@ -23,6 +23,141 @@ import { isbnUtil } from '../utils/isbn.util';
 import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
+const BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+export function isbn13ToIsbn10(isbn13: string): string | null {
+  const clean = isbnUtil.normalize(isbn13);
+  if (!/^978\d{10}$/.test(clean)) return null;
+  const core = clean.slice(3, 12);
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += Number(core[i]) * (10 - i);
+  }
+  const rem = (11 - (sum % 11)) % 11;
+  const check = rem === 10 ? 'X' : String(rem);
+  return `${core}${check}`;
+}
+
+async function isValidRemoteCoverImage(
+  url: string,
+  minBytes = 1500,
+  rejectExactBytes?: number
+): Promise<boolean> {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': BROWSER_USER_AGENT,
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        'Accept-Encoding': 'identity'
+      }
+    });
+    if (!res.ok) return false;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+    if (ct && !ct.startsWith('image/') && !ct.includes('octet-stream')) return false;
+    const buf = await res.arrayBuffer();
+    const len = buf.byteLength;
+    if (len < minBytes) return false;
+    if (rejectExactBytes && len === rejectExactBytes) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Cascade multi-sources vérifiée pour récupérer la meilleure couverture disponible :
+ * 1. BnF 950$a (idImage officiel numérisé)
+ * 2. CDN Amazon Direct ISBN-10 (.08.LZZZZZZZ.jpg / .01._SCLZZZZZZZ_SX500_.jpg > 1500 octets)
+ * 3. CDN Librairies Françaises (Eyrolles/Dilicom H1400, en écartant le placeholder exact de 63601 octets)
+ * 4. Couverture directe OpenLibrary / Google Books / Inventaire
+ * 5. Recherche d'image Apple Books (iTunes Search API FR par ISBN puis Titre+Auteur)
+ * 6. OpenLibrary Covers par ISBN (si existante)
+ */
+export async function resolveBestCoverUrl(
+  isbn13: string,
+  candidates: {
+    bnfCoverUrl?: string;
+    gbCoverUrl?: string;
+    olCoverUrl?: string;
+    invCoverUrl?: string;
+    title?: string;
+    author?: string;
+  } = {}
+): Promise<string | undefined> {
+  if (candidates.bnfCoverUrl) {
+    return candidates.bnfCoverUrl;
+  }
+
+  const cleanIsbn13 = isbnUtil.normalize(isbn13);
+  const isbn10 = isbn13ToIsbn10(cleanIsbn13);
+
+  // 2. CDN Amazon Direct ISBN-10 (excellent pour les BD franco-belges Dupuis, Lombard, Dargaud, Casterman)
+  if (isbn10) {
+    const amazonEuUrl = `https://images-eu.ssl-images-amazon.com/images/P/${isbn10}.08.LZZZZZZZ.jpg`;
+    if (await isValidRemoteCoverImage(amazonEuUrl, 1500)) {
+      return amazonEuUrl;
+    }
+    const amazonMediaUrl = `https://m.media-amazon.com/images/P/${isbn10}.01._SCLZZZZZZZ_SX500_.jpg`;
+    if (await isValidRemoteCoverImage(amazonMediaUrl, 1500)) {
+      return amazonMediaUrl;
+    }
+  }
+
+  // 3. CDN Librairies Françaises (fonctionne sur 978... et 97910..., en rejetant le placeholder de 63601 octets)
+  if (cleanIsbn13.length === 13) {
+    const eyrollesUrl = `https://servimg.eyrolles.com/static/media/${cleanIsbn13.slice(-4)}/${cleanIsbn13}_internet_h1400.jpg`;
+    if (await isValidRemoteCoverImage(eyrollesUrl, 2000, 63601)) {
+      return eyrollesUrl;
+    }
+  }
+
+  // 4. Candidats API directs (Google Books, OpenLibrary, Inventaire)
+  const directCandidates = [
+    candidates.gbCoverUrl,
+    candidates.olCoverUrl,
+    candidates.invCoverUrl
+  ].filter(Boolean) as string[];
+
+  for (const url of directCandidates) {
+    if (await isValidRemoteCoverImage(url, 1000)) {
+      return url;
+    }
+  }
+
+  // 5. Recherche Apple Books / iTunes FR (par ISBN puis par Titre + Auteur)
+  const searchTerms = [
+    cleanIsbn13,
+    candidates.title ? `${candidates.title} ${candidates.author || ''}`.trim() : ''
+  ].filter(Boolean);
+
+  for (const term of searchTerms) {
+    try {
+      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=fr&entity=ebook&limit=1`;
+      const res = await fetch(itunesUrl, { headers: { 'User-Agent': BROWSER_USER_AGENT } });
+      if (res.ok) {
+        const data = (await res.json()) as { results?: Array<{ artworkUrl100?: string }> };
+        const art = data?.results?.[0]?.artworkUrl100;
+        if (art) {
+          return art.replace('100x100bb.jpg', '600x600bb.jpg');
+        }
+      }
+    } catch {
+      // Ignorer et passer à la source suivante
+    }
+  }
+
+  // 6. OpenLibrary Covers par ISBN (avec default=false pour renvoyer 404 si absente)
+  if (cleanIsbn13.length === 13) {
+    const olIsbnCover = `https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg?default=false`;
+    if (await isValidRemoteCoverImage(olIsbnCover, 1500)) {
+      return olIsbnCover;
+    }
+  }
+
+  return undefined;
+}
 
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
@@ -163,19 +298,23 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
   const isbn13 = isbnUtil.toIsbn13(isbnUtil.normalize(rawIsbn)) || isbnUtil.normalize(rawIsbn);
   if (!isbn13) return null;
 
-  const bnfIntermarcUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.isbn%20adj%20%22${encodeURIComponent(isbn13)}%22&recordSchema=intermarcxchange&maximumRecords=1`;
+  // Utilisation de `bib.anywhere all` sur BnF SRU pour trouver aussi les EAN-13 stockés en zone 038$a (livres 1990-2007 dont le 020$a est en ISBN-10)
+  const bnfIntermarcUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn13)}%22&recordSchema=intermarcxchange&maximumRecords=1`;
   const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}&maxResults=2`;
   const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn13)}&jscmd=data&format=json`;
+  const invUrl = `https://inventaire.io/api/entities?action=by-uris&uris=isbn:${encodeURIComponent(isbn13)}&attributes=info|labels|descriptions|claims|image&relatives=wdt:P629|wdt:P179`;
 
-  const [bnfRes, gbRes, olRes] = await Promise.allSettled([
+  const [bnfRes, gbRes, olRes, invRes] = await Promise.allSettled([
     fetch(bnfIntermarcUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.text() : '')),
     fetch(gbUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null)),
-    fetch(olUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null))
+    fetch(olUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null)),
+    fetch(invUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null))
   ]);
 
   let title = '';
   let seriesTitle = '';
   let seriesNumber = '';
+  let unnumberedEnsembleTitle = '';
   const authors: string[] = [];
   const illustrators: string[] = [];
   const scriptwriters: string[] = [];
@@ -184,25 +323,25 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
   let publishDate = '';
   let pageCount: number | undefined;
   let description = '';
-  let coverUrl = '';
+  let bnfCoverUrl = '';
+  let gbCoverUrl = '';
+  let olCoverUrl = '';
+  let invCoverUrl = '';
   let deweyCode = '';
   const rawSubjects: string[] = [];
 
-  // 1. Extraction BnF InterMarc (prioritaire pour titre, série, tome, auteurs, Dewey, RAMEAU)
+  // 1. Extraction BnF InterMarc (prioritaire pour titre, série 460$t/$v, tome, auteurs, Dewey, RAMEAU)
   if (bnfRes.status === 'fulfilled' && bnfRes.value) {
     const xml = bnfRes.value;
     const fields = parseMarcFieldsFromXml(xml);
-    const arkMatch = /ark:\/12148\/(cb[0-9a-z]+)/i.exec(xml);
-    if (arkMatch) {
-      coverUrl = `https://catalogue.bnf.fr/couverture?appName=NE&idArk=ark:/12148/${arkMatch[1]}&couverture=1`;
-    }
 
     for (const f of fields) {
       const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
       if (f.tag === '950') {
         const coverId = getSf('a');
         if (coverId) {
-          coverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
+          // Uniquement si le tag 950$a (idImage numérisée réelle) est présent ! (Les URLs idArk génériques renvoient HTTP 500)
+          bnfCoverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
         }
       } else if (f.tag === '245') {
         const a = cleanTitle(getSf('a'));
@@ -217,17 +356,29 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
         } else {
           title = title || a;
           if (u) seriesNumber = seriesNumber || normalizeSeriesNumber(u);
-          if (e && !seriesTitle && /^(tome|vol|épisode|\d+)/i.test(e)) {
+          if (e && !seriesTitle && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
             seriesNumber = seriesNumber || normalizeSeriesNumber(e);
           }
         }
-      } else if (f.tag === '460' || f.tag === '461' || f.tag === '290' || f.tag === '410') {
+      } else if (f.tag === '460' || f.tag === '461') {
+        // Notice d'ensemble = vraie série si numérotée ($v présent ou numéro de tome connu), sinon candidate série/collection
         const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
         const sVol = normalizeSeriesNumber(getSf('v'));
-        if (sTitle && !seriesTitle) {
+        if (sTitle && sVol && !seriesTitle) {
           seriesTitle = sTitle;
-          if (sVol) seriesNumber = sVol;
-        } else if (sTitle && f.tag === '290' && !collection) {
+          seriesNumber = sVol;
+        } else if (sTitle && !unnumberedEnsembleTitle) {
+          unnumberedEnsembleTitle = sTitle;
+        }
+      } else if (f.tag === '290' || f.tag === '410' || f.tag === '295') {
+        // Collection éditoriale vs Série numérotée :
+        // Uniquement considérée comme série si un numéro de volume ($v) est présent ! Sinon c'est une collection éditoriale (ex: "Les Arènes BD").
+        const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
+        const sVol = normalizeSeriesNumber(getSf('v'));
+        if (sTitle && sVol && !seriesTitle) {
+          seriesTitle = sTitle;
+          seriesNumber = sVol;
+        } else if (sTitle && !collection) {
           collection = sTitle;
         }
       } else if (f.tag === '100' || f.tag === '700') {
@@ -280,8 +431,8 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
         rawSubjects.push(...info.categories);
       }
       const thumb = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail;
-      if (thumb && !coverUrl) {
-        coverUrl = String(thumb).replace(/^http:\/\//i, 'https://');
+      if (thumb) {
+        gbCoverUrl = String(thumb).replace(/^http:\/\//i, 'https://');
       }
     }
   }
@@ -303,14 +454,53 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       publishDate = publishDate || cleanPublishDate(olBook.publish_date || '');
       pageCount = pageCount || olBook.number_of_pages;
       if (olBook.cover?.large || olBook.cover?.medium) {
-        coverUrl = coverUrl || olBook.cover.large || olBook.cover.medium;
+        olCoverUrl = olBook.cover.large || olBook.cover.medium;
+      }
+    }
+  }
+
+  // 4. Complément Graphe Ouvert (Wikidata / Inventaire public par ISBN)
+  if (invRes.status === 'fulfilled' && invRes.value?.entities) {
+    const ents = invRes.value.entities as Record<string, any>;
+    const edEnt =
+      ents[`isbn:${isbn13}`] ||
+      Object.values(ents).find((e: any) => e?.type === 'edition');
+    if (edEnt) {
+      const edTitle = cleanTitle(
+        edEnt.claims?.['wdt:P1476']?.[0] || edEnt.labels?.fr || edEnt.labels?.en || ''
+      );
+      title = title || edTitle;
+      const rawImg = edEnt.image?.url || edEnt.claims?.['invp:P2']?.[0];
+      if (typeof rawImg === 'string' && rawImg.trim()) {
+        const hash = rawImg.split('/').pop();
+        if (hash) {
+          invCoverUrl = `https://inventaire.io/img/entities/300x300/${hash}`;
+        }
+      }
+      const workUri = edEnt.claims?.['wdt:P629']?.[0];
+      const workEnt = workUri ? ents[workUri] : undefined;
+      if (workEnt) {
+        const ord = workEnt.claims?.['wdt:P1545']?.[0];
+        if (ord && !seriesNumber) {
+          seriesNumber = normalizeSeriesNumber(String(ord));
+        }
+        const serieUri = workEnt.claims?.['wdt:P179']?.[0];
+        const serieEnt = serieUri ? ents[serieUri] : undefined;
+        if (serieEnt && !seriesTitle) {
+          const sLabel = cleanSeriesName(
+            serieEnt.labels?.fr || serieEnt.labels?.en || serieEnt.label || ''
+          );
+          if (sLabel) seriesTitle = sLabel;
+        }
       }
     }
   }
 
   if (!title) return null;
 
-  // Si le titre contient "Tome X" ou ", tome X", on en extrait proprement le numéro et la série
+  // Nettoyage intelligent du titre :
+  // - Si `seriesTitle` est déjà connue (ex: "Les Schtroumpfs"), un suffixe ", tome 15" dans le titre de l'album
+  //   doit simplement être retiré du titre (et fournir `seriesNumber` s'il manquait) SANS écraser `seriesTitle` !
   const parsedFromTitle = parseSeriesFromTitle(title);
   if (parsedFromTitle.seriesNumber && !seriesNumber) {
     seriesNumber = normalizeSeriesNumber(parsedFromTitle.seriesNumber);
@@ -319,8 +509,28 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
     seriesTitle = cleanSeriesName(parsedFromTitle.series);
   }
   if (parsedFromTitle.title) {
-    title = parsedFromTitle.title;
+    title = cleanTitle(parsedFromTitle.title);
   }
+
+  // Si un 460$t sans $v a été trouvé : c'est une série uniquement si un numéro de tome existe par ailleurs (245$u, titre, P1545),
+  // sinon c'est une collection éditoriale non numérotée (ex: "Yummy !").
+  if (unnumberedEnsembleTitle) {
+    if (seriesNumber && !seriesTitle) {
+      seriesTitle = unnumberedEnsembleTitle;
+    } else if (!collection) {
+      collection = unnumberedEnsembleTitle;
+    }
+  }
+
+  // Cascade de résolution et vérification de la couverture
+  const coverUrl = await resolveBestCoverUrl(isbn13, {
+    bnfCoverUrl: bnfCoverUrl || undefined,
+    gbCoverUrl: gbCoverUrl || undefined,
+    olCoverUrl: olCoverUrl || undefined,
+    invCoverUrl: invCoverUrl || undefined,
+    title,
+    author: authors[0]
+  });
 
   return {
     isbn13,
@@ -335,7 +545,7 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
     publishDate: publishDate || undefined,
     pageCount,
     description: description || undefined,
-    coverUrl: coverUrl || `https://covers.openlibrary.org/b/isbn/${isbn13}-L.jpg?default=false`,
+    coverUrl,
     deweyCode: deweyCode || undefined,
     rawSubjects
   };
@@ -441,6 +651,13 @@ export async function expandSeriesVolumesInD1(
         continue;
       }
 
+      const resolvedCoverUrl =
+        top.coverUrl ||
+        (await resolveBestCoverUrl(top.isbn, {
+          title: top.title,
+          author: top.authors[0]
+        }));
+
       const authorUris: string[] = [];
       for (const aName of top.authors) {
         const aUri = await upsertCatalogEntity(db, {
@@ -474,7 +691,7 @@ export async function expandSeriesVolumesInD1(
         seriesNumber: normNum || undefined,
         authorUris,
         mainCategory: 'BD',
-        imageUrl: top.coverUrl,
+        imageUrl: resolvedCoverUrl,
         claims: workClaims
       });
 
@@ -497,7 +714,7 @@ export async function expandSeriesVolumesInD1(
         seriesNumber: normNum || undefined,
         authorUris,
         mainCategory: 'BD',
-        imageUrl: top.coverUrl,
+        imageUrl: resolvedCoverUrl,
         claims: editionClaims
       });
 
@@ -586,8 +803,8 @@ export async function upsertCatalogEntity(
         normalized_label = excluded.normalized_label,
         isbn13 = COALESCE(excluded.isbn13, catalog_entities.isbn13),
         work_uri = COALESCE(excluded.work_uri, catalog_entities.work_uri),
-        series_uri = COALESCE(excluded.series_uri, catalog_entities.series_uri),
-        series_number = COALESCE(excluded.series_number, catalog_entities.series_number),
+        series_uri = excluded.series_uri,
+        series_number = excluded.series_number,
         sort_order = excluded.sort_order,
         author_uris_json = excluded.author_uris_json,
         main_category = excluded.main_category,
@@ -689,7 +906,22 @@ export async function resolveAndStoreIsbnInD1(
     });
   }
 
-  // 5. Création/récupération de l'Œuvre (Work)
+  // 5. Création/récupération de l'Œuvre (Work) en réutilisant work_uri si l'édition existe déjà
+  const editionUri = `isbn:${ext.isbn13}`;
+  const existingEd = await db
+    .prepare('SELECT work_uri FROM catalog_entities WHERE uri = ? LIMIT 1')
+    .bind(editionUri)
+    .first<{ work_uri: string | null }>();
+
+  let collectionUri: string | undefined;
+  if (ext.collection) {
+    collectionUri = await upsertCatalogEntity(db, {
+      entityType: 'collection',
+      label: ext.collection,
+      claims: {}
+    });
+  }
+
   const workClaims: Record<string, unknown[]> = {
     'wdt:P31': ['wd:Q47461344']
   };
@@ -699,6 +931,7 @@ export async function resolveAndStoreIsbnInD1(
   if (genreUris.length) workClaims['wdt:P136'] = genreUris;
 
   const workUri = await upsertCatalogEntity(db, {
+    uri: existingEd?.work_uri || undefined,
     entityType: 'work',
     label: ext.title,
     seriesUri,
@@ -718,11 +951,11 @@ export async function resolveAndStoreIsbnInD1(
     'wdt:P1476': [ext.title]
   };
   if (publisherUri) editionClaims['wdt:P123'] = [publisherUri];
+  if (collectionUri) editionClaims['wdt:P195'] = [collectionUri];
   if (ext.publishDate) editionClaims['wdt:P577'] = [ext.publishDate];
   if (ext.pageCount) editionClaims['wdt:P1104'] = [ext.pageCount];
   if (genreUris.length) editionClaims['wdt:P136'] = genreUris;
 
-  const editionUri = `isbn:${ext.isbn13}`;
   await upsertCatalogEntity(db, {
     uri: editionUri,
     entityType: 'edition',
@@ -745,4 +978,90 @@ export async function resolveAndStoreIsbnInD1(
     .first<{ entity_json: string }>();
 
   return stored ? JSON.parse(stored.entity_json) : null;
+}
+
+/**
+ * Ré-enrichit tous les livres existants dans D1 (séries, numéros de tomes, couvertures multi-sources)
+ * et nettoie les fausses séries créées à partir de collections éditoriales non numérotées.
+ */
+export async function rehydrateAllCatalogEntitiesInD1(
+  db: DatabaseBinding,
+  options: { offset?: number; limit?: number } = {}
+): Promise<{
+  updated: number;
+  total: number;
+  details: Array<{
+    isbn: string;
+    title: string;
+    series?: string;
+    seriesNumber?: string;
+    coverUrl?: string;
+  }>;
+}> {
+  const allRows = await db
+    .prepare("SELECT isbn13, uri FROM catalog_entities WHERE entity_type = 'edition' AND isbn13 IS NOT NULL ORDER BY uri ASC")
+    .all<{ isbn13: string; uri: string }>();
+
+  const fullList = allRows.results || [];
+  const offset = options.offset ?? 0;
+  const limit = options.limit ?? 8;
+  const slice = fullList.slice(offset, offset + limit);
+
+  const details: Array<{
+    isbn: string;
+    title: string;
+    series?: string;
+    seriesNumber?: string;
+    coverUrl?: string;
+  }> = [];
+
+  for (const row of slice) {
+    if (!row.isbn13) continue;
+    // Réinitialiser l'image_url afin de forcer la cascade de couverture vérifiée
+    await db
+      .prepare(
+        "UPDATE catalog_entities SET image_url = NULL WHERE uri = ? OR uri IN (SELECT work_uri FROM catalog_entities WHERE uri = ?)"
+      )
+      .bind(row.uri, row.uri)
+      .run();
+
+    const updatedEntity = await resolveAndStoreIsbnInD1(db, row.isbn13);
+    if (updatedEntity) {
+      const updatedRow = await db
+        .prepare(
+          `SELECT e.label, e.series_number, e.image_url, s.label as series_label
+           FROM catalog_entities e
+           LEFT JOIN catalog_entities s ON s.uri = e.series_uri
+           WHERE e.uri = ? LIMIT 1`
+        )
+        .bind(row.uri)
+        .first<{
+          label: string;
+          series_number: string | null;
+          image_url: string | null;
+          series_label: string | null;
+        }>();
+
+      details.push({
+        isbn: row.isbn13,
+        title: updatedRow?.label || String(updatedEntity.label || ''),
+        series: updatedRow?.series_label || undefined,
+        seriesNumber: updatedRow?.series_number || undefined,
+        coverUrl: updatedRow?.image_url || undefined
+      });
+    }
+  }
+
+  // Supprimer les entités `serie` orphelines qui ne sont plus rattachées à aucune œuvre ni édition
+  await db
+    .prepare(
+      `DELETE FROM catalog_entities
+       WHERE entity_type = 'serie'
+         AND uri NOT IN (
+           SELECT DISTINCT series_uri FROM catalog_entities WHERE series_uri IS NOT NULL
+         )`
+    )
+    .run();
+
+  return { updated: details.length, total: fullList.length, details };
 }
