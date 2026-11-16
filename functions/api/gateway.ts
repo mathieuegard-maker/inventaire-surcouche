@@ -438,24 +438,109 @@ export const onRequest = async (context: {
           );
         }
 
-        // OpenLibrary Search en parallèle sur titre + auteur pour trouver d'autres tirages/éditions rapidement
+        // OpenLibrary : Éditions de l'œuvre (via ISBN -> work -> editions.json) + Search titre/auteur
+        const olWorkTask = isbnParam
+          ? (async () => {
+              const edJson = await quickFetchJson(`https://openlibrary.org/isbn/${isbnParam}.json`);
+              for (const cov of edJson?.covers || []) {
+                if (typeof cov === 'number' && cov > 0) {
+                  coverSet.add(`https://covers.openlibrary.org/b/id/${cov}-L.jpg?default=false`);
+                }
+              }
+              const workKey = edJson?.works?.[0]?.key;
+              if (typeof workKey === 'string' && workKey.startsWith('/works/')) {
+                const eds = await quickFetchJson(`https://openlibrary.org${workKey}/editions.json?limit=50`);
+                for (const entry of eds?.entries || []) {
+                  for (const c of entry?.covers || []) {
+                    if (typeof c === 'number' && c > 0) {
+                      coverSet.add(`https://covers.openlibrary.org/b/id/${c}-L.jpg?default=false`);
+                    }
+                  }
+                  for (const i13 of entry?.isbn_13 || []) {
+                    const clean13 = String(i13).replace(/[^0-9]/g, '');
+                    if (clean13.length === 13) editionIsbns.add(clean13);
+                  }
+                }
+              }
+            })()
+          : Promise.resolve();
+
         const olTask = titleParam
           ? (async () => {
               const cleanTitle = titleParam.replace(/\([^)]*\)/g, ' ').trim();
               const cleanAuthor = authorParam.split(',')[0]?.trim() || '';
               const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(cleanTitle)}${
                 cleanAuthor ? `&author=${encodeURIComponent(cleanAuthor)}` : ''
-              }&fields=cover_i,isbn&limit=8`;
+              }&fields=cover_i,isbn&limit=12`;
               const olData = await quickFetchJson(olUrl);
               for (const doc of olData?.docs || []) {
                 if (doc?.cover_i) {
                   coverSet.add(`https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg?default=false`);
                 }
+                for (const rawI of (doc?.isbn || []).slice(0, 3)) {
+                  const cleanI = String(rawI).replace(/[^0-9]/g, '');
+                  if (cleanI.length === 13) editionIsbns.add(cleanI);
+                }
               }
             })()
           : Promise.resolve();
 
-        await Promise.all([...invTasks, olTask]);
+        // BnF SRU : découvrir les ISBNs de toutes les éditions françaises (grand format, poche, intégrale...)
+        const bnfTask = titleParam
+          ? (async () => {
+              const cleanTitle = titleParam.replace(/\([^)]*\)/g, ' ').replace(/["()]/g, ' ').trim();
+              const cleanAuthor = authorParam.split(',')[0]?.replace(/["()]/g, ' ').trim() || '';
+              if (!cleanTitle) return;
+              const cql = cleanAuthor
+                ? `(bib.title all "${cleanTitle}") and (bib.author all "${cleanAuthor}")`
+                : `(bib.title all "${cleanTitle}")`;
+              const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(
+                cql
+              )}&recordSchema=unimarcxchange&maximumRecords=25&startRecord=1`;
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 3500);
+              try {
+                const res = await fetch(bnfUrl, {
+                  headers: { 'User-Agent': USER_AGENT_BASE },
+                  signal: controller.signal
+                });
+                if (!res.ok) return;
+                const xml = await res.text();
+                const isbnRegex = /<mxc:subfield\s+code="a">\s*([0-9Xx-]{10,17})\s*<\/mxc:subfield>/g;
+                let m: RegExpExecArray | null;
+                while ((m = isbnRegex.exec(xml)) !== null) {
+                  const digits = m[1].replace(/[^0-9]/g, '');
+                  if (digits.length === 13 && (digits.startsWith('978') || digits.startsWith('979'))) {
+                    editionIsbns.add(digits);
+                  }
+                }
+              } catch {
+                // Non bloquant
+              } finally {
+                clearTimeout(timer);
+              }
+            })()
+          : Promise.resolve();
+
+        // Google Books : recherche multi-éditions (non bloquante si quota 429)
+        const gbTask = titleParam
+          ? (async () => {
+              const cleanTitle = titleParam.replace(/\([^)]*\)/g, ' ').trim();
+              const cleanAuthor = authorParam.split(',')[0]?.trim() || '';
+              const q = `intitle:${cleanTitle}${cleanAuthor ? ` inauthor:${cleanAuthor}` : ''}`;
+              const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(q)}&maxResults=15`;
+              const gbData = await quickFetchJson(gbUrl);
+              for (const item of gbData?.items || []) {
+                const links = item?.volumeInfo?.imageLinks;
+                const best = links?.large || links?.medium || links?.thumbnail || links?.smallThumbnail;
+                if (typeof best === 'string' && best.trim()) {
+                  addImg(best.replace(/^http:\/\//i, 'https://').replace(/&edge=curl/i, ''));
+                }
+              }
+            })()
+          : Promise.resolve();
+
+        await Promise.all([...invTasks, olWorkTask, olTask, bnfTask, gbTask]);
 
         // 2. Récupérer les éditions liées à chaque œuvre découverte (Inventaire reverse-claims + Wikidata SPARQL)
         const remoteEdUris = new Set<string>();
@@ -499,10 +584,15 @@ export const onRequest = async (context: {
             })
         );
 
+        // Ajouter les ISBNs découverts (BnF / OpenLibrary) au batch Inventaire.io pour récupérer leurs couvertures éventuelles
+        for (const edIsbn of Array.from(editionIsbns).slice(0, 20)) {
+          remoteEdUris.add(`isbn:${edIsbn}`);
+        }
+
         if (remoteEdUris.size > 0) {
           const edsData = await quickFetchJson(
             `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(
-              Array.from(remoteEdUris).slice(0, 20).join('|')
+              Array.from(remoteEdUris).slice(0, 25).join('|')
             )}`
           );
           for (const ent of Object.values(edsData?.entities || {}) as any[]) {
@@ -516,8 +606,8 @@ export const onRequest = async (context: {
           }
         }
 
-        // Ajouter les URLs OpenLibrary des autres éditions découvertes
-        for (const edIsbn of Array.from(editionIsbns).slice(0, 6)) {
+        // Ajouter les URLs OpenLibrary des autres éditions découvertes (jusqu'à 20 ISBNs)
+        for (const edIsbn of Array.from(editionIsbns).slice(0, 20)) {
           if (edIsbn === isbnParam) continue;
           coverSet.add(`https://covers.openlibrary.org/b/isbn/${edIsbn}-L.jpg?default=false`);
         }
