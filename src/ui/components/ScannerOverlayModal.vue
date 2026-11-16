@@ -151,12 +151,25 @@ const showByokSetup = ref<boolean>(!existingByok?.apiKey);
 const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
 const isTestingKey = ref(false);
 
-byokVisionService.fetchServerVisionStatus().then((st) => {
-  serverVisionStatus.value = st;
-  if (st.serverAvailable && !byokVisionService.getSettings()) {
-    showByokSetup.value = false;
+const refreshServerVisionStatus = () => {
+  byokVisionService.fetchServerVisionStatus().then((st) => {
+    serverVisionStatus.value = st;
+    if (st.serverAvailable && !byokVisionService.getSettings()) {
+      showByokSetup.value = false;
+    }
+  });
+};
+
+refreshServerVisionStatus();
+
+watch(
+  [isScanning, activeMode],
+  ([open, mode]) => {
+    if (open && mode === 'photo') {
+      refreshServerVisionStatus();
+    }
   }
-});
+);
 
 const photoStats = photoBatchQueueService.stats;
 const isPhotoProcessing = photoBatchQueueService.isProcessing;
