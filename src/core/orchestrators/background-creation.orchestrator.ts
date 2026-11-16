@@ -9,6 +9,7 @@ import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolve
 import { getLevenshteinDistance } from '../utils/string.util';
 import { isbnUtil } from '../utils/isbn.util';
 import { imageUtil } from '../utils/image.util';
+import { findBestMatchingSeries } from '../utils/series-matcher.util';
 import { connectionState, fetchWithTimeout } from '../../state/connection';
 import type { ExternalBookMetadata, HumanizedBook } from '../types';
 
@@ -85,18 +86,43 @@ export const backgroundCreationOrchestrator = {
       ownershipTarget = 'owned'
     } = params;
 
-    // 1. Pré-attachement local si la série existe déjà en cache IndexedDB
+    // 1. Pré-attachement orienté Œuvre : vérifier si l'œuvre ou la série existe déjà en cache local
     let effectiveSeriesUri = resolvedSeriesUri;
-    if (!effectiveSeriesUri && tempBook.series?.trim()) {
-      const localMatches = await databaseService.findLocalSeriesMatches(tempBook.series);
-      const existingSeriesId = localMatches.find(b => b.seriesId && !b.seriesId.startsWith('local:'))?.seriesId;
-      if (existingSeriesId) {
-        effectiveSeriesUri = existingSeriesId;
+    let effectiveSeriesTitle = tempBook.series;
+    let effectiveExpandSeries = expandSeries;
+    if (!effectiveSeriesUri && (tempBook.series?.trim() || tempBook.title?.trim())) {
+      const localBooks =
+        typeof databaseService.getAllBooksFromCache === 'function'
+          ? await databaseService.getAllBooksFromCache().catch(() => [])
+          : [];
+      const matched = findBestMatchingSeries({
+        candidateSeries: tempBook.series,
+        candidateTitle: tempBook.title,
+        candidateAuthors: tempBook.authors,
+        candidateWorkUri: tempBook.workUri,
+        existingBooks: localBooks
+      });
+      if (matched) {
+        if (matched.seriesId && !matched.seriesId.startsWith('local:')) {
+          effectiveSeriesUri = matched.seriesId;
+        }
+        effectiveSeriesTitle = matched.series;
+        // Si la série est déjà hydratée avec >= 2 tomes en local, inutile de retélécharger toute la série sur la BnF
+        if (matched.volumeCount >= 2) {
+          effectiveExpandSeries = false;
+        }
+      } else if (tempBook.series?.trim()) {
+        const localMatches = await databaseService.findLocalSeriesMatches(tempBook.series);
+        const existingSeriesId = localMatches.find(b => b.seriesId && !b.seriesId.startsWith('local:'))?.seriesId;
+        if (existingSeriesId) {
+          effectiveSeriesUri = existingSeriesId;
+        }
       }
     }
 
     const optimisticBook: HumanizedBook = {
       ...tempBook,
+      series: effectiveSeriesTitle,
       seriesId: effectiveSeriesUri || tempBook.seriesId,
       ownershipStatus: ownershipTarget
     };
@@ -119,7 +145,7 @@ export const backgroundCreationOrchestrator = {
       tempBook: optimisticBook,
       resolvedSeriesUri: effectiveSeriesUri,
       resolvedAuthorUris,
-      expandSeries,
+      expandSeries: effectiveExpandSeries,
       ownershipTarget,
       status: 'pending',
       createdAt: Date.now()

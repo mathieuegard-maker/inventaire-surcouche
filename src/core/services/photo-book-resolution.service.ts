@@ -14,6 +14,7 @@ import { externalMetadataService } from './external-metadata.service';
 import { wishlistService } from './wishlist.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { imageUtil } from '../utils/image.util';
+import { findBestMatchingSeries } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 
@@ -667,11 +668,38 @@ export const photoBookResolutionService = {
     }
 
     // Collecte des séries uniques détectées pour activer la proposition des autres tomes
-    const seriesMap = new Map<string, { seriesName: string; author?: string }>();
+    // Étage 1-3 : Rapprochement orienté Œuvre contre le cache local pour éviter les doublons de collections éditoriales
+    const localBooks =
+      typeof databaseService.getAllBooksFromCache === 'function'
+        ? await databaseService.getAllBooksFromCache().catch(() => [])
+        : [];
+    const seriesMap = new Map<string, { seriesName: string; author?: string; skipBnfExpand?: boolean }>();
     const knownVolKeysBySeries = new Map<string, Set<string>>();
 
     for (const item of detectedItems) {
-      if (item.status !== 'resolved' || !item.series?.trim()) continue;
+      if (item.status !== 'resolved') continue;
+      if (localBooks.length > 0 && (item.series?.trim() || item.title?.trim())) {
+        const matched = findBestMatchingSeries({
+          candidateSeries: item.series,
+          candidateTitle: item.title,
+          candidateAuthors: item.authors,
+          candidateWorkUri: item.existingWorkUri,
+          existingBooks: localBooks
+        });
+        if (matched) {
+          item.series = matched.series;
+          const seriesKey = normalizeTextKey(matched.series);
+          if (seriesKey && matched.volumeCount >= 2 && !seriesMap.has(seriesKey)) {
+            seriesMap.set(seriesKey, {
+              seriesName: matched.series,
+              author: item.authors[0],
+              skipBnfExpand: true
+            });
+          }
+        }
+      }
+
+      if (!item.series?.trim()) continue;
       const seriesKey = normalizeTextKey(item.series);
       if (!seriesKey) continue;
 
@@ -688,8 +716,12 @@ export const photoBookResolutionService = {
     const seriesExtraItems: ResolvedPhotoItem[] = [];
     const detectedSeriesNames: string[] = [];
 
-    for (const [seriesKey, { seriesName, author }] of seriesMap.entries()) {
+    for (const [seriesKey, { seriesName, author, skipBnfExpand }] of seriesMap.entries()) {
       detectedSeriesNames.push(seriesName);
+      if (skipBnfExpand) {
+        onStatus?.(`Série « ${seriesName} » déjà présente en base locale (rattachement direct).`);
+        continue;
+      }
       onStatus?.(`Recherche des autres tomes de la série « ${seriesName} » sur la BnF...`);
 
       onExternalLookup?.(1);
