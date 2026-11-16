@@ -28,6 +28,12 @@ const inlineQuery = ref(String(route.query.q || ''));
 const selectedCategory = ref<string>('ALL');
 const selectedSection = ref<'ALL' | 'series' | 'volumes' | 'standalone' | 'authors'>('ALL');
 const expandedSeriesKeys = ref<Record<string, boolean>>({});
+const showAllCategories = ref(false);
+const MAX_VISIBLE_CATEGORIES = 8;
+
+const visibleCategories = computed(() =>
+  showAllCategories.value ? grouped.value.categories : grouped.value.categories.slice(0, MAX_VISIBLE_CATEGORIES)
+);
 
 const grouped = ref<GroupedKeywordSearchResult>({
   categories: [],
@@ -262,7 +268,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               Toutes
             </button>
             <button
-              v-for="cat in grouped.categories"
+              v-for="cat in visibleCategories"
               :key="cat.label"
               type="button"
               class="filter-pill sub"
@@ -270,6 +276,14 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               @click="selectedCategory = cat.label"
             >
               {{ cat.label }} ({{ cat.count }})
+            </button>
+            <button
+              v-if="grouped.categories.length > MAX_VISIBLE_CATEGORIES"
+              type="button"
+              class="filter-pill sub"
+              @click="showAllCategories = !showAllCategories"
+            >
+              {{ showAllCategories ? 'Réduire' : `+${grouped.categories.length - MAX_VISIBLE_CATEGORIES} autres` }}
             </button>
           </div>
         </div>

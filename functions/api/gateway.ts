@@ -352,9 +352,32 @@ export const onRequest = async (context: {
 
       case 'work-edition-covers': {
         const isbnParam = (url.searchParams.get('isbn') || '').replace(/[^0-9Xx]/g, '').trim();
+        const titleParam = (url.searchParams.get('title') || '').trim();
+        const authorParam = (url.searchParams.get('author') || '').trim();
         let targetWorkUri = (url.searchParams.get('workUri') || '').trim();
+        const workUrisToCheck = new Set<string>();
+        if (targetWorkUri && targetWorkUri.startsWith('wd:')) {
+          workUrisToCheck.add(targetWorkUri);
+        }
+
         const coverSet = new Set<string>();
         const editionIsbns = new Set<string>();
+
+        const quickFetchJson = async (targetUrl: string, headers: Record<string, string> = {}, ms = 3200) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), ms);
+          try {
+            const res = await fetch(targetUrl, {
+              headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json', ...headers },
+              signal: controller.signal
+            });
+            return res.ok ? await res.json() : null;
+          } catch {
+            return null;
+          } finally {
+            clearTimeout(timer);
+          }
+        };
 
         const addImg = (raw?: string | null) => {
           const clean = (raw || '').trim();
@@ -367,92 +390,136 @@ export const onRequest = async (context: {
           }
         };
 
-        // 1. Inventaire.io : résoudre l'œuvre depuis l'ISBN si besoin, puis reverse-claims wdt:P629
-        try {
-          if ((!targetWorkUri || !targetWorkUri.startsWith('wd:')) && isbnParam) {
-            const invEdRes = await resilientFetch(
-              `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(`isbn:${isbnParam}`)}`,
-              { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
-            );
-            if (invEdRes.ok) {
-              const invEdData = await invEdRes.json();
+        // 1. Inventaire.io : ISBN + Recherche textuelle d'œuvre (si local inv:work_... ou ISBN inconnu)
+        const invTasks: Promise<void>[] = [];
+
+        if (workUrisToCheck.size === 0 && isbnParam) {
+          invTasks.push(
+            (async () => {
+              const invEdData = await quickFetchJson(
+                `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(`isbn:${isbnParam}`)}`
+              );
+              if (!invEdData) return;
               const ents = invEdData?.entities || {};
-              const ed = ents[`isbn:${isbnParam}`] || Object.values(ents)[0];
+              const redirectUri = invEdData?.redirects?.[`isbn:${isbnParam}`];
+              const ed = ents[`isbn:${isbnParam}`] || (redirectUri ? ents[redirectUri] : undefined) || Object.values(ents)[0];
               if (ed?.image?.url) addImg(ed.image.url);
               const w = ed?.claims?.['wdt:P629']?.[0];
               if (typeof w === 'string' && w.trim()) {
                 targetWorkUri = w.trim();
+                workUrisToCheck.add(w.trim());
               }
-            }
-          }
+            })()
+          );
+        }
 
-          if (targetWorkUri && (targetWorkUri.startsWith('wd:') || targetWorkUri.startsWith('inv:'))) {
-            const revRes = await resilientFetch(
-              `https://inventaire.io/api/entities?action=reverse-claims&property=wdt%3AP629&value=${encodeURIComponent(targetWorkUri)}`,
-              { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
-            );
-            if (revRes.ok) {
-              const revData = await revRes.json();
-              const editionUris: string[] = Array.isArray(revData?.uris) ? revData.uris.slice(0, 20) : [];
-              if (editionUris.length > 0) {
-                const edsRes = await resilientFetch(
-                  `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(editionUris.join('|'))}`,
-                  { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
+        if (titleParam) {
+          const cleanTitle = titleParam.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+          const cleanAuthor = authorParam.split(',')[0]?.trim() || '';
+          const searchQ = [cleanTitle, cleanAuthor].filter(Boolean).join(' ').trim();
+          invTasks.push(
+            (async () => {
+              let searchData = await quickFetchJson(
+                `https://inventaire.io/api/search?types=works&search=${encodeURIComponent(searchQ)}&limit=4`
+              );
+              if ((!searchData?.results || searchData.results.length === 0) && cleanAuthor && cleanTitle) {
+                searchData = await quickFetchJson(
+                  `https://inventaire.io/api/search?types=works&search=${encodeURIComponent(cleanTitle)}&limit=4`
                 );
-                if (edsRes.ok) {
-                  const edsData = await edsRes.json();
-                  for (const ent of Object.values(edsData?.entities || {}) as any[]) {
-                    if (ent?.image?.url) addImg(ent.image.url);
-                    if (ent?.claims?.['invp:P2']?.[0]) addImg(ent.claims['invp:P2'][0]);
-                    const p212 = ent?.claims?.['wdt:P212']?.[0];
-                    if (typeof p212 === 'string') {
-                      const cleanEdIsbn = p212.replace(/[^0-9]/g, '');
-                      if (cleanEdIsbn.length === 13) editionIsbns.add(cleanEdIsbn);
-                    }
+              }
+              for (const r of (searchData?.results || []).slice(0, 2)) {
+                if (r?.image) addImg(r.image);
+                if (typeof r?.uri === 'string' && r.uri.trim()) {
+                  workUrisToCheck.add(r.uri.trim());
+                  if (!targetWorkUri) targetWorkUri = r.uri.trim();
+                }
+              }
+            })()
+          );
+        }
+
+        // OpenLibrary Search en parallèle sur titre + auteur pour trouver d'autres tirages/éditions rapidement
+        const olTask = titleParam
+          ? (async () => {
+              const cleanTitle = titleParam.replace(/\([^)]*\)/g, ' ').trim();
+              const cleanAuthor = authorParam.split(',')[0]?.trim() || '';
+              const olUrl = `https://openlibrary.org/search.json?title=${encodeURIComponent(cleanTitle)}${
+                cleanAuthor ? `&author=${encodeURIComponent(cleanAuthor)}` : ''
+              }&fields=cover_i,isbn&limit=8`;
+              const olData = await quickFetchJson(olUrl);
+              for (const doc of olData?.docs || []) {
+                if (doc?.cover_i) {
+                  coverSet.add(`https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg?default=false`);
+                }
+              }
+            })()
+          : Promise.resolve();
+
+        await Promise.all([...invTasks, olTask]);
+
+        // 2. Récupérer les éditions liées à chaque œuvre découverte (Inventaire reverse-claims + Wikidata SPARQL)
+        const remoteEdUris = new Set<string>();
+        await Promise.all(
+          Array.from(workUrisToCheck)
+            .slice(0, 2)
+            .map(async (wUri) => {
+              const tasks: Promise<void>[] = [
+                (async () => {
+                  const revData = await quickFetchJson(
+                    `https://inventaire.io/api/entities?action=reverse-claims&property=wdt%3AP629&value=${encodeURIComponent(wUri)}`
+                  );
+                  for (const edUri of (revData?.uris || []).slice(0, 18)) {
+                    if (typeof edUri === 'string' && edUri) remoteEdUris.add(edUri);
                   }
-                }
+                })()
+              ];
+
+              if (/^wd:Q\d+$/i.test(wUri)) {
+                const qid = wUri.slice(3);
+                const sparql = `SELECT ?cover ?isbn WHERE { ?ed wdt:P629 wd:${qid} . OPTIONAL { ?ed wdt:P18 ?cover . } OPTIONAL { ?ed wdt:P212 ?isbn . } } LIMIT 15`;
+                tasks.push(
+                  (async () => {
+                    const wdData = await quickFetchJson(
+                      `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`,
+                      { Accept: 'application/sparql-results+json' }
+                    );
+                    for (const b of wdData?.results?.bindings || []) {
+                      const cov = b?.cover?.value;
+                      if (typeof cov === 'string' && cov.trim()) {
+                        addImg(cov.includes('Special:FilePath') ? `${cov}?width=500` : cov);
+                      }
+                      const wIsbn = (b?.isbn?.value || '').replace(/[^0-9]/g, '');
+                      if (wIsbn.length === 13) editionIsbns.add(wIsbn);
+                    }
+                  })()
+                );
               }
+
+              await Promise.all(tasks);
+            })
+        );
+
+        if (remoteEdUris.size > 0) {
+          const edsData = await quickFetchJson(
+            `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(
+              Array.from(remoteEdUris).slice(0, 20).join('|')
+            )}`
+          );
+          for (const ent of Object.values(edsData?.entities || {}) as any[]) {
+            if (ent?.image?.url) addImg(ent.image.url);
+            if (ent?.claims?.['invp:P2']?.[0]) addImg(ent.claims['invp:P2'][0]);
+            const p212 = ent?.claims?.['wdt:P212']?.[0];
+            if (typeof p212 === 'string') {
+              const cleanEdIsbn = p212.replace(/[^0-9]/g, '');
+              if (cleanEdIsbn.length === 13) editionIsbns.add(cleanEdIsbn);
             }
           }
-        } catch {
-          // Inventaire.io non bloquant
         }
 
-        // 2. Wikidata SPARQL (complément si l'œuvre a un URI Wikidata wd:Q...)
-        if (targetWorkUri && /^wd:Q\d+$/i.test(targetWorkUri)) {
-          try {
-            const qid = targetWorkUri.slice(3);
-            const sparql = `SELECT ?cover ?isbn WHERE { ?ed wdt:P629 wd:${qid} . OPTIONAL { ?ed wdt:P18 ?cover . } OPTIONAL { ?ed wdt:P212 ?isbn . } } LIMIT 20`;
-            const wdRes = await resilientFetch(
-              `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`,
-              {
-                headers: {
-                  'User-Agent': USER_AGENT_BASE,
-                  Accept: 'application/sparql-results+json'
-                }
-              }
-            );
-            if (wdRes.ok) {
-              const wdData = await wdRes.json();
-              for (const b of wdData?.results?.bindings || []) {
-                const cov = b?.cover?.value;
-                if (typeof cov === 'string' && cov.trim()) {
-                  addImg(cov.includes('Special:FilePath') ? `${cov}?width=500` : cov);
-                }
-                const wIsbn = (b?.isbn?.value || '').replace(/[^0-9]/g, '');
-                if (wIsbn.length === 13) editionIsbns.add(wIsbn);
-              }
-            }
-          } catch {
-            // Wikidata non bloquant
-          }
-        }
-
-        // Ajouter les URLs de couvertures OpenLibrary/Amazon des autres éditions découvertes
-        for (const edIsbn of Array.from(editionIsbns).slice(0, 8)) {
+        // Ajouter les URLs OpenLibrary des autres éditions découvertes
+        for (const edIsbn of Array.from(editionIsbns).slice(0, 6)) {
           if (edIsbn === isbnParam) continue;
           coverSet.add(`https://covers.openlibrary.org/b/isbn/${edIsbn}-L.jpg?default=false`);
-          coverSet.add(`https://servimg.eyrolles.com/static/media/${edIsbn.slice(-4)}/${edIsbn}_internet_h1400.jpg`);
         }
 
         return jsonResp({

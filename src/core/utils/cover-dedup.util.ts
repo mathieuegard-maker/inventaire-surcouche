@@ -63,7 +63,7 @@ export function hammingDistanceHex(hexA: string, hexB: string): number {
 async function computeImageFingerprint(
   url: string,
   isbn?: string,
-  timeoutMs = 5000
+  timeoutMs = 2500
 ): Promise<{ url: string; hash: string; area: number } | null> {
   if (typeof document === 'undefined' || typeof Image === 'undefined') {
     return null;
@@ -126,7 +126,7 @@ export async function deduplicateCoverUrls(
 ): Promise<string[]> {
   const uniqueUrls = Array.from(new Set(urls.map((u) => u.trim()).filter(Boolean))).slice(
     0,
-    options.maxCandidates ?? 20
+    options.maxCandidates ?? 14
   );
   if (uniqueUrls.length <= 1 || typeof document === 'undefined') {
     return uniqueUrls;

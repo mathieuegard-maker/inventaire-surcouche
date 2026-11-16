@@ -179,16 +179,20 @@ onMounted(async () => {
 
     isLoading.value = false;
 
-    // Recherche en arrière-plan sur nos sources + autres éditions de l'œuvre (Inventaire/Wikidata) + déduplication visuelle dHash
+    // Recherche en arrière-plan sur nos sources + autres éditions de l'œuvre (Inventaire/Wikidata/OL) + déduplication visuelle dHash
     const isbn = currentBook.isbn13 || currentBook.isbn10;
-    if (isbn || currentBook.workUri) {
+    if (isbn || currentBook.workUri || currentBook.title) {
       isLoadingExtCovers.value = true;
       try {
+        const coverParams = new URLSearchParams({
+          isbn: isbn || '',
+          workUri: currentBook.workUri || '',
+          title: currentBook.title || '',
+          author: currentBook.authors?.[0] || ''
+        });
         const [extData, edCoversData] = await Promise.all([
           isbn ? externalMetadataService.fetchFromExternalSources(isbn).catch(() => null) : Promise.resolve(null),
-          fetch(
-            `/api/gateway?action=work-edition-covers&isbn=${encodeURIComponent(isbn || '')}&workUri=${encodeURIComponent(currentBook.workUri || '')}`
-          )
+          fetch(`/api/gateway?action=work-edition-covers&${coverParams.toString()}`)
             .then((r) => (r.ok ? r.json() : null))
             .catch(() => null)
         ]);
@@ -229,8 +233,13 @@ onMounted(async () => {
           }
         }
 
-        deduplicatedCovers.value = await deduplicateCoverUrls(rawCandidateUrls.value, {
-          isbn: isbn || undefined
+        // Afficher immédiatement la galerie, puis filtrer les doublons visuels en arrière-plan
+        isLoadingExtCovers.value = false;
+        void deduplicateCoverUrls(rawCandidateUrls.value, {
+          isbn: isbn || undefined,
+          maxCandidates: 14
+        }).then((deduped) => {
+          if (deduped.length > 0) deduplicatedCovers.value = deduped;
         });
       } catch (err: any) {
         console.warn('[BOOK EDIT] Recherche sources externes non critique :', err.message);

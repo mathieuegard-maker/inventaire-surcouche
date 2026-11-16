@@ -8,10 +8,12 @@ import BookMiniCard from '../components/BookMiniCard.vue';
 import WireframeTable from '../components/WireframeTable.vue';
 import WireframePagination from '../components/WireframePagination.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
-import { databaseService } from '../../core/database/database.service';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
-import { seriesReleaseService, type SeriesReleaseAlert } from '../../core/services/series-release.service';
+import {
+  seriesReleaseService,
+  type SeriesReleaseAlert
+} from '../../core/services/series-release.service';
 import { connectionState } from '../../state/connection';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
@@ -80,16 +82,6 @@ const dispatchBatchAction = async (
     .map((u) => alertByBookUri.value.get(u))
     .filter((a): a is SeriesReleaseAlert => Boolean(a));
 
-  const hasDemoOnly = selectedAlerts.some((a) => a.id.startsWith('demo:'));
-  if (hasDemoOnly) {
-    for (const a of selectedAlerts) {
-      await seriesReleaseService.dismissAlert(a.id);
-    }
-    selectedIds.value = [];
-    infoBanner.value = `Simulation : ${selectedAlerts.length} nouveauté(s) traitée(s) (${action === 'ADD_INVENTORY' ? 'Collection' : 'Wishlist'}).`;
-    return;
-  }
-
   for (const alert of selectedAlerts) {
     let targetUri = alert.volumeUri;
     if (alert.isbn13) {
@@ -102,93 +94,6 @@ const dispatchBatchAction = async (
     await seriesReleaseService.dismissAlert(alert.id);
   }
   selectedIds.value = [];
-};
-
-const triggerSimulation = async () => {
-  infoBanner.value = null;
-  const cached = await databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]);
-  const seenSeries = new Set<string>();
-  const samples: Array<{
-    seriesUri?: string;
-    seriesTitle?: string;
-    seriesNumber?: string;
-    coverUrl?: string;
-    isbn13?: string;
-    volumeTitle?: string;
-  }> = [];
-
-  for (const book of cached) {
-    if (book.ownershipStatus === 'owned' && book.series) {
-      const key = book.series.toLowerCase().trim();
-      if (seenSeries.has(key)) continue;
-      seenSeries.add(key);
-
-      const sameSeries = cached.filter((b) => b.series?.toLowerCase().trim() === key);
-      const maxNum = sameSeries.reduce((max, b) => {
-        const n = parseInt(b.seriesNumber || '0', 10);
-        return Number.isFinite(n) && n > max ? n : max;
-      }, 0);
-      const nextNum = String((maxNum || 1) + 1);
-
-      samples.push({
-        seriesUri: book.seriesId || book.series,
-        seriesTitle: book.series,
-        seriesNumber: nextNum,
-        coverUrl: book.coverUrl,
-        isbn13: book.isbn13,
-        volumeTitle: `${book.series} — Tome ${nextNum} (Simulation)`
-      });
-      if (samples.length >= 3) break;
-    }
-  }
-
-  // Compléter avec des classiques BD pour tester plusieurs lignes et la pagination
-  const fallbackPool = [
-    {
-      seriesUri: 'demo:asterix',
-      seriesTitle: 'Astérix',
-      seriesNumber: '41',
-      volumeTitle: 'Astérix en Lusitanie (Simulation)',
-      isbn13: '9782012101524'
-    },
-    {
-      seriesUri: 'demo:thorgal',
-      seriesTitle: 'Thorgal',
-      seriesNumber: '42',
-      volumeTitle: 'Ozurr le Varègue (Simulation)',
-      isbn13: '9782803613625'
-    },
-    {
-      seriesUri: 'demo:blacksad',
-      seriesTitle: 'Blacksad',
-      seriesNumber: '8',
-      volumeTitle: 'Alors, tout tombe — Partie 3 (Simulation)',
-      isbn13: '9782205054194'
-    },
-    {
-      seriesUri: 'demo:tintin',
-      seriesTitle: 'Les Aventures de Tintin',
-      seriesNumber: '25',
-      volumeTitle: 'L’Alph-Art — Édition spéciale (Simulation)',
-      isbn13: '9782203001107'
-    },
-    {
-      seriesUri: 'demo:luckyluke',
-      seriesTitle: 'Lucky Luke',
-      seriesNumber: '84',
-      volumeTitle: 'Un cow-boy sous pression (Simulation)',
-      isbn13: '9782884714938'
-    }
-  ];
-
-  for (const fallback of fallbackPool) {
-    if (samples.length >= 5) break;
-    if (!seenSeries.has(fallback.seriesTitle.toLowerCase())) {
-      samples.push(fallback);
-    }
-  }
-
-  seriesReleaseService.simulateDemoAlerts(samples);
 };
 </script>
 
@@ -205,13 +110,6 @@ const triggerSimulation = async () => {
         @click="seriesReleaseService.checkNewReleasesOnOpen(true)"
       >
         {{ isChecking ? 'Vérification en cours...' : 'Vérifier les sorties' }}
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn releases-tool-btn"
-        @click="triggerSimulation"
-      >
-        Simuler plusieurs sorties
       </button>
       <button
         v-if="alerts.length > 0"
@@ -244,7 +142,7 @@ const triggerSimulation = async () => {
         <div v-if="displayedBooks.length === 0">
           <BaseBanner
             type="error"
-            message="Aucune nouvelle sortie détectée pour vos séries commencées. Cliquez sur « Simuler plusieurs sorties » pour tester la mise en page."
+            message="Aucune nouvelle sortie détectée pour vos séries commencées."
           />
         </div>
 
