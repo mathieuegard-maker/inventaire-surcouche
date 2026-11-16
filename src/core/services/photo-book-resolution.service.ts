@@ -13,6 +13,7 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { externalMetadataService } from './external-metadata.service';
 import { wishlistService } from './wishlist.service';
 import { isbnUtil } from '../utils/isbn.util';
+import { imageUtil } from '../utils/image.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 
@@ -24,6 +25,7 @@ export interface PhotoResolutionOption {
   publishDate?: string;
   pageCount?: number;
   coverUrl?: string;
+  coverFallbackUrls?: string[];
   series?: string;
   seriesNumber?: string;
   score: number;
@@ -45,6 +47,7 @@ export interface ResolvedPhotoItem {
   publishDate?: string;
   pageCount?: number;
   coverUrl?: string;
+  coverFallbackUrls?: string[];
   series?: string;
   seriesNumber?: string;
   existingUri?: string;
@@ -439,11 +442,25 @@ export const photoBookResolutionService = {
         entityResolver.resolvePhysicalEntity(`isbn:${isbn13}`).catch(() => null)
       ]);
 
-      // Si doute : enrichir brièvement les alternatives 2..3 (couverture/série/auteur BnF) si nécessaire
+      // Si doute : enrichir brièvement les alternatives 2..3 (couverture/série/auteur BnF + repli CDN) si nécessaire
       if (isDoubt && alternatives.length > 0) {
         const enrichedAlternatives = await Promise.all(
           alternatives.map(async (alt, idx) => {
             if (idx === 0) {
+              const primaryCover =
+                ownership.cachedCover ||
+                d1Entity?.localCover ||
+                d1Entity?.coverUrl ||
+                externalMeta?.coverUrl ||
+                alt.coverUrl;
+              const coverFallbackUrls = imageUtil.buildCoverCandidates(alt.isbn13, [
+                ownership.cachedCover,
+                d1Entity?.localCover,
+                d1Entity?.coverUrl,
+                externalMeta?.coverUrl,
+                ...(externalMeta?.coverFallbackUrls || []),
+                alt.coverUrl
+              ]);
               return {
                 ...alt,
                 title: externalMeta?.title?.trim() || d1Entity?.title?.trim() || alt.title,
@@ -451,21 +468,34 @@ export const photoBookResolutionService = {
                 publisher: externalMeta?.publisher || alt.publisher,
                 publishDate: externalMeta?.publishDate || alt.publishDate,
                 pageCount: externalMeta?.pageCount || alt.pageCount,
-                coverUrl: externalMeta?.coverUrl || ownership.cachedCover || d1Entity?.coverUrl || alt.coverUrl,
+                coverUrl: primaryCover || coverFallbackUrls[0],
+                coverFallbackUrls,
                 series: externalMeta?.series || alt.series,
                 seriesNumber: externalMeta?.seriesNumber || alt.seriesNumber
               };
             }
             onExternalLookup?.(1);
-            const altExt = await externalMetadataService.fetchFromExternalSources(alt.isbn13).catch(() => null);
+            const [altExt, altD1] = await Promise.all([
+              externalMetadataService.fetchFromExternalSources(alt.isbn13).catch(() => null),
+              entityResolver.resolvePhysicalEntity(`isbn:${alt.isbn13}`).catch(() => null)
+            ]);
+            const primaryAltCover = altD1?.localCover || altD1?.coverUrl || altExt?.coverUrl || alt.coverUrl;
+            const altFallbacks = imageUtil.buildCoverCandidates(alt.isbn13, [
+              altD1?.localCover,
+              altD1?.coverUrl,
+              altExt?.coverUrl,
+              ...(altExt?.coverFallbackUrls || []),
+              alt.coverUrl
+            ]);
             return {
               ...alt,
-              title: altExt?.title?.trim() || alt.title,
+              title: altExt?.title?.trim() || altD1?.title?.trim() || alt.title,
               authors: altExt?.authors?.length ? altExt.authors : alt.authors,
               publisher: altExt?.publisher || alt.publisher,
               publishDate: altExt?.publishDate || alt.publishDate,
               pageCount: altExt?.pageCount || alt.pageCount,
-              coverUrl: altExt?.coverUrl || alt.coverUrl,
+              coverUrl: primaryAltCover || altFallbacks[0],
+              coverFallbackUrls: altFallbacks,
               series: altExt?.series || alt.series,
               seriesNumber: altExt?.seriesNumber || alt.seriesNumber
             };
@@ -491,12 +521,21 @@ export const photoBookResolutionService = {
                 ? [cand.author]
                 : [];
 
+      const coverFallbackUrls = imageUtil.buildCoverCandidates(isbn13, [
+        ownership.cachedCover,
+        d1Entity?.localCover,
+        d1Entity?.coverUrl,
+        externalMeta?.coverUrl,
+        ...(externalMeta?.coverFallbackUrls || []),
+        hintMatchMeta?.coverUrl
+      ]);
       const mergedCover =
-        externalMeta?.coverUrl ||
         ownership.cachedCover ||
         d1Entity?.localCover ||
         d1Entity?.coverUrl ||
-        hintMatchMeta?.coverUrl;
+        externalMeta?.coverUrl ||
+        hintMatchMeta?.coverUrl ||
+        coverFallbackUrls[0];
 
       const mergedSeries =
         externalMeta?.series || d1Entity?.series || hintMatchMeta?.series || cand.series;
@@ -523,6 +562,7 @@ export const photoBookResolutionService = {
         publishDate: externalMeta?.publishDate || d1Entity?.publishDate || hintMatchMeta?.publishDate,
         pageCount: externalMeta?.pageCount || d1Entity?.pageCount || hintMatchMeta?.pageCount,
         coverUrl: mergedCover,
+        coverFallbackUrls,
         series: mergedSeries,
         seriesNumber: mergedSeriesNum,
         existingUri: ownership.existingUri || d1Entity?.uri,
@@ -678,11 +718,16 @@ export const photoBookResolutionService = {
       const enrichedExtras = await runWithConcurrency(candidateExtras, 3, async (vol, idx) => {
         const ownership = await checkOwnershipByIsbn(vol.isbn);
         let finalMeta: ExternalBookMetadata = vol;
+        let d1ExtraCover: string | undefined;
 
-        // S'il n'y a pas encore de couverture depuis la BnF, passage par le flux classique (OpenLibrary / Google Books)
-        if (!vol.coverUrl && !ownership.cachedCover) {
+        // Si pas encore de couverture locale/BnF, passer par le flux complet (D1 resolveBestCoverUrl + OpenLibrary / Google Books)
+        if (!ownership.cachedCover && !vol.coverUrl) {
           onExternalLookup?.(1);
-          const ext = await externalMetadataService.fetchFromExternalSources(vol.isbn).catch(() => null);
+          const [ext, d1Extra] = await Promise.all([
+            externalMetadataService.fetchFromExternalSources(vol.isbn).catch(() => null),
+            entityResolver.resolvePhysicalEntity(`isbn:${vol.isbn}`).catch(() => null)
+          ]);
+          d1ExtraCover = d1Extra?.localCover || d1Extra?.coverUrl;
           if (ext) {
             finalMeta = {
               ...vol,
@@ -691,14 +736,21 @@ export const photoBookResolutionService = {
               publisher: ext.publisher || vol.publisher,
               publishDate: ext.publishDate || vol.publishDate,
               pageCount: ext.pageCount || vol.pageCount,
-              coverUrl: ext.coverUrl || vol.coverUrl,
+              coverUrl: d1ExtraCover || ext.coverUrl || vol.coverUrl,
+              coverFallbackUrls: ext.coverFallbackUrls,
               series: ext.series || vol.series,
               seriesNumber: ext.seriesNumber || vol.seriesNumber
             };
           }
         }
 
-        const coverUrl = finalMeta.coverUrl || ownership.cachedCover;
+        const coverFallbackUrls = imageUtil.buildCoverCandidates(vol.isbn, [
+          ownership.cachedCover,
+          d1ExtraCover,
+          finalMeta.coverUrl,
+          ...(finalMeta.coverFallbackUrls || [])
+        ]);
+        const coverUrl = ownership.cachedCover || d1ExtraCover || finalMeta.coverUrl || coverFallbackUrls[0];
 
         return {
           id: `extra-${seriesKey}-${idx}-${vol.isbn}`,
@@ -722,6 +774,7 @@ export const photoBookResolutionService = {
           publishDate: finalMeta.publishDate,
           pageCount: finalMeta.pageCount,
           coverUrl,
+          coverFallbackUrls,
           series: finalMeta.series || seriesName,
           seriesNumber: finalMeta.seriesNumber,
           existingUri: ownership.existingUri,

@@ -2,7 +2,7 @@
 import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
-import type { BookSearchHints } from './googlebooks.resolver';
+import { extractSeriesAndVolumeHints, type BookSearchHints } from './googlebooks.resolver';
 
 function pickBestIsbnFromList(rawList?: unknown[]): string | null {
   if (!Array.isArray(rawList)) return null;
@@ -123,7 +123,7 @@ export const openLibraryResolver = {
         seenQueries.add(q);
 
         const res = await fetchWithTimeout(
-          `/api/gateway?action=external-lookup&source=openlibrary&q=${encodeURIComponent(q)}`
+          `/api/gateway?action=external-lookup&source=openlibrary&q=${encodeURIComponent(q)}&limit=${Math.min(Math.max(maxCandidates, 10), 40)}`
         );
         if (!res.ok) continue;
 
@@ -137,17 +137,24 @@ export const openLibraryResolver = {
           const isbn13 = pickBestIsbnFromList(doc.isbn);
           if (!isbn13 || byIsbn.has(isbn13)) continue;
 
+          const parsedSeries = extractSeriesAndVolumeHints(String(doc.title).trim(), doc.subtitle ? String(doc.subtitle).trim() : undefined);
           const coverUrl = doc.cover_i
             ? `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`
             : undefined;
+          const rawSubjects = Array.isArray(doc.subject)
+            ? doc.subject.slice(0, 8).map((s: unknown) => String(s).trim()).filter(Boolean)
+            : [];
 
           byIsbn.set(isbn13, {
             isbn: isbn13,
-            title: String(doc.title).trim(),
+            title: parsedSeries.title || String(doc.title).trim(),
             authors: Array.isArray(doc.author_name) ? doc.author_name.map((a: any) => String(a).trim()).filter(Boolean) : [],
             publisher: Array.isArray(doc.publisher) && doc.publisher[0] ? String(doc.publisher[0]).trim() : undefined,
             publishDate: doc.first_publish_year ? String(doc.first_publish_year) : undefined,
-            coverUrl
+            coverUrl,
+            ...(parsedSeries.series ? { series: parsedSeries.series } : {}),
+            ...(parsedSeries.seriesNumber ? { seriesNumber: parsedSeries.seriesNumber } : {}),
+            ...(rawSubjects.length ? { rawSubjects } : {})
           });
         }
 

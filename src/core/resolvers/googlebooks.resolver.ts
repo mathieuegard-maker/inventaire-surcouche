@@ -2,6 +2,7 @@
 import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
+import { cleanSeriesName, normalizeSeriesNumber, parseSeriesFromTitle } from './bnf.resolver';
 
 export interface BookSearchHints {
   title?: string;
@@ -15,8 +16,57 @@ export interface BookSearchHints {
   rawSpineText?: string;
 }
 
+export function extractSeriesAndVolumeHints(
+  rawTitle: string,
+  rawSubtitle?: string
+): { title: string; series?: string; seriesNumber?: string } {
+  const cleanMain = rawTitle.trim();
+  const cleanSub = rawSubtitle?.trim() || '';
+
+  // Ex: "Les Aventures de Tintin - Tome 11 : Le Secret de La Licorne" ou "Astérix T.2 - La Serpe d'or"
+  const frontVolMatch =
+    /^(.+?)\s*(?:,|\s-\s|\s)*\b(?:tome|vol\.?|volume|t\.?|n°)\s*0*(\d+)\b(?:\s*[:\-–]\s*(.+))?$/i.exec(
+      cleanMain
+    );
+  if (frontVolMatch) {
+    const candidateSeries = cleanSeriesName(frontVolMatch[1]);
+    const volNum = normalizeSeriesNumber(frontVolMatch[2]);
+    const candidateAlbum = frontVolMatch[3]?.trim() || cleanSub;
+    if (candidateSeries && volNum) {
+      return {
+        title: candidateAlbum || cleanMain,
+        series: candidateSeries,
+        seriesNumber: volNum
+      };
+    }
+  }
+
+  // Ex: Title = "Astérix le Gaulois", Subtitle = "Astérix - Tome 1"
+  if (cleanSub) {
+    const subMatch =
+      /^(.+?)\s*(?:,|\s-\s|\s)*\b(?:tome|vol\.?|volume|t\.?|n°)\s*0*(\d+)\b/i.exec(cleanSub);
+    if (subMatch) {
+      const candidateSeries = cleanSeriesName(subMatch[1]);
+      const volNum = normalizeSeriesNumber(subMatch[2]);
+      if (candidateSeries && volNum) {
+        return { title: cleanMain, series: candidateSeries, seriesNumber: volNum };
+      }
+    }
+  }
+
+  const parsed = parseSeriesFromTitle(cleanMain);
+  return {
+    title: parsed.title || cleanMain,
+    series: parsed.series ? cleanSeriesName(parsed.series) : undefined,
+    seriesNumber: parsed.seriesNumber ? normalizeSeriesNumber(parsed.seriesNumber) : undefined
+  };
+}
+
 function extractVolumeMetadata(isbn: string, volumeInfo: any): ExternalBookMetadata {
-  const title = volumeInfo.title?.trim() || '';
+  const rawTitle = volumeInfo.title?.trim() || '';
+  const rawSubtitle = volumeInfo.subtitle?.trim() || '';
+  const parsedSeries = extractSeriesAndVolumeHints(rawTitle, rawSubtitle);
+  const title = parsedSeries.title || rawTitle;
   const authors: string[] = volumeInfo.authors || [];
   const publisher = volumeInfo.publisher?.trim() || undefined;
 
@@ -49,6 +99,8 @@ function extractVolumeMetadata(isbn: string, volumeInfo: any): ExternalBookMetad
     publishDate,
     pageCount,
     coverUrl,
+    ...(parsedSeries.series ? { series: parsedSeries.series } : {}),
+    ...(parsedSeries.seriesNumber ? { seriesNumber: parsedSeries.seriesNumber } : {}),
     ...(rawSubjects.length ? { rawSubjects } : {})
   };
 }
@@ -127,7 +179,9 @@ export const googleBooksResolver = {
         if (!q || seenQueries.has(q)) continue;
         seenQueries.add(q);
 
-        const res = await fetchWithTimeout(`/api/gateway?action=google-books&q=${encodeURIComponent(q)}`);
+        const res = await fetchWithTimeout(
+          `/api/gateway?action=google-books&q=${encodeURIComponent(q)}&maxResults=${Math.min(Math.max(maxCandidates, 20), 40)}`
+        );
         if (!res.ok) continue;
 
         const data = await res.json();
@@ -162,7 +216,7 @@ export const googleBooksResolver = {
           }
         }
 
-        if (byIsbn.size >= 4) break;
+        if (byIsbn.size >= Math.max(4, Math.min(maxCandidates, 40))) break;
       }
 
       return Array.from(byIsbn.values())
@@ -171,6 +225,62 @@ export const googleBooksResolver = {
         .map((x) => x.meta);
     } catch (e: any) {
       console.warn('[GOOGLE BOOKS RESOLVER] Échec searchCandidatesByHints:', e?.message || e);
+      return [];
+    }
+  },
+
+  /**
+   * Recherche large multi-requêtes (mot-clé / série / auteur) avec pagination Google Books pour récupérer tous les tomes d'une série.
+   */
+  async searchKeywordOrSeriesVolumes(query: string, authorHint?: string, maxTotal = 60): Promise<ExternalBookMetadata[]> {
+    const cleanQ = query.trim();
+    if (!cleanQ) return [];
+    const byIsbn = new Map<string, { score: number; meta: ExternalBookMetadata }>();
+
+    const fetchPage = async (q: string, startIndex: number) => {
+      const res = await fetchWithTimeout(
+        `/api/gateway?action=google-books&q=${encodeURIComponent(q)}&maxResults=40&startIndex=${startIndex}`
+      ).catch(() => null);
+      if (!res || !res.ok) return [] as any[];
+      const data = await res.json();
+      return Array.isArray(data?.items) ? data.items : [];
+    };
+
+    try {
+      const queries = authorHint?.trim()
+        ? [`"${cleanQ}" inauthor:${authorHint.trim()}`, cleanQ]
+        : [cleanQ];
+
+      const pages = await Promise.all([
+        fetchPage(queries[0], 0),
+        fetchPage(queries[0], 40),
+        ...(queries[1] ? [fetchPage(queries[1], 0)] : [])
+      ]);
+
+      for (const item of pages.flat()) {
+        const info = item?.volumeInfo;
+        if (!info?.title) continue;
+        if (info.language && info.language !== 'fr') continue;
+        const isbn13 = extractBestIsbnFromVolume(info);
+        if (!isbn13) continue;
+
+        let score = 0;
+        if (info.language === 'fr') score += 20;
+        if (isbn13.startsWith('9782') || isbn13.startsWith('97910')) score += 15;
+        if (info.imageLinks) score += 8;
+
+        const existing = byIsbn.get(isbn13);
+        if (!existing || score > existing.score) {
+          byIsbn.set(isbn13, { score, meta: extractVolumeMetadata(isbn13, info) });
+        }
+      }
+
+      return Array.from(byIsbn.values())
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxTotal)
+        .map((x) => x.meta);
+    } catch (e: any) {
+      console.warn('[GOOGLE BOOKS RESOLVER] Échec searchKeywordOrSeriesVolumes:', e?.message || e);
       return [];
     }
   },

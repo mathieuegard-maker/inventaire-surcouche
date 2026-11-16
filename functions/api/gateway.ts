@@ -177,6 +177,20 @@ export const onRequest = async (context: {
             });
           }
 
+          if (author && author.trim()) {
+            const cleanAuthor = author.replace(/["()]/g, ' ').replace(/\s+/g, ' ').trim();
+            const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 50, 1), 100);
+            const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
+            const cql = `bib.author all "${cleanAuthor}"`;
+            const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
+            const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+            const bnfText = await bnfRes.text();
+            return new Response(bnfText, {
+              status: bnfRes.status,
+              headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+            });
+          }
+
           if (!isbn) return jsonResp({ error: 'ISBN ou série requis' }, 400);
           const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn)}%22&recordSchema=${recordSchema}`;
           const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
@@ -190,7 +204,8 @@ export const onRequest = async (context: {
         if (source === 'openlibrary') {
           const olQuery = url.searchParams.get('q');
           if (olQuery && olQuery.trim()) {
-            const olSearchUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery.trim())}&fields=key,title,author_name,publisher,first_publish_year,isbn,cover_i,language&limit=10`;
+            const limit = Math.min(Math.max(Number(url.searchParams.get('limit')) || 30, 1), 40);
+            const olSearchUrl = `https://openlibrary.org/search.json?q=${encodeURIComponent(olQuery.trim())}&fields=key,title,subtitle,author_name,publisher,first_publish_year,isbn,cover_i,language,subject&limit=${limit}`;
             const olRes = await resilientFetch(olSearchUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
             const olText = await olRes.text();
             return new Response(olText, {
@@ -217,7 +232,9 @@ export const onRequest = async (context: {
         const queryParam = isbn ? `isbn:${encodeURIComponent(isbn)}` : q ? encodeURIComponent(q) : '';
         if (!queryParam) return jsonResp({ error: 'ISBN ou paramètre q requis' }, 400);
 
-        const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=${queryParam}&maxResults=20`;
+        const maxResults = Math.min(Math.max(Number(url.searchParams.get('maxResults')) || (isbn ? 10 : 40), 1), 40);
+        const startIndex = Math.max(Number(url.searchParams.get('startIndex')) || 0, 0);
+        const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=${queryParam}&maxResults=${maxResults}&startIndex=${startIndex}`;
         const gbRes = await resilientFetch(gbUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
         const gbText = await gbRes.text();
         return new Response(gbText, {

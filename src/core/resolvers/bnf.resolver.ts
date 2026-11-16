@@ -456,11 +456,23 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
   const cleanIsbn = isbnUtil.normalize(rawIsbn);
   const isbn = cleanIsbn.length === 10 ? isbnUtil.toIsbn13(cleanIsbn) : cleanIsbn;
 
-  // 2. Titre & filtre anti-compilation / double-album
+  // 2. Titre & filtre anti-compilation / double-album (gère aussi 245$a série + 245$n tome + 245$p titre d'album)
   const f245 = fields.find(f => f.tag === '245');
-  const rawImTitle = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
+  const rawA245 = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
+  const rawP245 = f245 ? cleanTitle(getSubfield(f245, 'p') || '') : '';
+  const rawE245 = f245 ? cleanTitle(getSubfield(f245, 'e') || '') : '';
+  const partNumber245 = f245 ? getSubfield(f245, 'n') : undefined;
+  const imVolumeNumber = (f245 ? getSubfield(f245, 'u') : undefined) || partNumber245;
+
+  let rawImTitle = rawA245;
+  let inferredSeriesFrom245: string | undefined;
+  if (rawP245 && rawA245) {
+    inferredSeriesFrom245 = cleanSeriesName(rawA245);
+    rawImTitle = rawP245;
+  } else if (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245)) {
+    rawImTitle = rawA245;
+  }
   if (!rawImTitle) return null;
-  const imVolumeNumber = f245 ? getSubfield(f245, 'u') : undefined;
   const secondTitleInSameVol = f245 ? getSubfield(f245, 'b') : undefined;
 
   const f280 = fields.find(f => f.tag === '280');
@@ -472,15 +484,17 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     return null;
   }
 
-  // 3. Série & numéro de tome (460 -> 290/410 uniquement si sous-zone $v présente)
-  let imSeries: string | undefined;
-  let imSeriesNumber: string | undefined;
+  // 3. Série & numéro de tome (460 -> 245$p -> 290/410 uniquement si sous-zone $v présente)
+  let imSeries: string | undefined = inferredSeriesFrom245;
+  let imSeriesNumber: string | undefined = partNumber245;
   let bnfEnsembleId: string | undefined;
   const f460 = fields.find(f => f.tag === '460' || f.tag === '461');
   if (f460) {
-    bnfEnsembleId = getSubfield(f460, '3');
-    imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a');
-    imSeriesNumber = getSubfield(f460, 'v');
+    const rawEns = getSubfield(f460, '3') || '';
+    const digitsEns = rawEns.replace(/\D/g, '');
+    bnfEnsembleId = digitsEns.length >= 8 ? digitsEns.slice(-8) : (digitsEns || undefined);
+    imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a') || imSeries;
+    imSeriesNumber = getSubfield(f460, 'v') || imSeriesNumber;
   }
   if (!imSeries) {
     const f290 = fields.find(f => f.tag === '290');
@@ -502,7 +516,11 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
   const titleParse = parseSeriesFromTitle(rawImTitle);
   const title = titleParse.title || rawImTitle.trim();
   const series = cleanSeriesName(imSeries || titleParse.series || '');
-  const rawSeriesNum = imSeriesNumber || imVolumeNumber || titleParse.seriesNumber;
+  const rawSeriesNum =
+    imSeriesNumber ||
+    imVolumeNumber ||
+    (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245) ? rawE245 : undefined) ||
+    titleParse.seriesNumber;
   const seriesNumber = normalizeSeriesNumber(rawSeriesNum) || undefined;
 
   if (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series))) {
@@ -728,9 +746,14 @@ export const bnfResolver = {
 
   /**
    * Recherche les autres tomes d'une série sur la BNF (SRU InterMarc)
-   * et dédoublonne les rééditions par numéro de tome / titre.
+   * en combinant les notices d'ensemble (`bib.ens2bib` via `460$3`) et la recherche directe par titre de série,
+   * puis dédoublonne les rééditions par numéro de tome / titre.
    */
-  async searchSeriesVolumes(seriesName: string, authorName?: string): Promise<ExternalBookMetadata[]> {
+  async searchSeriesVolumes(
+    seriesName: string,
+    authorName?: string,
+    knownEnsembleIds: string[] = []
+  ): Promise<ExternalBookMetadata[]> {
     const cleanTargetSeries = cleanSeriesName(seriesName);
     const targetSeriesKey = normalizeTextKey(cleanTargetSeries);
     if (!targetSeriesKey) return [];
@@ -741,7 +764,7 @@ export const bnfResolver = {
         source: 'bnf',
         schema: 'intermarc',
         series: cleanTargetSeries,
-        maxRecords: '80'
+        maxRecords: '100'
       });
       if (withAuthor?.trim()) {
         params.set('author', withAuthor.trim());
@@ -752,8 +775,31 @@ export const bnfResolver = {
       return xml.split('<srw:record>').slice(1);
     };
 
+    const fetchByEnsembleIds = async (ids: string[]): Promise<string[]> => {
+      const cleanIds = ids.map((id) => id.replace(/\D/g, '')).filter((id) => id.length >= 6);
+      if (cleanIds.length === 0) return [];
+      const res = await fetchWithTimeout(
+        `/api/gateway?action=external-lookup&source=bnf&schema=intermarc&ensIds=${encodeURIComponent(cleanIds.slice(0, 6).join(' '))}&maxRecords=100`
+      );
+      if (!res.ok) return [];
+      const xml = await res.text();
+      const page1 = xml.split('<srw:record>').slice(1);
+      if (page1.length < 95) return page1;
+      const res2 = await fetchWithTimeout(
+        `/api/gateway?action=external-lookup&source=bnf&schema=intermarc&ensIds=${encodeURIComponent(cleanIds.slice(0, 6).join(' '))}&maxRecords=100&startRecord=101`
+      ).catch(() => null);
+      if (!res2 || !res2.ok) return page1;
+      const xml2 = await res2.text();
+      return [...page1, ...xml2.split('<srw:record>').slice(1)];
+    };
+
     try {
-      let rawRecords = await fetchRecords(authorName);
+      const ensIds = new Set<string>(knownEnsembleIds.map((id) => id.replace(/\D/g, '')).filter((id) => id.length >= 6));
+      let [rawRecords, ensRecords] = await Promise.all([
+        fetchRecords(authorName),
+        ensIds.size > 0 ? fetchByEnsembleIds(Array.from(ensIds)) : Promise.resolve([])
+      ]);
+
       if (rawRecords.length < 2 && authorName?.trim()) {
         // Repli sans contrainte d'auteur si la série change de scénariste/dessinateur
         const fallbackRecords = await fetchRecords();
@@ -762,21 +808,43 @@ export const bnfResolver = {
         }
       }
 
-      const candidates: Array<ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }> = [];
+      // Découvrir aussi les FRBNF ensembleIds trouvés dans les premières notices puis récupérer tous les tomes rattachés
       for (const recXml of rawRecords) {
         const parsed = parseIntermarcRecord(recXml);
-        if (!parsed || !parsed.series) continue;
+        if (parsed?._bnfEnsembleId) {
+          const candKey = parsed.series ? normalizeTextKey(parsed.series) : '';
+          if (candKey && (candKey === targetSeriesKey || candKey.includes(targetSeriesKey) || targetSeriesKey.includes(candKey))) {
+            ensIds.add(parsed._bnfEnsembleId);
+          }
+        }
+      }
+      if (ensRecords.length === 0 && ensIds.size > 0) {
+        ensRecords = await fetchByEnsembleIds(Array.from(ensIds));
+      }
 
-        const candSeriesKey = normalizeTextKey(parsed.series);
+      const allRawRecords = [...ensRecords, ...rawRecords];
+      const candidates: Array<ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }> = [];
+      for (const recXml of allRawRecords) {
+        const parsed = parseIntermarcRecord(recXml);
+        if (!parsed) continue;
+        // Si la notice provient directement de `ens2bib` sans `series` renseignée, on rattache au nom de série cible
+        const effectiveSeries = parsed.series || (ensRecords.includes(recXml) ? cleanTargetSeries : '');
+        if (!effectiveSeries) continue;
+
+        const candSeriesKey = normalizeTextKey(effectiveSeries);
         const seriesMatch =
           candSeriesKey === targetSeriesKey ||
+          candSeriesKey.includes(targetSeriesKey) ||
+          targetSeriesKey.includes(candSeriesKey) ||
           (candSeriesKey.length >= 4 && getLevenshteinDistance(candSeriesKey, targetSeriesKey) <= 2);
 
         if (!seriesMatch) continue;
-        // Exclure explicitement les éditions dans une langue non française si codée
         if (parsed._lang && parsed._lang !== 'fre') continue;
 
-        candidates.push(parsed);
+        candidates.push({
+          ...parsed,
+          series: cleanSeriesName(effectiveSeries) || parsed.series
+        });
       }
 
       // Regrouper les rééditions d'un même tome (par numéro de tome, sinon par titre normalisé)
@@ -790,12 +858,10 @@ export const bnfResolver = {
         byVolumeKey.set(volKey, list);
       }
 
-      const scoreCandidate = (c: ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }): number =>
-        scoreEditionCandidate(c);
-
       const elected: ExternalBookMetadata[] = [];
       for (const group of byVolumeKey.values()) {
-        group.sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+        group.sort((a, b) => scoreEditionCandidate(b) - scoreEditionCandidate(a));
+        const bestWithCover = group.find((g) => Boolean(g.coverUrl));
         const top = group[0];
         elected.push({
           isbn: top.isbn,
@@ -804,9 +870,12 @@ export const bnfResolver = {
           publisher: top.publisher,
           publishDate: top.publishDate,
           pageCount: top.pageCount,
-          coverUrl: top.coverUrl,
+          coverUrl: top.coverUrl || bestWithCover?.coverUrl,
           series: top.series,
-          seriesNumber: top.seriesNumber
+          seriesNumber: top.seriesNumber,
+          collection: top.collection,
+          deweyCode: top.deweyCode,
+          rawSubjects: top.rawSubjects
         });
       }
 
@@ -822,6 +891,74 @@ export const bnfResolver = {
       return elected;
     } catch (e: any) {
       console.warn(`[BNF RESOLVER] Erreur searchSeriesVolumes (${seriesName}):`, e?.message || e);
+      return [];
+    }
+  },
+
+  /**
+   * Recherche textuelle large BnF (titre + partout + auteur) pour la barre de recherche principale.
+   */
+  async searchKeywordVolumes(
+    query: string,
+    maxRecordsPerQuery = 50
+  ): Promise<Array<ExternalBookMetadata & { _bnfEnsembleId?: string }>> {
+    const cleanQ = query.trim();
+    if (!cleanQ) return [];
+
+    const runSru = async (paramsObj: Record<string, string>): Promise<string[]> => {
+      const params = new URLSearchParams({
+        action: 'external-lookup',
+        source: 'bnf',
+        schema: 'intermarc',
+        maxRecords: String(maxRecordsPerQuery),
+        ...paramsObj
+      });
+      const res = await fetchWithTimeout(`/api/gateway?${params.toString()}`).catch(() => null);
+      if (!res || !res.ok) return [];
+      const xml = await res.text();
+      return xml.split('<srw:record>').slice(1);
+    };
+
+    try {
+      const [byTitle, byAnywhere, byAuthor] = await Promise.all([
+        runSru({ title: cleanQ }),
+        runSru({ title: cleanQ, queryMode: 'anywhere' }),
+        runSru({ author: cleanQ })
+      ]);
+
+      const byIsbn = new Map<string, ExternalBookMetadata & { _bnfEnsembleId?: string; _editScore: number }>();
+      for (const recXml of [...byTitle, ...byAnywhere, ...byAuthor]) {
+        const parsed = parseIntermarcRecord(recXml);
+        if (!parsed) continue;
+        if (parsed._lang && parsed._lang !== 'fre') continue;
+
+        const editScore = scoreEditionCandidate(parsed);
+        const existing = byIsbn.get(parsed.isbn);
+        if (!existing || editScore > existing._editScore) {
+          byIsbn.set(parsed.isbn, {
+            isbn: parsed.isbn,
+            title: parsed.title,
+            authors: parsed.authors,
+            publisher: parsed.publisher,
+            publishDate: parsed.publishDate,
+            pageCount: parsed.pageCount,
+            coverUrl: parsed.coverUrl,
+            series: parsed.series,
+            seriesNumber: parsed.seriesNumber,
+            collection: parsed.collection,
+            deweyCode: parsed.deweyCode,
+            rawSubjects: parsed.rawSubjects,
+            _bnfEnsembleId: parsed._bnfEnsembleId,
+            _editScore: editScore
+          });
+        }
+      }
+
+      return Array.from(byIsbn.values())
+        .sort((a, b) => b._editScore - a._editScore)
+        .map(({ _editScore, ...meta }) => meta);
+    } catch (e: any) {
+      console.warn(`[BNF RESOLVER] Erreur searchKeywordVolumes (${cleanQ}):`, e?.message || e);
       return [];
     }
   },

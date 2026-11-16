@@ -11,6 +11,7 @@ import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
 import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
+import { imageUtil } from '../../core/utils/image.util';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
@@ -511,7 +512,7 @@ const saveChanges = async () => {
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
               <div v-else-if="suggestions" class="suggestion-content-inline">
                 <div style="display: flex; gap: var(--spacing-sm); align-items: center; min-width: 0; flex: 1;">
-                  <img v-if="suggestions.coverUrl" :src="suggestions.coverUrl" style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover; flex-shrink: 0;" />
+                  <img v-if="suggestions.coverUrl" :src="imageUtil.resolveCoverUrl(suggestions.coverUrl)" style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover; flex-shrink: 0;" />
                   <span class="suggestion-value-text" style="font-size: 11px;">{{ suggestions.coverUrl ? 'Image disponible' : 'Aucune' }}</span>
                 </div>
                 <BaseButton 

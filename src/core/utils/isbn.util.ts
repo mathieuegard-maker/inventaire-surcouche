@@ -48,5 +48,20 @@ export const isbnUtil = {
     }
     const checkDigit = (10 - (sum % 10)) % 10;
     return base + checkDigit;
+  },
+
+  /**
+   * Convertit un ISBN-13 (préfixe 978) en ISBN-10 (utile pour certains CDN éditeurs/librairies)
+   */
+  toIsbn10(isbn13: string): string | null {
+    const clean = this.normalize(isbn13);
+    if (!/^978\d{10}$/.test(clean)) return null;
+    const core = clean.slice(3, 12);
+    let sum = 0;
+    for (let i = 0; i < 9; i++) {
+      sum += Number(core[i]) * (10 - i);
+    }
+    const rem = (11 - (sum % 11)) % 11;
+    return `${core}${rem === 10 ? 'X' : String(rem)}`;
   }
 };

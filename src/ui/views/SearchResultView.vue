@@ -8,6 +8,7 @@ import BaseBanner from '../components/BaseBanner.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
+import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
 import {
   keywordSearchService,
@@ -52,6 +53,10 @@ const executeSemanticSearch = async () => {
 
   try {
     grouped.value = await keywordSearchService.searchGrouped(query, connectionState.isOffline.value);
+    if (grouped.value.series.length > 0) {
+      // Ouvrir automatiquement la première série correspondante pour afficher immédiatement ses tomes
+      expandedSeriesKeys.value[grouped.value.series[0].key] = true;
+    }
   } catch (error) {
     console.error('[SEARCH RESULT VIEW] Échec de la recherche multi-sources :', error);
     errorMessage.value = TEXTS.searchResults.errorFetch;
@@ -304,7 +309,13 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
                   class="mini-card-row card-row-clickable nested-vol"
                   @click="handleSelectBook(vol)"
                 >
-                  <img v-if="vol.coverUrl" :src="vol.coverUrl" :alt="vol.title" class="search-thumb" />
+                  <img
+                    v-if="vol.coverUrl"
+                    :src="imageUtil.resolveCoverUrl(vol.coverUrl)"
+                    :alt="vol.title"
+                    class="search-thumb"
+                    @error="imageUtil.advanceCoverFallback(vol)"
+                  />
                   <div v-else class="search-thumb-fallback">📖</div>
                   <div class="row-info-content">
                     <p class="row-title">
@@ -338,7 +349,13 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               class="mini-card-row card-row-clickable"
               @click="handleSelectBook(vol)"
             >
-              <img v-if="vol.coverUrl" :src="vol.coverUrl" :alt="vol.title" class="search-thumb" />
+              <img
+                v-if="vol.coverUrl"
+                :src="imageUtil.resolveCoverUrl(vol.coverUrl)"
+                :alt="vol.title"
+                class="search-thumb"
+                @error="imageUtil.advanceCoverFallback(vol)"
+              />
               <div v-else class="search-thumb-fallback">📖</div>
               <div class="row-info-content">
                 <p class="row-title">
@@ -376,7 +393,13 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
                 class="mini-card-row card-row-clickable"
                 @click="handleSelectBook(work)"
               >
-                <img v-if="work.coverUrl" :src="work.coverUrl" :alt="work.title" class="search-thumb" />
+                <img
+                  v-if="work.coverUrl"
+                  :src="imageUtil.resolveCoverUrl(work.coverUrl)"
+                  :alt="work.title"
+                  class="search-thumb"
+                  @error="imageUtil.advanceCoverFallback(work)"
+                />
                 <div v-else class="search-thumb-fallback">📕</div>
                 <div class="row-info-content">
                   <p class="row-title">{{ work.title }}</p>

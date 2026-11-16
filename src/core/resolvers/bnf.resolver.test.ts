@@ -12,7 +12,8 @@ import {
   extractBnfCoverId,
   parseSeriesFromString,
   parseSeriesFromTitle,
-  parseMarcFields
+  parseMarcFields,
+  parseIntermarcRecord
 } from './bnf.resolver';
 
 describe('BNF Resolver & Parsers', () => {
@@ -503,6 +504,29 @@ describe('BNF Resolver & Parsers', () => {
       expect(volumes[0].title).toBe('Histoires à lire au coin du feu');
       expect(volumes[0].series).toBe('Mélusine');
       expect(volumes[0].seriesNumber).toBe('4');
+    });
+
+    it('doit extraire le titre d album en 245$p et le tome en 245$n pour les séries BnF type Tintin', () => {
+      const tintinXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">930515s 1993                 befre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="020"><mxc:subfield code="a">2-203-00110-0</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782203001107</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Hergé</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Les aventures de Tintin</mxc:subfield>
+            <mxc:subfield code="n">11</mxc:subfield>
+            <mxc:subfield code="p">Le secret de La Licorne</mxc:subfield>
+          </mxc:datafield>
+          <mxc:datafield tag="280"><mxc:subfield code="a">62 p.</mxc:subfield></mxc:datafield>
+        </mxc:record>`;
+
+      const parsed = parseIntermarcRecord(tintinXml);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.title).toBe('Le secret de La Licorne');
+      expect(parsed?.series).toBe('Les aventures de Tintin');
+      expect(parsed?.seriesNumber).toBe('11');
+      expect(parsed?.isbn).toBe('9782203001107');
     });
   });
 });

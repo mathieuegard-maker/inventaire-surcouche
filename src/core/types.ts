@@ -124,6 +124,7 @@ export interface ExternalBookMetadata {
   publishDate?: string;
   pageCount?: number;
   coverUrl?: string;
+  coverFallbackUrls?: string[];
   series?: string;
   seriesNumber?: string;
   collection?: string;

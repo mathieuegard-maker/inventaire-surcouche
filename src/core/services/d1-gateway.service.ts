@@ -86,7 +86,7 @@ export async function resolveBestCoverUrl(
     author?: string;
   } = {}
 ): Promise<string | undefined> {
-  if (candidates.bnfCoverUrl) {
+  if (candidates.bnfCoverUrl && (await isValidRemoteCoverImage(candidates.bnfCoverUrl, 1000, 63601))) {
     return candidates.bnfCoverUrl;
   }
 

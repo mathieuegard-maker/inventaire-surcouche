@@ -15,6 +15,7 @@ import {
 } from '../../core/services/photo-book-resolution.service';
 import { photoBatchQueueService } from '../../core/services/photo-batch-queue.service';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
+import { imageUtil } from '../../core/utils/image.util';
 
 const router = useRouter();
 
@@ -236,6 +237,7 @@ function selectDoubtOption(item: ResolvedPhotoItem, option: PhotoResolutionOptio
   item.publishDate = option.publishDate;
   item.pageCount = option.pageCount;
   item.coverUrl = option.coverUrl;
+  item.coverFallbackUrls = option.coverFallbackUrls;
   item.series = option.series;
   item.seriesNumber = option.seriesNumber;
   item.selected = true;
@@ -856,9 +858,10 @@ async function clearPhotoQueueAndForm() {
                 <input type="checkbox" v-model="item.selected" class="cand-check" />
                 <img
                   v-if="item.coverUrl"
-                  :src="item.coverUrl"
+                  :src="imageUtil.resolveCoverUrl(item.coverUrl)"
                   :alt="item.title"
                   class="cand-cover-thumb"
+                  @error="imageUtil.advanceCoverFallback(item)"
                 />
                 <div v-else class="cand-cover-fallback">📖</div>
                 <div class="cand-meta">
@@ -916,7 +919,13 @@ async function clearPhotoQueueAndForm() {
                         :checked="d.selectedAlternativeIsbn === opt.isbn13 && d.selected"
                         @change="selectDoubtOption(d, opt)"
                       />
-                      <img v-if="opt.coverUrl" :src="opt.coverUrl" :alt="opt.title" class="cand-cover-thumb small-thumb" />
+                      <img
+                        v-if="opt.coverUrl"
+                        :src="imageUtil.resolveCoverUrl(opt.coverUrl)"
+                        :alt="opt.title"
+                        class="cand-cover-thumb small-thumb"
+                        @error="imageUtil.advanceCoverFallback(opt)"
+                      />
                       <div v-else class="cand-cover-fallback small-thumb">📖</div>
                       <div class="doubt-opt-meta">
                         <div>
@@ -1000,9 +1009,10 @@ async function clearPhotoQueueAndForm() {
                     <input type="checkbox" v-model="extra.selected" class="cand-check" />
                     <img
                       v-if="extra.coverUrl"
-                      :src="extra.coverUrl"
+                      :src="imageUtil.resolveCoverUrl(extra.coverUrl)"
                       :alt="extra.title"
                       class="cand-cover-thumb"
+                      @error="imageUtil.advanceCoverFallback(extra)"
                     />
                     <div v-else class="cand-cover-fallback">📖</div>
                     <div class="cand-meta">

@@ -3,6 +3,7 @@ import { bnfResolver } from '../resolvers/bnf.resolver';
 import { openLibraryResolver } from '../resolvers/openlibrary.resolver';
 import { googleBooksResolver } from '../resolvers/googlebooks.resolver';
 import { classifyBookMetadata, buildCombinedGenres } from '../utils/category-classifier.util';
+import { imageUtil } from '../utils/image.util';
 import type { ExternalBookMetadata } from '../types';
 
 function isMetadataComplete(meta: ExternalBookMetadata): boolean {
@@ -32,7 +33,10 @@ function mergeSubjects(existing?: string[], incoming?: string[]): string[] | und
   });
 }
 
-function finalizeMetadataGenres(metadata: ExternalBookMetadata): ExternalBookMetadata {
+function finalizeMetadataGenres(
+  metadata: ExternalBookMetadata,
+  extraCoverCandidates: Array<string | undefined> = []
+): ExternalBookMetadata {
   const classification = classifyBookMetadata({
     title: metadata.title,
     series: metadata.series,
@@ -42,8 +46,13 @@ function finalizeMetadataGenres(metadata: ExternalBookMetadata): ExternalBookMet
     rawSubjects: metadata.rawSubjects
   });
   const genres = buildCombinedGenres(classification);
+  const coverFallbackUrls = imageUtil.buildCoverCandidates(metadata.isbn, [
+    metadata.coverUrl,
+    ...extraCoverCandidates
+  ]);
   return {
     ...metadata,
+    ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
     ...(genres.length ? { genres } : {})
   };
 }
@@ -101,9 +110,11 @@ export const externalMetadataService = {
       googleBooksResolver.resolve(isbn)
     ]);
 
+    const extraCovers: Array<string | undefined> = [];
     const olData = olRes.status === 'fulfilled' ? olRes.value : null;
     if (olData) {
       hasFoundAny = true;
+      if (olData.coverUrl) extraCovers.push(olData.coverUrl);
       metadata = {
         ...metadata,
         isbn,
@@ -122,6 +133,7 @@ export const externalMetadataService = {
     const gbData = gbRes.status === 'fulfilled' ? gbRes.value : null;
     if (gbData) {
       hasFoundAny = true;
+      if (gbData.coverUrl) extraCovers.push(gbData.coverUrl);
       metadata = {
         ...metadata,
         isbn,
@@ -143,6 +155,6 @@ export const externalMetadataService = {
     }
 
     console.log(`[EXTERNAL METADATA SERVICE] ✅ Données agrégées finales pour l'ISBN ${isbn}`);
-    return finalizeMetadataGenres(metadata);
+    return finalizeMetadataGenres(metadata, extraCovers);
   }
 };
