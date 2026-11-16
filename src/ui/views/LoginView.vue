@@ -157,27 +157,32 @@ const handleSubmit = async () => {
 .login-card {
   width: 100%;
   max-width: 430px;
-  border: 2.5px solid #111827;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-lg, 16px);
   background: #ffffff;
-  box-shadow: 6px 6px 0 #111827;
+  box-shadow: var(--shadow-lg, 0 10px 15px -3px rgba(15, 23, 42, 0.1));
   padding: 1.5rem;
 }
 
 .login-title {
   margin: 0 0 0.25rem;
   font-size: 1.45rem;
+  text-wrap: balance;
 }
 
 .login-subtitle {
   margin: 0 0 1rem;
-  font-size: 0.88rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
   color: #4b5563;
+  text-wrap: pretty;
 }
 
 .pwa-install-box {
-  border: 2px solid #0284c7;
+  border: 1px solid #bae6fd;
+  border-radius: var(--radius-md, 12px);
   background: #f0f9ff;
-  padding: 0.7rem;
+  padding: 0.75rem;
   margin-bottom: 0.9rem;
   display: flex;
   flex-direction: column;
@@ -186,31 +191,37 @@ const handleSubmit = async () => {
 
 .pwa-text {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
   color: #0c4a6e;
 }
 
 .pwa-btn {
-  border: 2px solid #111827;
+  border: 1px solid #0284c7;
+  border-radius: var(--radius-sm, 8px);
   background: #0284c7;
   color: #fff;
-  font-weight: 800;
+  font-weight: 600;
+  min-block-size: 38px;
   padding: 0.45rem 0.75rem;
   cursor: pointer;
 }
 
 .ios-install-tip {
-  font-size: 0.78rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
   color: #374151;
-  background: #f3f4f6;
-  border: 1.5px solid #d1d5db;
-  padding: 0.5rem 0.65rem;
+  background: #f8fafc;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.55rem 0.7rem;
   margin: 0 0 0.9rem;
 }
 
 .invite-box {
-  border: 2px solid #111827;
-  padding: 0.75rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  padding: 0.8rem;
   margin-bottom: 0.9rem;
   font-size: 0.84rem;
 }
@@ -264,33 +275,50 @@ const handleSubmit = async () => {
 
 .field label {
   font-size: 0.84rem;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .field input {
-  border: 2px solid #111827;
-  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  min-block-size: 42px;
+  padding: 0.55rem 0.75rem;
   font-size: 0.95rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.field input:focus {
+  outline: none;
+  border-color: var(--color-primary, #4f46e5);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
 .error-msg {
   margin: 0;
   background: #fee2e2;
   color: #991b1b;
-  padding: 0.5rem;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.55rem 0.75rem;
   font-size: 0.84rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .submit-btn {
-  border: 2px solid #111827;
-  background: #4f46e5;
+  border: 1px solid var(--color-primary, #4f46e5);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-primary, #4f46e5);
   color: #fff;
-  font-weight: 900;
+  font-weight: 600;
   font-size: 0.95rem;
+  min-block-size: 44px;
   padding: 0.65rem 1rem;
   cursor: pointer;
-  box-shadow: 3px 3px 0 #111827;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease;
+}
+
+.submit-btn:hover:not(:disabled) {
+  background: var(--color-primary-hover, #4338ca);
 }
 
 .submit-btn:disabled {

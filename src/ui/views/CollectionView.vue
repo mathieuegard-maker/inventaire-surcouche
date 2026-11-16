@@ -212,11 +212,12 @@ const seriesGondolas = computed(() => {
 
   const gondolas = Object.values(groups).map(g => {
     g.tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+    const coverBook = g.tomes.find(t => t.localCover || t.coverUrl) || g.tomes[0];
     return {
       id: g.id,
       name: g.name,
       ownedCount: g.tomes.length,
-      coverUrl: imageUtil.resolveCoverUrl(g.tomes[0])
+      coverUrl: imageUtil.resolveCoverUrl(coverBook)
     };
   });
 
@@ -411,29 +412,31 @@ const resetSelection = () => {
     />
 
     <!-- Modal de confirmation de suppression en lot -->
-    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
-      <div class="modal-box">
-        <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
-        <p class="modal-text">
-          {{ selectedIds.length > 1 
-            ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
-            : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
-          }}
-        </p>
-        
-        <div class="modal-actions">
-          <button 
-            @click="confirmGroupDelete" 
-            class="btn-danger"
-          >
-            {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
-          </button>
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+        <div class="modal-box">
+          <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+          <p class="modal-text">
+            {{ selectedIds.length > 1 
+              ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
+              : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
+            }}
+          </p>
           
-          <button @click="showDeleteModal = false" class="btn-close">
-            {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
-          </button>
+          <div class="modal-actions">
+            <button 
+              @click="confirmGroupDelete" 
+              class="btn-danger"
+            >
+              {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
+            </button>
+            
+            <button @click="showDeleteModal = false" class="btn-close">
+              {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>

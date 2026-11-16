@@ -115,7 +115,7 @@ onMounted(async () => {
 
     <div
       v-if="photoStats.totalPhotos > 0"
-      style="margin: 8px 16px 0; padding: 10px 14px; border: 2px solid #0f172a; background: #fffbeb; color: #1e293b; font-size: 13px; display: flex; flex-direction: column; gap: 6px;"
+      style="margin: 8px 16px 0; padding: 10px 14px; border: 1px solid #fde68a; border-radius: 12px; background: #fffbeb; color: #1e293b; font-size: 13px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);"
     >
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
         <div>

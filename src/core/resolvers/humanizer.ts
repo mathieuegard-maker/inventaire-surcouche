@@ -2,6 +2,7 @@
 import type { RawBook, HumanizedBook } from '../types';
 import { databaseService } from '../database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { imageUtil } from '../utils/image.util';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
@@ -59,6 +60,10 @@ export const entityHumanizer = {
     const translateSingle = (id?: string) => id ? (dictionary[id] || id) : undefined;
 
     const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
+    const coverFallbackUrls = imageUtil.buildCoverCandidates(
+      rawBook.isbn13 || rawBook.isbn10,
+      [targetImageUrl]
+    );
 
     // 3. ASSEMBLAGE
     const humanized: HumanizedBook = {
@@ -71,7 +76,8 @@ export const entityHumanizer = {
       description: rawBook.description,
       isbn13: rawBook.isbn13,
       isbn10: rawBook.isbn10,
-      coverUrl: targetImageUrl,
+      coverUrl: targetImageUrl || coverFallbackUrls[0],
+      ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
       localCover: undefined,
       pageCount: rawBook.pageCount,
       publishDate: rawBook.publishDate,

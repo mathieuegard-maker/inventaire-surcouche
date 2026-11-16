@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
@@ -14,6 +15,24 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const coverExhausted = ref(false);
+
+watch(
+  () => `${props.book.uri}|${props.book.localCover || ''}|${props.book.coverUrl || ''}`,
+  () => {
+    coverExhausted.value = false;
+  }
+);
+
+const onCoverError = (event: Event) => {
+  imageUtil.handleImageError(event, {
+    isbn: props.book.isbn13 || props.book.isbn10,
+    fallbackUrls: props.book.coverFallbackUrls,
+    onExhausted: () => {
+      coverExhausted.value = true;
+    }
+  });
+};
 
 const translateFriendName = (name?: string): string => {
   if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
@@ -38,11 +57,12 @@ const handleZoneClick = () => {
   <div class="mini-card-row" @click="navigateToDetail">
     
     <div class="row-cover-container">
-      <img 
-        v-if="book.localCover || book.coverUrl" 
-        :src="imageUtil.resolveCoverUrl(book)" 
+      <img
+        v-if="!coverExhausted && (book.localCover || book.coverUrl || book.isbn13 || book.isbn10)"
+        :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
         :alt="book.title"
         class="row-cover-image"
+        @error="onCoverError"
       />
       <div v-else class="row-cover-fallback">
         <span class="fallback-title">{{ book.title }}</span>

@@ -962,15 +962,10 @@ export async function expandSeriesVolumesInD1(
       const wdMatch = normNum ? wdWorksByNum.get(normNum) : undefined;
       const finalTitle = top.title || wdMatch?.title || cleanTargetSeries;
 
-      // Couverture par ordre de fiabilité sans exploser les sous-requêtes Cloudflare Workers :
-      // 1. BnF 950$a -> 2. Inventaire/Wikidata vérifié -> 3. Amazon CDN ISBN-10 -> 4. Eyrolles H1400
-      const isbn10 = isbn13ToIsbn10(top.isbn);
-      const resolvedCoverUrl =
-        top.coverUrl ||
-        wdMatch?.imageUrl ||
-        (isbn10
-          ? `https://images-eu.ssl-images-amazon.com/images/P/${isbn10}.08.LZZZZZZZ.jpg`
-          : `https://servimg.eyrolles.com/static/media/${top.isbn.slice(-4)}/${top.isbn}_internet_h1400.jpg`);
+      // Ne stocker que des couvertures explicites vérifiables (BnF/Wikidata);
+      // les replis CDN (Amazon/Eyrolles/OL) sont résolus avec vérification d'octets
+      // par `resolveBestCoverUrl` à l'ouverture ou en bascule client via `coverFallbackUrls`.
+      const resolvedCoverUrl = top.coverUrl || wdMatch?.imageUrl || undefined;
 
       const volAuthorUris: string[] = [];
       for (const aName of top.authors) {

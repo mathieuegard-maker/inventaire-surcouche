@@ -33,6 +33,25 @@ const successMessage = ref('');
 const showLendModal = ref(false);
 const showDeleteModal = ref(false);
 const collectionOrderedUris = ref<string[]>([]);
+const coverExhausted = ref(false);
+
+watch(
+  () => `${book.value?.uri || ''}|${book.value?.localCover || ''}|${book.value?.coverUrl || ''}`,
+  () => {
+    coverExhausted.value = false;
+  }
+);
+
+const onDetailCoverError = (event: Event) => {
+  if (!book.value) return;
+  imageUtil.handleImageError(event, {
+    isbn: book.value.isbn13 || book.value.isbn10,
+    fallbackUrls: book.value.coverFallbackUrls,
+    onExhausted: () => {
+      coverExhausted.value = true;
+    }
+  });
+};
 
 // Statut de lecture optionnel (stocké localement par URI d'œuvre/édition)
 const readingStatus = ref<string>('none');
@@ -503,14 +522,15 @@ const confirmDelete = async () => {
           </button>
 
           <div class="book-cover-wrapper">
-            <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
+            <div v-if="coverExhausted || (!book.localCover && !book.coverUrl && !book.isbn13 && !book.isbn10)" class="book-cover-placeholder">
               {{ TEXTS.bookDetail.noCover }}
             </div>
             <img
               v-else
-              :src="imageUtil.resolveCoverUrl(book)"
+              :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
               :alt="book.title"
               class="book-cover-image"
+              @error="onDetailCoverError"
             />
           </div>
 
@@ -635,27 +655,29 @@ const confirmDelete = async () => {
     />
 
     <!-- Modal de confirmation de suppression -->
-    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
-      <div class="modal-box">
-        <h2>{{ TEXTS.bookDetail?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
-        <p class="modal-text">
-          {{ book?.ownershipStatus === 'owned' ? (TEXTS.bookDetail?.deleteConfirmMsg || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') : (TEXTS.bookDetail?.deleteConfirmWishMsg || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') }}
-        </p>
-        
-        <div class="modal-actions">
-          <button 
-            @click="confirmDelete" 
-            class="btn-danger"
-          >
-            {{ TEXTS.bookDetail?.btnDeleteConfirm || 'Supprimer' }}
-          </button>
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+        <div class="modal-box">
+          <h2>{{ TEXTS.bookDetail?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+          <p class="modal-text">
+            {{ book?.ownershipStatus === 'owned' ? (TEXTS.bookDetail?.deleteConfirmMsg || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') : (TEXTS.bookDetail?.deleteConfirmWishMsg || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') }}
+          </p>
           
-          <button @click="showDeleteModal = false" class="btn-close">
-            {{ TEXTS.bookDetail?.btnDeleteCancel || 'Annuler' }}
-          </button>
+          <div class="modal-actions">
+            <button 
+              @click="confirmDelete" 
+              class="btn-danger"
+            >
+              {{ TEXTS.bookDetail?.btnDeleteConfirm || 'Supprimer' }}
+            </button>
+            
+            <button @click="showDeleteModal = false" class="btn-close">
+              {{ TEXTS.bookDetail?.btnDeleteCancel || 'Annuler' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>
 
@@ -682,15 +704,23 @@ const confirmDelete = async () => {
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
-  font-family: monospace !important;
-  font-size: 20px !important;
-  font-weight: bold !important;
+  font-family: var(--font-main) !important;
+  font-size: 1.125rem !important;
+  font-weight: 700 !important;
   padding: 0 !important;
   cursor: pointer !important;
   background-color: var(--color-bg-main) !important;
-  border: var(--border-width) solid var(--color-border) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 9999px !important;
+  box-shadow: var(--shadow-sm) !important;
   color: var(--color-text-main) !important;
   user-select: none !important;
+  transition: background-color 0.15s ease, border-color 0.15s ease !important;
+}
+
+.cover-nav-btn:hover:not(:disabled) {
+  background-color: var(--color-bg-alt) !important;
+  border-color: var(--color-border-hover) !important;
 }
 
 .cover-nav-btn:disabled {

@@ -127,7 +127,8 @@ async function handleConfirmMerge() {
 </script>
 
 <template>
-  <div v-if="show" class="modal-backdrop" @click.self="emit('close')">
+  <Teleport to="body">
+    <div v-if="show" class="modal-backdrop" @click.self="emit('close')">
     <div class="modal-card">
       <div class="modal-header">
         <h3>Rattacher ou Fusionner dans une Série</h3>
@@ -204,121 +205,184 @@ async function handleConfirmMerge() {
         </button>
       </div>
     </div>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.75);
-  z-index: 9500;
+  width: 100%;
+  min-block-size: 100dvh;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(4px);
+  z-index: var(--z-modal, 2000);
   display: flex;
   justify-content: center;
   align-items: center;
   padding: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
 }
 
 .modal-card {
-  width: 100%;
-  max-width: 480px;
-  background: #fff;
-  border: 2px solid #000;
-  box-shadow: 6px 6px 0 #000;
-  padding: 1.1rem;
+  inline-size: 100%;
+  max-inline-size: 480px;
+  max-block-size: 92dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--color-bg-main, #ffffff);
+  color: var(--color-text-main, #0f172a);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-modal, 0 20px 25px -5px rgba(15, 23, 42, 0.16));
+  padding: 1.35rem;
+  font-family: var(--font-main);
+  box-sizing: border-box;
 }
 
 .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 0.75rem;
   margin-bottom: 0.5rem;
 }
 
 .modal-header h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .close-btn {
-  border: 2px solid #000;
-  background: #f1f5f9;
-  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 34px;
+  min-block-size: 34px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-bg-alt, #f8fafc);
+  color: var(--color-text-main, #0f172a);
+  font-weight: 600;
   cursor: pointer;
-  padding: 0.2rem 0.5rem;
+  padding: 0.25rem 0.5rem;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.close-btn:hover {
+  background: #e2e8f0;
 }
 
 .modal-desc {
-  font-size: 0.82rem;
-  color: #475569;
-  margin-top: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--color-text-muted, #64748b);
+  margin: 0 0 0.9rem;
+  text-wrap: pretty;
 }
 
 .form-group {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  margin-bottom: 0.75rem;
-  font-size: 0.85rem;
-  font-weight: 700;
+  margin-bottom: 0.85rem;
+  font-size: 0.875rem;
+  font-weight: 600;
 }
 
 .input-control {
-  border: 2px solid #000;
-  padding: 0.45rem;
-  font-size: 0.85rem;
+  min-block-size: 40px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.45rem 0.7rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+  background: var(--color-bg-main, #ffffff);
+  color: var(--color-text-main, #0f172a);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.input-control:focus {
+  outline: none;
+  border-color: var(--color-primary, #4f46e5);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
 .sub-fields {
-  margin-top: 0.35rem;
+  margin-top: 0.4rem;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.3rem;
 }
 
 .small-label {
-  font-size: 0.75rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  color: #475569;
+  color: var(--color-text-muted, #64748b);
+  line-height: 1.4;
 }
 
 .checkbox-row {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.82rem;
-  margin-bottom: 0.75rem;
+  gap: 0.5rem;
+  font-size: 0.84rem;
+  line-height: 1.4;
+  margin-bottom: 0.85rem;
 }
 
 .modal-actions {
   display: flex;
+  flex-direction: row !important;
   justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.85rem;
+  gap: 0.6rem;
+  margin-top: 0.95rem;
 }
 
 .btn {
-  border: 2px solid #000;
-  padding: 0.5rem 0.85rem;
-  font-weight: 700;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  min-block-size: 40px;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  font-family: inherit;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .btn.primary {
-  background: #4f46e5;
-  color: #fff;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
+  color: #ffffff;
+}
+
+.btn.primary:hover:not(:disabled) {
+  background: var(--color-primary-hover, #4338ca);
 }
 
 .btn.outline {
-  background: #fff;
+  background: var(--color-bg-main, #ffffff);
+  color: var(--color-text-main, #0f172a);
+}
+
+.btn.outline:hover {
+  background: var(--color-bg-alt, #f8fafc);
 }
 
 .err-box {
-  background: #fee2e2;
-  color: #991b1b;
-  border: 1px solid #b91c1c;
-  padding: 0.45rem;
-  font-size: 0.8rem;
-  font-weight: 700;
+  background: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 </style>

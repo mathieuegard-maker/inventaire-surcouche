@@ -134,4 +134,20 @@ describe('External Metadata Service (Aggregation & Fusion)', () => {
     
     expect(result).toBeNull();
   });
+
+  it('doit pre-remplir coverUrl depuis coverFallbackUrls[0] si BNF/OL/GB n\'ont aucune couverture explicite', async () => {
+    const mockIsbn = '9782203001107';
+    vi.mocked(bnfResolver.resolve).mockResolvedValue({
+      isbn: mockIsbn,
+      title: 'Tintin au Congo',
+      authors: ['Hergé']
+    });
+    vi.mocked(openLibraryResolver.resolve).mockResolvedValue(null);
+    vi.mocked(googleBooksResolver.resolve).mockResolvedValue(null);
+
+    const result = await externalMetadataService.fetchFromExternalSources(mockIsbn);
+    expect(result).not.toBeNull();
+    expect(result?.coverFallbackUrls?.length).toBeGreaterThan(0);
+    expect(result?.coverUrl).toBe(result?.coverFallbackUrls?.[0]);
+  });
 });

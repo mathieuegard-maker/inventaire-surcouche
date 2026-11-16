@@ -1,5 +1,6 @@
 <template>
-  <div v-if="show" class="modal-backdrop" @click.self="closeModal">
+  <Teleport to="body">
+    <div v-if="show" class="modal-backdrop" @click.self="closeModal">
     <div class="modal-card" role="dialog" aria-modal="true" aria-label="Partage Foyer et Amis">
       <div class="modal-header">
         <h3>Foyer &amp; Amis</h3>
@@ -176,7 +177,8 @@
         </section>
       </div>
     </div>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -297,109 +299,141 @@ const handleJoin = async () => {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.72);
+  width: 100%;
+  min-block-size: 100dvh;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.75rem;
-  z-index: 1000;
+  padding: 1rem;
+  z-index: var(--z-modal, 2000);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
 }
 
 .modal-card {
-  background: #ffffff;
-  border: 2.5px solid #000;
-  box-shadow: 6px 6px 0 #000;
-  width: 100%;
-  max-width: 520px;
-  max-height: 92vh;
+  background: var(--color-bg-main, #ffffff);
+  color: var(--color-text-main, #0f172a);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-lg, 16px);
+  box-shadow: var(--shadow-modal, 0 20px 25px -5px rgba(15, 23, 42, 0.16));
+  inline-size: 100%;
+  max-inline-size: 520px;
+  max-block-size: 92dvh;
   overflow-y: auto;
-  padding: 1rem;
+  overscroll-behavior: contain;
+  padding: 1.35rem;
+  font-family: var(--font-main);
+  box-sizing: border-box;
 }
 
 .modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.75rem;
+  gap: 0.75rem;
+  margin-bottom: 0.85rem;
 }
 
 .modal-header h3 {
   margin: 0;
-  font-size: 1.12rem;
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.25;
+  text-wrap: balance;
 }
 
 .close-btn {
-  background: none;
-  border: 2px solid #000;
-  width: 32px;
-  height: 32px;
-  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-alt, #f8fafc);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  min-inline-size: 34px;
+  min-block-size: 34px;
+  font-weight: 600;
   cursor: pointer;
+  color: var(--color-text-main, #0f172a);
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.close-btn:hover {
+  background: #e2e8f0;
 }
 
 .tab-bar {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 0.45rem;
-  margin-bottom: 0.85rem;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
 }
 
 .tab-btn {
-  padding: 0.6rem 0.5rem;
-  border: 2px solid #111827;
-  background: #f3f4f6;
-  font-weight: 800;
-  font-size: 0.86rem;
+  min-block-size: 40px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-bg-alt, #f8fafc);
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.25;
   cursor: pointer;
-  color: #374151;
+  color: var(--color-text-muted, #475569);
+  transition: all 0.15s ease;
 }
 
 .tab-btn.active.tab-family {
-  background: #4f46e5;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
   color: #fff;
-  box-shadow: 2px 2px 0 #000;
+  box-shadow: var(--shadow-sm);
 }
 
 .tab-btn.active.tab-friends {
   background: #059669;
+  border-color: #059669;
   color: #fff;
-  box-shadow: 2px 2px 0 #000;
+  box-shadow: var(--shadow-sm);
 }
 
 .modal-body {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: 0.9rem;
 }
 
 .share-section {
-  border: 2px solid #111827;
-  padding: 0.85rem;
-  background: #fff;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  padding: 1rem;
+  background: var(--color-bg-main, #ffffff);
 }
 
 .family-card {
   background: #f5f3ff;
-  border-color: #4f46e5;
+  border-color: #c7d2fe;
 }
 
 .friends-card {
   background: #ecfdf5;
-  border-color: #059669;
+  border-color: #a7f3d0;
 }
 
 .section-badge {
   display: inline-block;
-  font-size: 0.7rem;
-  font-weight: 900;
+  font-size: 0.6875rem;
+  font-weight: 700;
   letter-spacing: 0.04em;
-  padding: 0.2rem 0.45rem;
-  border-radius: 3px;
-  margin-bottom: 0.45rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 9999px;
+  margin-bottom: 0.5rem;
 }
 
 .section-badge.family {
-  background: #4f46e5;
+  background: var(--color-primary, #4f46e5);
   color: #fff;
 }
 
@@ -409,70 +443,89 @@ const handleJoin = async () => {
 }
 
 .section-desc {
-  margin: 0 0 0.7rem 0;
-  font-size: 0.82rem;
-  color: #1f2937;
-  line-height: 1.4;
+  margin: 0 0 0.75rem 0;
+  font-size: 0.84rem;
+  color: #334155;
+  line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .qr-center {
   display: flex;
   justify-content: center;
-  margin: 0.4rem 0 0.8rem 0;
+  margin: 0.45rem 0 0.85rem 0;
 }
 
 .code-pill-row {
   display: flex;
   align-items: center;
   gap: 0.45rem;
-  margin-bottom: 0.55rem;
+  margin-bottom: 0.6rem;
   flex-wrap: wrap;
 }
 
 .code-label {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #374151;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #334155;
 }
 
 .code-value {
-  font-weight: 900;
-  font-size: 0.92rem;
+  font-weight: 700;
+  font-size: 0.9rem;
   background: #fff;
-  border: 1.5px solid #4f46e5;
-  padding: 0.2rem 0.5rem;
+  border: 1px solid #c7d2fe;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.25rem 0.6rem;
   color: #312e81;
 }
 
 .code-value.friends-code {
-  border-color: #059669;
+  border-color: #a7f3d0;
   color: #065f46;
 }
 
 .share-actions-row {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.45rem;
   align-items: center;
   flex-wrap: wrap;
 }
 
 .link-input {
   flex: 1;
-  min-width: 150px;
-  border: 2px solid #000;
-  padding: 0.42rem 0.55rem;
-  font-size: 0.8rem;
+  min-inline-size: 150px;
+  min-block-size: 38px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.42rem 0.6rem;
+  font-size: 0.8125rem;
   background: #fff;
+  color: var(--color-text-main, #0f172a);
+}
+
+.link-input:focus {
+  outline: none;
+  border-color: var(--color-primary, #4f46e5);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
 .copy-btn {
-  border: 2px solid #000;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
   background: #fff;
-  padding: 0.42rem 0.65rem;
-  font-weight: 800;
-  font-size: 0.78rem;
+  color: var(--color-text-main, #0f172a);
+  min-block-size: 38px;
+  padding: 0.42rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.8125rem;
   cursor: pointer;
   white-space: nowrap;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.copy-btn:hover:not(:disabled) {
+  background: var(--color-bg-alt, #f8fafc);
 }
 
 .copy-btn:disabled {
@@ -481,27 +534,29 @@ const handleJoin = async () => {
 }
 
 .copy-btn.primary {
-  background: #4f46e5;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
   color: #fff;
 }
 
 .copy-btn.success {
   background: #059669;
+  border-color: #059669;
   color: #fff;
 }
 
 .members-box {
-  margin-top: 0.75rem;
-  padding-top: 0.6rem;
+  margin-top: 0.8rem;
+  padding-top: 0.65rem;
   border-top: 1px dashed #c7d2fe;
 }
 
 .members-title {
   display: block;
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: 0.78rem;
+  font-weight: 700;
   color: #3730a3;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.4rem;
 }
 
 .members-chips {
@@ -511,35 +566,39 @@ const handleJoin = async () => {
 }
 
 .member-chip {
-  font-size: 0.76rem;
-  font-weight: 700;
+  font-size: 0.78rem;
+  font-weight: 600;
   background: #fff;
-  border: 1.5px solid #818cf8;
-  padding: 0.15rem 0.45rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 9999px;
+  padding: 0.2rem 0.55rem;
+  color: #312e81;
 }
 
 .join-details {
-  border: 2px solid #111827;
-  padding: 0.6rem 0.75rem;
-  background: #f9fafb;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  padding: 0.7rem 0.85rem;
+  background: var(--color-bg-alt, #f8fafc);
 }
 
 .join-details summary {
   cursor: pointer;
-  font-weight: 800;
-  font-size: 0.84rem;
-  color: #111827;
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--color-text-main, #0f172a);
 }
 
 .join-inner {
-  margin-top: 0.6rem;
+  margin-top: 0.65rem;
 }
 
 .status-msg {
-  margin: 0.45rem 0 0;
-  padding: 0.45rem;
-  font-size: 0.8rem;
-  font-weight: 700;
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .status-msg.ok {

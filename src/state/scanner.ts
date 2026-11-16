@@ -8,6 +8,7 @@ import { ref } from 'vue';
 import type { Router } from 'vue-router';
 import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
 import { externalMetadataService } from '../core/services/external-metadata.service';
+import { imageUtil } from '../core/utils/image.util';
 import type { HumanizedBook } from '../core/types';
 
 export type ScannerMode = 'simple' | 'burst' | 'photo';
@@ -140,6 +141,10 @@ export const scannerState = {
       .then((meta) => {
         const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
         if (idx === -1) return;
+        const coverFallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn, [
+          meta?.coverUrl,
+          ...(meta?.coverFallbackUrls || [])
+        ]);
         burstBooks.value[idx] = {
           ...burstBooks.value[idx],
           title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
@@ -147,7 +152,8 @@ export const scannerState = {
           publisher: meta?.publisher || '',
           publishDate: meta?.publishDate,
           pageCount: meta?.pageCount,
-          coverUrl: meta?.coverUrl,
+          coverUrl: meta?.coverUrl || coverFallbackUrls[0],
+          ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
           series: meta?.series,
           seriesNumber: meta?.seriesNumber,
           genres: meta?.genres || []
@@ -158,6 +164,17 @@ export const scannerState = {
       })
       .catch((e: unknown) => {
         console.warn('[BURST SCAN] Échec enrichissement aperçu :', e);
+        const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+        if (idx !== -1) {
+          const fallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn);
+          burstBooks.value[idx] = {
+            ...burstBooks.value[idx],
+            title: `Livre ISBN ${scannedIsbn}`,
+            authors: ['Auteur inconnu'],
+            coverUrl: burstBooks.value[idx].coverUrl || fallbackUrls[0],
+            ...(fallbackUrls.length ? { coverFallbackUrls: fallbackUrls } : {})
+          };
+        }
       });
   },
 

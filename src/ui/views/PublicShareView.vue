@@ -162,23 +162,26 @@ watch(() => route.params.token, loadShare);
 }
 
 .state-card {
-  border: 2.5px solid #111827;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
   background: #fff;
   padding: 1.5rem;
   text-align: center;
-  box-shadow: 4px 4px 0 #111827;
+  box-shadow: var(--shadow-md);
 }
 
 .error-card {
   background: #fef2f2;
+  border-color: #fecaca;
   color: #991b1b;
 }
 
 .invite-banner {
-  border: 2px solid #111827;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-md, 12px);
   background: #fffbeb;
-  padding: 0.8rem 0.9rem;
-  box-shadow: 3px 3px 0 #111827;
+  padding: 0.85rem 1rem;
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
@@ -187,7 +190,8 @@ watch(() => route.params.token, loadShare);
 .banner-text {
   font-size: 0.86rem;
   color: #1f2937;
-  line-height: 1.4;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 
 .banner-actions {
@@ -197,21 +201,25 @@ watch(() => route.params.token, loadShare);
 }
 
 .action-btn {
-  border: 2px solid #111827;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
   background: #fff;
-  padding: 0.48rem 0.85rem;
-  font-weight: 800;
+  min-block-size: 38px;
+  padding: 0.48rem 0.9rem;
+  font-weight: 600;
   font-size: 0.84rem;
   cursor: pointer;
 }
 
 .action-btn.primary {
-  background: #4f46e5;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
   color: #fff;
 }
 
 .action-btn.success {
   background: #059669;
+  border-color: #059669;
   color: #fff;
 }
 

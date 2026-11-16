@@ -11,6 +11,7 @@ import {
   rehydrateAllCatalogEntitiesInD1,
   resolveAndStoreIsbnInD1,
   resolveAuthSession,
+  resolveBestCoverUrl,
   upsertCatalogEntity
 } from './d1-gateway.service';
 
@@ -841,6 +842,8 @@ export async function handleD1GatewayAction(
         .filter(Boolean);
       const relatives = (url.searchParams.get('relatives') || '').includes('P629');
       const forceRefresh = url.searchParams.get('refresh') === '1';
+      const attributesParam = url.searchParams.get('attributes') || '';
+      const wantsImage = !attributesParam || attributesParam.includes('image');
 
       const entities: Record<string, any> = {};
 
@@ -888,6 +891,36 @@ export async function handleD1GatewayAction(
 
         if (row) {
           const parsed = JSON.parse(row.entity_json);
+          if (
+            !row.image_url &&
+            wantsImage &&
+            (requestedUri.startsWith('isbn:') || row.isbn13)
+          ) {
+            const rawIsbn = row.isbn13 || (requestedUri.startsWith('isbn:') ? requestedUri.slice(5) : '');
+            const normIsbn13 = isbnUtil.toIsbn13(isbnUtil.normalize(rawIsbn)) || isbnUtil.normalize(rawIsbn);
+            if (normIsbn13.length === 13) {
+              const repairedCover = await resolveBestCoverUrl(normIsbn13, {
+                title: parsed?.label || parsed?.labels?.fr
+              });
+              if (repairedCover) {
+                parsed.image = { url: repairedCover };
+                parsed.claims = {
+                  ...(parsed.claims || {}),
+                  'invp:P2': [repairedCover]
+                };
+                await db
+                  .prepare('UPDATE catalog_entities SET image_url = ?, entity_json = ? WHERE uri = ?')
+                  .bind(repairedCover, JSON.stringify(parsed), row.uri)
+                  .run();
+                if (row.work_uri) {
+                  await db
+                    .prepare("UPDATE catalog_entities SET image_url = COALESCE(image_url, ?) WHERE uri = ?")
+                    .bind(repairedCover, row.work_uri)
+                    .run();
+                }
+              }
+            }
+          }
           entities[requestedUri] = parsed;
           if (relatives && row.work_uri) {
             const wRow = await db

@@ -111,7 +111,8 @@ const handleClose = () => {
 </script>
 
 <template>
-  <div v-if="show" class="modal-overlay" @click.self="handleClose">
+  <Teleport to="body">
+    <div v-if="show" class="modal-overlay" @click.self="handleClose">
     <div class="modal-box">
       <h2>{{ TEXTS.lendModal.title }}</h2>
       <p class="modal-text">
@@ -166,62 +167,68 @@ const handleClose = () => {
         </button>
       </div>
     </div>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
 .contacts-picker {
-  margin-bottom: 0.85rem;
+  margin-bottom: 0.25rem;
   text-align: left;
 }
 
 .picker-label,
 .new-person-label {
   display: block;
-  font-size: 0.8rem;
-  font-weight: 800;
-  color: #374151;
-  margin-bottom: 0.35rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-text-muted, #475569);
+  margin-bottom: 0.4rem;
 }
 
 .loading-tag {
-  font-weight: 600;
-  color: #6b7280;
+  font-weight: 500;
+  color: var(--color-text-muted, #64748b);
 }
 
 .contacts-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
-  max-height: 150px;
+  max-block-size: 150px;
   overflow-y: auto;
   padding: 0.15rem 0;
 }
 
 .contact-chip {
-  border: 2px solid #111827;
-  background: #f9fafb;
-  padding: 0.3rem 0.6rem;
-  font-size: 0.82rem;
-  font-weight: 700;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 9999px;
+  background: var(--color-bg-alt, #f8fafc);
+  min-block-size: 32px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.25;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .contact-chip.is-friend {
   background: #ecfdf5;
-  border-color: #059669;
+  border-color: #6ee7b7;
   color: #065f46;
 }
 
 .contact-chip.is-borrower {
   background: #eef2ff;
-  border-color: #4f46e5;
-  color: #312e81;
+  border-color: #c7d2fe;
+  color: #3730a3;
 }
 
 .contact-chip.selected {
-  background: #111827;
-  border-color: #111827;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
   color: #ffffff;
 }
 </style>

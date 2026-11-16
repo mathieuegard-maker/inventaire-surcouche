@@ -70,4 +70,47 @@ describe('Image Utility', () => {
       expect(target.coverUrl).toBeUndefined();
     });
   });
+
+  describe('handleImageError', () => {
+    it('bascule automatiquement sur la source suivante lorsque la couverture proxifiée échoue puis déclenche onExhausted', () => {
+      let exhausted = false;
+      const fakeImgObj: {
+        src: string;
+        dataset: Record<string, string>;
+        getAttribute(name: string): string | null;
+      } = {
+        src: '/api/gateway?action=image-proxy&url=https%3A%2F%2Fbroken.example%2Fa.jpg',
+        dataset: {},
+        getAttribute(name: string) {
+          return name === 'src' ? fakeImgObj.src : null;
+        }
+      };
+      const fakeImg = fakeImgObj as unknown as HTMLImageElement;
+
+      const step1 = imageUtil.handleImageError(fakeImg, {
+        isbn: '9782203001107',
+        fallbackUrls: ['https://broken.example/a.jpg', 'https://good.example/b.jpg'],
+        onExhausted: () => {
+          exhausted = true;
+        }
+      });
+      expect(step1).toBe(true);
+      expect(exhausted).toBe(false);
+      expect(fakeImg.src).toBe(
+        '/api/gateway?action=image-proxy&url=https%3A%2F%2Fgood.example%2Fb.jpg'
+      );
+
+      // Tant qu'il reste les repli CDN ISBN, bascule dessus avant d'épuiser
+      while (imageUtil.handleImageError(fakeImg, {
+        isbn: '9782203001107',
+        fallbackUrls: ['https://broken.example/a.jpg', 'https://good.example/b.jpg'],
+        onExhausted: () => {
+          exhausted = true;
+        }
+      })) {
+        // avance jusqu'à épuisement
+      }
+      expect(exhausted).toBe(true);
+    });
+  });
 });

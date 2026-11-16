@@ -13,18 +13,20 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div v-if="show" class="modal-overlay">
-    <div class="modal-box">
-      <h2>{{ TEXTS.onboarding.title }}</h2>
-      
-      <p class="modal-text">{{ TEXTS.onboarding.description }}</p>
-      <p class="modal-text highlight">{{ TEXTS.onboarding.requirement }}</p>
-      
-      <div class="modal-actions">
-        <button @click="emit('close')" class="btn-close">
-          {{ TEXTS.onboarding.actionClose }}
-        </button>
+  <Teleport to="body">
+    <div v-if="show" class="modal-overlay">
+      <div class="modal-box">
+        <h2>{{ TEXTS.onboarding.title }}</h2>
+        
+        <p class="modal-text">{{ TEXTS.onboarding.description }}</p>
+        <p class="modal-text highlight">{{ TEXTS.onboarding.requirement }}</p>
+        
+        <div class="modal-actions">
+          <button @click="emit('close')" class="btn-close">
+            {{ TEXTS.onboarding.actionClose }}
+          </button>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>

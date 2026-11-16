@@ -452,41 +452,46 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
 
 <style scoped>
 .search-filters-panel {
-  border: 2px solid #0f172a;
-  background: #f8fafc;
-  padding: 0.65rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  background: var(--color-bg-alt, #f8fafc);
+  padding: 0.75rem;
   margin-bottom: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.55rem;
+  box-shadow: var(--shadow-sm);
 }
 
 .filter-pills-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.4rem;
   align-items: center;
 }
 
 .subcat-label {
-  font-size: 0.76rem;
-  font-weight: 800;
+  font-size: 0.75rem;
+  font-weight: 700;
   color: #475569;
   text-transform: uppercase;
 }
 
 .filter-pill {
-  border: 1.5px solid #0f172a;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 9999px;
   background: #ffffff;
   color: #0f172a;
-  padding: 0.25rem 0.55rem;
+  padding: 0.3rem 0.7rem;
   font-size: 0.78rem;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .filter-pill.active {
-  background: #0f172a;
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
   color: #ffffff;
 }
 

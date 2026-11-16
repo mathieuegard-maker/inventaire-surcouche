@@ -48,14 +48,15 @@ const handleSelect = (uri: string) => {
 </script>
 
 <template>
-  <div v-if="show && step" class="modal-overlay" @click.self="emit('cancel')">
-    <div class="modal-box dedup-modal-box">
-      <h3 class="dedup-title">
-        [ {{ modalTitle }} ]
-      </h3>
-      <p class="dedup-desc">
-        {{ modalDescription }}
-      </p>
+  <Teleport to="body">
+    <div v-if="show && step" class="modal-overlay" @click.self="emit('cancel')">
+      <div class="modal-box dedup-modal-box">
+        <h3 class="dedup-title">
+          {{ modalTitle }}
+        </h3>
+        <p class="modal-text dedup-desc">
+          {{ modalDescription }}
+        </p>
 
       <div class="dedup-options-list">
         <!-- Options existantes -->
@@ -99,14 +100,15 @@ const handleSelect = (uri: string) => {
         </div>
       </div>
 
-      <div class="modal-actions dedup-actions">
-        <BaseButton @click="emit('cancel')" class="btn-cancel">
-          [ {{ TEXTS.dedupModal.btnCancel }} ]
-        </BaseButton>
-        <BaseButton type="primary" @click="emit('confirm')" class="btn-save">
-          [ {{ TEXTS.dedupModal.btnConfirm }} ]
-        </BaseButton>
+        <div class="modal-actions dedup-actions">
+          <BaseButton @click="emit('cancel')" class="btn-cancel">
+            {{ TEXTS.dedupModal.btnCancel }}
+          </BaseButton>
+          <BaseButton type="primary" @click="emit('confirm')" class="btn-save">
+            {{ TEXTS.dedupModal.btnConfirm }}
+          </BaseButton>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>

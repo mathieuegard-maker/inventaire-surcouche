@@ -8,6 +8,7 @@ import { bookCacheService } from '../services/book-cache.service';
 import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { imageUtil } from '../utils/image.util';
 import { connectionState, fetchWithTimeout } from '../../state/connection';
 import type { ExternalBookMetadata, HumanizedBook } from '../types';
 
@@ -109,7 +110,7 @@ export const backgroundCreationOrchestrator = {
     }
 
     // Mise en cache image en non-bloquant
-    if (optimisticBook.coverUrl) {
+    if (optimisticBook.coverUrl || optimisticBook.isbn13 || optimisticBook.isbn10) {
       bookCacheService.saveAndProcessImage(optimisticBook, ownershipTarget).catch(() => {});
     }
 
@@ -258,7 +259,7 @@ export const backgroundCreationOrchestrator = {
       await wishlistService.addToWishlist(syncResult.editionUri);
     }
 
-    if (savedBook.coverUrl && !savedBook.localCover) {
+    if ((savedBook.coverUrl || savedBook.isbn13 || savedBook.isbn10) && !savedBook.localCover) {
       bookCacheService.saveAndProcessImage(savedBook, ownershipTarget).catch(() => {});
     }
 
@@ -546,6 +547,8 @@ export const backgroundCreationOrchestrator = {
           }
 
           const existingLocal = await databaseService.getBookFromCache(existingRemote.editionUri);
+          const volIsbn13 = vol.isbn.length === 13 ? vol.isbn : isbnUtil.toIsbn13(vol.isbn);
+          const volFallbacks = imageUtil.buildCoverCandidates(volIsbn13, [existingLocal?.coverUrl, vol.coverUrl]);
           await databaseService.saveBookToCache({
             ...(existingLocal || {}),
             uri: existingRemote.editionUri,
@@ -560,7 +563,8 @@ export const backgroundCreationOrchestrator = {
             publisher: vol.publisher || existingLocal?.publisher,
             publishDate: vol.publishDate || existingLocal?.publishDate,
             pageCount: vol.pageCount || existingLocal?.pageCount,
-            coverUrl: existingLocal?.coverUrl || vol.coverUrl,
+            coverUrl: existingLocal?.coverUrl || vol.coverUrl || volFallbacks[0],
+            ...(volFallbacks.length ? { coverFallbackUrls: volFallbacks } : {}),
             genres: existingLocal?.genres || [],
             series: seriesName,
             seriesId: seriesUri,
@@ -620,6 +624,7 @@ export const backgroundCreationOrchestrator = {
           }
 
           const isbn13 = vol.isbn.length === 13 ? vol.isbn : isbnUtil.toIsbn13(vol.isbn);
+          const volFallbacks = imageUtil.buildCoverCandidates(isbn13, [vol.coverUrl]);
           const editionClaims: Record<string, any> = {
             'wdt:P31': ['wd:Q3331189'],
             'wdt:P629': [volumeWorkUri],
@@ -629,6 +634,9 @@ export const backgroundCreationOrchestrator = {
           };
           if (vol.publishDate) {
             editionClaims['wdt:P577'] = [vol.publishDate];
+          }
+          if (vol.coverUrl) {
+            editionClaims['invp:P2'] = [vol.coverUrl];
           }
 
           const editionUri = await inventaireSyncService.createEntity('edition', vol.title, editionClaims);
@@ -645,7 +653,8 @@ export const backgroundCreationOrchestrator = {
             publisher: vol.publisher,
             publishDate: vol.publishDate,
             pageCount: vol.pageCount,
-            coverUrl: vol.coverUrl,
+            coverUrl: vol.coverUrl || volFallbacks[0],
+            ...(volFallbacks.length ? { coverFallbackUrls: volFallbacks } : {}),
             genres: [],
             series: seriesName,
             seriesId: seriesUri,

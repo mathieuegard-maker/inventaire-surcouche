@@ -1,6 +1,7 @@
 // src/core/services/book-cache.service.ts
 import { databaseService } from '../database/database.service';
 import { imageService } from './image.service';
+import { imageUtil } from '../utils/image.util';
 import type { HumanizedBook } from '../types';
 
 export const bookCacheService = {
@@ -38,19 +39,34 @@ export const bookCacheService = {
         book.ownershipStatus = targetStatus;
       }
 
-      // 3. Sauvegarde principale
+      // 3. Sauvegarde principale avec repli CDN ISBN pré-calculé
+      const candidates = imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10, [
+        book.coverUrl,
+        ...(book.coverFallbackUrls || [])
+      ]);
+      if (candidates.length > 0) {
+        book.coverFallbackUrls = candidates;
+        if (!book.coverUrl) {
+          book.coverUrl = candidates[0];
+        }
+      }
       await databaseService.saveBookToCache(book);
 
-      // 4. Compression Asynchrone (Non-bloquant / Fire and Forget)
-      if (book.coverUrl && !book.localCover) {
+      // 4. Compression Asynchrone multi-candidats (Non-bloquant / Fire and Forget)
+      if (candidates.length > 0 && !book.localCover) {
         setTimeout(async () => {
           try {
-            const base64 = await imageService.compressAndEncode(book.coverUrl!);
-            if (base64) {
-              const updatedBook = await databaseService.getBookFromCache(book.uri);
-              if (updatedBook) {
-                updatedBook.localCover = base64;
-                await databaseService.saveBookToCache(updatedBook);
+            for (const candidateUrl of candidates) {
+              const base64 = await imageService.compressAndEncode(candidateUrl);
+              if (base64) {
+                const updatedBook = await databaseService.getBookFromCache(book.uri);
+                if (updatedBook) {
+                  updatedBook.localCover = base64;
+                  updatedBook.coverUrl = candidateUrl;
+                  updatedBook.coverFallbackUrls = candidates;
+                  await databaseService.saveBookToCache(updatedBook);
+                }
+                break;
               }
             }
           } catch (e) {

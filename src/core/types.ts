@@ -46,6 +46,7 @@ export interface HumanizedBook extends BaseBook {
   seriesNumber?: string;
   genres: string[];
   collection?: string;
+  coverFallbackUrls?: string[];
   ownershipStatus: 'owned' | 'wish' | 'none';
   loan?: LoanRecord; // AJOUT : Attribut contextuel optionnel pour porter le prêt local
   isLocallyEdited?: boolean; // FLAG : Indique que le livre a été édité localement pour éviter l'écrasement par la tâche de fond

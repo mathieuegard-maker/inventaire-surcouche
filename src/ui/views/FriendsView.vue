@@ -216,20 +216,23 @@ onMounted(loadFriends);
 }
 
 .add-friend-card {
-  border: 2px solid #111827;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-md, 12px);
   background: #f0fdf4;
-  padding: 0.9rem;
-  box-shadow: 3px 3px 0 #111827;
+  padding: 1rem;
+  box-shadow: var(--shadow-sm);
 }
 
 .card-subtitle {
   margin: 0 0 0.35rem;
   font-size: 1rem;
+  text-wrap: balance;
 }
 
 .card-help {
   margin: 0 0 0.65rem;
-  font-size: 0.82rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
   color: #374151;
 }
 
@@ -242,24 +245,28 @@ onMounted(loadFriends);
 .friend-input {
   flex: 1;
   min-width: 220px;
-  border: 2px solid #111827;
-  padding: 0.5rem 0.65rem;
+  min-block-size: 40px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.5rem 0.7rem;
   font-size: 0.88rem;
   background: #fff;
 }
 
 .add-btn {
   background: #059669;
+  border-color: #059669;
   color: #fff;
-  font-weight: 800;
+  font-weight: 600;
   padding: 0.5rem 0.95rem;
 }
 
 .status-banner {
   margin: 0.55rem 0 0;
-  padding: 0.45rem 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm, 8px);
   font-size: 0.82rem;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .status-banner.ok {
@@ -274,7 +281,8 @@ onMounted(loadFriends);
 
 .loading-box,
 .empty-friends-card {
-  border: 2px dashed #9ca3af;
+  border: 1px dashed #cbd5e1;
+  border-radius: var(--radius-md, 12px);
   background: #fff;
   padding: 1.4rem;
   text-align: center;
@@ -282,7 +290,7 @@ onMounted(loadFriends);
 
 .empty-title {
   margin: 0 0 0.35rem;
-  font-weight: 800;
+  font-weight: 700;
   color: #111827;
 }
 
@@ -299,10 +307,11 @@ onMounted(loadFriends);
 }
 
 .friend-card {
-  border: 2px solid #111827;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
   background: #fff;
-  padding: 0.9rem;
-  box-shadow: 4px 4px 0 #111827;
+  padding: 0.95rem;
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 0.7rem;

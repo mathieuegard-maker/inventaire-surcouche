@@ -76,5 +76,67 @@ export const imageUtil = {
     const fallbacks = (target.coverFallbackUrls || []).filter((u) => u && u !== current);
     target.coverFallbackUrls = fallbacks;
     target.coverUrl = fallbacks.length > 0 ? fallbacks[0] : undefined;
+  },
+
+  /**
+   * Extrait l'URL distante originale depuis une URL éventuellement proxifiée via `/api/gateway?action=image-proxy`.
+   */
+  extractRawUrl(src: string | undefined | null): string {
+    const trimmed = (src || '').trim();
+    if (!trimmed) return '';
+    const match = /[?&]action=image-proxy&url=([^&]+)/.exec(trimmed);
+    if (match?.[1]) {
+      try {
+        return decodeURIComponent(match[1]);
+      } catch {
+        return trimmed;
+      }
+    }
+    return trimmed;
+  },
+
+  /**
+   * Gestionnaire `@error` générique pour les balises `<img>` de couverture :
+   * parcourt les URLs candidates construites depuis l'ISBN et bascule vers l'URL suivante,
+   * puis déclenche `onExhausted()` lorsque toutes les sources ont échoué.
+   */
+  handleImageError(
+    eventOrEl: Event | HTMLImageElement | null | undefined,
+    options: { isbn?: string; fallbackUrls?: string[]; onExhausted?: () => void } = {}
+  ): boolean {
+    const imgEl =
+      eventOrEl && 'currentTarget' in eventOrEl
+        ? ((eventOrEl.currentTarget || eventOrEl.target) as HTMLImageElement | null)
+        : (eventOrEl as HTMLImageElement | null);
+    if (!imgEl || typeof imgEl !== 'object') {
+      options.onExhausted?.();
+      return false;
+    }
+
+    const currentRaw = this.extractRawUrl(imgEl.getAttribute('src') || imgEl.src);
+    if (!imgEl.dataset.coverOrigUrl && currentRaw && !currentRaw.startsWith('data:')) {
+      imgEl.dataset.coverOrigUrl = currentRaw;
+    }
+
+    const initialRaw = imgEl.dataset.coverOrigUrl || '';
+    const candidates = this.buildCoverCandidates(options.isbn, [
+      ...(initialRaw ? [initialRaw] : []),
+      ...(options.fallbackUrls || [])
+    ]);
+
+    const triedRaw = (imgEl.dataset.coverTried || '').split('|').filter(Boolean);
+    const tried = new Set<string>(triedRaw);
+    if (currentRaw) tried.add(currentRaw);
+
+    const nextCandidate = candidates.find((c) => !tried.has(c));
+    if (nextCandidate) {
+      tried.add(nextCandidate);
+      imgEl.dataset.coverTried = Array.from(tried).join('|');
+      imgEl.src = this.resolveExternalUrl(nextCandidate);
+      return true;
+    }
+
+    options.onExhausted?.();
+    return false;
   }
 };

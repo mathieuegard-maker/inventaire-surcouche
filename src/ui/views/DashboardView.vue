@@ -125,6 +125,7 @@ watch(
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"
+            @error="imageUtil.handleImageError($event, { isbn: book.isbn13 || book.isbn10, fallbackUrls: book.coverFallbackUrls })"
             @click="openBook(book.uri)"
           />
         </div>
@@ -143,6 +144,7 @@ watch(
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"
+            @error="imageUtil.handleImageError($event, { isbn: book.isbn13 || book.isbn10, fallbackUrls: book.coverFallbackUrls })"
             @click="openBook(book.uri)"
           />
         </div>
@@ -161,6 +163,7 @@ watch(
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"
+            @error="imageUtil.handleImageError($event, { isbn: book.isbn13 || book.isbn10, fallbackUrls: book.coverFallbackUrls })"
             @click="openBook(book.uri)"
           />
         </div>

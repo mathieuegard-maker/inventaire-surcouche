@@ -52,6 +52,7 @@ function finalizeMetadataGenres(
   ]);
   return {
     ...metadata,
+    coverUrl: metadata.coverUrl || coverFallbackUrls[0],
     ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
     ...(genres.length ? { genres } : {})
   };
