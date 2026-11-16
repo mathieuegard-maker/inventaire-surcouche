@@ -144,6 +144,24 @@ const confirmBurstGroupLend = async (friendName: string) => {
 // MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (IA SERVEUR + VALIDATION LIVRE PAR LIVRE)
 // ============================================================================
 const serverVisionStatus = ref<ServerVisionStatus | null>(null);
+const PHOTO_HELP_KEY = 'biblio_photo_ai_hide_help';
+const hidePhotoHelp = ref<boolean>(
+  typeof localStorage !== 'undefined' && localStorage.getItem(PHOTO_HELP_KEY) === '1'
+);
+
+const dismissPhotoHelp = () => {
+  hidePhotoHelp.value = true;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem(PHOTO_HELP_KEY, '1');
+  }
+};
+
+const showPhotoHelp = () => {
+  hidePhotoHelp.value = false;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(PHOTO_HELP_KEY);
+  }
+};
 
 const refreshServerVisionStatus = () => {
   byokVisionService.fetchServerVisionStatus().then((st) => {
@@ -708,57 +726,66 @@ async function clearPhotoQueueAndForm() {
             </strong>
             <strong v-else>Vérification...</strong>
           </span>
+          <button
+            v-if="hidePhotoHelp"
+            type="button"
+            class="link-btn"
+            @click="showPhotoHelp"
+          >
+            Aide
+          </button>
         </div>
 
-        <!-- Boutons de capture photo (rafale d'appareils photo ou multi-sélection galerie) -->
-        <div class="photo-triggers-grid">
-          <div class="photo-trigger-group">
-            <label class="photo-trigger-card">
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                hidden
-                @change="(e) => handlePhotoSelected(e, 'cover')"
-              />
-              <strong>Photo Couverture (Appareil)</strong>
-              <small>Enchaînez les couvertures — ajout au lot en arrière-fond</small>
-            </label>
-            <label class="photo-gallery-btn">
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                @change="(e) => handlePhotoSelected(e, 'cover')"
-              />
-              Importer plusieurs couvertures (galerie)
-            </label>
+        <div v-if="!hidePhotoHelp" class="photo-help-card">
+          <div class="photo-help-header">
+            <strong>Comment ça marche ?</strong>
+            <button type="button" class="photo-help-dismiss" @click="dismissPhotoHelp">
+              Ne plus afficher
+            </button>
           </div>
+          <p class="photo-help-text">
+            Photographiez ou importez au choix <strong>toute une étagère</strong> (les tranches de votre bibliothèque d'un seul coup), une <strong>pile de livres</strong>, ou <strong>couverture par couverture</strong>. Vous pouvez enchaîner plusieurs photos ou en sélectionner plusieurs dans votre galerie : elles sont analysées automatiquement en file d'attente, puis vous validez les livres détectés en une seule fois.
+          </p>
+        </div>
 
-          <div class="photo-trigger-group">
-            <label class="photo-trigger-card">
-              <input
-                type="file"
-                accept="image/*"
-                capture="environment"
-                hidden
-                @change="(e) => handlePhotoSelected(e, 'shelf')"
-              />
-              <strong>Photo Étagère / Pile (Appareil)</strong>
-              <small>Prenez plusieurs étagères d’affilée, tout est analysé en file</small>
-            </label>
-            <label class="photo-gallery-btn">
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                @change="(e) => handlePhotoSelected(e, 'shelf')"
-              />
-              Importer plusieurs étagères (galerie)
-            </label>
-          </div>
+        <!-- 2 boutons clairs : Appareil photo ou Galerie -->
+        <div class="photo-triggers-grid">
+          <label class="photo-trigger-card">
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              hidden
+              @change="(e) => handlePhotoSelected(e, 'shelf')"
+            />
+            <span class="photo-trigger-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
+            </span>
+            <strong>Prendre une photo</strong>
+            <small>Étagère, pile ou couverture</small>
+          </label>
+
+          <label class="photo-trigger-card">
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              @change="(e) => handlePhotoSelected(e, 'shelf')"
+            />
+            <span class="photo-trigger-icon" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                <circle cx="8.5" cy="8.5" r="1.5" />
+                <polyline points="21 15 16 10 5 21" />
+              </svg>
+            </span>
+            <strong>Choisir dans la galerie</strong>
+            <small>Une ou plusieurs photos</small>
+          </label>
         </div>
 
         <!-- Panneau d'avancement détaillé du lot arrière-fond -->
@@ -1520,6 +1547,48 @@ async function clearPhotoQueueAndForm() {
 .key-status.err {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.photo-help-card {
+  background: #f8fafc;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
+  padding: 0.75rem 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.photo-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+  font-size: 0.85rem;
+}
+
+.photo-help-dismiss {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.78rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.photo-help-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: #475569;
+}
+
+.photo-trigger-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary, #4f46e5);
+  margin-bottom: 0.35rem;
 }
 
 .photo-triggers-grid {
