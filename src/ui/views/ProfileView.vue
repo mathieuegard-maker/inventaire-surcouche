@@ -30,7 +30,6 @@ const digestTimezone = ref(
 const digestChannel = ref<'push' | 'email' | 'both'>('push');
 const hasPushSubscription = ref(false);
 const vapidPublicKey = ref<string | null>(null);
-const pushBusy = ref(false);
 const savingNotif = ref(false);
 const notifMsg = ref('');
 const notifError = ref('');
@@ -61,8 +60,14 @@ onMounted(async () => {
       digestDayOfMonth.value = prefs.digestDayOfMonth;
       digestTimezone.value = prefs.digestTimezone || digestTimezone.value;
       digestChannel.value = prefs.digestChannel;
-      hasPushSubscription.value = prefs.hasPushSubscription;
       vapidPublicKey.value = prefs.vapidPublicKey;
+    }
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
+      const reg = await navigator.serviceWorker.ready;
+      const existingSub = await reg.pushManager.getSubscription();
+      hasPushSubscription.value = Boolean(existingSub);
+    } else if (prefs) {
+      hasPushSubscription.value = prefs.hasPushSubscription;
     }
   } catch (e: unknown) {
     errorMsg.value = e instanceof Error ? e.message : 'Impossible de charger le profil.';
@@ -76,6 +81,40 @@ const handleSaveNotifs = async () => {
   notifMsg.value = '';
   savingNotif.value = true;
   try {
+    let pushWarning = '';
+
+    if (digestFrequency.value !== 'off' && digestChannel.value !== 'email') {
+      if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
+        pushWarning = ' (Push non supporté sur ce navigateur ; sur iPhone, installez d’abord l’app sur l’écran d’accueil).';
+      } else if (!vapidPublicKey.value) {
+        pushWarning = ' (Clé VAPID serveur non configurée).';
+      } else {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+          pushWarning = ' (Permission Push refusée sur cet appareil).';
+        } else {
+          const reg = await navigator.serviceWorker.ready;
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: urlBase64ToUint8Array(vapidPublicKey.value)
+            });
+          }
+          await userService.subscribeWebPush(sub.toJSON());
+          hasPushSubscription.value = true;
+        }
+      }
+    } else if (digestFrequency.value === 'off' && typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await userService.unsubscribeWebPush(sub.endpoint);
+        await sub.unsubscribe();
+        hasPushSubscription.value = false;
+      }
+    }
+
     await userService.saveNotificationPrefs({
       digestFrequency: digestFrequency.value,
       digestHour: Number(digestHour.value),
@@ -84,70 +123,19 @@ const handleSaveNotifs = async () => {
       digestTimezone: digestTimezone.value,
       digestChannel: digestChannel.value
     });
-    notifMsg.value = 'Préférences de notification enregistrées.';
+
+    if (pushWarning) {
+      notifError.value = `Préférences enregistrées${pushWarning}`;
+    } else {
+      notifMsg.value =
+        digestFrequency.value !== 'off' && digestChannel.value !== 'email'
+          ? 'Préférences enregistrées et notifications Push activées sur cet appareil.'
+          : 'Préférences de notification enregistrées.';
+    }
   } catch (e: unknown) {
     notifError.value = e instanceof Error ? e.message : 'Erreur lors de la sauvegarde.';
   } finally {
     savingNotif.value = false;
-  }
-};
-
-const handleEnablePush = async () => {
-  notifError.value = '';
-  notifMsg.value = '';
-  if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
-    notifError.value = 'Les notifications Push ne sont pas supportées sur ce navigateur (sur iPhone, installez d’abord l’app sur l’écran d’accueil).';
-    return;
-  }
-  if (!vapidPublicKey.value) {
-    notifError.value = 'Clé VAPID serveur non configurée.';
-    return;
-  }
-  pushBusy.value = true;
-  try {
-    const permission = await Notification.requestPermission();
-    if (permission !== 'granted') {
-      notifError.value = 'Permission de notification refusée.';
-      return;
-    }
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey.value)
-    });
-    await userService.subscribeWebPush(sub.toJSON());
-    hasPushSubscription.value = true;
-    notifMsg.value = 'Notifications Push activées sur cet appareil.';
-  } catch (e: unknown) {
-    notifError.value = e instanceof Error ? e.message : "Impossible d'activer les notifications Push.";
-  } finally {
-    pushBusy.value = false;
-  }
-};
-
-const handleDisablePush = async () => {
-  notifError.value = '';
-  notifMsg.value = '';
-  pushBusy.value = true;
-  try {
-    if ('serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
-      if (sub) {
-        await userService.unsubscribeWebPush(sub.endpoint);
-        await sub.unsubscribe();
-      } else {
-        await userService.unsubscribeWebPush();
-      }
-    } else {
-      await userService.unsubscribeWebPush();
-    }
-    hasPushSubscription.value = false;
-    notifMsg.value = 'Notifications Push désactivées sur cet appareil.';
-  } catch (e: unknown) {
-    notifError.value = e instanceof Error ? e.message : 'Erreur lors de la désactivation.';
-  } finally {
-    pushBusy.value = false;
   }
 };
 
@@ -351,29 +339,13 @@ const handleLogout = async () => {
             </select>
           </div>
 
-          <div v-if="digestChannel !== 'email'" class="push-box">
-            <p class="notif-sub">
-              Chaque téléphone/ordinateur doit autoriser les notifications Push séparément.
-            </p>
-            <button
-              v-if="!hasPushSubscription"
-              type="button"
-              class="wireframe-btn save-btn"
-              :disabled="pushBusy"
-              @click="handleEnablePush"
-            >
-              {{ pushBusy ? 'Activation...' : 'Activer les notifications Push sur cet appareil' }}
-            </button>
-            <button
-              v-else
-              type="button"
-              class="wireframe-btn save-btn"
-              :disabled="pushBusy"
-              @click="handleDisablePush"
-            >
-              {{ pushBusy ? 'Désactivation...' : 'Désactiver les notifications Push sur cet appareil' }}
-            </button>
-          </div>
+          <p v-if="digestChannel !== 'email'" class="notif-sub">
+            {{
+              hasPushSubscription
+                ? 'Notifications Push déjà actives sur cet appareil.'
+                : 'L’enregistrement activera automatiquement les notifications Push sur cet appareil.'
+            }}
+          </p>
         </template>
 
         <p v-if="notifError" class="error-msg">{{ notifError }}</p>
