@@ -236,7 +236,6 @@ onMounted(async () => {
         // Afficher immédiatement la galerie, puis filtrer les doublons visuels en arrière-plan
         isLoadingExtCovers.value = false;
         void deduplicateCoverUrls(rawCandidateUrls.value, {
-          isbn: isbn || undefined,
           maxCandidates: 36
         }).then((deduped) => {
           if (deduped.length > 0) deduplicatedCovers.value = deduped;
@@ -478,7 +477,7 @@ const saveChanges = async () => {
                   @click="selectCandidateCover(candUrl)"
                 >
                   <img
-                    :src="imageUtil.resolveExternalUrl(candUrl, originalBook?.isbn13 || originalBook?.isbn10)"
+                    :src="imageUtil.resolveExternalUrl(candUrl)"
                     :alt="`Couverture #${idx + 1}`"
                     class="cover-candidate-img"
                     @error="markCoverCandidateBroken(candUrl)"

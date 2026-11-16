@@ -274,9 +274,10 @@ export const onRequest = async (context: {
         const isbnParam = url.searchParams.get('isbn');
         const trimmedUrl = rawUrl?.trim() || '';
 
-        // 1. Vérifier d'abord le stockage central Cloudflare R2 / D1 (couverture déjà sauvegardée)
+        // 1. Vérifier d'abord le stockage central Cloudflare R2 / D1
+        // Si une URL précise est demandée, on ne cherche que par URL pour ne pas écraser les couvertures alternatives d'autres éditions.
         const stored = await getStoredCover(env, {
-          isbn: isbnParam,
+          isbn: trimmedUrl ? undefined : isbnParam,
           url: trimmedUrl || undefined
         });
         if (stored) {
