@@ -163,7 +163,7 @@ const refreshServerVisionStatus = () => {
 refreshServerVisionStatus();
 
 watch(
-  [isScanning, activeMode],
+  [() => scannerState.isScanningActive.value, activeMode],
   ([open, mode]) => {
     if (open && mode === 'photo') {
       refreshServerVisionStatus();
