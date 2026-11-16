@@ -44,6 +44,26 @@ const genresInput = ref<string[]>([]);
 const customGenreInput = ref('');
 const noSeries = ref(false);
 const showSeriesMergeModal = ref(false);
+const brokenCandidateUrls = ref<Record<string, boolean>>({});
+
+const suggestedCoverCandidates = computed(() => {
+  const isbn = originalBook.value?.isbn13 || originalBook.value?.isbn10;
+  const all = imageUtil.buildCoverCandidates(isbn, [
+    suggestions.value?.coverUrl,
+    ...(suggestions.value?.coverFallbackUrls || []),
+    originalBook.value?.coverUrl,
+    ...(originalBook.value?.coverFallbackUrls || [])
+  ]);
+  return all.filter((u) => !brokenCandidateUrls.value[u]);
+});
+
+const markCoverCandidateBroken = (url: string) => {
+  brokenCandidateUrls.value = { ...brokenCandidateUrls.value, [url]: true };
+};
+
+const selectCandidateCover = (url: string) => {
+  coverUrlInput.value = url;
+};
 
 async function handleCustomCoverUpload(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -554,16 +574,33 @@ const saveChanges = async () => {
               </div>
             </div>
 
-            <div v-if="isSuggestionsLoading || hasDiffCoverUrl" class="suggestion-group">
-              <label class="form-label">Couverture suggérée</label>
+            <div v-if="isSuggestionsLoading || hasDiffCoverUrl || suggestedCoverCandidates.length > 0" class="suggestion-group">
+              <label class="form-label">Couvertures trouvées par nos sources</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
+              <div v-else-if="suggestedCoverCandidates.length > 0" class="cover-candidates-gallery">
+                <button
+                  v-for="(candUrl, idx) in suggestedCoverCandidates"
+                  :key="candUrl"
+                  type="button"
+                  :class="['cover-candidate-thumb-btn', { selected: normStr(coverUrlInput) === normStr(candUrl) }]"
+                  :title="`Choisir couverture #${idx + 1}`"
+                  @click="selectCandidateCover(candUrl)"
+                >
+                  <img
+                    :src="imageUtil.resolveExternalUrl(candUrl)"
+                    :alt="`Couverture #${idx + 1}`"
+                    class="cover-candidate-img"
+                    @error="markCoverCandidateBroken(candUrl)"
+                  />
+                </button>
+              </div>
               <div v-else class="suggestion-content-inline">
                 <div style="display: flex; gap: var(--spacing-sm); align-items: center; min-width: 0; flex: 1;">
                   <img v-if="suggestions.coverUrl" :src="imageUtil.resolveCoverUrl(suggestions.coverUrl)" style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover; flex-shrink: 0;" />
                   <span class="suggestion-value-text" style="font-size: 11px;">Image disponible</span>
                 </div>
                 <BaseButton @click="applySuggestion('coverUrl')" class="apply-btn-inline">
-                  [ COPIER ]
+                  Copier
                 </BaseButton>
               </div>
             </div>
@@ -880,5 +917,45 @@ const saveChanges = async () => {
   gap: 6px !important;
   align-items: center !important;
   margin-top: 6px !important;
+}
+
+.cover-candidates-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.45rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--color-bg-alt, #f8fafc);
+}
+
+.cover-candidate-thumb-btn {
+  padding: 2px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+
+.cover-candidate-thumb-btn:hover {
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.cover-candidate-thumb-btn.selected {
+  border-color: var(--color-primary, #4f46e5);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.cover-candidate-img {
+  width: 44px;
+  height: 62px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
 }
 </style>

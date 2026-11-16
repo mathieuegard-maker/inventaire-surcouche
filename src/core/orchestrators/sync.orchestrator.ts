@@ -161,16 +161,23 @@ export const syncOrchestrator = {
         }
       }
 
-      // 4. Analyse du delta Local vs Wishlist
-      for (const uri of wishlistPhysicalUris) {
-         if (inventoryPhysicalUris.includes(uri)) continue;
+      const existingLocalBooks = await databaseService.getAllBooksFromCache();
 
-         const livre = await databaseService.getBookFromCache(uri);
-         if (!livre || needsBookRefresh(livre)) {
-           missingItems.push({ uri, status: 'wish' });
-         } else if (livre.ownershipStatus !== 'wish') {
-           await bookCacheService.saveAndProcessImage(livre, 'wish');
-         }
+      // 4. Analyse du delta Local vs Wishlist (sans créer de doublon work + edition)
+      for (const uri of wishlistPhysicalUris) {
+        if (inventoryPhysicalUris.includes(uri)) continue;
+
+        let livre = await databaseService.getBookFromCache(uri);
+        if (!livre) {
+          // Si le registre D1 pointe vers un workUri déjà représenté par une édition locale, réutiliser celle-ci !
+          livre = existingLocalBooks.find((b) => b.workUri === uri);
+        }
+
+        if (!livre || needsBookRefresh(livre)) {
+          missingItems.push({ uri, status: 'wish' });
+        } else if (livre.ownershipStatus !== 'wish') {
+          await bookCacheService.saveAndProcessImage(livre, 'wish');
+        }
       }
 
       // 5. Téléchargement des manquants
@@ -191,6 +198,16 @@ export const syncOrchestrator = {
       for (const book of localBooks) {
         const isActuallyOwned = inventoryUrisSet.has(book.uri) || (!!book.workUri && inventoryUrisSet.has(book.workUri));
         const isActuallyWished = wishlistUrisSet.has(book.uri) || (!!book.workUri && wishlistUrisSet.has(book.workUri));
+
+        // Dédoublonnage Wishlist : si un work nu et une édition du même workUri coexistent, supprimer le work nu redondant
+        if (
+          book.type !== 'edition' &&
+          !book.isbn13 &&
+          localBooks.some((other) => other.uri !== book.uri && other.workUri === book.uri)
+        ) {
+          await databaseService.deleteBookFromCache(book.uri);
+          continue;
+        }
 
         if (book.ownershipStatus === 'owned' && !isActuallyOwned) {
           if (isActuallyWished) {

@@ -162,20 +162,31 @@ const handleToggleAll = (checked: boolean) => {
   selectedIds.value = checked ? authorBooks.value.map(item => item.uri) : [];
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
+  if (selectedIds.value.length === 0) return;
   if (action === 'LEND') {
     showLendModal.value = true;
     return;
   }
   try {
     for (const uri of selectedIds.value) {
-      await queueService.enqueueAction(action, uri);
+      if (action === 'DELETE') {
+        const book = authorBooks.value.find(b => b.uri === uri);
+        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, uri);
+      } else {
+        await queueService.enqueueAction(action, uri);
+      }
     }
     authorBooks.value = authorBooks.value.map(book => {
       if (selectedIds.value.includes(book.uri)) {
         if (action === 'RETURN') {
           const copy = { ...book };
+          delete copy.loan;
+          return copy;
+        }
+        if (action === 'DELETE') {
+          const copy = { ...book, ownershipStatus: 'none' as const };
           delete copy.loan;
           return copy;
         }
@@ -260,9 +271,10 @@ const confirmGroupLend = async (friendName: string) => {
 
           <BatchActionBar 
             :selected-count="selectedIds.length"
-            :is-mixed="isSelectionMixed"
+            :selected-books="selectedBooks"
             :context="batchContext"
             @execute="dispatchBatchAction"
+            @clear="selectedIds = []"
           />
         </WireframePagination>
       </div>

@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { useModalScrollable } from '../composables/useModalScrollable';
 
 const props = defineProps<{
   show: boolean;
@@ -25,6 +26,8 @@ const sortOrderInput = ref<number>(100);
 const mergeEntireSourceSeries = ref<boolean>(Boolean(props.currentSeriesId));
 const isSaving = ref(false);
 const errorMsg = ref('');
+const modalCardRef = ref<HTMLElement | null>(null);
+const { isScrollable } = useModalScrollable(modalCardRef, () => [props.show, selectedSeriesId.value, volumeType.value]);
 
 onMounted(async () => {
   await loadLocalSeries();
@@ -129,7 +132,7 @@ async function handleConfirmMerge() {
 <template>
   <Teleport to="body">
     <div v-if="show" class="modal-backdrop" @click.self="emit('close')">
-    <div class="modal-card">
+    <div ref="modalCardRef" class="modal-card" role="dialog" aria-modal="true" aria-label="Rattacher ou Fusionner dans une Série">
       <div class="modal-header">
         <h3>Rattacher ou Fusionner dans une Série</h3>
         <button type="button" class="close-btn" @click="emit('close')">✕</button>
@@ -203,6 +206,9 @@ async function handleConfirmMerge() {
         >
           {{ isSaving ? 'Regroupement...' : 'Appliquer le rattachement' }}
         </button>
+      </div>
+      <div v-if="isScrollable" class="modal-bottom-close-bar">
+        <button type="button" class="close-btn" aria-label="Fermer" @click="emit('close')">✕</button>
       </div>
     </div>
     </div>

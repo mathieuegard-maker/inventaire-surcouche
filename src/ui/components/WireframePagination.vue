@@ -124,49 +124,51 @@ watch(paginatedItems, (newList) => {
       />
     </div>
 
-    <!-- Contrôles de pagination du haut -->
+    <!-- Contrôles de pagination du haut : Tout sur une seule ligne compacte -->
     <div class="pagination-controls-row upper-pagination">
-      <div class="pagination-upper-controls">
-        <div v-if="hasSelectAll" class="pagination-select-all-zone">
-          <input
-            type="checkbox"
-            :checked="selectAllValue"
-            @change="emit('update:selectAllValue', ($event.target as HTMLInputElement).checked)"
-            class="wireframe-checkbox"
-          />
-          <span class="pagination-select-all-label">
-            {{ selectedCount === 0 ? TEXTS.pagination.selectAll : selectedCount + ' ' + TEXTS.pagination.selectedCount }}
-          </span>
-        </div>
+      <label v-if="hasSelectAll" class="pagination-select-all-zone">
+        <input
+          type="checkbox"
+          :checked="selectAllValue"
+          @change="emit('update:selectAllValue', ($event.target as HTMLInputElement).checked)"
+          class="wireframe-checkbox"
+        />
+        <span class="pagination-select-all-label">
+          {{ selectedCount === 0 ? 'Tout' : `${selectedCount}` }}
+        </span>
+      </label>
 
-        <div class="page-size-selector-box">
-          <select v-model="internalPageSize" class="wireframe-input size-select">
-            <option :value="20">20 {{ TEXTS.pagination.perPage }}</option>
-            <option :value="50">50 {{ TEXTS.pagination.perPage }}</option>
-            <option :value="100">100 {{ TEXTS.pagination.perPage }}</option>
-          </select>
-        </div>
+      <div class="page-size-selector-box">
+        <select v-model="internalPageSize" class="wireframe-input size-select" aria-label="Éléments par page">
+          <option :value="20">20 / p.</option>
+          <option :value="50">50 / p.</option>
+          <option :value="100">100 / p.</option>
+        </select>
       </div>
 
       <div class="page-navigation-buttons">
         <button
+          type="button"
           class="wireframe-btn nav-arrow-btn"
           :disabled="internalPage === 1"
+          aria-label="Page précédente"
           @click="internalPage--"
         >
-          [ {{ TEXTS.pagination.previous }} ]
+          ‹
         </button>
-        
+
         <span class="pagination-counter-label">
-          {{ TEXTS.pagination.page }} {{ internalPage }} / {{ totalPages }}
+          {{ internalPage }} / {{ totalPages }}
         </span>
 
         <button
+          type="button"
           class="wireframe-btn nav-arrow-btn"
           :disabled="internalPage === totalPages"
+          aria-label="Page suivante"
           @click="internalPage++"
         >
-          [ {{ TEXTS.pagination.next }} ]
+          ›
         </button>
       </div>
     </div>
@@ -174,49 +176,51 @@ watch(paginatedItems, (newList) => {
     <!-- Le contenu de la liste/table est inséré ici en sandwich -->
     <slot></slot>
 
-    <!-- Contrôles de pagination du bas -->
+    <!-- Contrôles de pagination du bas : identiques sur une seule ligne -->
     <div class="pagination-controls-row lower-pagination">
-      <div class="pagination-upper-controls">
-        <div v-if="hasSelectAll" class="pagination-select-all-zone">
-          <input
-            type="checkbox"
-            :checked="selectAllValue"
-            @change="emit('update:selectAllValue', ($event.target as HTMLInputElement).checked)"
-            class="wireframe-checkbox"
-          />
-          <span class="pagination-select-all-label">
-            {{ selectedCount === 0 ? TEXTS.pagination.selectAll : selectedCount + ' ' + TEXTS.pagination.selectedCount }}
-          </span>
-        </div>
+      <label v-if="hasSelectAll" class="pagination-select-all-zone">
+        <input
+          type="checkbox"
+          :checked="selectAllValue"
+          @change="emit('update:selectAllValue', ($event.target as HTMLInputElement).checked)"
+          class="wireframe-checkbox"
+        />
+        <span class="pagination-select-all-label">
+          {{ selectedCount === 0 ? 'Tout' : `${selectedCount}` }}
+        </span>
+      </label>
 
-        <div class="page-size-selector-box">
-          <select v-model="internalPageSize" class="wireframe-input size-select">
-            <option :value="20">20 {{ TEXTS.pagination.perPage }}</option>
-            <option :value="50">50 {{ TEXTS.pagination.perPage }}</option>
-            <option :value="100">100 {{ TEXTS.pagination.perPage }}</option>
-          </select>
-        </div>
+      <div class="page-size-selector-box">
+        <select v-model="internalPageSize" class="wireframe-input size-select" aria-label="Éléments par page">
+          <option :value="20">20 / p.</option>
+          <option :value="50">50 / p.</option>
+          <option :value="100">100 / p.</option>
+        </select>
       </div>
 
       <div class="page-navigation-buttons">
         <button
+          type="button"
           class="wireframe-btn nav-arrow-btn"
           :disabled="internalPage === 1"
+          aria-label="Page précédente"
           @click="internalPage--"
         >
-          [ {{ TEXTS.pagination.previous }} ]
+          ‹
         </button>
-        
+
         <span class="pagination-counter-label">
-          {{ TEXTS.pagination.page }} {{ internalPage }} / {{ totalPages }}
+          {{ internalPage }} / {{ totalPages }}
         </span>
 
         <button
+          type="button"
           class="wireframe-btn nav-arrow-btn"
           :disabled="internalPage === totalPages"
+          aria-label="Page suivante"
           @click="internalPage++"
         >
-          [ {{ TEXTS.pagination.next }} ]
+          ›
         </button>
       </div>
     </div>

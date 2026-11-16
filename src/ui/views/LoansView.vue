@@ -285,9 +285,10 @@ const resetSelection = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="false"
+          :selected-books="hydratedLoans.filter(i => selectedIds.includes(i.loan.uri)).map(i => ({ ...i.book, loan: i.loan }))"
           context="lent"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>

@@ -89,7 +89,25 @@ const fetchWishlist = async () => {
   isLoading.value = true;
   try {
     const cached = await databaseService.getAllBooksFromCache();
-    allWishBooks.value = cached.filter(b => b.ownershipStatus === 'wish');
+    const rawWished = cached.filter((b) => b.ownershipStatus === 'wish');
+
+    // Déduplication canonique (évite d'afficher 2 fois le même livre s'il existait sous workUri + editionUri)
+    const dedupMap = new Map<string, HumanizedBook>();
+    const scoreBook = (b: HumanizedBook) =>
+      (b.type === 'edition' ? 4 : 0) +
+      (b.isbn13 ? 3 : 0) +
+      (b.localCover ? 2 : 0) +
+      (!b.uri.startsWith('isbn:') ? 1 : 0);
+
+    for (const book of rawWished) {
+      const key = book.workUri || book.isbn13 || book.uri;
+      const existing = dedupMap.get(key);
+      if (!existing || scoreBook(book) > scoreBook(existing)) {
+        dedupMap.set(key, book);
+      }
+    }
+
+    allWishBooks.value = Array.from(dedupMap.values());
     selectedIds.value = [];
   } catch (e) {
     console.error("[WISHLIST VIEW] Échec de lecture du cache :", e);
@@ -298,9 +316,10 @@ const resetFilters = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="false"
+          :selected-books="allWishBooks.filter(b => selectedIds.includes(b.uri))"
           context="wishlist"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>

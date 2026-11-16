@@ -130,14 +130,23 @@ const handleToggleAll = (checked: boolean) => {
   selectedIds.value = checked ? seriesTomes.value.map(item => item.uri) : [];
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
+  if (selectedIds.value.length === 0) return;
   if (action === 'LEND') { showLendModal.value = true; return; }
   try {
-    for (const uri of selectedIds.value) await queueService.enqueueAction(action, uri);
+    for (const uri of selectedIds.value) {
+      if (action === 'DELETE') {
+        const book = seriesTomes.value.find(b => b.uri === uri);
+        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, uri);
+      } else {
+        await queueService.enqueueAction(action, uri);
+      }
+    }
     seriesTomes.value = seriesTomes.value.map(tome => {
       if (selectedIds.value.includes(tome.uri)) {
         if (action === 'RETURN') { const { loan, ...rest } = tome; return rest; }
+        if (action === 'DELETE') { const { loan, ...rest } = tome; return { ...rest, ownershipStatus: 'none' }; }
         return { ...tome, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
       }
       return tome;
@@ -252,9 +261,10 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
 
           <BatchActionBar 
             :selected-count="selectedIds.length"
-            :is-mixed="isSelectionMixed"
+            :selected-books="selectedBooks"
             :context="batchContext"
             @execute="dispatchBatchAction"
+            @clear="selectedIds = []"
           />
         </WireframePagination>
       </template>

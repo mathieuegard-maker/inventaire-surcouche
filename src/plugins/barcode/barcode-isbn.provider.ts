@@ -13,6 +13,13 @@ const COOLDOWN_MS = 3200;
  */
 export function playScanBeep(type: 'success' | 'duplicate' = 'success'): void {
   try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(type === 'success' ? 85 : [45, 50, 45]);
+    }
+  } catch {
+    // Ignore si non supporté
+  }
+  try {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
@@ -29,13 +36,6 @@ export function playScanBeep(type: 'success' | 'duplicate' = 'success'): void {
     setTimeout(() => ctx.close().catch(() => {}), 200);
   } catch {
     // Ignore si l'audio est bloqué par le navigateur
-  }
-  try {
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate(type === 'success' ? 60 : [40, 60, 40]);
-    }
-  } catch {
-    // Ignore sur iOS
   }
 }
 

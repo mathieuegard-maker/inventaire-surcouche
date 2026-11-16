@@ -19,8 +19,18 @@ const errorMessage = ref<string | null>(null);
 const activeMode = ref<ScannerMode>('simple');
 const burstBooks = ref<HumanizedBook[]>([]);
 const latestBurstBook = ref<HumanizedBook | null>(null);
+const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate' } | null>(null);
 const lastUpdatedTick = ref<number>(Date.now());
 let activeRouter: Router | null = null;
+let flashTimer: ReturnType<typeof setTimeout> | null = null;
+
+function triggerBurstFeedback(status: 'success' | 'duplicate') {
+  burstFlashEvent.value = { id: Date.now(), status };
+  if (flashTimer) clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => {
+    burstFlashEvent.value = null;
+  }, 600);
+}
 
 export const scannerState = {
   isScanningActive,
@@ -29,6 +39,7 @@ export const scannerState = {
   activeMode,
   burstBooks,
   latestBurstBook,
+  burstFlashEvent,
   lastUpdatedTick,
 
   notifyCatalogChanged() {
@@ -104,6 +115,7 @@ export const scannerState = {
     );
     if (alreadyInList) {
       playScanBeep('duplicate');
+      triggerBurstFeedback('duplicate');
       return;
     }
 
@@ -114,6 +126,7 @@ export const scannerState = {
         loan: response.loan?.details || response.mainBook.loan
       };
       playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
+      triggerBurstFeedback('success');
       burstBooks.value.unshift(book);
       latestBurstBook.value = book;
       return;
@@ -121,6 +134,7 @@ export const scannerState = {
 
     // Cas 2 : ISBN absent de D1 -> résolution métadonnées externes pour l'afficher dans la liste à cocher (sans création auto)
     playScanBeep('success');
+    triggerBurstFeedback('success');
     const placeholderUri = `isbn:${scannedIsbn}`;
     const placeholderBook: HumanizedBook = {
       uri: placeholderUri,

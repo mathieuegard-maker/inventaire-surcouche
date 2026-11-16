@@ -2,8 +2,29 @@
 import { computed, ref, watch } from 'vue';
 import { TEXTS } from '../locales/fr';
 import { userService, type LoanContact } from '../../core/services/user.service';
+import { useModalScrollable } from '../composables/useModalScrollable';
 
 const LOCAL_CONTACTS_KEY = 'biblio_loan_contacts_v1';
+
+const isValidPersonName = (raw: string | null | undefined): boolean => {
+  const clean = String(raw || '').trim();
+  if (!clean) return false;
+  const low = clean.toLowerCase();
+  if (
+    low === 'prêt' ||
+    low === 'pret' ||
+    low === 'prêts' ||
+    low === 'prets' ||
+    low === 'ami' ||
+    low === 'inconnu' ||
+    low.startsWith('inconnu (') ||
+    low.startsWith('prêt -') ||
+    low.startsWith('pret -')
+  ) {
+    return false;
+  }
+  return true;
+};
 
 const props = defineProps<{
   show: boolean;
@@ -18,12 +39,19 @@ const emit = defineEmits<{
 const friendName = ref('');
 const contacts = ref<LoanContact[]>([]);
 const loadingContacts = ref(false);
+const modalCardRef = ref<HTMLElement | null>(null);
+const { isScrollable } = useModalScrollable(modalCardRef, () => [props.show, contacts.value.length]);
 
 const readLocalContacts = (): LoanContact[] => {
   try {
     const raw = localStorage.getItem(LOCAL_CONTACTS_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    const cleaned = parsed.filter((c: LoanContact) => isValidPersonName(c?.name));
+    if (cleaned.length !== parsed.length) {
+      writeLocalContacts(cleaned);
+    }
+    return cleaned;
   } catch {
     return [];
   }
@@ -41,7 +69,7 @@ const mergeContacts = (remote: LoanContact[], local: LoanContact[]): LoanContact
   const map = new Map<string, LoanContact>();
   const add = (c: LoanContact) => {
     const clean = String(c?.name || '').trim();
-    if (!clean) return;
+    if (!isValidPersonName(clean)) return;
     const key = clean.toLowerCase();
     const existing = map.get(key);
     if (!existing || (c.source === 'friend_share' && existing.source !== 'friend_share')) {
@@ -65,11 +93,9 @@ const loadContacts = async () => {
     const remote = await userService.listLoanContacts();
     const merged = mergeContacts(remote, cached);
     contacts.value = merged;
-    if (remote.length > 0) {
-      writeLocalContacts(merged);
-    }
+    writeLocalContacts(merged);
   } catch {
-    // Hors ligne : on garde le cache local
+    // Hors ligne : on garde le cache local nettoyé
   } finally {
     loadingContacts.value = false;
   }
@@ -113,60 +139,68 @@ const handleClose = () => {
 <template>
   <Teleport to="body">
     <div v-if="show" class="modal-overlay" @click.self="handleClose">
-    <div class="modal-box">
-      <h2>{{ TEXTS.lendModal.title }}</h2>
-      <p class="modal-text">
-        {{ bookCount > 1 ? TEXTS.lendModal.instructionPlural : TEXTS.lendModal.instructionSingular }}
-      </p>
+      <div ref="modalCardRef" class="modal-box" role="dialog" aria-modal="true" aria-label="Prêter">
+        <div class="modal-header-row">
+          <h2>{{ TEXTS.lendModal.title }}</h2>
+          <button type="button" class="modal-close-icon" aria-label="Fermer" @click="handleClose">✕</button>
+        </div>
+        <p class="modal-text">
+          {{ bookCount > 1 ? TEXTS.lendModal.instructionPlural : TEXTS.lendModal.instructionSingular }}
+        </p>
 
-      <!-- Liste rapide : amis connus par partage + anciens emprunteurs -->
-      <div v-if="contacts.length > 0 || loadingContacts" class="contacts-picker">
-        <span class="picker-label">
-          Choisir une personne connue :
-          <small v-if="loadingContacts" class="loading-tag">(mise à jour...)</small>
-        </span>
-        <div class="contacts-chips">
+        <!-- Liste contextuelle : affichée uniquement s'il existe de vrais amis/emprunteurs enregistrés -->
+        <div v-if="contacts.length > 0" class="contacts-picker">
+          <span class="picker-label">
+            Choisir une personne connue :
+          </span>
+          <div class="contacts-chips">
+            <button
+              v-for="c in contacts"
+              :key="c.name.toLowerCase()"
+              type="button"
+              :class="[
+                'contact-chip',
+                c.source === 'friend_share' ? 'is-friend' : 'is-borrower',
+                { selected: normalizedInput === c.name.toLowerCase() }
+              ]"
+              @click="selectContact(c.name)"
+            >
+              {{ c.source === 'friend_share' ? '[Ami] ' : '' }}{{ c.name }}
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <label class="new-person-label" for="lend-friend-input">
+            {{ contacts.length > 0 ? 'Ou saisir / créer une nouvelle personne :' : 'Nom de l’emprunteur :' }}
+          </label>
+          <input
+            id="lend-friend-input"
+            v-model="friendName"
+            type="text"
+            :placeholder="TEXTS.lendModal.placeholder"
+            class="form-input"
+            @keyup.enter="handleConfirm"
+          />
+
           <button
-            v-for="c in contacts"
-            :key="c.name.toLowerCase()"
             type="button"
-            :class="[
-              'contact-chip',
-              c.source === 'friend_share' ? 'is-friend' : 'is-borrower',
-              { selected: normalizedInput === c.name.toLowerCase() }
-            ]"
-            @click="selectContact(c.name)"
+            :disabled="!friendName.trim()"
+            @click="handleConfirm"
+            class="btn-action"
           >
-            {{ c.source === 'friend_share' ? '[Ami] ' : '' }}{{ c.name }}
+            {{ TEXTS.lendModal.confirm }}
+          </button>
+
+          <button type="button" @click="handleClose" class="btn-close">
+            {{ TEXTS.lendModal.cancel }}
           </button>
         </div>
+
+        <div v-if="isScrollable" class="modal-bottom-close-bar">
+          <button type="button" class="modal-close-icon" aria-label="Fermer" @click="handleClose">✕</button>
+        </div>
       </div>
-
-      <div class="modal-actions">
-        <label class="new-person-label">
-          {{ contacts.length > 0 ? 'Ou saisir / créer une nouvelle personne :' : 'Nom de l’emprunteur :' }}
-        </label>
-        <input
-          v-model="friendName"
-          type="text"
-          :placeholder="TEXTS.lendModal.placeholder"
-          class="form-input"
-          @keyup.enter="handleConfirm"
-        />
-
-        <button
-          :disabled="!friendName.trim()"
-          @click="handleConfirm"
-          class="btn-action"
-        >
-          {{ TEXTS.lendModal.confirm }}
-        </button>
-
-        <button @click="handleClose" class="btn-close">
-          {{ TEXTS.lendModal.cancel }}
-        </button>
-      </div>
-    </div>
     </div>
   </Teleport>
 </template>

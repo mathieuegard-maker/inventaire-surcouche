@@ -8,6 +8,8 @@ import { imageUtil } from '../../core/utils/image.util';
 const props = defineProps<{
   book: HumanizedBook;
   modelValue?: boolean;
+  selectableOnly?: boolean;
+  extraBadges?: Array<{ label: string; tone?: 'info' | 'consensus' | 'warn' }>;
 }>();
 
 const emit = defineEmits<{
@@ -43,6 +45,10 @@ const translateFriendName = (name?: string): string => {
 };
 
 const navigateToDetail = () => {
+  if (props.selectableOnly) {
+    emit('update:modelValue', !props.modelValue);
+    return;
+  }
   if (props.book.uri) {
     router.push(`/book/${encodeURIComponent(props.book.uri)}`);
   }
@@ -87,6 +93,16 @@ const handleZoneClick = () => {
       <p v-if="book.authors?.length && !book.loan" class="row-authors">
         {{ book.authors.join(', ') }}
       </p>
+
+      <div v-if="extraBadges && extraBadges.length > 0" class="row-extra-badges">
+        <span
+          v-for="(badge, bi) in extraBadges"
+          :key="bi"
+          :class="['row-mini-badge', badge.tone || 'info']"
+        >
+          {{ badge.label }}
+        </span>
+      </div>
     </div>
 
     <div class="row-status-text-column">
@@ -112,3 +128,34 @@ const handleZoneClick = () => {
 
   </div>
 </template>
+
+<style scoped>
+.row-extra-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+}
+
+.row-mini-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.06rem 0.38rem;
+  border-radius: 9999px;
+}
+
+.row-mini-badge.info {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.row-mini-badge.consensus {
+  background: #ede9fe;
+  color: #5b21b6;
+}
+
+.row-mini-badge.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+</style>

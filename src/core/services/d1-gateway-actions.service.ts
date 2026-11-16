@@ -452,9 +452,22 @@ export async function handleD1GatewayAction(
       if (!auth) return jsonResp({ contacts: [] });
 
       const contactMap = new Map<string, { name: string; source: 'friend_share' | 'borrower' }>();
+      const isPlaceholderContact = (name: string) => {
+        const low = name.toLowerCase();
+        return (
+          low === 'prêt' ||
+          low === 'pret' ||
+          low === 'prêts' ||
+          low === 'prets' ||
+          low === 'ami' ||
+          low === 'inconnu' ||
+          low.startsWith('inconnu (') ||
+          low === auth.username.toLowerCase()
+        );
+      };
       const addContact = (rawName: string | null | undefined, source: 'friend_share' | 'borrower') => {
         const clean = String(rawName || '').trim();
-        if (!clean || clean.toLowerCase() === auth.username.toLowerCase()) return;
+        if (!clean || isPlaceholderContact(clean)) return;
         const key = clean.toLowerCase();
         const existing = contactMap.get(key);
         if (!existing || (source === 'friend_share' && existing.source !== 'friend_share')) {
@@ -653,7 +666,7 @@ export async function handleD1GatewayAction(
       const libraryId = listId.startsWith('wish_') ? listId.slice(5) : listId || 'lib_default';
       const rows = await db
         .prepare(
-          "SELECT COALESCE(edition_id, work_id) as uri FROM library_items WHERE library_id = ? AND ownership_status = 'wishlist' AND deleted_at IS NULL"
+          "SELECT DISTINCT COALESCE(edition_id, work_id) as uri FROM library_items WHERE library_id = ? AND ownership_status = 'wishlist' AND deleted_at IS NULL"
         )
         .bind(libraryId)
         .all<{ uri: string }>();
@@ -673,6 +686,13 @@ export async function handleD1GatewayAction(
       for (const u of uris) {
         const entityUri = String(u || '').trim();
         if (!entityUri) continue;
+        // Évite toute duplication dans library_items pour un même ouvrage
+        await db
+          .prepare(
+            "DELETE FROM library_items WHERE library_id = ? AND ownership_status = 'wishlist' AND (edition_id = ? OR work_id = ?)"
+          )
+          .bind(libraryId, entityUri, entityUri)
+          .run();
         const itemId = `wishitm_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
         await db
           .prepare(
@@ -768,8 +788,9 @@ export async function handleD1GatewayAction(
       }
 
       if (!subPath && request.method === 'POST') {
-        const rawName = String(body?.name || 'Prêts - Ami');
-        const borrowerName = rawName.replace(/^Prêts\s*-\s*/i, '').trim() || 'Ami';
+        const rawName = String(body?.name || '');
+        const borrowerName = rawName.replace(/^Prêts?\s*[-:]?\s*/i, '').trim();
+        const effectiveBorrower = borrowerName || 'Inconnu';
         const description = String(body?.description || Date.now());
         const items: string[] = Array.isArray(body?.items) ? body.items : [];
         const itemRef = items[0] || '';
@@ -781,21 +802,27 @@ export async function handleD1GatewayAction(
             `INSERT INTO loans (id, library_id, library_item_id, borrower_name, loaned_at, notes, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
           )
-          .bind(loanId, libraryId, itemRef, borrowerName, now, description, now, now)
+          .bind(loanId, libraryId, itemRef, effectiveBorrower, now, description, now, now)
           .run();
 
-        // Mémorise automatiquement l'emprunteur dans le carnet de contacts de la bibliothèque
-        const contactId = `cnt_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-        await db
-          .prepare(
-            `INSERT OR IGNORE INTO borrower_contacts (id, library_id, name, source, created_at)
-             VALUES (?, ?, ?, 'manual', ?)`
-          )
-          .bind(contactId, libraryId, borrowerName, now)
-          .run();
+        // N'enregistre le contact que s'il s'agit d'un vrai nom (pas d'un libellé générique)
+        if (
+          effectiveBorrower.toLowerCase() !== 'inconnu' &&
+          effectiveBorrower.toLowerCase() !== 'ami' &&
+          !/^prêts?$/i.test(effectiveBorrower)
+        ) {
+          const contactId = `cnt_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+          await db
+            .prepare(
+              `INSERT OR IGNORE INTO borrower_contacts (id, library_id, name, source, created_at)
+               VALUES (?, ?, ?, 'manual', ?)`
+            )
+            .bind(contactId, libraryId, effectiveBorrower, now)
+            .run();
+        }
 
         return jsonResp({
-          shelf: { _id: loanId, name: rawName, description, items }
+          shelf: { _id: loanId, name: `Prêts - ${effectiveBorrower}`, description, items }
         });
       }
 

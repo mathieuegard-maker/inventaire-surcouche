@@ -52,13 +52,19 @@ export const wishlistService = {
 
       const elementsList = listData.list?.elements || listData.elements || [];
       
-      const urisToSync = elementsList.map((item: any) => {
-        if (typeof item === 'string') return item;
-        if (item.element) return item.element;
-        if (item.uri) return item.uri;
-        if (item.entity) return item.entity; 
-        return null;
-      }).filter(Boolean);
+      const urisToSync: string[] = Array.from(
+        new Set(
+          elementsList
+            .map((item: any) => {
+              if (typeof item === 'string') return item;
+              if (item.element) return item.element;
+              if (item.uri) return item.uri;
+              if (item.entity) return item.entity;
+              return null;
+            })
+            .filter(Boolean)
+        )
+      );
 
       await databaseService.syncRegistry('wishlist', urisToSync);
       console.log(`Contenu téléchargé et synchronisé : ${urisToSync.length} éléments.`);
@@ -97,11 +103,8 @@ export const wishlistService = {
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
     
-    // Double sauvegarde locale pour assurer la réactivité de la vue Série et la cohérence au rechargement
+    // Enregistrement canonique unique en base locale (évite le doublon edition + work dans les compteurs)
     await databaseService.addRegistryEntry('wishlist', editionUri);
-    if (cachedBook?.workUri) {
-      await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
-    }
     return true;
   },
 
@@ -125,13 +128,9 @@ export const wishlistService = {
       throw new Error(data.status_verbose || data.error || JSON.stringify(data));
     }
     
-    // Enregistrement des correspondances en base locale pour chaque tome traité
+    // Enregistrement canonique unique par ouvrage
     for (const uri of editionUris) {
       await databaseService.addRegistryEntry('wishlist', uri);
-      const cachedBook = await databaseService.getBookFromCache(uri);
-      if (cachedBook?.workUri) {
-        await databaseService.addRegistryEntry('wishlist', cachedBook.workUri);
-      }
     }
     return true;
   },

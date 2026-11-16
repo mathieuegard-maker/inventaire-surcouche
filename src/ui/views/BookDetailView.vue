@@ -695,7 +695,25 @@ const confirmDelete = async () => {
   display: flex !important;
   justify-content: center !important;
   align-items: center !important;
+  width: 175px !important;
+  height: 240px !important;
   flex-shrink: 0 !important;
+}
+
+.book-cover-wrapper :deep(.book-cover-image),
+.book-cover-wrapper .book-cover-image {
+  width: auto !important;
+  height: auto !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  object-fit: contain !important;
+}
+
+.book-cover-wrapper .book-cover-placeholder {
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  margin-bottom: 0 !important;
 }
 
 .cover-nav-btn {

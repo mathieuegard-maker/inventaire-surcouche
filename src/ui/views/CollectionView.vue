@@ -250,7 +250,7 @@ const handleToggleAll = (checked: boolean) => {
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+  if (selectedIds.value.length === 0) return;
 
   if (action === 'LEND') {
     showLendModal.value = true;
@@ -397,9 +397,10 @@ const resetSelection = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="isSelectionMixed"
+          :selected-books="selectedBooks"
           :context="batchContext"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>

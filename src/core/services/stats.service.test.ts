@@ -97,5 +97,12 @@ describe('Stats Service', () => {
     const statsAll = await statsService.getDashboardStats(-1);
     expect(statsAll.acquiredInPeriod).toBe(3);
     expect(statsAll.loansInPeriod).toBe(2);
+
+    // 4. Vérifier les KPIs détaillés
+    const detailed = await statsService.getDetailedStats(-1);
+    expect(detailed.totalPagesOwned).toBe(0);
+    expect(detailed.overdueLoansCount).toBe(1); // prêt Marc > 30 jours
+    expect(detailed.borrowers[0]).toEqual({ name: 'Marc', count: 1, maxDays: 45 });
+    expect(detailed.borrowers[1]).toEqual({ name: 'Jean', count: 1, maxDays: 5 });
   });
 });

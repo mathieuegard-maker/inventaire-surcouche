@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <div v-if="show" class="modal-backdrop" @click.self="closeModal">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-label="Partage Foyer et Amis">
+      <div ref="modalCardRef" class="modal-card" role="dialog" aria-modal="true" aria-label="Partage Foyer et Amis">
       <div class="modal-header">
         <h3>Foyer &amp; Amis</h3>
         <button type="button" class="close-btn" @click="closeModal" aria-label="Fermer">✕</button>
@@ -176,6 +176,10 @@
           </div>
         </section>
       </div>
+
+      <div v-if="isScrollable" class="modal-bottom-close-bar">
+        <button type="button" class="close-btn" @click="closeModal" aria-label="Fermer">✕</button>
+      </div>
     </div>
     </div>
   </Teleport>
@@ -187,6 +191,9 @@ import { sessionStore } from '../../state/session';
 import { userService } from '../../core/services/user.service';
 import { connectionService } from '../../core/orchestrators/connection.orchestrator';
 import QrCodeDisplay from './QrCodeDisplay.vue';
+import { useModalScrollable } from '../composables/useModalScrollable';
+
+const modalCardRef = ref<HTMLElement | null>(null);
 
 const props = withDefaults(
   defineProps<{
@@ -209,6 +216,7 @@ const joining = ref(false);
 const joinMessage = ref('');
 const joinSuccess = ref(false);
 const copiedKey = ref('');
+const { isScrollable } = useModalScrollable(modalCardRef, () => [props.show, activeTab.value, joinMessage.value]);
 
 watch(
   () => [props.show, props.initialTab] as const,

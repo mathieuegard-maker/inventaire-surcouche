@@ -21,6 +21,8 @@ import BookMiniCard from './BookMiniCard.vue';
 import WireframeTable from './WireframeTable.vue';
 import BatchActionBar from './BatchActionBar.vue';
 import LendModal from './LendModal.vue';
+import { useModalScrollable } from '../composables/useModalScrollable';
+import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
 
@@ -29,6 +31,7 @@ const burstBooks = computed(() => scannerState.burstBooks.value);
 const burstSelectedUris = ref<string[]>([]);
 const showBurstLendModal = ref(false);
 const burstFeedback = ref('');
+const modalCardRef = ref<HTMLElement | null>(null);
 
 // Fermer automatiquement la fenêtre scanner si l'utilisateur ouvre une fiche livre depuis la liste rafale
 watch(
@@ -71,7 +74,7 @@ const burstBatchState = computed(() => {
 const dispatchBurstBatchAction = async (
   action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
 ) => {
-  if (selectedBurstBooks.value.length === 0 || burstBatchState.value.isMixed) return;
+  if (selectedBurstBooks.value.length === 0) return;
   if (action === 'LEND') {
     showBurstLendModal.value = true;
     return;
@@ -385,6 +388,113 @@ const totalSelectedToSave = computed(
   () => selectedDetectedCount.value + selectedSeriesCount.value
 );
 
+const { isScrollable } = useModalScrollable(modalCardRef, () => [
+  scannerState.isScanningActive.value,
+  activeMode.value,
+  burstBooks.value.length,
+  resolvedDetectedItems.value.length,
+  doubtItems.value.length,
+  unresolvedItems.value.length,
+  seriesExtraItems.value.length,
+  showByokSetup.value
+]);
+
+const photoItemToBook = (item: ResolvedPhotoItem): HumanizedBook => {
+  const isbn = item.isbn13 || '';
+  const coverFallbackUrls = imageUtil.buildCoverCandidates(isbn, [
+    item.coverUrl,
+    ...(item.coverFallbackUrls || [])
+  ]);
+  return {
+    uri: item.existingUri || `isbn:${isbn || item.id}`,
+    workUri: item.existingWorkUri,
+    type: 'edition',
+    isbn13: isbn || undefined,
+    title: item.title,
+    authors: item.authors.length ? item.authors : ['Auteur inconnu'],
+    illustrators: [],
+    scriptwriters: [],
+    publisher: item.publisher || '',
+    publishDate: item.publishDate,
+    pageCount: item.pageCount,
+    coverUrl: item.coverUrl || coverFallbackUrls[0],
+    coverFallbackUrls,
+    series: item.series,
+    seriesNumber: item.seriesNumber,
+    genres: [],
+    ownershipStatus: item.alreadyOwned ? 'owned' : item.alreadyWished ? 'wish' : 'none'
+  };
+};
+
+const getPhotoItemBadges = (item: ResolvedPhotoItem) => {
+  const badges: Array<{ label: string; tone?: 'info' | 'consensus' | 'warn' }> = [];
+  if (item.correctedFromAi) badges.push({ label: 'Corrigé BnF', tone: 'info' });
+  if (item.sourcesCount && item.sourcesCount > 1) badges.push({ label: `${item.sourcesCount} sources`, tone: 'consensus' });
+  if (!item.coverUrl) badges.push({ label: 'Sans couverture', tone: 'warn' });
+  return badges;
+};
+
+const isAllPhotoDetectedSelected = computed(
+  () => resolvedDetectedItems.value.length > 0 && resolvedDetectedItems.value.every((i) => i.selected)
+);
+
+const toggleAllPhotoDetected = (checked: boolean) => {
+  for (const item of resolvedDetectedItems.value) {
+    item.selected = checked;
+  }
+};
+
+const allSelectedPhotoItems = computed(() => {
+  const sure = resolvedDetectedItems.value.filter((c) => c.selected && c.isbn13);
+  const doubts = doubtItems.value.filter(
+    (c) => c.selected && c.isbn13 && c.selectedAlternativeIsbn !== '__ignore__'
+  );
+  const extras = seriesExtraItems.value.filter((c) => c.selected && c.isbn13);
+  return [...sure, ...doubts, ...extras];
+});
+
+const selectedPhotoBooks = computed(() =>
+  allSelectedPhotoItems.value.map((item) => photoItemToBook(item))
+);
+
+const clearPhotoSelections = () => {
+  for (const i of resolvedDetectedItems.value) i.selected = false;
+  for (const d of doubtItems.value) d.selected = false;
+  for (const e of seriesExtraItems.value) e.selected = false;
+};
+
+const dispatchPhotoBatchAction = async (
+  action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
+) => {
+  const target: 'owned' | 'wish' = action === 'ADD_WISHLIST' ? 'wish' : 'owned';
+  const itemsToSave = allSelectedPhotoItems.value;
+  if (itemsToSave.length === 0) return;
+
+  const processedIsbns = new Set<string>();
+  let savedCount = 0;
+  for (const item of itemsToSave) {
+    if (!item.isbn13 || processedIsbns.has(item.isbn13)) continue;
+    processedIsbns.add(item.isbn13);
+    await enqueueResolvedItem(item, target);
+    savedCount++;
+  }
+
+  // Retirer uniquement les éléments validés tout en préservant les éventuels restants/doutes non cochés
+  const savedSet = new Set(itemsToSave.map((i) => i.id));
+  resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !savedSet.has(i.id));
+  doubtItems.value = doubtItems.value.filter((d) => !savedSet.has(d.id));
+  seriesExtraItems.value = seriesExtraItems.value.filter((e) => !savedSet.has(e.id));
+
+  if (resolvedDetectedItems.value.length === 0 && doubtItems.value.length === 0 && unresolvedItems.value.length === 0) {
+    await photoBatchQueueService.clearCompletedJobs();
+  }
+  scannerState.notifyCatalogChanged();
+  photoSavingFeedback.value = `${savedCount} livre(s) ajouté(s) à ${target === 'owned' ? 'ma Collection' : 'ma Wishlist'} ✓`;
+  setTimeout(() => {
+    photoSavingFeedback.value = '';
+  }, 4000);
+};
+
 async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'wish' | 'none') {
   if (!item.isbn13) return;
 
@@ -466,7 +576,7 @@ async function clearPhotoQueueAndForm() {
 <template>
   <Teleport to="body">
     <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop" @click.self="scannerState.stopScan()">
-      <div class="scanner-modal-card" role="dialog" aria-modal="true" aria-label="Scanner de livres">
+      <div ref="modalCardRef" class="scanner-modal-card" role="dialog" aria-modal="true" aria-label="Scanner de livres">
       <!-- En-tête + Sélecteur 3 Modes (Simple par défaut / Rafale / Photo) -->
       <div class="scanner-header">
         <div class="mode-tabs">
@@ -497,8 +607,8 @@ async function clearPhotoQueueAndForm() {
             <span v-if="photoStats.totalPhotos > 0" class="tab-count-badge">{{ photoStats.totalPhotos }}</span>
           </button>
         </div>
-        <button type="button" class="close-scan-btn" @click="scannerState.stopScan()">
-          Fermer
+        <button type="button" class="close-scan-btn" aria-label="Fermer" @click="scannerState.stopScan()">
+          ✕
         </button>
       </div>
 
@@ -527,6 +637,12 @@ async function clearPhotoQueueAndForm() {
           <div v-if="!scannerState.isSearching.value" class="scanner-placeholder">
             Ouverture de la caméra...
           </div>
+          <div
+            v-if="scannerState.burstFlashEvent.value"
+            :key="scannerState.burstFlashEvent.value.id"
+            :class="['burst-flash-overlay', scannerState.burstFlashEvent.value.status]"
+            aria-hidden="true"
+          ></div>
         </div>
 
         <div v-if="burstFeedback" class="quick-feedback">{{ burstFeedback }}</div>
@@ -534,7 +650,7 @@ async function clearPhotoQueueAndForm() {
         <!-- Liste à cocher type Ma Collection pour le Scan Rafale (aucun enregistrement auto) -->
         <div v-if="activeMode === 'burst' && burstBooks.length > 0" class="burst-checklist-panel">
           <div class="burst-history-header">
-            <label style="display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 0.85rem; cursor: pointer;">
+            <label style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.85rem; cursor: pointer;">
               <input
                 type="checkbox"
                 class="wireframe-checkbox"
@@ -572,10 +688,11 @@ async function clearPhotoQueueAndForm() {
           </WireframeTable>
 
           <BatchActionBar
+            :inline="true"
             :selected-count="burstSelectedUris.length"
-            :is-mixed="burstBatchState.isMixed"
-            :context="burstBatchState.context"
+            :selected-books="selectedBurstBooks"
             @execute="dispatchBurstBatchAction"
+            @clear="burstSelectedUris = []"
           />
         </div>
       </div>
@@ -740,67 +857,50 @@ async function clearPhotoQueueAndForm() {
         <div v-if="photoError" class="error-banner">{{ photoError }}</div>
         <div v-if="photoSavingFeedback" class="quick-feedback">{{ photoSavingFeedback }}</div>
 
-        <!-- Validation après résolution BnF / ISBN / Couvertures + Doutes + Découverte séries -->
+        <!-- Validation unifiée façon Scan Rafale (WireframeTable + BookMiniCard + BatchActionBar) -->
         <div
           v-if="resolvedDetectedItems.length > 0 || doubtItems.length > 0 || unresolvedItems.length > 0 || seriesExtraItems.length > 0"
-          class="candidates-validation-box"
+          class="burst-checklist-panel"
         >
-          <!-- SECTION 1 : LIVRES IDENTIFIÉS AVEC CERTITUDE -->
+          <!-- SECTION 1 : LIVRES IDENTIFIÉS (Présentation identique au mode Rafale) -->
           <div v-if="resolvedDetectedItems.length > 0" class="validation-section">
-            <div class="validation-header">
-              <h4>Identifiés sur les photos ({{ resolvedDetectedItems.filter(c => c.selected).length }}/{{ resolvedDetectedItems.length }})</h4>
-              <select v-model="photoTargetStatus" class="provider-select">
-                <option value="owned">Ajouter à ma Collection</option>
-                <option value="wish">Ajouter à ma Wishlist</option>
-              </select>
+            <div class="burst-history-header">
+              <label style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.85rem; cursor: pointer;">
+                <input
+                  type="checkbox"
+                  class="wireframe-checkbox"
+                  :checked="isAllPhotoDetectedSelected"
+                  @change="toggleAllPhotoDetected(($event.target as HTMLInputElement).checked)"
+                />
+                <span>
+                  {{
+                    resolvedDetectedItems.filter(c => c.selected).length === 0
+                      ? `Tout cocher (${resolvedDetectedItems.length})`
+                      : `${resolvedDetectedItems.filter(c => c.selected).length}/${resolvedDetectedItems.length} sélectionné(s)`
+                  }}
+                </span>
+              </label>
+              <button type="button" class="clear-btn" @click="clearPhotoQueueAndForm">
+                Vider la liste
+              </button>
             </div>
 
-            <div class="candidates-list primary-detected-list">
-              <div
+            <WireframeTable>
+              <BookMiniCard
                 v-for="item in resolvedDetectedItems"
                 :key="item.id"
-                class="candidate-row resolved-row"
-              >
-                <input type="checkbox" v-model="item.selected" class="cand-check" />
-                <img
-                  v-if="item.coverUrl"
-                  :src="imageUtil.resolveCoverUrl(item.coverUrl)"
-                  :alt="item.title"
-                  class="cand-cover-thumb"
-                  @error="imageUtil.advanceCoverFallback(item)"
-                />
-                <div v-else class="cand-cover-fallback">—</div>
-                <div class="cand-meta">
-                  <div class="cand-title-line">
-                    <span v-if="item.series" class="cand-series-pill">
-                      {{ item.series }}<template v-if="item.seriesNumber"> T.{{ item.seriesNumber }}</template>
-                    </span>
-                    <strong>{{ item.title }}</strong>
-                  </div>
-                  <div class="cand-sub-meta">
-                    <span v-if="item.authors.length">{{ item.authors.join(', ') }}</span>
-                    <span v-if="item.publisher"> • {{ item.publisher }}</span>
-                    <span v-if="item.publishDate"> ({{ item.publishDate }})</span>
-                  </div>
-                  <div class="cand-badges">
-                    <code class="isbn-tag">{{ item.isbn13 }}</code>
-                    <span v-if="item.correctedFromAi" class="mini-badge corrected">Corrigé par BnF</span>
-                    <span v-if="item.sourcesCount && item.sourcesCount > 1" class="mini-badge consensus">
-                      {{ item.sourcesCount }} sources
-                    </span>
-                    <span v-if="item.alreadyOwned" class="mini-badge owned">Déjà possédé</span>
-                    <span v-else-if="item.alreadyWished" class="mini-badge wish">En wishlist</span>
-                    <span v-if="!item.coverUrl" class="mini-badge warn">Sans couverture trouvée</span>
-                  </div>
-                </div>
-              </div>
-            </div>
+                :book="photoItemToBook(item)"
+                :selectable-only="true"
+                :extra-badges="getPhotoItemBadges(item)"
+                v-model="item.selected"
+              />
+            </WireframeTable>
           </div>
 
-          <!-- SECTION 1B : DOUTES (ARBITRAGE ENTRE 2–3 PISTES CROISÉES) -->
+          <!-- SECTION 1B : DOUTES (ARBITRAGE ENTRE PISTES CROISÉES) -->
           <div v-if="doubtItems.length > 0" class="validation-section doubt-section">
             <div class="validation-header">
-              <h4>Doutes à arbitrer ({{ selectedDoubtCount }}/{{ doubtItems.length }})</h4>
+              <h4>Résultats incertains à arbitrer ({{ selectedDoubtCount }}/{{ doubtItems.length }})</h4>
             </div>
             <div class="candidates-list doubt-list">
               <div v-for="d in doubtItems" :key="d.id" class="candidate-row doubt-row">
@@ -866,16 +966,11 @@ async function clearPhotoQueueAndForm() {
             </div>
           </div>
 
-          <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES (FERMÉES PAR DÉFAUT) -->
+          <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES (ACCORDÉONS + BOOKMINICARD) -->
           <div v-if="groupedSeriesExtras.length > 0" class="validation-section series-extras-section">
             <div class="validation-header">
               <h4>Autres tomes des séries ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
               <div class="series-controls-inline">
-                <select v-model="seriesExtraTarget" class="provider-select">
-                  <option value="none">Fiches série (catalogue seul)</option>
-                  <option value="wish">Ajouter en Wishlist</option>
-                  <option value="owned">Ajouter en Collection</option>
-                </select>
                 <button type="button" class="link-btn" @click="toggleAllSeriesExtras(true)">Tout</button>
                 <button type="button" class="link-btn" @click="toggleAllSeriesExtras(false)">Aucun</button>
               </div>
@@ -907,48 +1002,25 @@ async function clearPhotoQueueAndForm() {
                 </div>
 
                 <div v-if="expandedSeriesKeys[group.seriesKey]" class="candidates-list series-inner-list">
-                  <div
-                    v-for="extra in group.items"
-                    :key="extra.id"
-                    class="candidate-row resolved-row"
-                  >
-                    <input type="checkbox" v-model="extra.selected" class="cand-check" />
-                    <img
-                      v-if="extra.coverUrl"
-                      :src="imageUtil.resolveCoverUrl(extra.coverUrl)"
-                      :alt="extra.title"
-                      class="cand-cover-thumb"
-                      @error="imageUtil.advanceCoverFallback(extra)"
+                  <WireframeTable>
+                    <BookMiniCard
+                      v-for="extra in group.items"
+                      :key="extra.id"
+                      :book="photoItemToBook(extra)"
+                      :selectable-only="true"
+                      :extra-badges="getPhotoItemBadges(extra)"
+                      v-model="extra.selected"
                     />
-                    <div v-else class="cand-cover-fallback">—</div>
-                    <div class="cand-meta">
-                      <div class="cand-title-line">
-                        <span v-if="extra.series" class="cand-series-pill">
-                          {{ extra.series }}<template v-if="extra.seriesNumber"> T.{{ extra.seriesNumber }}</template>
-                        </span>
-                        <strong>{{ extra.title }}</strong>
-                      </div>
-                      <div class="cand-sub-meta">
-                        <span v-if="extra.authors.length">{{ extra.authors.join(', ') }}</span>
-                        <span v-if="extra.publisher"> • {{ extra.publisher }}</span>
-                        <span v-if="extra.publishDate"> ({{ extra.publishDate }})</span>
-                      </div>
-                      <div class="cand-badges">
-                        <code class="isbn-tag">{{ extra.isbn13 }}</code>
-                        <span v-if="extra.alreadyOwned" class="mini-badge owned">Déjà possédé</span>
-                        <span v-else-if="extra.alreadyWished" class="mini-badge wish">En wishlist</span>
-                      </div>
-                    </div>
-                  </div>
+                  </WireframeTable>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- SECTION 3 : NON IDENTIFIÉS SUR BNF / GOOGLE BOOKS (NON VALIDABLES TEL QUEL) -->
+          <!-- SECTION 3 : NON IDENTIFIÉS SUR BNF / GOOGLE BOOKS -->
           <div v-if="unresolvedItems.length > 0" class="validation-section unresolved-section">
             <div class="validation-header">
-              <h4>Non identifiés sur BnF ({{ unresolvedItems.length }}) — Non validables sans notice</h4>
+              <h4>Non identifiés ({{ unresolvedItems.length }})</h4>
             </div>
             <div class="candidates-list unresolved-list">
               <div
@@ -984,20 +1056,24 @@ async function clearPhotoQueueAndForm() {
             </div>
           </div>
 
-          <button
-            v-if="resolvedDetectedItems.length > 0 || doubtItems.length > 0 || seriesExtraItems.length > 0"
-            type="button"
-            class="action-btn primary full-width"
-            :disabled="totalSelectedToSave === 0"
-            @click="confirmAndSaveCandidates"
-          >
-            Valider {{ selectedDetectedCount }} livre(s) + {{ selectedSeriesCount }} tome(s) de série
-          </button>
+          <BatchActionBar
+            :inline="true"
+            :selected-count="selectedPhotoBooks.length"
+            :selected-books="selectedPhotoBooks"
+            @execute="dispatchPhotoBatchAction"
+            @clear="clearPhotoSelections"
+          />
         </div>
       </div>
 
       <div v-if="scannerState.errorMessage.value" class="error-banner">
         {{ scannerState.errorMessage.value }}
+      </div>
+
+      <div v-if="isScrollable" class="modal-bottom-close-bar">
+        <button type="button" class="close-scan-btn" aria-label="Fermer" @click="scannerState.stopScan()">
+          ✕
+        </button>
       </div>
     </div>
 
@@ -1988,6 +2064,33 @@ async function clearPhotoQueueAndForm() {
 
 .burst-compact-viewport {
   min-block-size: 240px;
+}
+
+.burst-flash-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 15;
+  animation: burstPulseFlash 550ms ease-out forwards;
+}
+
+.burst-flash-overlay.success {
+  background: rgba(34, 197, 94, 0.38);
+  box-shadow: inset 0 0 0 5px #22c55e;
+}
+
+.burst-flash-overlay.duplicate {
+  background: rgba(245, 158, 11, 0.35);
+  box-shadow: inset 0 0 0 5px #f59e0b;
+}
+
+@keyframes burstPulseFlash {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .burst-checklist-panel {

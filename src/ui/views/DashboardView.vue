@@ -9,7 +9,7 @@ import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
-import { statsService, type DashboardStats } from '../../core/services/stats.service';
+import { statsService } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
 import type { HumanizedBook } from '../../core/types';
 
@@ -21,6 +21,7 @@ const errorMessage = ref<string | null>(null);
 const previewCollection = ref<HumanizedBook[]>([]);
 const previewWishlist = ref<HumanizedBook[]>([]);
 const previewLoans = ref<HumanizedBook[]>([]);
+const counts = ref({ owned: 0, wishlist: 0, loans: 0 });
 
 const handleSearch = async (isbn: string) => {
   if (!isbn) return;
@@ -46,19 +47,18 @@ const handleKeywordsSearch = (query: string) => {
   router.push({ name: 'SearchResultView', query: { q: query } });
 };
 
-const stats = ref<DashboardStats | null>(null);
-const selectedPeriod = ref(30);
-const isStatsLoading = ref(true);
-
 const loadDashboardData = async () => {
-  isStatsLoading.value = true;
   try {
     const [statsRes, cachedBooks, loans] = await Promise.all([
-      statsService.getDashboardStats(selectedPeriod.value),
+      statsService.getDashboardStats(30),
       databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
       databaseService.getAllLoans().catch(() => [])
     ]);
-    stats.value = statsRes;
+    counts.value = {
+      owned: statsRes.totalOwned,
+      wishlist: statsRes.totalWishlist,
+      loans: statsRes.totalLoans
+    };
 
     const byRecent = (list: HumanizedBook[]) =>
       [...list]
@@ -73,8 +73,6 @@ const loadDashboardData = async () => {
     previewLoans.value = byRecent(cachedBooks.filter((b) => loanUris.has(b.uri)));
   } catch (e) {
     console.error('Erreur chargement tableau de bord :', e);
-  } finally {
-    isStatsLoading.value = false;
   }
 };
 
@@ -110,12 +108,12 @@ watch(
       {{ errorMessage }}
     </div>
 
-    <!-- Accès rapides : Ma Collection, Ma Wishlist, Mes Prêts avec aperçu couvertures -->
+    <!-- Accès rapides sobres : Ma Collection, Ma Wishlist, Mes Prêts -->
     <div class="home-spaces-grid">
       <div class="home-space-card">
         <button type="button" class="home-space-link" @click="router.push({ name: 'CollectionView', query: { mode: 'books' } })">
           <span>MA COLLECTION</span>
-          <span class="home-space-count" v-if="stats">{{ stats.totalOwned }}</span>
+          <span class="home-space-count">{{ counts.owned }}</span>
         </button>
         <div v-if="previewCollection.length" class="home-covers-strip">
           <img
@@ -134,7 +132,7 @@ watch(
       <div class="home-space-card">
         <button type="button" class="home-space-link" @click="router.push({ name: 'WishlistView' })">
           <span>MA WISHLIST</span>
-          <span class="home-space-count" v-if="stats">{{ stats.totalWishlist }}</span>
+          <span class="home-space-count">{{ counts.wishlist }}</span>
         </button>
         <div v-if="previewWishlist.length" class="home-covers-strip">
           <img
@@ -153,7 +151,7 @@ watch(
       <div class="home-space-card">
         <button type="button" class="home-space-link" @click="router.push({ name: 'LoansView' })">
           <span>MES PRÊTS</span>
-          <span class="home-space-count" v-if="stats">{{ stats.totalLoans }}</span>
+          <span class="home-space-count">{{ counts.loans }}</span>
         </button>
         <div v-if="previewLoans.length" class="home-covers-strip">
           <img
@@ -169,127 +167,6 @@ watch(
         </div>
       </div>
     </div>
-
-    <!-- Panneau de Statistiques de la Bibliothèque -->
-    <div class="dashboard-stats-section">
-      <div class="stats-header">
-        <h3 class="stats-title">{{ TEXTS.dashboardStats.title }}</h3>
-      </div>
-
-      <div v-if="isStatsLoading" class="stats-info-msg">
-        {{ TEXTS.dashboardStats.loading }}
-      </div>
-
-      <div v-else-if="!stats" class="stats-info-msg">
-        {{ TEXTS.dashboardStats.noData }}
-      </div>
-
-      <template v-else>
-        <!-- Grille des statistiques clés (Globaux) -->
-        <div class="stats-grid">
-          <div
-            class="stats-card card-owned"
-            role="button"
-            tabindex="0"
-            @click="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
-            @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
-            @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
-          >
-            <div class="stats-value">{{ stats.totalOwned }}</div>
-            <div class="stats-label">{{ TEXTS.dashboardStats.totalOwned }}</div>
-          </div>
-          <div
-            class="stats-card card-series"
-            role="button"
-            tabindex="0"
-            @click="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
-            @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
-            @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
-          >
-            <div class="stats-value">{{ stats.totalSeries }}</div>
-            <div class="stats-label">{{ TEXTS.dashboardStats.totalSeries }}</div>
-          </div>
-          <div
-            class="stats-card card-wishlist"
-            role="button"
-            tabindex="0"
-            @click="router.push({ name: 'WishlistView' })"
-            @keydown.enter="router.push({ name: 'WishlistView' })"
-            @keydown.space.prevent="router.push({ name: 'WishlistView' })"
-          >
-            <div class="stats-value">{{ stats.totalWishlist }}</div>
-            <div class="stats-label">{{ TEXTS.dashboardStats.totalWishlist }}</div>
-          </div>
-          <div
-            class="stats-card card-loans"
-            role="button"
-            tabindex="0"
-            @click="router.push({ name: 'LoansView' })"
-            @keydown.enter="router.push({ name: 'LoansView' })"
-            @keydown.space.prevent="router.push({ name: 'LoansView' })"
-          >
-            <div class="stats-value">{{ stats.totalLoans }}</div>
-            <div class="stats-label">
-              {{ TEXTS.dashboardStats.loansWithRate.replace('{rate}', stats.loanRate.toString()) }}
-            </div>
-          </div>
-        </div>
-
-        <!-- Détails avancés (Activité, Genres, Auteurs) -->
-        <div class="stats-extra-row">
-          <div class="stats-extra-card">
-            <div class="stats-card-header">
-              <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.activityTitle }}</h4>
-              <div class="stats-period-selector">
-                <select v-model="selectedPeriod" @change="loadDashboardData" class="stats-select">
-                  <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
-                  <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>
-                  <option :value="365">{{ TEXTS.dashboardStats.period365 }}</option>
-                  <option :value="-1">{{ TEXTS.dashboardStats.periodAll }}</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="stats-flux-container">
-              <div class="stats-flux-item">
-                <div class="stats-flux-value">+{{ stats.acquiredInPeriod }}</div>
-                <div class="stats-flux-label">{{ TEXTS.dashboardStats.acquiredInPeriod }}</div>
-              </div>
-              <div class="stats-flux-item">
-                <div class="stats-flux-value">{{ stats.loansInPeriod }}</div>
-                <div class="stats-flux-label">{{ TEXTS.dashboardStats.loansInPeriod }}</div>
-              </div>
-            </div>
-          </div>
-
-          <div class="stats-extra-card">
-            <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.topGenres }}</h4>
-            <ul class="stats-list" v-if="stats.topGenres.length > 0">
-              <li v-for="g in stats.topGenres" :key="g.name" class="stats-list-item">
-                <span class="stats-item-name">{{ g.name }}</span>
-                <span class="stats-item-count">{{ g.count }}</span>
-              </li>
-            </ul>
-            <p v-else class="stats-empty-msg">
-              {{ TEXTS.dashboardStats.noData }}
-            </p>
-          </div>
-
-          <div class="stats-extra-card">
-            <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.topAuthors }}</h4>
-            <ul class="stats-list" v-if="stats.topAuthors.length > 0">
-              <li v-for="a in stats.topAuthors" :key="a.name" class="stats-list-item">
-                <span class="stats-item-name">{{ a.name }}</span>
-                <span class="stats-item-count">{{ a.count }}</span>
-              </li>
-            </ul>
-            <p v-else class="stats-empty-msg">
-              {{ TEXTS.dashboardStats.noData }}
-            </p>
-          </div>
-        </div>
-      </template>
-    </div>
   </div>
 </template>
 
@@ -297,55 +174,62 @@ watch(
 .home-spaces-grid {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  margin: 0.85rem 0 1.25rem;
+  gap: 0.75rem;
+  margin: 1rem 0;
 }
 
 .home-space-card {
-  border: var(--border-width, 2px) solid var(--color-border, #000);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 12px);
   background: var(--color-bg-main, #fff);
-  padding: 0.55rem 0.7rem;
+  box-shadow: var(--shadow-sm);
+  padding: 0.8rem 0.95rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
 }
 
 .home-space-link {
   background: none;
   border: none;
   padding: 0;
-  width: 100%;
+  inline-size: 100%;
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-family: var(--font-main);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 0.875rem;
+  font-weight: 700;
   text-transform: uppercase;
-  color: var(--color-text-main, #000);
+  letter-spacing: 0.02em;
+  color: var(--color-text-main, #0f172a);
   cursor: pointer;
   text-align: left;
 }
 
 .home-space-count {
-  font-size: 12px;
-  padding: 1px 7px;
-  border: 1.5px solid var(--color-border, #000);
-  background: var(--color-bg-alt, #f1f5f9);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 9999px;
+  background: var(--color-primary-light, #eef2ff);
+  color: var(--color-primary, #4f46e5);
 }
 
 .home-covers-strip {
   display: flex;
-  gap: 0.45rem;
+  gap: 0.5rem;
   overflow-x: auto;
   padding-top: 2px;
 }
 
 .home-preview-cover {
-  width: 44px;
-  height: 62px;
+  width: 46px;
+  height: 66px;
   object-fit: cover;
-  border: 1px solid var(--color-border, #000);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 6px;
   cursor: pointer;
   flex-shrink: 0;
   background: #f1f5f9;

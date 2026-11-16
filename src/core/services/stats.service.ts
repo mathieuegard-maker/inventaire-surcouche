@@ -13,7 +13,159 @@ export interface DashboardStats {
   topAuthors: { name: string; count: number }[];
 }
 
+export interface DetailedStats extends DashboardStats {
+  totalOneshots: number;
+  totalPagesOwned: number;
+  averagePages: number;
+  completedSeriesCount: number;
+  seriesCompletionRate: number;
+  overdueLoansCount: number;
+  readingCounts: {
+    read: number;
+    reading: number;
+    to_read: number;
+    abandoned: number;
+    none: number;
+  };
+  ratedCount: number;
+  averageRating: number;
+  topPublishers: { name: string; count: number }[];
+  topSeries: { name: string; owned: number; knownTotal: number }[];
+  borrowers: { name: string; count: number; maxDays: number }[];
+}
+
 export const statsService = {
+  /**
+   * Calcule les statistiques détaillées pour la page KPI dédiée.
+   */
+  async getDetailedStats(periodDays: number): Promise<DetailedStats> {
+    const base = await this.getDashboardStats(periodDays);
+    const inventoryEntries = await databaseService.getAllRegistryEntries('inventory');
+    const loans = await databaseService.getAllLoans();
+    const allBooks = await databaseService.getAllCachedBooks();
+
+    const ownedUris = new Set(inventoryEntries.map((e) => e.uri));
+    const ownedBooks = allBooks.filter(
+      (b) => b.ownershipStatus === 'owned' || ownedUris.has(b.uri) || (b.workUri && ownedUris.has(b.workUri))
+    );
+
+    const totalOneshots = ownedBooks.filter((b) => !b.seriesId && !b.series?.trim()).length;
+    const pagesList = ownedBooks.map((b) => Number(b.pageCount) || 0).filter((p) => p > 0);
+    const totalPagesOwned = pagesList.reduce((acc, p) => acc + p, 0);
+    const averagePages = pagesList.length > 0 ? Math.round(totalPagesOwned / pagesList.length) : 0;
+
+    // Groupement par série (possédés vs connus au catalogue)
+    const seriesMap = new Map<string, { name: string; owned: number; knownUris: Set<string> }>();
+    for (const b of allBooks) {
+      const sKey = b.seriesId || b.series?.trim();
+      if (!sKey) continue;
+      const entry = seriesMap.get(sKey) || { name: b.series?.trim() || sKey, owned: 0, knownUris: new Set() };
+      if (b.series?.trim()) entry.name = b.series.trim();
+      entry.knownUris.add(b.uri);
+      if (b.ownershipStatus === 'owned' || ownedUris.has(b.uri) || (b.workUri && ownedUris.has(b.workUri))) {
+        entry.owned++;
+      }
+      seriesMap.set(sKey, entry);
+    }
+
+    const startedSeries = Array.from(seriesMap.values()).filter((s) => s.owned > 0);
+    const completedSeriesCount = startedSeries.filter((s) => s.knownUris.size > 0 && s.owned >= s.knownUris.size).length;
+    const seriesCompletionRate =
+      startedSeries.length > 0 ? Math.round((completedSeriesCount / startedSeries.length) * 100) : 0;
+
+    const topSeries = startedSeries
+      .map((s) => ({ name: s.name, owned: s.owned, knownTotal: Math.max(s.owned, s.knownUris.size) }))
+      .sort((a, b) => b.owned - a.owned || a.name.localeCompare(b.name, 'fr'))
+      .slice(0, 8);
+
+    // Top Genres, Auteurs et Éditeurs (jusqu'à 10)
+    const genreCounts: Record<string, number> = {};
+    const authorCounts: Record<string, number> = {};
+    const publisherCounts: Record<string, number> = {};
+    const readingCounts = { read: 0, reading: 0, to_read: 0, abandoned: 0, none: 0 };
+    let ratingSum = 0;
+    let ratedCount = 0;
+
+    for (const book of ownedBooks) {
+      for (const g of book.genres || []) {
+        const c = g?.trim();
+        if (c && !c.startsWith('wd:')) genreCounts[c] = (genreCounts[c] || 0) + 1;
+      }
+      for (const a of book.authors || []) {
+        const c = a?.trim();
+        if (c && !c.startsWith('wd:')) authorCounts[c] = (authorCounts[c] || 0) + 1;
+      }
+      const pub = book.publisher?.trim();
+      if (pub && !pub.startsWith('wd:') && !pub.startsWith('inv:')) {
+        publisherCounts[pub] = (publisherCounts[pub] || 0) + 1;
+      }
+
+      let metaStatus: keyof typeof readingCounts = 'none';
+      let metaRating = 0;
+      if (typeof localStorage !== 'undefined') {
+        try {
+          const raw = localStorage.getItem(`biblio_reading_${book.uri}`);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed.status && parsed.status in readingCounts) {
+              metaStatus = parsed.status;
+            }
+            metaRating = Number(parsed.rating) || 0;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      readingCounts[metaStatus]++;
+      if (metaRating > 0) {
+        ratingSum += metaRating;
+        ratedCount++;
+      }
+    }
+
+    const sortTop = (rec: Record<string, number>, limit: number) =>
+      Object.entries(rec)
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, limit);
+
+    // Prêts & emprunteurs
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const overdueLoansCount = loans.filter((l) => now - l.loanDate > 30 * DAY_MS).length;
+    const borrowerMap = new Map<string, { name: string; count: number; maxDays: number }>();
+    for (const loan of loans) {
+      const name = (loan.friendName || 'Inconnu').trim() || 'Inconnu';
+      const days = Math.max(0, Math.floor((now - loan.loanDate) / DAY_MS));
+      const existing = borrowerMap.get(name);
+      if (existing) {
+        existing.count++;
+        existing.maxDays = Math.max(existing.maxDays, days);
+      } else {
+        borrowerMap.set(name, { name, count: 1, maxDays: days });
+      }
+    }
+    const borrowers = Array.from(borrowerMap.values()).sort((a, b) => b.count - a.count || b.maxDays - a.maxDays);
+
+    return {
+      ...base,
+      totalOneshots,
+      totalPagesOwned,
+      averagePages,
+      completedSeriesCount,
+      seriesCompletionRate,
+      overdueLoansCount,
+      readingCounts,
+      ratedCount,
+      averageRating: ratedCount > 0 ? Math.round((ratingSum / ratedCount) * 10) / 10 : 0,
+      topGenres: sortTop(genreCounts, 10),
+      topAuthors: sortTop(authorCounts, 10),
+      topPublishers: sortTop(publisherCounts, 6),
+      topSeries,
+      borrowers
+    };
+  },
+
   /**
    * Calcule les statistiques globales et périodiques de la bibliothèque à partir de Dexie
    * @param periodDays Période glissante en jours (-1 pour désactiver le filtre)
@@ -26,8 +178,16 @@ export const statsService = {
     const allBooks = await databaseService.getAllCachedBooks();
 
     const totalOwned = inventoryEntries.length;
-    const totalWishlist = wishlistEntries.length;
     const totalLoans = loans.length;
+
+    // 2. Déduplication canonique de la wishlist (évite double comptage work + edition)
+    const cachedByUri = new Map(allBooks.map((b) => [b.uri, b]));
+    const distinctWishKeys = new Set<string>();
+    for (const entry of wishlistEntries) {
+      const cached = cachedByUri.get(entry.uri);
+      distinctWishKeys.add(cached?.workUri || entry.uri);
+    }
+    const totalWishlist = distinctWishKeys.size;
 
     // 2. Nombre de sagas commencées
     // On matche les livres en cache qui appartiennent réellement à l'inventaire actuel
