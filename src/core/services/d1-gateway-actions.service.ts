@@ -6,6 +6,7 @@ import type { AppBackendEnv, DatabaseBinding } from '../adapters/storage-db.inte
 import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { buildVisionPrompt, PREFERRED_GEMINI_MODELS } from '../utils/vision-prompt.util';
 import {
   expandSeriesVolumesInD1,
   rehydrateAllCatalogEntitiesInD1,
@@ -708,6 +709,149 @@ export async function handleD1GatewayAction(
           .run();
       }
       return jsonResp({ ok: true });
+    }
+
+    case 'vision-status': {
+      const auth = await resolveAuthSession(db, request, url.searchParams.get('uri'));
+      if (!auth) {
+        return jsonResp({ error: 'Session invalide' }, 401);
+      }
+      const ONBOARDING_FREE_QUOTA = 40;
+      const MONTHLY_FREE_QUOTA = 10;
+      const currentMonthKey = now.slice(0, 7);
+      const usageRow = await db
+        .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
+        .bind(auth.userId)
+        .first<{ total_used: number; month_key: string; month_used: number }>();
+
+      const totalUsed = usageRow?.total_used || 0;
+      const monthUsed = usageRow?.month_key === currentMonthKey ? usageRow.month_used : 0;
+      const remainingQuota =
+        totalUsed < ONBOARDING_FREE_QUOTA
+          ? ONBOARDING_FREE_QUOTA - totalUsed
+          : Math.max(0, MONTHLY_FREE_QUOTA - monthUsed);
+
+      return jsonResp({
+        serverAvailable: Boolean(env?.GEMINI_API_KEY),
+        totalUsed,
+        monthUsed,
+        remainingQuota
+      });
+    }
+
+    case 'vision-analyze': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) {
+        return jsonResp({ error: 'Session invalide' }, 401);
+      }
+      const geminiKey = env?.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return jsonResp(
+          { error: 'Analyse IA serveur non configurée. Configurez votre propre clé gratuite ci-dessus.' },
+          503
+        );
+      }
+
+      const imageBase64 = String(body?.imageBase64 || '').trim();
+      const mimeType = String(body?.mimeType || 'image/webp').trim();
+      const mode = body?.mode === 'cover' ? 'cover' : 'shelf';
+      if (!imageBase64) {
+        return jsonResp({ error: 'Image manquante.' }, 400);
+      }
+
+      const ONBOARDING_FREE_QUOTA = 40;
+      const MONTHLY_FREE_QUOTA = 10;
+      const currentMonthKey = now.slice(0, 7);
+      const usageRow = await db
+        .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
+        .bind(auth.userId)
+        .first<{ total_used: number; month_key: string; month_used: number }>();
+
+      const totalUsed = usageRow?.total_used || 0;
+      const monthUsed = usageRow?.month_key === currentMonthKey ? usageRow.month_used : 0;
+
+      if (totalUsed >= ONBOARDING_FREE_QUOTA && monthUsed >= MONTHLY_FREE_QUOTA) {
+        return jsonResp(
+          {
+            error: `Quota d'analyses IA offertes atteint (${ONBOARDING_FREE_QUOTA} au démarrage + ${MONTHLY_FREE_QUOTA}/mois). Vous pouvez saisir votre propre clé gratuite Gemini/Groq.`
+          },
+          429
+        );
+      }
+
+      const prompt = buildVisionPrompt(mode);
+      let rawText: string | null = null;
+      let lastStatus = 0;
+      let lastBody = '';
+
+      for (const modelId of PREFERRED_GEMINI_MODELS.slice(0, 4)) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { text: prompt },
+                    { inline_data: { mime_type: mimeType, data: imageBase64 } }
+                  ]
+                }
+              ],
+              generationConfig: {
+                temperature: 0.1,
+                responseMimeType: 'application/json'
+              }
+            })
+          }
+        );
+
+        if (res.ok) {
+          const json = (await res.json()) as any;
+          rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+          break;
+        }
+        lastStatus = res.status;
+        lastBody = await res.text().catch(() => '');
+        if (lastStatus !== 404 && lastStatus !== 429 && lastStatus < 500) {
+          break;
+        }
+      }
+
+      if (rawText === null) {
+        return jsonResp(
+          {
+            error:
+              lastStatus === 429
+                ? 'Serveur IA temporairement saturé (quota gratuit). Réessayez dans un instant ou utilisez votre clé personnelle.'
+                : `Erreur API Gemini serveur (${lastStatus}): ${lastBody.slice(0, 140)}`
+          },
+          lastStatus === 429 ? 429 : 502
+        );
+      }
+
+      const nextTotal = totalUsed + 1;
+      const nextMonthUsed = totalUsed < ONBOARDING_FREE_QUOTA ? monthUsed : monthUsed + 1;
+      await db
+        .prepare(
+          `INSERT INTO user_ai_usage (user_id, total_used, month_key, month_used, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             total_used = excluded.total_used,
+             month_key = excluded.month_key,
+             month_used = excluded.month_used,
+             updated_at = excluded.updated_at`
+        )
+        .bind(auth.userId, nextTotal, currentMonthKey, nextMonthUsed, now)
+        .run();
+
+      const remainingQuota =
+        nextTotal < ONBOARDING_FREE_QUOTA
+          ? ONBOARDING_FREE_QUOTA - nextTotal
+          : Math.max(0, MONTHLY_FREE_QUOTA - nextMonthUsed);
+
+      return jsonResp({ text: rawText, remainingQuota });
     }
 
     case 'family-join': {

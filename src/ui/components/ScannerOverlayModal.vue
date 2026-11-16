@@ -146,9 +146,17 @@ const confirmBurstGroupLend = async (friendName: string) => {
 const existingByok = byokVisionService.getSettings();
 const byokProvider = ref<ByokProvider>(existingByok?.provider || 'gemini');
 const byokKey = ref<string>(existingByok?.apiKey || '');
+const serverVisionStatus = ref<{ serverAvailable: boolean; remainingQuota: number } | null>(null);
 const showByokSetup = ref<boolean>(!existingByok?.apiKey);
 const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
 const isTestingKey = ref(false);
+
+byokVisionService.fetchServerVisionStatus().then((st) => {
+  serverVisionStatus.value = st;
+  if (st.serverAvailable && !byokVisionService.getSettings()) {
+    showByokSetup.value = false;
+  }
+});
 
 const photoStats = photoBatchQueueService.stats;
 const isPhotoProcessing = photoBatchQueueService.isProcessing;
@@ -265,7 +273,7 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
 
   photoError.value = '';
   try {
-    if (!byokVisionService.getSettings()) {
+    if (!byokVisionService.getSettings() && !serverVisionStatus.value?.serverAvailable) {
       throw new Error("Aucune clé API configurée. Configurez votre clé gratuite ci-dessus.");
     }
     const count = await photoBatchQueueService.enqueuePhotos(files, mode);
@@ -709,11 +717,21 @@ async function clearPhotoQueueAndForm() {
       <div v-if="activeMode === 'photo'" class="photo-mode-box">
         <div class="byok-header-bar">
           <span>
-            Reconnaissance IA (0 € serveur) :
-            <strong>{{ byokVisionService.getSettings() ? 'Clé active' : 'À configurer' }}</strong>
+            Reconnaissance IA :
+            <strong v-if="byokVisionService.getSettings()">Clé personnelle active</strong>
+            <strong v-else-if="serverVisionStatus?.serverAvailable">
+              IA incluse ({{ serverVisionStatus.remainingQuota }} analyses offertes restantes)
+            </strong>
+            <strong v-else>À configurer</strong>
           </span>
           <button type="button" class="link-btn" @click="showByokSetup = !showByokSetup">
-            {{ showByokSetup ? 'Masquer l’assistant clé' : 'Configurer ma clé gratuite' }}
+            {{
+              showByokSetup
+                ? 'Masquer l’assistant clé'
+                : serverVisionStatus?.serverAvailable && !byokVisionService.getSettings()
+                  ? 'Utiliser ma propre clé'
+                  : 'Configurer ma clé gratuite'
+            }}
           </button>
         </div>
 

@@ -6,6 +6,15 @@
 // 2. Identifier toute une étagère de livres avec validation livre par livre.
 
 import { compressImageToWebpDataUrl } from '../utils/webp-compressor.util';
+import { buildVisionPrompt, PREFERRED_GEMINI_MODELS } from '../utils/vision-prompt.util';
+import { sessionStore } from '../../state/session';
+
+export interface ServerVisionStatus {
+  serverAvailable: boolean;
+  totalUsed: number;
+  monthUsed: number;
+  remainingQuota: number;
+}
 
 export type ByokProvider = 'gemini' | 'groq';
 
@@ -31,19 +40,6 @@ export interface RecognizedBookCandidate {
 }
 
 const STORAGE_KEY = 'biblio_byok_vision_settings';
-
-const PREFERRED_GEMINI_MODELS = [
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-3.5-flash',
-  'gemini-3.6-flash',
-  'gemini-3.8-flash',
-  'gemini-3-flash',
-  'gemini-3.0-flash'
-];
 
 const PREFERRED_GROQ_MODELS = [
   'meta-llama/llama-4-scout-17b-16e-instruct',
@@ -268,15 +264,26 @@ export const byokVisionService = {
     });
   },
 
+  async fetchServerVisionStatus(): Promise<ServerVisionStatus> {
+    try {
+      const savedUri = sessionStore.getUserUri() || '';
+      const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+      const res = await fetch(`/api/gateway?action=vision-status${query}`);
+      if (!res.ok) {
+        return { serverAvailable: false, totalUsed: 0, monthUsed: 0, remainingQuota: 0 };
+      }
+      return (await res.json()) as ServerVisionStatus;
+    } catch {
+      return { serverAvailable: false, totalUsed: 0, monthUsed: 0, remainingQuota: 0 };
+    }
+  },
+
   async analyzePhoto(
     fileOrDataUrl: Blob | File | string,
     mode: 'cover' | 'shelf',
     onStatus?: (msg: string) => void
   ): Promise<RecognizedBookCandidate[]> {
     const settings = this.getSettings();
-    if (!settings) {
-      throw new Error("Aucune clé API configurée. Configurez votre clé gratuite dans l'assistant.");
-    }
 
     let dataUrl: string;
     if (typeof fileOrDataUrl === 'string' && fileOrDataUrl.startsWith('data:')) {
@@ -290,10 +297,28 @@ export const byokVisionService = {
     const mimeMatch = /^data:([^;]+);base64,/.exec(dataUrl);
     const mimeType = mimeMatch?.[1] || 'image/jpeg';
 
-    const prompt =
-      mode === 'cover'
-        ? `Analyse cette couverture (ou 4e de couverture) de livre ou bande dessinée. Extrais TOUS les éléments textuels visibles sans rien inventer de mémoire. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"spineIndex":1,"rawSpineText":"Tout le texte exact visible sur la couverture/tranche","title":"Titre exact de l'album ou du livre","subtitle":"Sous-titre éventuel ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres si visible ou vide","author":"Auteur ou scénariste visible ou vide","illustrator":"Dessinateur si distinct et visible ou vide","publisher":"Éditeur ou logo visible (Dupuis, Dargaud, Glénat, Lombard, Delcourt, Soleil, Casterman, Gallimard...) ou vide","collection":"Nom de collection éditoriale si distinct de la série (ex: Aire Libre, Repérages) ou vide","isbn":"ISBN-13 ou ISBN-10 si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : si un champ n'est pas lisible sur l'image, laisse "" ; n'invente jamais un auteur.`
-        : `Analyse cette photo d'étagère ou de pile de livres/BD en travaillant STRICTEMENT TRANCHE PAR TRANCHE (de gauche à droite, ou de haut en bas pour une pile), sans jamais mélanger les informations de deux tranches voisines. Pour CHAQUE tranche, extrais d'abord TOUT le texte lisible sur cette tranche (y compris logos d'éditeur, numéros, sous-titres, auteurs/dessinateurs) dans rawSpineText, puis remplis les champs structurés. Réponds UNIQUEMENT avec un tableau JSON valide : [{"spineIndex":1,"rawSpineText":"Texte intégral lu sur cette tranche uniquement","title":"Titre du tome ou livre","subtitle":"Sous-titre si présent ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres ou vide","author":"Auteur/scénariste lisible sur CETTE tranche ou vide","illustrator":"Dessinateur si lisible ou vide","publisher":"Éditeur ou logo visible sur CETTE tranche ou vide","collection":"Collection éditoriale si visible ou vide","isbn":"ISBN si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : n'invente et ne devine JAMAIS un auteur ou un titre absent/illisible ; laisse "" si tu n'es pas sûr.`;
+    if (!settings) {
+      onStatus?.('Analyse visuelle des livres par l’IA incluse...');
+      const res = await fetch('/api/gateway?action=vision-analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          mimeType,
+          mode,
+          userUri: sessionStore.getUserUri() || ''
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (!res.ok) {
+        throw new Error(
+          data?.error || "Aucune clé API configurée. Configurez votre clé gratuite dans l'assistant."
+        );
+      }
+      return parseCandidatesJson(data.text || '[]');
+    }
+
+    const prompt = buildVisionPrompt(mode);
 
     onStatus?.('Analyse visuelle des livres par l’IA...');
 
