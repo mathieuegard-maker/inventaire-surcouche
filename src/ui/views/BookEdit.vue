@@ -13,6 +13,7 @@ import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
 import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
 import { imageUtil } from '../../core/utils/image.util';
+import { deduplicateCoverUrls } from '../../core/utils/cover-dedup.util';
 import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
@@ -46,19 +47,26 @@ const noSeries = ref(false);
 const showSeriesMergeModal = ref(false);
 const brokenCandidateUrls = ref<Record<string, boolean>>({});
 
-// Métadonnées externes pour pré-remplissage des champs vides & galerie de couvertures
+// Métadonnées externes pour pré-remplissage des champs vides & galerie de couvertures dédupliquée visuellement
 const extMetadata = ref<any>(null);
+const editionExtraCovers = ref<string[]>([]);
+const deduplicatedCovers = ref<string[]>([]);
 const isLoadingExtCovers = ref(false);
 
-const suggestedCoverCandidates = computed(() => {
+const rawCandidateUrls = computed(() => {
   const isbn = originalBook.value?.isbn13 || originalBook.value?.isbn10;
-  const all = imageUtil.buildCoverCandidates(isbn, [
+  return imageUtil.buildCoverCandidates(isbn, [
     extMetadata.value?.coverUrl,
     ...(extMetadata.value?.coverFallbackUrls || []),
     originalBook.value?.coverUrl,
-    ...(originalBook.value?.coverFallbackUrls || [])
+    ...(originalBook.value?.coverFallbackUrls || []),
+    ...editionExtraCovers.value
   ]);
-  return all.filter((u) => !brokenCandidateUrls.value[u]);
+});
+
+const suggestedCoverCandidates = computed(() => {
+  const sourceList = deduplicatedCovers.value.length > 0 ? deduplicatedCovers.value : rawCandidateUrls.value;
+  return sourceList.filter((u) => !brokenCandidateUrls.value[u]);
 });
 
 const markCoverCandidateBroken = (url: string) => {
@@ -171,12 +179,24 @@ onMounted(async () => {
 
     isLoading.value = false;
 
-    // Recherche en arrière-plan sur nos sources : pré-remplit uniquement les champs restés vides et alimente les couvertures proposées
+    // Recherche en arrière-plan sur nos sources + autres éditions de l'œuvre (Inventaire/Wikidata) + déduplication visuelle dHash
     const isbn = currentBook.isbn13 || currentBook.isbn10;
-    if (isbn) {
+    if (isbn || currentBook.workUri) {
       isLoadingExtCovers.value = true;
       try {
-        const extData = await externalMetadataService.fetchFromExternalSources(isbn);
+        const [extData, edCoversData] = await Promise.all([
+          isbn ? externalMetadataService.fetchFromExternalSources(isbn).catch(() => null) : Promise.resolve(null),
+          fetch(
+            `/api/gateway?action=work-edition-covers&isbn=${encodeURIComponent(isbn || '')}&workUri=${encodeURIComponent(currentBook.workUri || '')}`
+          )
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        ]);
+
+        if (Array.isArray(edCoversData?.coverUrls)) {
+          editionExtraCovers.value = edCoversData.coverUrls;
+        }
+
         if (extData) {
           extMetadata.value = extData;
           if (!titleInput.value.trim() && extData.title) {
@@ -208,6 +228,10 @@ onMounted(async () => {
             genresInput.value = [...extData.genres];
           }
         }
+
+        deduplicatedCovers.value = await deduplicateCoverUrls(rawCandidateUrls.value, {
+          isbn: isbn || undefined
+        });
       } catch (err: any) {
         console.warn('[BOOK EDIT] Recherche sources externes non critique :', err.message);
       } finally {

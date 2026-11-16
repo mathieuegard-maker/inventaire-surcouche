@@ -350,6 +350,119 @@ export const onRequest = async (context: {
         });
       }
 
+      case 'work-edition-covers': {
+        const isbnParam = (url.searchParams.get('isbn') || '').replace(/[^0-9Xx]/g, '').trim();
+        let targetWorkUri = (url.searchParams.get('workUri') || '').trim();
+        const coverSet = new Set<string>();
+        const editionIsbns = new Set<string>();
+
+        const addImg = (raw?: string | null) => {
+          const clean = (raw || '').trim();
+          if (!clean) return;
+          if (clean.startsWith('http://') || clean.startsWith('https://')) {
+            coverSet.add(clean.replace(/^http:\/\//i, 'https://'));
+          } else if (clean.startsWith('/img/') || !clean.includes('/')) {
+            const hash = clean.split('/').pop();
+            if (hash) coverSet.add(`https://inventaire.io/img/entities/500x500/${hash}`);
+          }
+        };
+
+        // 1. Inventaire.io : résoudre l'œuvre depuis l'ISBN si besoin, puis reverse-claims wdt:P629
+        try {
+          if ((!targetWorkUri || !targetWorkUri.startsWith('wd:')) && isbnParam) {
+            const invEdRes = await resilientFetch(
+              `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(`isbn:${isbnParam}`)}`,
+              { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
+            );
+            if (invEdRes.ok) {
+              const invEdData = await invEdRes.json();
+              const ents = invEdData?.entities || {};
+              const ed = ents[`isbn:${isbnParam}`] || Object.values(ents)[0];
+              if (ed?.image?.url) addImg(ed.image.url);
+              const w = ed?.claims?.['wdt:P629']?.[0];
+              if (typeof w === 'string' && w.trim()) {
+                targetWorkUri = w.trim();
+              }
+            }
+          }
+
+          if (targetWorkUri && (targetWorkUri.startsWith('wd:') || targetWorkUri.startsWith('inv:'))) {
+            const revRes = await resilientFetch(
+              `https://inventaire.io/api/entities?action=reverse-claims&property=wdt%3AP629&value=${encodeURIComponent(targetWorkUri)}`,
+              { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
+            );
+            if (revRes.ok) {
+              const revData = await revRes.json();
+              const editionUris: string[] = Array.isArray(revData?.uris) ? revData.uris.slice(0, 20) : [];
+              if (editionUris.length > 0) {
+                const edsRes = await resilientFetch(
+                  `https://inventaire.io/api/entities?action=by-uris&uris=${encodeURIComponent(editionUris.join('|'))}`,
+                  { headers: { 'User-Agent': USER_AGENT_BASE, Accept: 'application/json' } }
+                );
+                if (edsRes.ok) {
+                  const edsData = await edsRes.json();
+                  for (const ent of Object.values(edsData?.entities || {}) as any[]) {
+                    if (ent?.image?.url) addImg(ent.image.url);
+                    if (ent?.claims?.['invp:P2']?.[0]) addImg(ent.claims['invp:P2'][0]);
+                    const p212 = ent?.claims?.['wdt:P212']?.[0];
+                    if (typeof p212 === 'string') {
+                      const cleanEdIsbn = p212.replace(/[^0-9]/g, '');
+                      if (cleanEdIsbn.length === 13) editionIsbns.add(cleanEdIsbn);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch {
+          // Inventaire.io non bloquant
+        }
+
+        // 2. Wikidata SPARQL (complément si l'œuvre a un URI Wikidata wd:Q...)
+        if (targetWorkUri && /^wd:Q\d+$/i.test(targetWorkUri)) {
+          try {
+            const qid = targetWorkUri.slice(3);
+            const sparql = `SELECT ?cover ?isbn WHERE { ?ed wdt:P629 wd:${qid} . OPTIONAL { ?ed wdt:P18 ?cover . } OPTIONAL { ?ed wdt:P212 ?isbn . } } LIMIT 20`;
+            const wdRes = await resilientFetch(
+              `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`,
+              {
+                headers: {
+                  'User-Agent': USER_AGENT_BASE,
+                  Accept: 'application/sparql-results+json'
+                }
+              }
+            );
+            if (wdRes.ok) {
+              const wdData = await wdRes.json();
+              for (const b of wdData?.results?.bindings || []) {
+                const cov = b?.cover?.value;
+                if (typeof cov === 'string' && cov.trim()) {
+                  addImg(cov.includes('Special:FilePath') ? `${cov}?width=500` : cov);
+                }
+                const wIsbn = (b?.isbn?.value || '').replace(/[^0-9]/g, '');
+                if (wIsbn.length === 13) editionIsbns.add(wIsbn);
+              }
+            }
+          } catch {
+            // Wikidata non bloquant
+          }
+        }
+
+        // Ajouter les URLs de couvertures OpenLibrary/Amazon des autres éditions découvertes
+        for (const edIsbn of Array.from(editionIsbns).slice(0, 8)) {
+          if (edIsbn === isbnParam) continue;
+          coverSet.add(`https://covers.openlibrary.org/b/isbn/${edIsbn}-L.jpg?default=false`);
+          coverSet.add(`https://servimg.eyrolles.com/static/media/${edIsbn.slice(-4)}/${edIsbn}_internet_h1400.jpg`);
+        }
+
+        return jsonResp({
+          ok: true,
+          workUri: targetWorkUri || null,
+          editionIsbns: Array.from(editionIsbns),
+          coverUrls: Array.from(coverSet)
+        });
+      }
+
       default:
         return jsonResp({ error: `Action '${action}' non reconnue.` }, 404);
     }
