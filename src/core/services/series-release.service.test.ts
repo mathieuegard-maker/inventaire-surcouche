@@ -73,4 +73,20 @@ describe('seriesReleaseService', () => {
       })
     );
   });
+
+  it('génère et masque une alerte de simulation sans appeler le serveur', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const demo = seriesReleaseService.simulateDemoAlert({
+      seriesTitle: 'Blacksad',
+      seriesNumber: '8'
+    });
+    expect(demo.id.startsWith('demo:')).toBe(true);
+    expect(seriesReleaseService.alerts.value).toHaveLength(1);
+
+    await seriesReleaseService.dismissAlert(demo.id);
+    expect(seriesReleaseService.alerts.value).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

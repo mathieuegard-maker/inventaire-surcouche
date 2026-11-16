@@ -84,8 +84,11 @@ export const seriesReleaseService = {
     const previous = [...alerts.value];
     if (alertId) {
       alerts.value = alerts.value.filter((a) => a.id !== alertId);
+      if (alertId.startsWith('demo:')) return;
     } else {
+      const hadOnlyDemo = alerts.value.every((a) => a.id.startsWith('demo:'));
       alerts.value = [];
+      if (hadOnlyDemo) return;
     }
 
     try {
@@ -97,5 +100,26 @@ export const seriesReleaseService = {
     } catch {
       alerts.value = previous;
     }
+  },
+
+  simulateDemoAlert(sample?: {
+    seriesUri?: string;
+    seriesTitle?: string;
+    seriesNumber?: string;
+    coverUrl?: string;
+  }): SeriesReleaseAlert {
+    const demo: SeriesReleaseAlert = {
+      id: `demo:${Date.now()}`,
+      seriesUri: sample?.seriesUri || 'demo:series',
+      seriesTitle: sample?.seriesTitle || 'Astérix',
+      volumeUri: 'isbn:9782012101524',
+      volumeTitle: `${sample?.seriesTitle || 'Astérix'} — Nouvel album (Simulation)`,
+      seriesNumber: sample?.seriesNumber || '41',
+      isbn13: '9782012101524',
+      coverUrl: sample?.coverUrl,
+      detectedAt: new Date().toISOString()
+    };
+    alerts.value = [demo, ...alerts.value.filter((a) => !a.id.startsWith('demo:'))];
+    return demo;
   }
 };
