@@ -5,6 +5,7 @@ import { scannerState } from '../../state/scanner';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { inventoryService } from '../../core/services/inventory.service';
+import { databaseService } from '../../core/database/database.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import {
   byokVisionService,
@@ -529,6 +530,12 @@ async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'w
   if (!item.isbn13 && !item.existingUri) return;
 
   if (item.existingUri && (target === 'owned' || target === 'wish')) {
+    const existingLocal = await databaseService.getBookFromCache(item.existingUri);
+    if (!existingLocal) {
+      const bookToCache = photoItemToBook(item);
+      bookToCache.ownershipStatus = target;
+      await databaseService.saveBookToCache(bookToCache);
+    }
     await queueService.enqueueAction(target === 'owned' ? 'ADD_INVENTORY' : 'ADD_WISHLIST', item.existingUri);
     return;
   }
@@ -1048,6 +1055,9 @@ async function clearPhotoQueueAndForm() {
               </div>
             </div>
           </div>
+
+          <div v-if="photoError" class="error-banner" style="margin-top: 0.5rem;">{{ photoError }}</div>
+          <div v-if="photoSavingFeedback" class="quick-feedback" style="margin-top: 0.5rem;">{{ photoSavingFeedback }}</div>
 
           <BatchActionBar
             :inline="true"
