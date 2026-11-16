@@ -381,7 +381,7 @@ export const onRequest = async (context: {
 
         const addImg = (raw?: string | null) => {
           const clean = (raw || '').trim();
-          if (!clean) return;
+          if (!clean || clean.toLowerCase().endsWith('.svg')) return;
           if (clean.startsWith('http://') || clean.startsWith('https://')) {
             coverSet.add(clean.replace(/^http:\/\//i, 'https://'));
           } else if (clean.startsWith('/img/') || !clean.includes('/')) {

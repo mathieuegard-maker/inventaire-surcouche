@@ -56,11 +56,11 @@ const isLoadingExtCovers = ref(false);
 const rawCandidateUrls = computed(() => {
   const isbn = originalBook.value?.isbn13 || originalBook.value?.isbn10;
   return imageUtil.buildCoverCandidates(isbn, [
-    extMetadata.value?.coverUrl,
-    ...(extMetadata.value?.coverFallbackUrls || []),
     originalBook.value?.coverUrl,
-    ...(originalBook.value?.coverFallbackUrls || []),
-    ...editionExtraCovers.value
+    extMetadata.value?.coverUrl,
+    ...editionExtraCovers.value,
+    ...(extMetadata.value?.coverFallbackUrls || []),
+    ...(originalBook.value?.coverFallbackUrls || [])
   ]);
 });
 
@@ -237,7 +237,7 @@ onMounted(async () => {
         isLoadingExtCovers.value = false;
         void deduplicateCoverUrls(rawCandidateUrls.value, {
           isbn: isbn || undefined,
-          maxCandidates: 14
+          maxCandidates: 36
         }).then((deduped) => {
           if (deduped.length > 0) deduplicatedCovers.value = deduped;
         });
