@@ -47,6 +47,11 @@ export const router = createRouter({
       component: LoansView
     },
     {
+      path: '/releases',
+      name: 'ReleasesView',
+      component: () => import('../ui/views/ReleasesView.vue')
+    },
+    {
       path: '/stats',
       name: 'StatsView',
       component: () => import('../ui/views/StatsView.vue')

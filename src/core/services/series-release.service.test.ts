@@ -88,5 +88,11 @@ describe('seriesReleaseService', () => {
     await seriesReleaseService.dismissAlert(demo.id);
     expect(seriesReleaseService.alerts.value).toHaveLength(0);
     expect(fetchMock).not.toHaveBeenCalled();
+
+    const multi = seriesReleaseService.simulateDemoAlerts();
+    expect(multi.length).toBeGreaterThanOrEqual(5);
+    await seriesReleaseService.dismissAlert();
+    expect(seriesReleaseService.alerts.value).toHaveLength(0);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

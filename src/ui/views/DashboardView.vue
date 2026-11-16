@@ -10,11 +10,10 @@ import BaseTitle from '../components/BaseTitle.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService } from '../../core/services/stats.service';
-import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { scannerState } from '../../state/scanner';
 import { connectionState } from '../../state/connection';
 import { pendingScansStore } from '../../state/pendingScans';
-import { seriesReleaseService, type SeriesReleaseAlert } from '../../core/services/series-release.service';
+import { seriesReleaseService } from '../../core/services/series-release.service';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
@@ -25,9 +24,7 @@ const errorMessage = ref<string | null>(null);
 const offlineNoticeMessage = ref<string | null>(null);
 const pendingScans = pendingScansStore.pendingScans;
 const releaseAlerts = seriesReleaseService.alerts;
-const isCheckingReleases = seriesReleaseService.isChecking;
 const isOffline = connectionState.isOffline;
-const addingAlertId = ref<string | null>(null);
 
 const previewCollection = ref<HumanizedBook[]>([]);
 const previewWishlist = ref<HumanizedBook[]>([]);
@@ -68,67 +65,6 @@ const openPendingScan = (isbn: string) => {
   }
   saveBookNavigationOrder([isbn, `isbn:${isbn}`], 'direct');
   router.push(`/book/${encodeURIComponent(isbn)}`);
-};
-
-const openReleaseAlert = (alert: SeriesReleaseAlert) => {
-  if (alert.id.startsWith('demo:') && alert.seriesUri === 'demo:series') {
-    router.push(`/book/${encodeURIComponent(alert.isbn13 || alert.volumeUri)}`);
-    return;
-  }
-  const target = alert.isbn13 || alert.volumeUri;
-  saveBookNavigationOrder([target], 'direct');
-  router.push(`/book/${encodeURIComponent(target)}`);
-};
-
-const addReleaseToWishlist = async (alert: SeriesReleaseAlert) => {
-  if (alert.id.startsWith('demo:')) {
-    offlineNoticeMessage.value = `Simulation : « ${alert.seriesTitle} — Tome ${alert.seriesNumber || '?'} » serait ajouté à votre Wishlist en un clic.`;
-    await seriesReleaseService.dismissAlert(alert.id);
-    return;
-  }
-  addingAlertId.value = alert.id;
-  try {
-    let targetUri = alert.volumeUri;
-    if (alert.isbn13) {
-      const resolved = await searchService.searchByIsbn(alert.isbn13);
-      if (resolved && !('isUnknown' in resolved) && resolved.mainBook?.uri) {
-        targetUri = resolved.mainBook.uri;
-      }
-    }
-    await queueService.enqueueAction('ADD_WISHLIST', targetUri);
-    await seriesReleaseService.dismissAlert(alert.id);
-    await loadDashboardData();
-  } catch {
-    errorMessage.value = "Impossible d'ajouter ce tome à la wishlist pour le moment.";
-  } finally {
-    addingAlertId.value = null;
-  }
-};
-
-const triggerDemoRelease = async () => {
-  const cached = await databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]);
-  const ownedSeriesBook = cached.find((b) => b.ownershipStatus === 'owned' && b.series);
-  let nextNum = '41';
-  if (ownedSeriesBook?.series) {
-    const sameSeries = cached.filter(
-      (b) => b.series?.toLowerCase() === ownedSeriesBook.series?.toLowerCase()
-    );
-    const maxNum = sameSeries.reduce((max, b) => {
-      const n = parseInt(b.seriesNumber || '0', 10);
-      return Number.isFinite(n) && n > max ? n : max;
-    }, 0);
-    if (maxNum > 0) nextNum = String(maxNum + 1);
-  }
-  seriesReleaseService.simulateDemoAlert(
-    ownedSeriesBook
-      ? {
-          seriesUri: ownedSeriesBook.seriesId || ownedSeriesBook.series,
-          seriesTitle: ownedSeriesBook.series,
-          seriesNumber: nextNum,
-          coverUrl: ownedSeriesBook.coverUrl
-        }
-      : undefined
-  );
 };
 
 const formatScanTime = (ts: number) =>
@@ -312,80 +248,21 @@ watch(
       </div>
 
       <div class="home-space-card">
-        <div class="home-space-header-row">
-          <span class="home-space-link home-space-title-static">MES NOUVEAUTÉS</span>
-          <div class="news-header-right">
-            <button
-              v-if="releaseAlerts.length > 1"
-              type="button"
-              class="pending-clear-btn"
-              @click="seriesReleaseService.dismissAlert()"
-            >
-              Tout masquer
-            </button>
-            <span class="home-space-count">{{ releaseAlerts.length }}</span>
-          </div>
-        </div>
-
-        <div v-if="releaseAlerts.length > 0" class="release-alerts-list">
-          <div v-for="alert in releaseAlerts" :key="alert.id" class="release-alert-row">
-            <img
-              v-if="alert.coverUrl || alert.isbn13"
-              :src="imageUtil.resolveCoverUrl({ coverUrl: alert.coverUrl, isbn13: alert.isbn13 } as any)"
-              :alt="alert.volumeTitle"
-              class="release-alert-cover"
-            />
-            <div class="release-alert-info">
-              <span class="release-alert-series">
-                {{ alert.seriesTitle }}<template v-if="alert.seriesNumber"> — Tome {{ alert.seriesNumber }}</template>
-              </span>
-              <span class="release-alert-title">{{ alert.volumeTitle }}</span>
-            </div>
-            <div class="pending-scan-actions">
-              <button
-                type="button"
-                class="release-wish-btn"
-                :disabled="addingAlertId === alert.id || isOffline"
-                @click="addReleaseToWishlist(alert)"
-              >
-                {{ addingAlertId === alert.id ? 'Ajout...' : '+ Wishlist' }}
-              </button>
-              <button type="button" class="pending-open-btn" @click="openReleaseAlert(alert)">
-                Voir
-              </button>
-              <button
-                type="button"
-                class="pending-remove-btn"
-                aria-label="Masquer"
-                @click="seriesReleaseService.dismissAlert(alert.id)"
-              >
-                ✕
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div v-else class="news-empty-row">
-          <span class="news-empty-text">
-            Aucune nouvelle sortie détectée récemment dans vos séries commencées.
-          </span>
-          <div class="news-empty-actions">
-            <button
-              type="button"
-              class="news-action-btn"
-              :disabled="isCheckingReleases || isOffline"
-              @click="seriesReleaseService.checkNewReleasesOnOpen(true)"
-            >
-              {{ isCheckingReleases ? 'Vérification...' : 'Vérifier maintenant' }}
-            </button>
-            <button
-              type="button"
-              class="news-action-btn"
-              @click="triggerDemoRelease"
-            >
-              Simuler une sortie
-            </button>
-          </div>
+        <button type="button" class="home-space-link" @click="router.push({ name: 'ReleasesView' })">
+          <span>MES NOUVEAUTÉS</span>
+          <span class="home-space-count">{{ releaseAlerts.length }}</span>
+        </button>
+        <div v-if="releaseAlerts.length" class="home-covers-strip">
+          <img
+            v-for="alert in releaseAlerts.slice(0, 5)"
+            :key="alert.id"
+            :src="imageUtil.resolveCoverUrl({ coverUrl: alert.coverUrl, isbn13: alert.isbn13 } as any)"
+            :alt="alert.volumeTitle"
+            :title="`${alert.seriesTitle}${alert.seriesNumber ? ' T.' + alert.seriesNumber : ''}`"
+            class="home-preview-cover"
+            @error="imageUtil.handleImageError($event, { isbn: alert.isbn13 })"
+            @click="router.push({ name: 'ReleasesView' })"
+          />
         </div>
       </div>
     </div>

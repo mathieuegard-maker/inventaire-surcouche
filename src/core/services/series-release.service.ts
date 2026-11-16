@@ -102,24 +102,85 @@ export const seriesReleaseService = {
     }
   },
 
+  simulateDemoAlerts(
+    samples?: Array<{
+      seriesUri?: string;
+      seriesTitle?: string;
+      seriesNumber?: string;
+      coverUrl?: string;
+      isbn13?: string;
+      volumeTitle?: string;
+    }>
+  ): SeriesReleaseAlert[] {
+    const defaults = [
+      {
+        seriesUri: 'demo:asterix',
+        seriesTitle: 'Astérix',
+        seriesNumber: '41',
+        volumeTitle: 'Astérix en Lusitanie (Simulation)',
+        isbn13: '9782012101524'
+      },
+      {
+        seriesUri: 'demo:thorgal',
+        seriesTitle: 'Thorgal',
+        seriesNumber: '42',
+        volumeTitle: 'Ozurr le Varègue (Simulation)',
+        isbn13: '9782803613625'
+      },
+      {
+        seriesUri: 'demo:blacksad',
+        seriesTitle: 'Blacksad',
+        seriesNumber: '8',
+        volumeTitle: 'Alors, tout tombe — Partie 3 (Simulation)',
+        isbn13: '9782205054194'
+      },
+      {
+        seriesUri: 'demo:tintin',
+        seriesTitle: 'Les Aventures de Tintin',
+        seriesNumber: '25',
+        volumeTitle: 'L’Alph-Art — Édition spéciale (Simulation)',
+        isbn13: '9782203001107'
+      },
+      {
+        seriesUri: 'demo:luckyluke',
+        seriesTitle: 'Lucky Luke',
+        seriesNumber: '84',
+        volumeTitle: 'Un cow-boy sous pression (Simulation)',
+        isbn13: '9782884714938'
+      }
+    ];
+
+    const list: Array<{
+      seriesUri?: string;
+      seriesTitle?: string;
+      seriesNumber?: string;
+      coverUrl?: string;
+      isbn13?: string;
+      volumeTitle?: string;
+    }> = samples && samples.length > 0 ? samples : defaults;
+    const nowIso = new Date().toISOString();
+    const created: SeriesReleaseAlert[] = list.map((item, idx) => ({
+      id: `demo:${Date.now()}_${idx}`,
+      seriesUri: item.seriesUri || `demo:series_${idx}`,
+      seriesTitle: item.seriesTitle || `Série ${idx + 1}`,
+      volumeUri: item.isbn13 ? `isbn:${item.isbn13}` : `demo:vol_${idx}`,
+      volumeTitle: item.volumeTitle || `${item.seriesTitle || 'Nouveau tome'} (Simulation)`,
+      seriesNumber: item.seriesNumber || String(idx + 1),
+      isbn13: item.isbn13,
+      coverUrl: item.coverUrl,
+      detectedAt: nowIso
+    }));
+
+    alerts.value = [...created, ...alerts.value.filter((a) => !a.id.startsWith('demo:'))];
+    return created;
+  },
+
   simulateDemoAlert(sample?: {
     seriesUri?: string;
     seriesTitle?: string;
     seriesNumber?: string;
     coverUrl?: string;
   }): SeriesReleaseAlert {
-    const demo: SeriesReleaseAlert = {
-      id: `demo:${Date.now()}`,
-      seriesUri: sample?.seriesUri || 'demo:series',
-      seriesTitle: sample?.seriesTitle || 'Astérix',
-      volumeUri: 'isbn:9782012101524',
-      volumeTitle: `${sample?.seriesTitle || 'Astérix'} — Nouvel album (Simulation)`,
-      seriesNumber: sample?.seriesNumber || '41',
-      isbn13: '9782012101524',
-      coverUrl: sample?.coverUrl,
-      detectedAt: new Date().toISOString()
-    };
-    alerts.value = [demo, ...alerts.value.filter((a) => !a.id.startsWith('demo:'))];
-    return demo;
+    return this.simulateDemoAlerts([sample || {}])[0];
   }
 };
