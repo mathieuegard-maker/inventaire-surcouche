@@ -526,7 +526,8 @@ const dispatchPhotoBatchAction = async (
   }
 };
 
-async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'wish' | 'none') {
+async function enqueueResolvedItem(rawItem: ResolvedPhotoItem, target: 'owned' | 'wish' | 'none') {
+  const item = JSON.parse(JSON.stringify(rawItem)) as ResolvedPhotoItem;
   if (!item.isbn13 && !item.existingUri) return;
 
   if (item.existingUri && (target === 'owned' || target === 'wish')) {
