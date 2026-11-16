@@ -36,9 +36,28 @@
         </label>
       </div>
 
-      <form class="login-form" @submit.prevent="handleSubmit">
+      <div class="auth-tabs" role="tablist">
+        <button
+          type="button"
+          class="auth-tab"
+          :class="{ active: authMode === 'login' }"
+          @click="switchMode('login')"
+        >
+          Se connecter
+        </button>
+        <button
+          type="button"
+          class="auth-tab"
+          :class="{ active: authMode === 'register' }"
+          @click="switchMode('register')"
+        >
+          Créer un compte
+        </button>
+      </div>
+
+      <form v-if="authMode !== 'forgot'" class="login-form" @submit.prevent="handleSubmit">
         <div class="field">
-          <label for="username">Identifiant (Prénom ou Pseudo)</label>
+          <label for="username">Nom d'utilisateur</label>
           <input
             id="username"
             v-model="username"
@@ -49,6 +68,18 @@
           />
         </div>
 
+        <div v-if="authMode === 'register'" class="field">
+          <label for="recovery-email">Adresse e-mail (obligatoire pour la récupération)</label>
+          <input
+            id="recovery-email"
+            v-model="recoveryEmail"
+            type="email"
+            required
+            autocomplete="email"
+            placeholder="Ex: camille@exemple.fr"
+          />
+        </div>
+
         <div class="field">
           <label for="password">Mot de passe</label>
           <input
@@ -56,15 +87,87 @@
             v-model="password"
             type="password"
             required
-            autocomplete="current-password"
+            :autocomplete="authMode === 'register' ? 'new-password' : 'current-password'"
             placeholder="Votre mot de passe"
           />
         </div>
 
         <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
+        <p v-if="successMsg" class="success-msg">{{ successMsg }}</p>
 
         <button type="submit" class="submit-btn" :disabled="submitting">
-          {{ submitting ? 'Connexion en cours...' : 'Se connecter / Créer mon compte' }}
+          {{
+            submitting
+              ? 'Patientez...'
+              : authMode === 'register'
+                ? 'Créer mon compte'
+                : 'Se connecter'
+          }}
+        </button>
+
+        <button
+          v-if="authMode === 'login'"
+          type="button"
+          class="link-btn"
+          @click="switchMode('forgot')"
+        >
+          Mot de passe oublié ?
+        </button>
+      </form>
+
+      <form v-else class="login-form" @submit.prevent="handleForgotSubmit">
+        <div class="field">
+          <label for="reset-identifier">Nom d'utilisateur ou adresse e-mail</label>
+          <input
+            id="reset-identifier"
+            v-model="resetIdentifier"
+            type="text"
+            required
+            :disabled="resetStep === 'confirm'"
+            placeholder="Ex: mathieu egard ou email@exemple.fr"
+          />
+        </div>
+
+        <template v-if="resetStep === 'confirm'">
+          <div class="field">
+            <label for="reset-code">Code reçu par e-mail (6 chiffres)</label>
+            <input
+              id="reset-code"
+              v-model="resetCode"
+              type="text"
+              inputmode="numeric"
+              required
+              placeholder="123456"
+            />
+          </div>
+          <div class="field">
+            <label for="reset-new-password">Nouveau mot de passe</label>
+            <input
+              id="reset-new-password"
+              v-model="resetNewPassword"
+              type="password"
+              required
+              autocomplete="new-password"
+              placeholder="Minimum 4 caractères"
+            />
+          </div>
+        </template>
+
+        <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
+        <p v-if="successMsg" class="success-msg">{{ successMsg }}</p>
+
+        <button type="submit" class="submit-btn" :disabled="submitting">
+          {{
+            submitting
+              ? 'Envoi en cours...'
+              : resetStep === 'request'
+                ? 'Envoyer le code de récupération'
+                : 'Valider le nouveau mot de passe'
+          }}
+        </button>
+
+        <button type="button" class="link-btn" @click="switchMode('login')">
+          Retour à la connexion
         </button>
       </form>
     </div>
@@ -75,17 +178,37 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { connectionService } from '../../core/orchestrators/connection.orchestrator';
+import { userService } from '../../core/services/user.service';
 import { canInstallPwa, isAppInstalled, isIosDevice, promptPwaInstall } from '../../core/utils/pwa-install.util';
 
 const route = useRoute();
 const router = useRouter();
 
+const authMode = ref<'login' | 'register' | 'forgot'>('login');
 const username = ref('');
+const recoveryEmail = ref('');
 const password = ref('');
+const resetIdentifier = ref('');
+const resetCode = ref('');
+const resetNewPassword = ref('');
+const resetStep = ref<'request' | 'confirm'>('request');
 const submitting = ref(false);
 const errorMsg = ref('');
+const successMsg = ref('');
 const syncFamily = ref(true);
 const followFriend = ref(true);
+
+const switchMode = (mode: 'login' | 'register' | 'forgot') => {
+  authMode.value = mode;
+  errorMsg.value = '';
+  successMsg.value = '';
+  if (mode === 'forgot') {
+    resetStep.value = 'request';
+    resetIdentifier.value = username.value.trim();
+    resetCode.value = '';
+    resetNewPassword.value = '';
+  }
+};
 
 const inviteCodeFromUrl = computed(() => {
   const raw = route.query.invite;
@@ -113,8 +236,13 @@ const handleInstallPwa = async () => {
 
 const handleSubmit = async () => {
   if (!username.value.trim() || !password.value) return;
+  if (authMode.value === 'register' && !recoveryEmail.value.trim()) {
+    errorMsg.value = "L'adresse e-mail est obligatoire pour créer un compte.";
+    return;
+  }
   submitting.value = true;
   errorMsg.value = '';
+  successMsg.value = '';
 
   const effectiveInvite = inviteCodeFromUrl.value && syncFamily.value ? inviteCodeFromUrl.value : undefined;
   const effectiveFriend = friendTokenFromUrl.value && followFriend.value ? friendTokenFromUrl.value : undefined;
@@ -124,7 +252,11 @@ const handleSubmit = async () => {
       username.value.trim(),
       password.value,
       effectiveInvite,
-      effectiveFriend
+      effectiveFriend,
+      {
+        mode: authMode.value === 'register' ? 'register' : 'login',
+        ...(authMode.value === 'register' ? { recoveryEmail: recoveryEmail.value.trim() } : {})
+      }
     );
 
     if (!ok) {
@@ -139,6 +271,35 @@ const handleSubmit = async () => {
     }
   } catch (e: unknown) {
     errorMsg.value = e instanceof Error ? e.message : 'Erreur réseau lors de la connexion.';
+  } finally {
+    submitting.value = false;
+  }
+};
+
+const handleForgotSubmit = async () => {
+  errorMsg.value = '';
+  successMsg.value = '';
+  submitting.value = true;
+  try {
+    if (resetStep.value === 'request') {
+      const res = await userService.requestPasswordReset(resetIdentifier.value.trim());
+      resetStep.value = 'confirm';
+      successMsg.value = res.maskedEmail
+        ? `Un code de réinitialisation a été envoyé à ${res.maskedEmail}.`
+        : 'Un code de réinitialisation a été envoyé par e-mail.';
+    } else {
+      await userService.resetPassword({
+        identifier: resetIdentifier.value.trim(),
+        code: resetCode.value.trim(),
+        newPassword: resetNewPassword.value
+      });
+      authMode.value = 'login';
+      username.value = resetIdentifier.value.trim();
+      password.value = '';
+      successMsg.value = 'Mot de passe réinitialisé ! Vous pouvez maintenant vous connecter.';
+    }
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Erreur lors de la réinitialisation.';
   } finally {
     submitting.value = false;
   }
@@ -324,5 +485,57 @@ const handleSubmit = async () => {
 .submit-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+  background: #f1f5f9;
+  padding: 0.25rem;
+  border-radius: var(--radius-sm, 8px);
+}
+
+.auth-tab {
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #475569;
+  cursor: pointer;
+}
+
+.auth-tab.active {
+  background: #fff;
+  color: var(--color-primary, #4f46e5);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.link-btn {
+  border: none;
+  background: transparent;
+  color: var(--color-primary, #4f46e5);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.25rem;
+  text-align: center;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.success-msg {
+  margin: 0;
+  background: #dcfce7;
+  color: #166534;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 </style>

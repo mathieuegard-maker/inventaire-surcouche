@@ -18,6 +18,10 @@ const handleFamilyShare = () => {
   isMenuOpen.value = false;
   router.push('/family');
 };
+const handleProfile = () => {
+  isMenuOpen.value = false;
+  router.push('/profile');
+};
 const handleBack = () => { isMenuOpen.value = false; router.back(); };
 
 const toggleScan = () => {
@@ -52,6 +56,9 @@ const toggleScan = () => {
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleStats">
         STATISTIQUES
+      </button>
+      <button class="wireframe-btn header-nav-btn" @click="handleProfile">
+        MON PROFIL
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleBack">
         {{ TEXTS.header?.back || 'RETOUR' }}
@@ -103,6 +110,9 @@ const toggleScan = () => {
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleStats">
           STATISTIQUES
+        </button>
+        <button class="wireframe-btn menu-drawer-item" @click="handleProfile">
+          MON PROFIL
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleBack">
           {{ TEXTS.header?.back || 'RETOUR' }}

@@ -4,6 +4,9 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
+import { scannerState } from '../../state/scanner';
+
+let activeHydrationPromise: Promise<void> | null = null;
 
 export const syncOrchestrator = {
   
@@ -108,6 +111,10 @@ export const syncOrchestrator = {
    * TÂCHE GLOBALE (V2.1) : S'assure que le cache est synchronisé avec les registres
    */
   async hydrateCacheInBackground(): Promise<void> {
+    if (activeHydrationPromise) {
+      return activeHydrationPromise;
+    }
+    activeHydrationPromise = (async () => {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
       const DB_RESET_TOKEN = 'reset_2026_11_15_clean_slate_v4';
@@ -184,6 +191,7 @@ export const syncOrchestrator = {
       console.log(`[HYDRATATION] ${missingItems.length} nouvelles éditions physiques à télécharger...`);
       if (missingItems.length > 0) {
          await this.hydrateRemainingPhysicalEntities(missingItems);
+         scannerState.lastUpdatedTick.value++;
       }
       if (needsGlobalCatalogRefresh && typeof localStorage !== 'undefined') {
         localStorage.setItem('biblio_catalog_sync_version', CATALOG_SYNC_VERSION);
@@ -249,8 +257,11 @@ export const syncOrchestrator = {
     } catch (error) {
       console.error("[HYDRATATION] Erreur globale :", error);
     } finally {
+      activeHydrationPromise = null;
       console.groupEnd();
     }
+    })();
+    return activeHydrationPromise;
   },
 
   /**

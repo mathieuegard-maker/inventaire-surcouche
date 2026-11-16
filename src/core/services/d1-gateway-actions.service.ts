@@ -32,6 +32,25 @@ function generateShortCode(len = 6): string {
     .join('');
 }
 
+function generateNumericCode(len = 6): string {
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes)
+    .map((b) => String(b % 10))
+    .join('');
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function maskEmail(email: string): string {
+  const [local, domain] = email.split('@');
+  if (!local || !domain) return '***';
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}***@${domain}`;
+}
+
 function jsonResp(
   data: unknown,
   status = 200,
@@ -158,6 +177,7 @@ export async function handleD1GatewayAction(
     case 'auth-register': {
       const rawUsername = String(body?.username || '').trim();
       const rawPassword = String(body?.password || '');
+      const rawRecoveryEmail = String(body?.recoveryEmail || '').trim().toLowerCase();
       const inviteCode = String(body?.inviteCode || '').trim().toUpperCase();
       const mode = body?.mode || (action === 'auth-register' ? 'register' : 'auto');
 
@@ -169,9 +189,9 @@ export async function handleD1GatewayAction(
       const passHash = await sha256Hex(`biblio_salt_v2:${rawPassword}`);
 
       let userRow = await db
-        .prepare('SELECT id, email, display_name, password_hash FROM users WHERE email = ? LIMIT 1')
+        .prepare('SELECT id, email, display_name, password_hash, recovery_email FROM users WHERE email = ? LIMIT 1')
         .bind(emailKey)
-        .first<{ id: string; email: string; display_name: string; password_hash: string }>();
+        .first<{ id: string; email: string; display_name: string; password_hash: string; recovery_email?: string | null }>();
 
       if (userRow) {
         if (mode === 'register') {
@@ -181,20 +201,38 @@ export async function handleD1GatewayAction(
           return jsonResp({ error: 'Mot de passe incorrect.' }, 401);
         }
       } else {
+        if (mode === 'login') {
+          return jsonResp({ error: 'Aucun compte trouvé avec cet identifiant.' }, 401);
+        }
+        if (!rawRecoveryEmail || !isValidEmail(rawRecoveryEmail)) {
+          return jsonResp(
+            { error: 'Une adresse e-mail valide est obligatoire pour créer un compte (nécessaire pour la récupération du mot de passe).' },
+            400
+          );
+        }
+        const existingEmailUser = await db
+          .prepare('SELECT id FROM users WHERE LOWER(recovery_email) = ? LIMIT 1')
+          .bind(rawRecoveryEmail)
+          .first<{ id: string }>();
+        if (existingEmailUser) {
+          return jsonResp({ error: 'Cette adresse e-mail est déjà associée à un autre compte.' }, 409);
+        }
+
         // Création automatique du compte utilisateur
         const userId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
         await db
           .prepare(
-            'INSERT INTO users (id, email, display_name, password_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT INTO users (id, email, display_name, password_hash, recovery_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
           )
-          .bind(userId, emailKey, rawUsername, passHash, now, now)
+          .bind(userId, emailKey, rawUsername, passHash, rawRecoveryEmail, now, now)
           .run();
 
         userRow = {
           id: userId,
           email: emailKey,
           display_name: rawUsername,
-          password_hash: passHash
+          password_hash: passHash,
+          recovery_email: rawRecoveryEmail
         };
       }
 
@@ -277,6 +315,7 @@ export async function handleD1GatewayAction(
           uri: `user:${targetLibraryId}`,
           id: userRow.id,
           username: userRow.display_name,
+          recoveryEmail: userRow.recovery_email || null,
           libraryId: targetLibraryId,
           sessionToken: rawSessionToken,
           inviteCode: tokens.inviteCode,
@@ -293,6 +332,10 @@ export async function handleD1GatewayAction(
       if (!auth) {
         return jsonResp({ error: 'Session invalide' }, 401);
       }
+      const userDetails = await db
+        .prepare('SELECT recovery_email FROM users WHERE id = ? LIMIT 1')
+        .bind(auth.userId)
+        .first<{ recovery_email?: string | null }>();
       const tokens = await getOrCreateShareTokens(db, auth.libraryId, auth.userId);
       const members = await db
         .prepare(
@@ -308,6 +351,7 @@ export async function handleD1GatewayAction(
         uri: `user:${auth.libraryId}`,
         id: auth.userId,
         username: auth.username,
+        recoveryEmail: userDetails?.recovery_email || null,
         libraryId: auth.libraryId,
         libraryName: auth.libraryName,
         role: auth.role,
@@ -315,6 +359,209 @@ export async function handleD1GatewayAction(
         publicReadonlyToken: tokens.publicReadonlyToken,
         members: members.results || []
       });
+    }
+
+    case 'profile-update': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) {
+        return jsonResp({ error: 'Session invalide' }, 401);
+      }
+
+      const newUsername = String(body?.username || '').trim();
+      const newRecoveryEmail = String(body?.recoveryEmail || '').trim().toLowerCase();
+      const currentPassword = String(body?.currentPassword || '');
+      const newPassword = String(body?.newPassword || '');
+
+      if (!newUsername) {
+        return jsonResp({ error: "Le nom d'utilisateur est obligatoire." }, 400);
+      }
+      if (!newRecoveryEmail || !isValidEmail(newRecoveryEmail)) {
+        return jsonResp({ error: 'Une adresse e-mail de récupération valide est obligatoire.' }, 400);
+      }
+
+      const newEmailKey = newUsername.toLowerCase();
+      const conflictUsername = await db
+        .prepare('SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1')
+        .bind(newEmailKey, auth.userId)
+        .first<{ id: string }>();
+      if (conflictUsername) {
+        return jsonResp({ error: "Ce nom d'utilisateur est déjà utilisé par un autre compte." }, 409);
+      }
+
+      const conflictEmail = await db
+        .prepare('SELECT id FROM users WHERE LOWER(recovery_email) = ? AND id != ? LIMIT 1')
+        .bind(newRecoveryEmail, auth.userId)
+        .first<{ id: string }>();
+      if (conflictEmail) {
+        return jsonResp({ error: 'Cette adresse e-mail est déjà associée à un autre compte.' }, 409);
+      }
+
+      let nextPassHash: string | null = null;
+      if (newPassword) {
+        if (newPassword.length < 4) {
+          return jsonResp({ error: 'Le nouveau mot de passe doit contenir au moins 4 caractères.' }, 400);
+        }
+        const existingUser = await db
+          .prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1')
+          .bind(auth.userId)
+          .first<{ password_hash: string }>();
+        const currentHash = await sha256Hex(`biblio_salt_v2:${currentPassword}`);
+        if (!existingUser || existingUser.password_hash !== currentHash) {
+          return jsonResp({ error: 'Le mot de passe actuel est incorrect.' }, 401);
+        }
+        nextPassHash = await sha256Hex(`biblio_salt_v2:${newPassword}`);
+      }
+
+      if (nextPassHash) {
+        await db
+          .prepare(
+            'UPDATE users SET email = ?, display_name = ?, recovery_email = ?, password_hash = ?, updated_at = ? WHERE id = ?'
+          )
+          .bind(newEmailKey, newUsername, newRecoveryEmail, nextPassHash, now, auth.userId)
+          .run();
+      } else {
+        await db
+          .prepare(
+            'UPDATE users SET email = ?, display_name = ?, recovery_email = ?, updated_at = ? WHERE id = ?'
+          )
+          .bind(newEmailKey, newUsername, newRecoveryEmail, now, auth.userId)
+          .run();
+      }
+
+      return jsonResp({
+        ok: true,
+        username: newUsername,
+        recoveryEmail: newRecoveryEmail
+      });
+    }
+
+    case 'auth-forgot-password': {
+      const identifier = String(body?.identifier || '').trim().toLowerCase();
+      if (!identifier) {
+        return jsonResp({ error: "Veuillez saisir votre nom d'utilisateur ou adresse e-mail." }, 400);
+      }
+
+      const userRow = await db
+        .prepare(
+          'SELECT id, display_name, recovery_email FROM users WHERE email = ? OR LOWER(recovery_email) = ? LIMIT 1'
+        )
+        .bind(identifier, identifier)
+        .first<{ id: string; display_name: string; recovery_email?: string | null }>();
+
+      if (!userRow) {
+        return jsonResp({ error: 'Aucun compte trouvé avec cet identifiant ou cette adresse e-mail.' }, 404);
+      }
+
+      if (!userRow.recovery_email || !isValidEmail(userRow.recovery_email)) {
+        return jsonResp(
+          {
+            error:
+              "Aucune adresse e-mail de récupération n'est enregistrée sur ce compte. Connectez-vous et ajoutez-la dans votre page Profil."
+          },
+          400
+        );
+      }
+
+      const code = generateNumericCode(6);
+      const tokenHash = await sha256Hex(`biblio_reset_v2:${code}`);
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+      await db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(userRow.id).run();
+      await db
+        .prepare(
+          'INSERT INTO password_reset_tokens (token_hash, user_id, expires_at, used_at, created_at) VALUES (?, ?, ?, NULL, ?)'
+        )
+        .bind(tokenHash, userRow.id, expiresAt, now)
+        .run();
+
+      const resendApiKey = env?.RESEND_API_KEY;
+      if (!resendApiKey) {
+        return jsonResp(
+          {
+            error:
+              "L'envoi d'e-mails de récupération n'est pas encore configuré sur le serveur (variable RESEND_API_KEY manquante dans Cloudflare Pages)."
+          },
+          503
+        );
+      }
+
+      const mailFrom = env?.MAIL_FROM || 'Biblio Collection <onboarding@resend.dev>';
+      const emailRes = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          from: mailFrom,
+          to: [userRow.recovery_email],
+          subject: 'Biblio Collection — Code de réinitialisation de mot de passe',
+          html: `<p>Bonjour ${userRow.display_name},</p><p>Voici votre code de réinitialisation (valable 15 minutes) :</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px;">${code}</p><p>Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail.</p>`
+        })
+      });
+
+      if (!emailRes.ok) {
+        return jsonResp(
+          { error: "Impossible d'envoyer l'e-mail de récupération pour le moment." },
+          502
+        );
+      }
+
+      return jsonResp({
+        ok: true,
+        maskedEmail: maskEmail(userRow.recovery_email)
+      });
+    }
+
+    case 'auth-reset-password': {
+      const identifier = String(body?.identifier || '').trim().toLowerCase();
+      const code = String(body?.code || '').trim();
+      const newPassword = String(body?.newPassword || '');
+
+      if (!identifier || !code || !newPassword) {
+        return jsonResp({ error: 'Identifiant, code et nouveau mot de passe requis.' }, 400);
+      }
+      if (newPassword.length < 4) {
+        return jsonResp({ error: 'Le nouveau mot de passe doit contenir au moins 4 caractères.' }, 400);
+      }
+
+      const userRow = await db
+        .prepare(
+          'SELECT id FROM users WHERE email = ? OR LOWER(recovery_email) = ? LIMIT 1'
+        )
+        .bind(identifier, identifier)
+        .first<{ id: string }>();
+
+      if (!userRow) {
+        return jsonResp({ error: 'Compte introuvable.' }, 404);
+      }
+
+      const tokenHash = await sha256Hex(`biblio_reset_v2:${code}`);
+      const tokenRow = await db
+        .prepare(
+          'SELECT token_hash, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ? AND user_id = ? LIMIT 1'
+        )
+        .bind(tokenHash, userRow.id)
+        .first<{ token_hash: string; expires_at: string; used_at: string | null }>();
+
+      if (!tokenRow || tokenRow.used_at || tokenRow.expires_at <= now) {
+        return jsonResp({ error: 'Code invalide ou expiré.' }, 400);
+      }
+
+      const nextPassHash = await sha256Hex(`biblio_salt_v2:${newPassword}`);
+      await db
+        .prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?')
+        .bind(nextPassHash, now, userRow.id)
+        .run();
+
+      await db
+        .prepare('UPDATE password_reset_tokens SET used_at = ? WHERE token_hash = ?')
+        .bind(now, tokenHash)
+        .run();
+
+      await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userRow.id).run();
+
+      return jsonResp({ ok: true });
     }
 
     case 'family-join': {

@@ -44,4 +44,6 @@ export interface AppBackendEnv {
   DB: DatabaseBinding;
   COVERS_BUCKET?: CoverBucketBinding;
   JWT_SECRET?: string;
+  RESEND_API_KEY?: string;
+  MAIL_FROM?: string;
 }

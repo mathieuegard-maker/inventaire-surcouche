@@ -67,6 +67,11 @@ export const router = createRouter({
       component: () => import('../ui/views/FamilyShareView.vue')
     },
     {
+      path: '/profile',
+      name: 'ProfileView',
+      component: () => import('../ui/views/ProfileView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView

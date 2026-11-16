@@ -66,7 +66,13 @@ export const userService = {
    * Supporte optionnellement un code d'invitation famille (`inviteCode`)
    * et/ou un jeton ami à suivre (`friendToken`)
    */
-  async login(username: string, password: string, inviteCode?: string, friendToken?: string): Promise<boolean> {
+  async login(
+    username: string,
+    password: string,
+    inviteCode?: string,
+    friendToken?: string,
+    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string }
+  ): Promise<boolean> {
     const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
       headers: {
@@ -75,15 +81,18 @@ export const userService = {
       body: JSON.stringify({
         username,
         password,
+        ...(options?.mode ? { mode: options.mode } : {}),
+        ...(options?.recoveryEmail ? { recoveryEmail: options.recoveryEmail } : {}),
         ...(inviteCode ? { inviteCode } : {}),
         ...(friendToken ? { friendToken } : {})
       })
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      return false;
+      if (res.status === 401) return false;
+      throw new Error(data?.error || 'Erreur lors de la connexion.');
     }
 
     if (data) {
@@ -91,6 +100,62 @@ export const userService = {
     }
 
     return true;
+  },
+
+  async updateProfile(payload: {
+    username: string;
+    recoveryEmail: string;
+    currentPassword?: string;
+    newPassword?: string;
+  }): Promise<{ username: string; recoveryEmail: string }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=profile-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de mettre à jour le profil.');
+    }
+    if (sessionStore.state.user) {
+      sessionStore.setUser({
+        ...sessionStore.state.user,
+        username: data.username,
+        recoveryEmail: data.recoveryEmail
+      });
+    }
+    return data;
+  },
+
+  async requestPasswordReset(identifier: string): Promise<{ ok: boolean; maskedEmail?: string }> {
+    const res = await fetchWithTimeout('/api/gateway?action=auth-forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || "Impossible d'envoyer le code de récupération.");
+    }
+    return data;
+  },
+
+  async resetPassword(payload: {
+    identifier: string;
+    code: string;
+    newPassword: string;
+  }): Promise<{ ok: boolean }> {
+    const res = await fetchWithTimeout('/api/gateway?action=auth-reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de réinitialiser le mot de passe.');
+    }
+    return data;
   },
 
   /**

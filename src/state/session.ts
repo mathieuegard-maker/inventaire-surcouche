@@ -2,6 +2,7 @@
 export interface SessionUser {
   uri: string;
   username: string;
+  recoveryEmail?: string | null;
   libraryId?: string;
   libraryName?: string;
   inviteCode?: string;
@@ -21,6 +22,7 @@ export const sessionStore = {
     this.state.user = {
       uri: finalUri,
       username: u.username || u.label || u.name || 'Utilisateur',
+      recoveryEmail: u.recoveryEmail !== undefined ? u.recoveryEmail : this.state.user?.recoveryEmail ?? null,
       libraryId: u.libraryId,
       libraryName: u.libraryName,
       inviteCode: u.inviteCode,

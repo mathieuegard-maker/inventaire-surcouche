@@ -2,6 +2,7 @@
 import { ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
+import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
 import { imageUtil } from '../../core/utils/image.util';
@@ -81,11 +82,25 @@ const handleKeywordsSearch = (query: string) => {
 
 const loadDashboardData = async () => {
   try {
-    const [statsRes, cachedBooks, loans] = await Promise.all([
+    let [statsRes, cachedBooks, loans, invRegistry, wishRegistry] = await Promise.all([
       statsService.getDashboardStats(30),
       databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
-      databaseService.getAllLoans().catch(() => [])
+      databaseService.getAllLoans().catch(() => []),
+      databaseService.getAllRegistryUris('inventory').catch(() => [] as string[]),
+      databaseService.getAllRegistryUris('wishlist').catch(() => [] as string[])
     ]);
+
+    const cachedOwnedCount = cachedBooks.filter((b) => b.ownershipStatus === 'owned').length;
+    const cachedWishCount = cachedBooks.filter((b) => b.ownershipStatus === 'wish').length;
+    if (!isOffline.value && (invRegistry.length > cachedOwnedCount || wishRegistry.length > cachedWishCount)) {
+      await syncOrchestrator.hydrateCacheInBackground().catch(() => {});
+      [statsRes, cachedBooks, loans] = await Promise.all([
+        statsService.getDashboardStats(30),
+        databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
+        databaseService.getAllLoans().catch(() => [])
+      ]);
+    }
+
     counts.value = {
       owned: statsRes.totalOwned,
       wishlist: statsRes.totalWishlist,

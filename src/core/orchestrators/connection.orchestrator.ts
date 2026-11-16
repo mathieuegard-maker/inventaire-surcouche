@@ -106,11 +106,17 @@ export const connectionService = {
   /**
    * Séquence d'authentification et d'amorçage de session
    */
-  async login(username: string, password: string, inviteCode?: string, friendToken?: string): Promise<boolean> {
+  async login(
+    username: string,
+    password: string,
+    inviteCode?: string,
+    friendToken?: string,
+    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string }
+  ): Promise<boolean> {
     console.group("[CONNECTION SERVICE] Tentative de connexion de l'utilisateur");
     try {
       // On relaie la requête brute au service utilisateur dédié
-      const success = await userService.login(username, password, inviteCode, friendToken);
+      const success = await userService.login(username, password, inviteCode, friendToken, options);
       
       if (!success) {
         console.warn("Identifiants refusés par le service utilisateur.");
