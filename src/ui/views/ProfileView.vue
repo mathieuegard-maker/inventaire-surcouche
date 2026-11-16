@@ -27,7 +27,7 @@ const digestDayOfMonth = ref(1);
 const digestTimezone = ref(
   (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'Europe/Paris'
 );
-const digestChannel = ref<'push' | 'email' | 'both'>('email');
+const digestChannel = ref<'push' | 'email' | 'both'>('push');
 const hasPushSubscription = ref(false);
 const vapidPublicKey = ref<string | null>(null);
 const pushBusy = ref(false);
@@ -303,7 +303,7 @@ const handleLogout = async () => {
 
       <form class="profile-form" @submit.prevent="handleSaveNotifs">
         <div class="field">
-          <label for="notif-freq">Fréquence du digest</label>
+          <label for="notif-freq">Fréquence des notifications</label>
           <select id="notif-freq" v-model="digestFrequency">
             <option value="off">Désactivé</option>
             <option value="daily">Quotidien</option>
@@ -345,13 +345,16 @@ const handleLogout = async () => {
           <div class="field">
             <label for="notif-channel">Canal de réception</label>
             <select id="notif-channel" v-model="digestChannel">
-              <option value="email">E-mail</option>
               <option value="push">Notification Push (PWA)</option>
-              <option value="both">E-mail + Notification Push</option>
+              <option value="email">E-mail</option>
+              <option value="both">Notification Push + E-mail</option>
             </select>
           </div>
 
           <div v-if="digestChannel !== 'email'" class="push-box">
+            <p class="notif-sub">
+              Chaque téléphone/ordinateur doit autoriser les notifications Push séparément.
+            </p>
             <button
               v-if="!hasPushSubscription"
               type="button"
@@ -377,7 +380,7 @@ const handleLogout = async () => {
         <p v-if="notifMsg" class="success-msg">{{ notifMsg }}</p>
 
         <button type="submit" class="wireframe-btn primary save-btn" :disabled="savingNotif">
-          {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences de digest' }}
+          {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences' }}
         </button>
       </form>
 

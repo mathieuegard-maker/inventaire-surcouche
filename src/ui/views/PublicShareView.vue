@@ -45,8 +45,8 @@
 
         <template v-else>
           <div class="banner-text">
-            <strong>Découvrez l'application Biblio</strong>
-            <span> — Consultez les albums et la wishlist ci-dessous, ou créez votre compte personnel pour suivre cet ami dans votre onglet Amis.</span>
+            <strong>Gardez cette bibliothèque dans votre poche</strong>
+            <span> — Créez votre compte gratuit pour la retrouver à tout moment dans l'application (sans risquer de perdre ce lien).</span>
           </div>
           <div class="banner-actions">
             <button
@@ -58,7 +58,7 @@
               Installer l'app
             </button>
             <button type="button" class="action-btn success" @click="goToCreateAccount">
-              🚀 Créer mon compte &amp; suivre cet ami
+              Créer mon compte &amp; suivre cette collection
             </button>
           </div>
           <p v-if="iosHint" class="ios-hint">
@@ -70,6 +70,41 @@
       </div>
 
       <SharedLibraryBrowser :library="library" />
+
+      <!-- Modale d'accueil non bloquante (Option A : aperçu + incitation forte) -->
+      <div
+        v-if="!isLoggedIn && showVisitorModal"
+        class="visitor-modal-backdrop"
+        @click.self="dismissVisitorModal"
+      >
+        <div class="visitor-modal" role="dialog" aria-modal="true" aria-labelledby="visitor-modal-title">
+          <h3 id="visitor-modal-title" class="visitor-modal-title">
+            Sauvegardez la bibliothèque de {{ library.ownerName || 'cet ami' }}
+          </h3>
+          <p class="visitor-modal-desc">
+            Vous pouvez consulter sa collection dès maintenant. Pour ne pas perdre ce lien et la retrouver facilement dans <strong>Mes Amis</strong>, créez votre compte en 10 secondes et installez l'application !
+          </p>
+          <div class="visitor-modal-actions">
+            <button type="button" class="action-btn success full-btn" @click="goToCreateAccount">
+              Créer mon compte &amp; suivre cette collection
+            </button>
+            <button
+              v-if="canInstallPwa"
+              type="button"
+              class="action-btn primary full-btn"
+              @click="handleInstall"
+            >
+              Installer l'application sur cet appareil
+            </button>
+            <p v-if="iosHint" class="ios-hint">
+              Sur iPhone/iPad : touchez <strong>Partager</strong> puis <strong>« Sur l'écran d'accueil »</strong>.
+            </p>
+            <button type="button" class="action-btn full-btn" @click="dismissVisitorModal">
+              Continuer l'aperçu sans compte
+            </button>
+          </div>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -91,6 +126,11 @@ const library = ref<PublicSharePayload | null>(null);
 const addingFriend = ref(false);
 const addedAsFriend = ref(false);
 const friendStatusMsg = ref('');
+const showVisitorModal = ref(true);
+
+const dismissVisitorModal = () => {
+  showVisitorModal.value = false;
+};
 
 const cleanToken = computed(() => String(route.params.token || '').trim());
 const isLoggedIn = computed(() => Boolean(sessionStore.state.user?.uri || sessionStore.getUserUri()));
@@ -239,5 +279,49 @@ watch(() => route.params.token, loadShare);
   font-size: 0.82rem;
   font-weight: 800;
   color: #065f46;
+}
+
+.visitor-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.visitor-modal {
+  width: 100%;
+  max-width: 420px;
+  background: var(--color-surface, #fff);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-lg, 14px);
+  padding: 1.35rem;
+  box-shadow: var(--shadow-lg);
+}
+
+.visitor-modal-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.15rem;
+}
+
+.visitor-modal-desc {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.visitor-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.full-btn {
+  width: 100%;
+  min-block-size: 42px;
 }
 </style>

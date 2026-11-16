@@ -608,7 +608,7 @@ export async function handleD1GatewayAction(
         digestWeekday: pref?.digest_weekday ?? 6,
         digestDayOfMonth: pref?.digest_day_of_month ?? 1,
         digestTimezone: pref?.digest_timezone || 'Europe/Paris',
-        digestChannel: pref?.digest_channel || 'email',
+        digestChannel: pref?.digest_channel || 'push',
         lastNotifiedAt: pref?.last_notified_at || null,
         hasPushSubscription: (subCountRow?.cnt || 0) > 0,
         vapidPublicKey: env?.VAPID_PUBLIC_KEY || null
@@ -629,7 +629,7 @@ export async function handleD1GatewayAction(
       const timezone = String(body?.digestTimezone || 'Europe/Paris').trim() || 'Europe/Paris';
       const channel = ['push', 'email', 'both'].includes(body?.digestChannel)
         ? String(body?.digestChannel)
-        : 'email';
+        : 'push';
 
       await db
         .prepare(
