@@ -77,9 +77,6 @@ const toggleScan = () => {
       </div>
 
       <div v-if="isMenuOpen" class="menu-accordion-drawer">
-        <button class="wireframe-btn menu-drawer-item" @click="handleHome">
-          {{ TEXTS.header?.home || 'ACCUEIL' }}
-        </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleCollection">
           {{ TEXTS.header?.collection || 'COLLECTION' }}
         </button>

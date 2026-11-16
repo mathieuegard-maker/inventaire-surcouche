@@ -1,40 +1,23 @@
 // src/state/scanner.ts
 // État réactif global du Scanner unifié :
-// 1. 'simple' : Scan unitaire avec vérif instantanée (déjà possédé / prêté / wishlist / tomes manquants) + ouverture fiche
-// 2. 'burst'  : Scan en Rafale continu (empile les livres scannés en direct sous la caméra)
-// 3. 'photo'  : Photo Étagère / Couverture (lot multi-photos traité en arrière-fond tant que l'appli reste ouverte)
+// 1. 'simple' : Scan unitaire -> ferme le scanner et ouvre directement la fiche complète du livre
+// 2. 'burst'  : Scan rafale multiple -> constitue une liste de livres à cocher (sans enregistrement automatique) avec actions groupées
+// 3. 'photo'  : Photo Étagère / Couverture (lot multi-photos traité en file d'attente par l'IA)
 
 import { ref } from 'vue';
 import type { Router } from 'vue-router';
 import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
-import { queueService } from '../core/orchestrators/queue.orchestrator';
-import { backgroundCreationOrchestrator } from '../core/orchestrators/background-creation.orchestrator';
 import { externalMetadataService } from '../core/services/external-metadata.service';
-import { databaseService } from '../core/database/database.service';
-import type { SearchResponse } from '../core/types';
+import type { HumanizedBook } from '../core/types';
 
-export type ScannerMode = 'chooser' | 'simple' | 'burst' | 'photo';
-export type BurstTarget = 'owned' | 'wishlist';
-
-export interface BurstScannedEntry {
-  isbn: string;
-  uri: string;
-  title: string;
-  series?: string;
-  seriesNumber?: string;
-  status: 'added' | 'already_owned' | 'creating_bg';
-  target: BurstTarget;
-  timestamp: number;
-}
+export type ScannerMode = 'simple' | 'burst' | 'photo';
 
 const isScanningActive = ref(false);
 const isSearching = ref(false);
 const errorMessage = ref<string | null>(null);
-const activeMode = ref<ScannerMode>('chooser');
-const burstTarget = ref<BurstTarget>('owned');
-const lastCheckResult = ref<(SearchResponse & { isUnknown?: boolean; isbn?: string }) | null>(null);
-const burstHistory = ref<BurstScannedEntry[]>([]);
-const latestBurstToast = ref<BurstScannedEntry | null>(null);
+const activeMode = ref<ScannerMode>('simple');
+const burstBooks = ref<HumanizedBook[]>([]);
+const latestBurstBook = ref<HumanizedBook | null>(null);
 const lastUpdatedTick = ref<number>(Date.now());
 let activeRouter: Router | null = null;
 
@@ -43,24 +26,21 @@ export const scannerState = {
   isSearching,
   errorMessage,
   activeMode,
-  burstTarget,
-  lastCheckResult,
-  burstHistory,
-  latestBurstToast,
+  burstBooks,
+  latestBurstBook,
   lastUpdatedTick,
 
   notifyCatalogChanged() {
     lastUpdatedTick.value = Date.now();
   },
 
-  async startScan(router: Router, mode: ScannerMode = 'chooser') {
+  async startScan(router: Router, mode: ScannerMode = 'simple') {
     activeRouter = router;
     activeMode.value = mode;
     errorMessage.value = null;
-    lastCheckResult.value = null;
     isScanningActive.value = true;
 
-    if (activeMode.value === 'chooser' || activeMode.value === 'photo') {
+    if (activeMode.value === 'photo') {
       isSearching.value = false;
       await barcodeIsbnProvider.stopScanner();
       return;
@@ -78,14 +58,21 @@ export const scannerState = {
               return;
             }
 
-            // Mode 'simple' unifié : vérif instantanée (collection/wishlist/prêt/série manquante) sans recherche superflue si déjà présent
+            // Mode 'simple' : dès que le livre est trouvé, on ferme la fenêtre de scan et on ouvre sa fiche complète
             isSearching.value = false;
             if (response) {
               playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
-              lastCheckResult.value = {
-                ...response,
-                isbn: rawIsbn || response.isbn || response.mainBook?.isbn13
-              };
+              await this.stopScan();
+              if ('isUnknown' in response && response.isUnknown) {
+                await router.push({
+                  name: 'BookCreateUnknown',
+                  query: { isbn: response.isbn || rawIsbn || '' }
+                });
+              } else if (response.mainBook?.uri) {
+                await router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+              } else {
+                errorMessage.value = 'Ouvrage non trouvé.';
+              }
             } else {
               errorMessage.value = 'Ouvrage non trouvé.';
             }
@@ -108,154 +95,82 @@ export const scannerState = {
   },
 
   async handleBurstDetection(response: any, scannedIsbn: string) {
-    const target = burstTarget.value;
+    if (!scannedIsbn) return;
 
-    // Évite de empiler deux fois le même ISBN dans la même session de rafale
-    if (burstHistory.value.some((e) => e.isbn === scannedIsbn)) {
+    // Éviter d'empiler deux fois le même ISBN dans la liste courante
+    const alreadyInList = burstBooks.value.some(
+      (b) => b.isbn13 === scannedIsbn || b.isbn10 === scannedIsbn || b.uri === `isbn:${scannedIsbn}`
+    );
+    if (alreadyInList) {
       playScanBeep('duplicate');
       return;
     }
 
-    // Cas 1 : Livre résolu immédiatement (depuis le cache local ou auto-résolu sur Cloudflare D1 via BnF/Google/OL)
+    // Cas 1 : Livre déjà connu (cache local / D1) — aucun enregistrement automatique !
     if (response && response.mainBook?.uri && !response.isUnknown) {
-      const book = response.mainBook;
-      const alreadyOwned = Boolean(response.ownership?.isWorkOwned);
-
-      if (alreadyOwned && target === 'owned') {
-        playScanBeep('duplicate');
-        const entry: BurstScannedEntry = {
-          isbn: scannedIsbn,
-          uri: book.uri,
-          title: book.title,
-          series: book.series,
-          seriesNumber: book.seriesNumber,
-          status: 'already_owned',
-          target,
-          timestamp: Date.now()
-        };
-        burstHistory.value.unshift(entry);
-        latestBurstToast.value = entry;
-        return;
-      }
-
-      playScanBeep('success');
-      if (target === 'owned') {
-        await queueService.enqueueAction('ADD_INVENTORY', book.uri);
-      } else {
-        await queueService.enqueueAction('ADD_WISHLIST', book.uri);
-      }
-      this.notifyCatalogChanged();
-
-      const entry: BurstScannedEntry = {
-        isbn: scannedIsbn,
-        uri: book.uri,
-        title: book.title,
-        series: book.series,
-        seriesNumber: book.seriesNumber,
-        status: 'added',
-        target,
-        timestamp: Date.now()
+      const book: HumanizedBook = {
+        ...response.mainBook,
+        loan: response.loan?.details || response.mainBook.loan
       };
-      burstHistory.value.unshift(entry);
-      latestBurstToast.value = entry;
+      playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
+      burstBooks.value.unshift(book);
+      latestBurstBook.value = book;
       return;
     }
 
-    // Cas 2 : ISBN inconnu -> Enrichissement et création en tâche de fond sans bloquer la caméra !
+    // Cas 2 : ISBN absent de D1 -> résolution métadonnées externes pour l'afficher dans la liste à cocher (sans création auto)
     playScanBeep('success');
     const placeholderUri = `isbn:${scannedIsbn}`;
-    const entry: BurstScannedEntry = {
-      isbn: scannedIsbn,
+    const placeholderBook: HumanizedBook = {
       uri: placeholderUri,
-      title: `ISBN ${scannedIsbn} (Recherche BnF...)`,
-      status: 'creating_bg',
-      target,
-      timestamp: Date.now()
+      type: 'edition',
+      isbn13: scannedIsbn,
+      title: `Recherche BnF (${scannedIsbn})...`,
+      authors: [],
+      illustrators: [],
+      scriptwriters: [],
+      genres: [],
+      ownershipStatus: 'none'
     };
-    burstHistory.value.unshift(entry);
-    latestBurstToast.value = entry;
+    burstBooks.value.unshift(placeholderBook);
+    latestBurstBook.value = placeholderBook;
 
     externalMetadataService
       .fetchFromExternalSources(scannedIsbn)
-      .then(async (meta) => {
-        const title = meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`;
-        entry.title = title;
-        entry.series = meta?.series;
-        entry.seriesNumber = meta?.seriesNumber;
-        await backgroundCreationOrchestrator.enqueueBookCreation({
-          tempBook: {
-            uri: placeholderUri,
-            type: 'edition',
-            isbn13: scannedIsbn,
-            title,
-            authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
-            illustrators: [],
-            scriptwriters: [],
-            publisher: meta?.publisher || '',
-            publishDate: meta?.publishDate,
-            pageCount: meta?.pageCount,
-            coverUrl: meta?.coverUrl,
-            series: meta?.series,
-            seriesNumber: meta?.seriesNumber,
-            genres: [],
-            ownershipStatus: target === 'owned' ? 'owned' : 'wish'
-          },
-          expandSeries: Boolean(meta?.series)
-        });
-        entry.status = 'added';
-        this.notifyCatalogChanged();
+      .then((meta) => {
+        const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+        if (idx === -1) return;
+        burstBooks.value[idx] = {
+          ...burstBooks.value[idx],
+          title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
+          authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
+          publisher: meta?.publisher || '',
+          publishDate: meta?.publishDate,
+          pageCount: meta?.pageCount,
+          coverUrl: meta?.coverUrl,
+          series: meta?.series,
+          seriesNumber: meta?.seriesNumber,
+          genres: meta?.genres || []
+        };
+        if (latestBurstBook.value?.uri === placeholderUri) {
+          latestBurstBook.value = burstBooks.value[idx];
+        }
       })
       .catch((e: unknown) => {
-        console.warn('[BURST SCAN] Échec enrichissement en tâche de fond :', e);
+        console.warn('[BURST SCAN] Échec enrichissement aperçu :', e);
       });
   },
 
-  async undoBurstEntry(entry: BurstScannedEntry) {
-    burstHistory.value = burstHistory.value.filter((e) => e.timestamp !== entry.timestamp);
-    if (latestBurstToast.value?.timestamp === entry.timestamp) {
-      latestBurstToast.value = null;
-    }
-    if (entry.status === 'added' || entry.status === 'creating_bg') {
-      if (entry.target === 'owned') {
-        await queueService.enqueueAction('REMOVE_INVENTORY', entry.uri);
-      } else {
-        await queueService.enqueueAction('REMOVE_WISHLIST', entry.uri);
-      }
-      const cached = await databaseService.getBookFromCache(entry.uri);
-      if (cached) {
-        cached.ownershipStatus = 'none';
-        await databaseService.saveBookToCache(cached);
-      }
-      this.notifyCatalogChanged();
-    }
-  },
-
-  async finishAndOpenBurstTarget(router: Router) {
-    const target = burstTarget.value;
-    await this.stopScan();
-    burstHistory.value = [];
-    latestBurstToast.value = null;
-    this.notifyCatalogChanged();
-    if (target === 'owned') {
-      await router.push({ name: 'CollectionView', query: { mode: 'books' } });
-    } else {
-      await router.push('/wishlist');
-    }
+  clearBurstBooks() {
+    burstBooks.value = [];
+    latestBurstBook.value = null;
   },
 
   async switchMode(newMode: ScannerMode) {
     activeMode.value = newMode;
-    lastCheckResult.value = null;
     errorMessage.value = null;
     if (isScanningActive.value && activeRouter) {
       await this.startScan(activeRouter, newMode);
-    }
-  },
-
-  async resumeCameraInCheckMode() {
-    lastCheckResult.value = null;
-    if (activeRouter) {
-      await this.startScan(activeRouter, 'simple');
     }
   },
 
@@ -263,15 +178,14 @@ export const scannerState = {
     await barcodeIsbnProvider.stopScanner();
     isScanningActive.value = false;
     isSearching.value = false;
-    lastCheckResult.value = null;
-    this.notifyCatalogChanged();
   },
 
   toggleScan(router: Router, mode?: ScannerMode) {
     if (isScanningActive.value && (!mode || activeMode.value === mode)) {
       this.stopScan();
     } else {
-      this.startScan(router, mode || 'chooser');
+      // Par défaut, cliquer sur Scanner ouvre le Scan simple
+      this.startScan(router, mode || 'simple');
     }
   }
 };

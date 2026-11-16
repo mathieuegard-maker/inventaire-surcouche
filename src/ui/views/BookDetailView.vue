@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onErrorCaptured, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
@@ -185,27 +185,70 @@ watch(
   }
 );
 
+let activeLoadToken = 0;
+
+function toStringArray(val: unknown): string[] {
+  if (Array.isArray(val)) {
+    return val.map((v) => (typeof v === 'string' ? v.trim() : '')).filter(Boolean);
+  }
+  if (typeof val === 'string' && val.trim()) {
+    return val.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function sanitizeBook(raw: HumanizedBook): HumanizedBook {
+  return {
+    ...raw,
+    title: typeof raw.title === 'string' && raw.title.trim() ? raw.title : 'Titre inconnu',
+    authors: toStringArray(raw.authors),
+    illustrators: toStringArray(raw.illustrators),
+    scriptwriters: toStringArray(raw.scriptwriters),
+    genres: toStringArray(raw.genres)
+  };
+}
+
+function decodeRouteUri(raw: unknown): string {
+  const str = typeof raw === 'string' ? raw : Array.isArray(raw) ? String(raw[0] || '') : '';
+  if (!str) return '';
+  try {
+    return str.includes('%') ? decodeURIComponent(str) : str;
+  } catch {
+    return str;
+  }
+}
+
+onErrorCaptured((err) => {
+  console.error('[DETAIL VIEW] Erreur de rendu capturée :', err);
+  errorMsg.value = 'Impossible d’afficher cette fiche livre.';
+  isLoading.value = false;
+  return false;
+});
+
 const navigateToBook = (uri: string) => {
-  router.push({ name: 'BookDetail', params: { uri } });
+  if (!uri) return;
+  router.push(`/book/${encodeURIComponent(uri)}`);
 };
 
 const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
-  const needsHumanization = (currentBook.series && currentBook.series.startsWith('wd:')) ||
-                            (currentBook.authors && currentBook.authors.some(a => a.startsWith('wd:'))) ||
-                            (currentBook.publisher && currentBook.publisher.startsWith('wd:')) ||
-                            (currentBook.genres && currentBook.genres.some(g => g.startsWith('wd:'))) ||
-                            (currentBook.collection && currentBook.collection.startsWith('wd:'));
+  const needsHumanization = (currentBook.series && typeof currentBook.series === 'string' && currentBook.series.startsWith('wd:')) ||
+                            currentBook.authors.some(a => a.startsWith('wd:')) ||
+                            (currentBook.publisher && typeof currentBook.publisher === 'string' && currentBook.publisher.startsWith('wd:')) ||
+                            currentBook.genres.some(g => g.startsWith('wd:')) ||
+                            (currentBook.collection && typeof currentBook.collection === 'string' && currentBook.collection.startsWith('wd:'));
   if (needsHumanization) {
     console.log(`[DETAIL VIEW] Livre partiellement humanisé détecté (${currentBook.uri}). Ré-humanisation à la volée...`);
     entityHumanizer.rehumanize(currentBook).then((updated) => {
       if (updated) {
-        book.value = { ...updated, loan: book.value?.loan };
+        book.value = sanitizeBook({ ...updated, loan: book.value?.loan });
       }
     });
   }
 };
 
-const loadBookDetails = async (uriParam: string) => {
+const loadBookDetails = async (rawUriParam: string) => {
+  const loadToken = ++activeLoadToken;
+  const uriParam = decodeRouteUri(rawUriParam);
   isLoading.value = true;
   errorMsg.value = '';
   successMessage.value = '';
@@ -214,54 +257,66 @@ const loadBookDetails = async (uriParam: string) => {
     if (isbnUtil.isValidFormat(normalized)) {
       console.log(`[DETAIL VIEW] Détection ISBN : Aiguillage vers le flux de recherche standard pour : ${normalized}`);
       const response = await searchService.searchByIsbn(normalized);
+      if (loadToken !== activeLoadToken) return;
       if (response) {
         if ('isUnknown' in response && (response as any).isUnknown) {
           router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
           return;
         }
-        const mainBook = response.mainBook;
+        const mainBook = sanitizeBook(response.mainBook);
         if (response.loan?.details) {
           mainBook.loan = response.loan.details;
         }
         book.value = mainBook;
         checkAndTriggerRehumanize(mainBook);
       } else {
+        book.value = null;
         errorMsg.value = TEXTS.bookDetail.fetchError;
       }
       return;
     }
 
-    // Flux normal pour les URIs (inv:...) ou autres identifiants (avec fallback ISBN si promu en tâche de fond)
+    // Flux normal pour les URIs (inv:..., ed:..., isbn:...)
     let cached = await databaseService.getBookFromCache(uriParam);
     if (!cached && uriParam.startsWith('isbn:')) {
       cached = await databaseService.getBookByIsbn(isbnUtil.normalize(uriParam.slice(5)));
     }
+    if (loadToken !== activeLoadToken) return;
     if (cached) {
-      const activeLoan = await databaseService.getLoan(cached.uri);
+      const safeCached = sanitizeBook(cached);
+      const activeLoan = await databaseService.getLoan(safeCached.uri);
+      if (loadToken !== activeLoadToken) return;
       if (activeLoan) {
-        cached.loan = activeLoan;
+        safeCached.loan = activeLoan;
       }
-      book.value = cached;
-      checkAndTriggerRehumanize(cached);
+      book.value = safeCached;
+      checkAndTriggerRehumanize(safeCached);
       return;
     }
 
     console.log(`[DETAIL VIEW] Non trouvé en cache, résolution réseau pour : ${uriParam}`);
     const resolved = await entityResolver.resolvePhysicalEntity(uriParam);
+    if (loadToken !== activeLoadToken) return;
     if (resolved) {
-      const activeLoan = await databaseService.getLoan(resolved.uri);
+      const safeResolved = sanitizeBook(resolved);
+      const activeLoan = await databaseService.getLoan(safeResolved.uri);
+      if (loadToken !== activeLoadToken) return;
       if (activeLoan) {
-        resolved.loan = activeLoan;
+        safeResolved.loan = activeLoan;
       }
-      book.value = resolved;
-      checkAndTriggerRehumanize(resolved);
+      book.value = safeResolved;
+      checkAndTriggerRehumanize(safeResolved);
     } else {
+      book.value = null;
       errorMsg.value = TEXTS.bookDetail.fetchError;
     }
   } catch (e) {
+    if (loadToken !== activeLoadToken) return;
     console.error("[DETAIL VIEW] Erreur de chargement :", e);
+    book.value = null;
     errorMsg.value = TEXTS.bookDetail.loadError;
   } finally {
+    if (loadToken !== activeLoadToken) return;
     isLoading.value = false;
     if (book.value?.uri) {
       loadLocalReadingMeta(book.value.uri);
@@ -481,6 +536,10 @@ const confirmDelete = async () => {
               <strong>{{ TEXTS.bookCard.series }} :</strong>
               {{ book.series }}
               <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
+              <span class="saga-sep"> — </span>
+              <button type="button" class="discreet-saga-link" @click="navigateToSeries">
+                Voir toute la saga{{ seriesTomes.length > 0 ? ` (${seriesTomes.length} tomes)` : '' }}
+              </button>
             </p>
           </div>
 
@@ -536,83 +595,6 @@ const confirmDelete = async () => {
                 <option :value="1">1 / 5</option>
               </select>
             </p>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%; border: 2px solid #000; background: #fff; padding: 0.75rem;">
-        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.6rem;">
-          <strong style="font-size: 0.95rem;">
-            Série : {{ book.series || 'SAGA' }} ({{ seriesTomes.length }} tome{{ seriesTomes.length > 1 ? 's' : '' }})
-          </strong>
-          <button class="wireframe-btn" style="width: auto; padding: 0.3rem 0.65rem; font-size: 0.8rem;" @click="navigateToSeries">
-            [ {{ TEXTS.bookDetail.btnSeries.toUpperCase() }} ]
-          </button>
-        </div>
-
-        <div v-if="seriesProgress.isActive" style="font-size: 0.82rem; font-weight: 700; color: #1d4ed8; margin-bottom: 0.6rem; padding: 0.4rem 0.6rem; background: #eff6ff; border: 1px dashed #1d4ed8;">
-          Récupération automatique des tomes de la série via BnF ({{ seriesProgress.current }} / {{ seriesProgress.total || '...' }})...
-        </div>
-
-        <div v-if="seriesTomes.length > 0" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
-          <button
-            v-if="missingSeriesTomes.length > 0"
-            type="button"
-            class="wireframe-btn"
-            style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.8rem;"
-            @click="selectAllMissingSeriesTomes"
-          >
-            {{ selectedSeriesTomeUris.length === missingSeriesTomes.length ? 'Tout décocher' : `Tout cocher (${missingSeriesTomeUris.length === 0 ? missingSeriesTomes.length : missingSeriesTomes.length} manquant${missingSeriesTomes.length > 1 ? 's' : ''})` }}
-          </button>
-          <button
-            v-if="selectedSeriesTomeUris.length > 0"
-            type="button"
-            class="wireframe-btn btn-primary"
-            style="width: auto; padding: 0.35rem 0.75rem; font-size: 0.82rem; font-weight: 800;"
-            @click="addSelectedSeriesTomesToCollection"
-          >
-            + Ajouter les {{ selectedSeriesTomeUris.length }} tome(s) coché(s) à ma collection
-          </button>
-        </div>
-
-        <div v-if="seriesTomes.length > 0" style="max-height: 260px; overflow-y: auto; border-top: 1px solid #cbd5e1; padding-top: 0.4rem; display: flex; flex-direction: column; gap: 0.35rem;">
-          <div
-            v-for="tome in seriesTomes"
-            :key="tome.uri"
-            style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.5rem; border: 1px solid #cbd5e1; background: #f8fafc;"
-            :style="tome.uri === book.uri ? 'border: 2px solid #000; background: #fef9c3;' : ''"
-          >
-            <label style="display: flex; align-items: center; gap: 0.5rem; flex: 1; cursor: pointer; font-size: 0.85rem;">
-              <input
-                v-if="tome.ownershipStatus !== 'owned'"
-                type="checkbox"
-                :checked="selectedSeriesTomeUris.includes(tome.uri)"
-                @change="toggleSeriesTomeSelection(tome.uri)"
-                style="width: 18px; height: 18px; cursor: pointer;"
-              />
-              <span v-else style="color: #15803d; font-weight: 800; font-size: 0.8rem; min-width: 18px; text-align: center;">OK</span>
-              <span>
-                <strong v-if="tome.seriesNumber">T.{{ tome.seriesNumber }} — </strong>
-                <span>{{ tome.title }}</span>
-              </span>
-            </label>
-            <div style="display: flex; align-items: center; gap: 0.4rem;">
-              <span
-                v-if="tome.ownershipStatus === 'owned'"
-                style="font-size: 0.72rem; font-weight: 800; background: #dcfce7; color: #166534; padding: 0.15rem 0.4rem; border: 1px solid #166534;"
-              >
-                Possédé
-              </span>
-              <button
-                v-if="tome.uri !== book.uri"
-                type="button"
-                class="wireframe-btn"
-                style="width: auto; padding: 0.2rem 0.45rem; font-size: 0.75rem;"
-                @click="navigateToBook(tome.uri)"
-              >
-                Voir
-              </button>
-            </div>
           </div>
         </div>
       </div>
@@ -730,6 +712,18 @@ const confirmDelete = async () => {
   font-family: inherit;
   font-size: inherit;
   padding: 1px 4px;
+  cursor: pointer;
+}
+
+.discreet-saga-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: #1d4ed8;
+  text-decoration: underline;
+  font-weight: 700;
   cursor: pointer;
 }
 </style>

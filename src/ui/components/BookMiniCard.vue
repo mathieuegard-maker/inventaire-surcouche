@@ -57,7 +57,7 @@ const handleZoneClick = () => {
       <p class="row-title">{{ book.title }}</p>
       
       <p v-if="book.loan?.friendName" class="row-authors">
-        👉 {{ translateFriendName(book.loan.friendName) }}
+        Prêté à : {{ translateFriendName(book.loan.friendName) }}
       </p>
       <p v-else-if="book.series" class="row-series-meta">
         {{ book.series }}

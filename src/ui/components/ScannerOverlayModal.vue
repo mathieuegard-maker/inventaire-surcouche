@@ -4,146 +4,138 @@ import { useRouter } from 'vue-router';
 import { scannerState } from '../../state/scanner';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
+import { inventoryService } from '../../core/services/inventory.service';
+import { wishlistService } from '../../core/services/wishlist.service';
 import {
   byokVisionService,
   type ByokProvider
 } from '../../core/services/byok-vision.service';
 import {
-  photoBookResolutionService,
   type ResolvedPhotoItem,
   type PhotoResolutionOption
 } from '../../core/services/photo-book-resolution.service';
 import { photoBatchQueueService } from '../../core/services/photo-batch-queue.service';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 import { imageUtil } from '../../core/utils/image.util';
+import BookMiniCard from './BookMiniCard.vue';
+import WireframeTable from './WireframeTable.vue';
+import BatchActionBar from './BatchActionBar.vue';
+import LendModal from './LendModal.vue';
 
 const router = useRouter();
 
-const checkRes = computed(() => scannerState.lastCheckResult.value);
 const activeMode = computed(() => scannerState.activeMode.value);
-const burstTarget = computed({
-  get: () => scannerState.burstTarget.value,
-  set: (v) => {
-    scannerState.burstTarget.value = v;
+const burstBooks = computed(() => scannerState.burstBooks.value);
+const burstSelectedUris = ref<string[]>([]);
+const showBurstLendModal = ref(false);
+const burstFeedback = ref('');
+
+// Fermer automatiquement la fenêtre scanner si l'utilisateur ouvre une fiche livre depuis la liste rafale
+watch(
+  () => router.currentRoute.value.fullPath,
+  () => {
+    if (scannerState.isScanningActive.value && activeMode.value !== 'photo') {
+      scannerState.stopScan();
+    }
   }
+);
+
+const isAllBurstSelected = computed(
+  () => burstBooks.value.length > 0 && burstSelectedUris.value.length === burstBooks.value.length
+);
+
+const toggleAllBurst = (checked: boolean) => {
+  burstSelectedUris.value = checked ? burstBooks.value.map((b) => b.uri) : [];
+};
+
+const selectedBurstBooks = computed(() =>
+  burstBooks.value.filter((b) => burstSelectedUris.value.includes(b.uri))
+);
+
+const burstBatchState = computed(() => {
+  const sel = selectedBurstBooks.value;
+  if (sel.length === 0) return { isMixed: false, context: 'unowned' as const };
+  const buckets = new Set(
+    sel.map((b) => {
+      if (b.loan) return 'lent';
+      if (b.ownershipStatus === 'owned') return 'owned';
+      if (b.ownershipStatus === 'wish') return 'wishlist';
+      return 'unowned';
+    })
+  );
+  if (buckets.size > 1) return { isMixed: true, context: 'unowned' as const };
+  const sole = Array.from(buckets)[0] as 'lent' | 'owned' | 'wishlist' | 'unowned';
+  return { isMixed: false, context: sole };
 });
 
-// Calcul des tomes manquants dans la série lors du Mode Vérif Magasin
-const missingTomesInSeries = computed(() => {
-  const s = checkRes.value?.series;
-  if (!s || !Array.isArray(s.tomes)) return [];
-  return s.tomes
-    .filter((t) => t.ownershipStatus !== 'owned')
-    .map((t) => (t.seriesNumber ? `T.${t.seriesNumber}` : t.title))
-    .slice(0, 8);
-});
-
-const checkStatusBanner = computed(() => {
-  const r = checkRes.value;
-  if (!r) return null;
-  if (r.isUnknown) {
-    return {
-      color: 'neutral',
-      badge: 'NOUVEAU LIVRE (ISBN INCONNU)',
-      headline: `Vous ne l'avez pas dans votre collection`,
-      sub: `ISBN ${r.isbn} — Cliquez ci-dessous pour l'enrichir et l'ajouter automatiquement.`
-    };
-  }
-  if (r.ownership?.isEditionOwned) {
-    return {
-      color: 'owned',
-      badge: 'VOUS AVEZ DÉJÀ CE LIVRE',
-      headline: r.mainBook?.title || 'Déjà possédé',
-      sub: r.loan?.isLent
-        ? `Actuellement prêté à ${r.loan.details?.friendName}`
-        : 'Cet ISBN exact est déjà présent dans votre collection.'
-    };
-  }
-  if (r.ownership?.isWorkOwned) {
-    return {
-      color: 'owned-other',
-      badge: 'DÉJÀ POSSÉDÉ (AUTRE ÉDITION)',
-      headline: r.mainBook?.title || 'Déjà possédé',
-      sub: `Vous possédez déjà cette œuvre (${r.ownership.duplicateEdition?.publisher || 'autre édition'}).`
-    };
-  }
-  if (r.ownership?.isWished) {
-    return {
-      color: 'wish',
-      badge: 'DANS VOTRE WISHLIST',
-      headline: r.mainBook?.title || 'Dans vos envies',
-      sub: 'Ce livre figure dans votre liste d’envies.'
-    };
-  }
-  if (r.series && r.series.ownedCount > 0) {
-    return {
-      color: 'series-gap',
-      badge: 'VOUS NE L’AVEZ PAS (SÉRIE SUIVIE)',
-      headline: r.mainBook?.title || 'Tome manquant',
-      sub: `Vous avez ${r.series.ownedCount}/${r.series.tomes.length} tomes de "${r.series.name || r.mainBook?.series}".`
-    };
-  }
-  return {
-    color: 'not-owned',
-    badge: 'ABSENT DE VOTRE BIBLIOTHÈQUE',
-    headline: r.mainBook?.title || 'Non possédé',
-    sub: 'Vous ne possédez pas encore cet ouvrage.'
-  };
-});
-
-const quickActionFeedback = ref('');
-
-async function quickAddFromCheck(target: 'owned' | 'wish') {
-  const r = checkRes.value;
-  if (!r) return;
-
-  if (r.isUnknown && r.isbn) {
-    await scannerState.stopScan();
-    router.push({ name: 'BookCreateUnknown', query: { isbn: r.isbn } });
+const dispatchBurstBatchAction = async (
+  action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
+) => {
+  if (selectedBurstBooks.value.length === 0 || burstBatchState.value.isMixed) return;
+  if (action === 'LEND') {
+    showBurstLendModal.value = true;
     return;
   }
 
-  const uri = r.mainBook?.uri;
-  if (!uri) return;
+  let processed = 0;
+  for (const book of selectedBurstBooks.value) {
+    if (action === 'DELETE') {
+      if (book.ownershipStatus === 'owned') {
+        await inventoryService.removeFromLibrary(book.uri);
+      } else if (book.ownershipStatus === 'wish') {
+        await wishlistService.removeFromWishlist([book.uri]);
+      }
+      book.ownershipStatus = 'none';
+      if (book.loan) delete book.loan;
+      processed++;
+      continue;
+    }
 
-  if (target === 'owned') {
-    await queueService.enqueueAction('ADD_INVENTORY', uri);
-    if (r.ownership) {
-      r.ownership.isEditionOwned = true;
-      r.ownership.isWorkOwned = true;
+    if (action === 'RETURN') {
+      await queueService.enqueueAction('RETURN', book.uri);
+      if (book.loan) delete book.loan;
+      processed++;
+      continue;
     }
-    scannerState.notifyCatalogChanged();
-    quickActionFeedback.value = 'Ajouté à votre collection ✓';
-  } else {
-    await queueService.enqueueAction('ADD_WISHLIST', uri);
-    if (r.ownership) {
-      r.ownership.isWished = true;
+
+    if (action === 'ADD_INVENTORY' || action === 'ADD_WISHLIST') {
+      const targetStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
+      if (book.uri.startsWith('isbn:')) {
+        await backgroundCreationOrchestrator.enqueueBookCreation({
+          tempBook: { ...book, ownershipStatus: targetStatus },
+          expandSeries: Boolean(book.series)
+        });
+      } else {
+        await queueService.enqueueAction(action, book.uri);
+      }
+      book.ownershipStatus = targetStatus;
+      processed++;
     }
-    scannerState.notifyCatalogChanged();
-    quickActionFeedback.value = 'Ajouté à votre Wishlist ✓';
   }
+
+  scannerState.notifyCatalogChanged();
+  burstSelectedUris.value = [];
+  burstFeedback.value = `Action appliquée sur ${processed} livre(s).`;
   setTimeout(() => {
-    quickActionFeedback.value = '';
-  }, 2500);
-}
+    burstFeedback.value = '';
+  }, 3000);
+};
 
-async function openFullBookFromCheck() {
-  const r = checkRes.value;
-  if (!r) return;
-  await scannerState.stopScan();
-  if (r.isUnknown && r.isbn) {
-    router.push({ name: 'BookCreateUnknown', query: { isbn: r.isbn } });
-  } else if (r.mainBook?.uri) {
-    router.push(`/book/${encodeURIComponent(r.mainBook.uri)}`);
+const confirmBurstGroupLend = async (friendName: string) => {
+  for (const book of selectedBurstBooks.value) {
+    if (!book.uri.startsWith('isbn:')) {
+      await queueService.enqueueAction('LEND', book.uri, { friendName });
+      book.loan = { uri: book.uri, friendName, loanDate: Date.now() };
+    }
   }
-}
-
-async function openSeriesFromCheck() {
-  const seriesId = checkRes.value?.series?.id || checkRes.value?.mainBook?.seriesId;
-  if (!seriesId) return;
-  await scannerState.stopScan();
-  router.push(`/series/${encodeURIComponent(seriesId)}`);
-}
+  scannerState.notifyCatalogChanged();
+  burstSelectedUris.value = [];
+  showBurstLendModal.value = false;
+  burstFeedback.value = `Prêt enregistré pour ${friendName}.`;
+  setTimeout(() => {
+    burstFeedback.value = '';
+  }, 3000);
+};
 
 // ============================================================================
 // MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (BYOK + VALIDATION LIVRE PAR LIVRE)
@@ -474,7 +466,7 @@ async function clearPhotoQueueAndForm() {
 <template>
   <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop">
     <div class="scanner-modal-card">
-      <!-- En-tête + Sélecteur 3 Modes (Simple / Rafale / Photo) -->
+      <!-- En-tête + Sélecteur 3 Modes (Simple par défaut / Rafale / Photo) -->
       <div class="scanner-header">
         <div class="mode-tabs">
           <button
@@ -492,6 +484,7 @@ async function clearPhotoQueueAndForm() {
             @click="scannerState.switchMode('burst')"
           >
             Scan rafale
+            <span v-if="burstBooks.length > 0" class="tab-count-badge">{{ burstBooks.length }}</span>
           </button>
           <button
             type="button"
@@ -508,176 +501,81 @@ async function clearPhotoQueueAndForm() {
         </button>
       </div>
 
-      <!-- ================================================================ -->
-      <!-- ÉCRAN DE CHOIX PAR DÉFAUT LORSQU'ON CLIQUE SUR "SCANNER"         -->
-      <!-- ================================================================ -->
-      <div v-if="activeMode === 'chooser'" class="scanner-chooser-grid">
-        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('simple')">
-          <strong>Scan simple</strong>
-          <small>Scanner un code-barres avec vérification immédiate et fiche complète</small>
-        </button>
-        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('burst')">
-          <strong>Scan rafale</strong>
-          <small>Enchaîner plusieurs codes-barres à la suite vers la collection ou la wishlist</small>
-        </button>
-        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('photo')">
-          <strong>Recherche par photo (étagère, pile ou couverture)</strong>
-          <small>
-            Identifier un ou plusieurs livres sans code-barres via l'IA en file d'attente
-            <template v-if="photoStats.totalPhotos > 0"> ({{ photoStats.totalPhotos }} photo(s) en file)</template>
-          </small>
-        </button>
-      </div>
+      <!-- Petite explication sous les 3 boutons -->
+      <p class="mode-hint-bar">
+        <template v-if="activeMode === 'simple'">
+          Scan simple : scanne un code-barres et ouvre directement sa fiche complète.
+        </template>
+        <template v-else-if="activeMode === 'burst'">
+          Scan rafale : scannez plusieurs livres à la suite sans enregistrement auto, puis cochez les actions souhaitées ci-dessous.
+        </template>
+        <template v-else>
+          Recherche par photo : photographiez une couverture, une pile ou une étagère (analyse IA en file d'attente).
+        </template>
+      </p>
 
       <!-- ================================================================ -->
       <!-- FLUX CAMÉRA CODE-BARRES (Simple ou Rafale)                       -->
       <!-- ================================================================ -->
-      <div v-show="(activeMode === 'simple' || activeMode === 'burst') && !checkRes" class="camera-section">
-        <div v-if="activeMode === 'burst'" class="burst-toolbar">
-          <span class="burst-label">Enregistrer à la volée dans :</span>
-          <div class="burst-target-switch">
-            <button
-              type="button"
-              :class="{ active: burstTarget === 'owned' }"
-              @click="burstTarget = 'owned'"
-            >
-              Ma Collection
-            </button>
-            <button
-              type="button"
-              :class="{ active: burstTarget === 'wishlist' }"
-              @click="burstTarget = 'wishlist'"
-            >
-              Ma Wishlist
-            </button>
-          </div>
-        </div>
-
-        <div class="scanner-viewport-container">
+      <div v-show="activeMode === 'simple' || activeMode === 'burst'" class="camera-section">
+        <div
+          class="scanner-viewport-container"
+          :class="{ 'burst-compact-viewport': activeMode === 'burst' }"
+        >
           <div id="global-barcode-scanner-viewport" class="scanner-viewport"></div>
           <div v-if="!scannerState.isSearching.value" class="scanner-placeholder">
             Ouverture de la caméra...
           </div>
         </div>
 
-        <!-- Toast instantané en Mode Rafale -->
-        <div
-          v-if="activeMode === 'burst' && scannerState.latestBurstToast.value"
-          class="burst-live-toast"
-          :class="scannerState.latestBurstToast.value.status"
-        >
-          <div class="toast-main">
-            <strong v-if="scannerState.latestBurstToast.value.status === 'already_owned'">
-              Déjà possédé : {{ scannerState.latestBurstToast.value.title }}
-            </strong>
-            <strong v-else>
-              Enregistré : {{ scannerState.latestBurstToast.value.title }}
-              <span v-if="scannerState.latestBurstToast.value.seriesNumber">
-                (T.{{ scannerState.latestBurstToast.value.seriesNumber }})
-              </span>
-            </strong>
-            <small>Scannez directement le code-barres suivant sans toucher l'écran</small>
-          </div>
-          <button
-            v-if="scannerState.latestBurstToast.value.status !== 'already_owned'"
-            type="button"
-            class="undo-btn"
-            @click="scannerState.undoBurstEntry(scannerState.latestBurstToast.value!)"
-          >
-            Annuler
-          </button>
-        </div>
+        <div v-if="burstFeedback" class="quick-feedback">{{ burstFeedback }}</div>
 
-        <!-- Historique de la session Rafale + Bouton de validation finale -->
-        <div v-if="activeMode === 'burst' && scannerState.burstHistory.value.length > 0" class="burst-history-box">
+        <!-- Liste à cocher type Ma Collection pour le Scan Rafale (aucun enregistrement auto) -->
+        <div v-if="activeMode === 'burst' && burstBooks.length > 0" class="burst-checklist-panel">
           <div class="burst-history-header">
-            <strong>Session rafale : {{ scannerState.burstHistory.value.length }} livre(s) scanné(s)</strong>
-            <button type="button" class="clear-btn" @click="scannerState.burstHistory.value = []">
+            <label style="display: flex; align-items: center; gap: 6px; font-weight: 800; font-size: 0.85rem; cursor: pointer;">
+              <input
+                type="checkbox"
+                class="wireframe-checkbox"
+                :checked="isAllBurstSelected"
+                @change="toggleAllBurst(($event.target as HTMLInputElement).checked)"
+              />
+              <span>
+                {{ burstSelectedUris.length === 0 ? `Tout cocher (${burstBooks.length})` : `${burstSelectedUris.length} sélectionné(s)` }}
+              </span>
+            </label>
+            <button
+              type="button"
+              class="clear-btn"
+              @click="() => { scannerState.clearBurstBooks(); burstSelectedUris = []; }"
+            >
               Vider la liste
             </button>
           </div>
-          <ul class="burst-list">
-            <li v-for="item in scannerState.burstHistory.value.slice(0, 10)" :key="item.timestamp">
-              <span>
-                [{{ item.status === 'already_owned' ? 'Déjà acquis' : 'OK' }}]
-                <strong>{{ item.title }}</strong>
-                <em v-if="item.series"> — {{ item.series }}</em>
-              </span>
-              <button
-                v-if="item.status !== 'already_owned'"
-                type="button"
-                class="mini-undo"
-                @click="scannerState.undoBurstEntry(item)"
-              >
-                Retirer
-              </button>
-            </li>
-          </ul>
-          <button
-            type="button"
-            class="action-btn primary full-width"
-            style="margin-top: 0.65rem;"
-            @click="scannerState.finishAndOpenBurstTarget(router)"
-          >
-            Valider et voir mes {{ scannerState.burstHistory.value.length }} livre(s) dans {{ burstTarget === 'owned' ? 'Ma Collection' : 'Ma Wishlist' }}
-          </button>
-        </div>
-      </div>
 
-      <!-- ================================================================ -->
-      <!-- RÉSULTAT INSTANTANÉ MODE SIMPLE (Vérif + Actions immédiates)    -->
-      <!-- ================================================================ -->
-      <div v-if="activeMode === 'simple' && checkRes && checkStatusBanner" class="check-result-box">
-        <div class="verdict-banner" :class="checkStatusBanner.color">
-          <div class="verdict-badge">{{ checkStatusBanner.badge }}</div>
-          <h3 class="verdict-title">{{ checkStatusBanner.headline }}</h3>
-          <p class="verdict-sub">{{ checkStatusBanner.sub }}</p>
+          <WireframeTable>
+            <BookMiniCard
+              v-for="livre in burstBooks"
+              :key="livre.uri"
+              :book="livre"
+              :model-value="burstSelectedUris.includes(livre.uri)"
+              @update:model-value="(val) => {
+                if (val) {
+                  if (!burstSelectedUris.includes(livre.uri)) burstSelectedUris.push(livre.uri);
+                } else {
+                  const idx = burstSelectedUris.indexOf(livre.uri);
+                  if (idx > -1) burstSelectedUris.splice(idx, 1);
+                }
+              }"
+            />
+          </WireframeTable>
 
-          <div v-if="missingTomesInSeries.length > 0" class="missing-tomes-pill">
-            <strong>Tomes manquants dans cette série :</strong>
-            {{ missingTomesInSeries.join(', ') }}
-          </div>
-        </div>
-
-        <div v-if="quickActionFeedback" class="quick-feedback">
-          {{ quickActionFeedback }}
-        </div>
-
-        <div class="check-actions-grid">
-          <button
-            v-if="!checkRes.ownership?.isEditionOwned"
-            type="button"
-            class="action-btn primary"
-            @click="quickAddFromCheck('owned')"
-          >
-            Ajouter à ma Collection
-          </button>
-          <button
-            v-if="!checkRes.ownership?.isWorkOwned && !checkRes.ownership?.isWished"
-            type="button"
-            class="action-btn secondary"
-            @click="quickAddFromCheck('wish')"
-          >
-            Ajouter à ma Wishlist
-          </button>
-          <button
-            v-if="checkRes.series?.id || checkRes.mainBook?.seriesId"
-            type="button"
-            class="action-btn series"
-            @click="openSeriesFromCheck"
-          >
-            Voir / Sélectionner toute la série ({{ checkRes.series?.tomes?.length || '?' }} tomes)
-          </button>
-          <button type="button" class="action-btn outline" @click="openFullBookFromCheck">
-            Ouvrir la fiche complète
-          </button>
-          <button
-            type="button"
-            class="action-btn rescan"
-            @click="scannerState.resumeCameraInCheckMode()"
-          >
-            Scanner un autre code-barres
-          </button>
+          <BatchActionBar
+            :selected-count="burstSelectedUris.length"
+            :is-mixed="burstBatchState.isMixed"
+            :context="burstBatchState.context"
+            @execute="dispatchBurstBatchAction"
+          />
         </div>
       </div>
 
@@ -1101,6 +999,13 @@ async function clearPhotoQueueAndForm() {
         {{ scannerState.errorMessage.value }}
       </div>
     </div>
+
+    <LendModal
+      :show="showBurstLendModal"
+      :bookCount="selectedBurstBooks.length"
+      @close="showBurstLendModal = false"
+      @confirm="confirmBurstGroupLend"
+    />
   </div>
 </template>
 
@@ -1937,35 +1842,25 @@ async function clearPhotoQueueAndForm() {
   flex: 1;
 }
 
-.scanner-chooser-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
-  margin-top: 0.5rem;
-}
-
-.chooser-mode-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.25rem;
-  width: 100%;
-  padding: 0.85rem 0.9rem;
-  border: 2px solid #0f172a;
-  background: #f8fafc;
-  color: #0f172a;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chooser-mode-card strong {
-  font-size: 0.95rem;
-  text-transform: uppercase;
-}
-
-.chooser-mode-card small {
-  font-size: 0.78rem;
+.mode-hint-bar {
+  margin: 0 0 0.55rem;
+  font-size: 0.76rem;
   color: #475569;
   line-height: 1.3;
+  background: #f8fafc;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid #0f172a;
+}
+
+.burst-compact-viewport {
+  min-height: 170px !important;
+  max-height: 200px !important;
+}
+
+.burst-checklist-panel {
+  margin-top: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
@@ -211,6 +211,37 @@ const applyAllSuggestions = () => {
   applySuggestion('genres');
 };
 
+const normStr = (v: unknown) => String(v ?? '').trim();
+const hasDiffTitle = computed(() => Boolean(suggestions.value?.title && normStr(suggestions.value.title) !== normStr(titleInput.value)));
+const hasDiffAuthors = computed(() => {
+  const sug = suggestions.value?.authors;
+  if (!Array.isArray(sug) || sug.length === 0) return false;
+  return normStr(sug.join(', ')) !== normStr(authorsInput.value);
+});
+const hasDiffSeries = computed(() => Boolean(!noSeries.value && suggestions.value?.series && normStr(suggestions.value.series) !== normStr(seriesInput.value)));
+const hasDiffSeriesNumber = computed(() => Boolean(!noSeries.value && suggestions.value?.seriesNumber && normStr(suggestions.value.seriesNumber) !== normStr(seriesNumberInput.value)));
+const hasDiffPublisher = computed(() => Boolean(suggestions.value?.publisher && normStr(suggestions.value.publisher) !== normStr(publisherInput.value)));
+const hasDiffPublishDate = computed(() => Boolean(suggestions.value?.publishDate && normStr(suggestions.value.publishDate) !== normStr(publishDateInput.value)));
+const hasDiffPageCount = computed(() => Boolean(suggestions.value?.pageCount && Number(suggestions.value.pageCount) !== Number(pageCountInput.value || 0)));
+const hasDiffCoverUrl = computed(() => Boolean(suggestions.value?.coverUrl && normStr(suggestions.value.coverUrl) !== normStr(coverUrlInput.value)));
+const hasDiffGenres = computed(() => {
+  const sug = suggestions.value?.genres;
+  if (!Array.isArray(sug) || sug.length === 0) return false;
+  return sug.join('|').toLowerCase() !== genresInput.value.join('|').toLowerCase();
+});
+const hasAnySuggestionDiff = computed(
+  () =>
+    hasDiffTitle.value ||
+    hasDiffAuthors.value ||
+    hasDiffSeries.value ||
+    hasDiffSeriesNumber.value ||
+    hasDiffPublisher.value ||
+    hasDiffPublishDate.value ||
+    hasDiffPageCount.value ||
+    hasDiffCoverUrl.value ||
+    hasDiffGenres.value
+);
+
 const {
   currentStep,
   selectedOptionUri,
@@ -331,10 +362,10 @@ const saveChanges = async () => {
       <div v-if="!errorMsg && !successMsg" class="edit-box">
         <div class="info-alert-banner" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--spacing-sm);">
           <p style="margin: 0; flex: 1; min-width: 250px;">
-            <strong>Mode Correction Sémantique :</strong> Modifiez les données à gauche ou copiez les suggestions de la BNF/OL à droite.
+            <strong>Mode Correction Sémantique :</strong> Modifiez les données ci-dessous. Les suggestions BnF/OL n'apparaissent que si une différence est détectée.
           </p>
           <BaseButton 
-            v-if="suggestions" 
+            v-if="suggestions && hasAnySuggestionDiff" 
             @click="applyAllSuggestions" 
             style="padding: 6px 12px; font-size: 11px; font-weight: bold;"
           >
@@ -344,57 +375,45 @@ const saveChanges = async () => {
 
         <div class="edit-split-layout">
           <!-- Titre -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffTitle }">
             <div class="form-group">
               <label class="form-label">Titre (Modifiable)</label>
               <input type="text" v-model="titleInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffTitle" class="suggestion-group">
               <label class="form-label">Titre suggéré (BNF/OL)</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.title">{{ suggestions.title || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.title && suggestions.title !== titleInput" 
-                  @click="applySuggestion('title')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text" :title="suggestions.title">{{ suggestions.title }}</span>
+                <BaseButton @click="applySuggestion('title')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Auteurs -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffAuthors }">
             <div class="form-group">
               <label class="form-label">Auteurs (Séparés par des virgules)</label>
               <input type="text" v-model="authorsInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffAuthors" class="suggestion-group">
               <label class="form-label">Auteurs suggérés</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.authors?.join(', ')">{{ suggestions.authors && suggestions.authors.length > 0 ? suggestions.authors.join(', ') : 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.authors && suggestions.authors.join(', ') !== authorsInput" 
-                  @click="applySuggestion('authors')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text" :title="suggestions.authors?.join(', ')">{{ suggestions.authors.join(', ') }}</span>
+                <BaseButton @click="applySuggestion('authors')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Série -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffSeries }">
             <div class="form-group">
               <label class="form-label">Série</label>
               <input 
@@ -420,27 +439,21 @@ const saveChanges = async () => {
                 </button>
               </div>
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffSeries" class="suggestion-group">
               <label class="form-label">Série suggérée</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.series">{{ suggestions.series || 'Aucune' }}</span>
-                <BaseButton 
-                  v-if="suggestions.series !== seriesInput" 
-                  @click="applySuggestion('series')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text" :title="suggestions.series">{{ suggestions.series }}</span>
+                <BaseButton @click="applySuggestion('series')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Tome -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffSeriesNumber }">
             <div class="form-group">
               <label class="form-label">Numéro de tome</label>
               <input 
@@ -452,102 +465,78 @@ const saveChanges = async () => {
                 :class="{ 'disabled-input': noSeries }"
               />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffSeriesNumber" class="suggestion-group">
               <label class="form-label">Tome suggéré</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.seriesNumber || 'Aucun' }}</span>
-                <BaseButton 
-                  v-if="suggestions.seriesNumber !== seriesNumberInput" 
-                  @click="applySuggestion('seriesNumber')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text">{{ suggestions.seriesNumber }}</span>
+                <BaseButton @click="applySuggestion('seriesNumber')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Éditeur -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffPublisher }">
             <div class="form-group">
               <label class="form-label">Éditeur</label>
               <input type="text" v-model="publisherInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffPublisher" class="suggestion-group">
               <label class="form-label">Éditeur suggéré</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.publisher">{{ suggestions.publisher || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.publisher && suggestions.publisher !== publisherInput" 
-                  @click="applySuggestion('publisher')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text" :title="suggestions.publisher">{{ suggestions.publisher }}</span>
+                <BaseButton @click="applySuggestion('publisher')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Année de publication -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffPublishDate }">
             <div class="form-group">
               <label class="form-label">Année de publication</label>
               <input type="text" v-model="publishDateInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffPublishDate" class="suggestion-group">
               <label class="form-label">Année suggérée</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.publishDate || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.publishDate && suggestions.publishDate !== publishDateInput" 
-                  @click="applySuggestion('publishDate')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text">{{ suggestions.publishDate }}</span>
+                <BaseButton @click="applySuggestion('publishDate')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Nombre de pages -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffPageCount }">
             <div class="form-group">
               <label class="form-label">Nombre de pages</label>
               <input type="number" v-model="pageCountInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffPageCount" class="suggestion-group">
               <label class="form-label">Pages suggérées</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.pageCount || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.pageCount && suggestions.pageCount !== pageCountInput" 
-                  @click="applySuggestion('pageCount')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+              <div v-else class="suggestion-content-inline">
+                <span class="suggestion-value-text">{{ suggestions.pageCount }}</span>
+                <BaseButton @click="applySuggestion('pageCount')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Couverture -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffCoverUrl }">
             <div class="form-group">
               <label class="form-label">URL de la couverture</label>
               <input type="text" v-model="coverUrlInput" class="wireframe-input" />
@@ -564,30 +553,24 @@ const saveChanges = async () => {
                 />
               </div>
             </div>
-            
-            <div class="suggestion-group">
+
+            <div v-if="isSuggestionsLoading || hasDiffCoverUrl" class="suggestion-group">
               <label class="form-label">Couverture suggérée</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
+              <div v-else class="suggestion-content-inline">
                 <div style="display: flex; gap: var(--spacing-sm); align-items: center; min-width: 0; flex: 1;">
                   <img v-if="suggestions.coverUrl" :src="imageUtil.resolveCoverUrl(suggestions.coverUrl)" style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover; flex-shrink: 0;" />
-                  <span class="suggestion-value-text" style="font-size: 11px;">{{ suggestions.coverUrl ? 'Image disponible' : 'Aucune' }}</span>
+                  <span class="suggestion-value-text" style="font-size: 11px;">Image disponible</span>
                 </div>
-                <BaseButton 
-                  v-if="suggestions.coverUrl && suggestions.coverUrl !== coverUrlInput" 
-                  @click="applySuggestion('coverUrl')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+                <BaseButton @click="applySuggestion('coverUrl')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
 
           <!-- Genre(s) multiples -->
-          <div class="comparison-row">
+          <div class="comparison-row" :class="{ 'single-col-row': !isSuggestionsLoading && !hasDiffGenres }">
             <div class="form-group">
               <label class="form-label">Genre(s) (choix multiple : ex. BD + Jeunesse + Fantastique)</label>
               <div v-if="genresInput.length > 0" class="selected-genres-row">
@@ -620,23 +603,17 @@ const saveChanges = async () => {
               </div>
             </div>
 
-            <div class="suggestion-group">
+            <div v-if="isSuggestionsLoading || hasDiffGenres" class="suggestion-group">
               <label class="form-label">Genre(s) croisés (BnF + Open Library + Google Books)</label>
               <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Croisement multi-sources...</div>
-              <div v-else-if="suggestions && suggestions.genres?.length" class="suggestion-content-inline">
+              <div v-else class="suggestion-content-inline">
                 <span class="suggestion-value-text" :title="suggestions.genres.join(', ')">
                   {{ suggestions.genres.join(' • ') }}
                 </span>
-                <BaseButton
-                  v-if="suggestions.genres.join('|') !== genresInput.join('|')"
-                  @click="applySuggestion('genres')"
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
+                <BaseButton @click="applySuggestion('genres')" class="apply-btn-inline">
+                  [ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
           </div>
         </div>
@@ -716,6 +693,10 @@ const saveChanges = async () => {
   border-bottom: 1px dashed var(--color-border) !important;
   padding-bottom: var(--spacing-md) !important;
   width: 100% !important;
+}
+
+.comparison-row.single-col-row {
+  grid-template-columns: 1fr !important;
 }
 
 .comparison-row:last-child {

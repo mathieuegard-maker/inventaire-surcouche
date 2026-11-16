@@ -33,13 +33,16 @@ export interface RecognizedBookCandidate {
 const STORAGE_KEY = 'biblio_byok_vision_settings';
 
 const PREFERRED_GEMINI_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
   'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
   'gemini-3-flash',
-  'gemini-3.0-flash',
-  'gemini-2.5-flash'
+  'gemini-3.0-flash'
 ];
 
 const PREFERRED_GROQ_MODELS = [
@@ -176,12 +179,15 @@ async function resolveAvailableGeminiModels(apiKey: string): Promise<string[]> {
     for (const pref of PREFERRED_GEMINI_MODELS) {
       if (usable.includes(pref) && !ordered.includes(pref)) ordered.push(pref);
     }
-    const otherFlash = usable
-      .filter((id) => id.includes('flash') && !ordered.includes(id))
+    const liteFlash = usable
+      .filter((id) => id.includes('flash') && id.includes('lite') && !ordered.includes(id))
       .sort()
       .reverse();
-    const otherGemini = usable.filter((id) => !id.includes('flash') && !ordered.includes(id));
-    return [...ordered, ...otherFlash, ...otherGemini];
+    const otherFlash = usable
+      .filter((id) => id.includes('flash') && !id.includes('lite') && !id.includes('thinking') && !id.includes('live') && !ordered.includes(id))
+      .sort()
+      .reverse();
+    return [...ordered, ...liteFlash, ...otherFlash].slice(0, 8);
   } catch {
     return PREFERRED_GEMINI_MODELS;
   }
