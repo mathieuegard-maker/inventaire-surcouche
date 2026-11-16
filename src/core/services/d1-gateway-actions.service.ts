@@ -23,10 +23,10 @@ import { runCentralizedSeriesReleaseSweep } from './series-digest.service';
 
 async function requireAdmin(
   db: DatabaseBinding,
-  request: Request,
-  fallbackUri?: string | null
+  request: Request
 ) {
-  const auth = await resolveAuthSession(db, request, fallbackUri);
+  // Exige obligatoirement un cookie de session authentifié (pas de repli par URI de bibliothèque)
+  const auth = await resolveAuthSession(db, request, null);
   if (!auth) return null;
   const row = await db
     .prepare('SELECT is_admin FROM users WHERE id = ? LIMIT 1')
@@ -879,7 +879,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-overview': {
-      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
@@ -918,7 +918,7 @@ export async function handleD1GatewayAction(
           )
           .all<{ entity_type: string; cnt: number }>(),
         db
-          .prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as bytes FROM catalog_covers')
+          .prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(byte_size), 0) as bytes FROM catalog_covers')
           .first<{ cnt: number; bytes: number }>(),
         db
           .prepare(
@@ -983,7 +983,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-catalog-list': {
-      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
@@ -1050,7 +1050,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-users-list': {
-      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
@@ -1094,7 +1094,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-reset-user-ai-quota': {
-      const admin = await requireAdmin(db, request, body?.userUri);
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
@@ -1113,7 +1113,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-rehydrate-catalog': {
-      const admin = await requireAdmin(db, request, body?.userUri);
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
@@ -1124,7 +1124,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'admin-run-release-sweep': {
-      const admin = await requireAdmin(db, request, body?.userUri);
+      const admin = await requireAdmin(db, request);
       if (!admin) {
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
