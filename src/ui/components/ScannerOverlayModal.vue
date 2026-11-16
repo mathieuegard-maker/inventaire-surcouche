@@ -146,6 +146,7 @@ const confirmBurstGroupLend = async (friendName: string) => {
 const existingByok = byokVisionService.getSettings();
 const byokProvider = ref<ByokProvider>(existingByok?.provider || 'gemini');
 const byokKey = ref<string>(existingByok?.apiKey || '');
+const hasPersonalByokKey = ref<boolean>(Boolean(existingByok?.apiKey));
 const serverVisionStatus = ref<{ serverAvailable: boolean; remainingQuota: number } | null>(null);
 const showByokSetup = ref<boolean>(!existingByok?.apiKey);
 const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
@@ -273,9 +274,20 @@ async function handleSaveAndTestByok() {
       provider: byokProvider.value,
       apiKey: byokKey.value
     });
+    hasPersonalByokKey.value = true;
     setTimeout(() => {
       showByokSetup.value = false;
     }, 900);
+  }
+}
+
+function handleClearByok() {
+  byokVisionService.clearSettings();
+  byokKey.value = '';
+  hasPersonalByokKey.value = false;
+  byokTestStatus.value = null;
+  if (serverVisionStatus.value?.serverAvailable) {
+    showByokSetup.value = false;
   }
 }
 
@@ -731,7 +743,12 @@ async function clearPhotoQueueAndForm() {
         <div class="byok-header-bar">
           <span>
             Reconnaissance IA :
-            <strong v-if="byokVisionService.getSettings()">Clé personnelle active</strong>
+            <strong v-if="hasPersonalByokKey">
+              Clé personnelle active
+              <template v-if="serverVisionStatus?.serverAvailable">
+                (ou IA incluse : {{ serverVisionStatus.remainingQuota }} offertes)
+              </template>
+            </strong>
             <strong v-else-if="serverVisionStatus?.serverAvailable">
               IA incluse ({{ serverVisionStatus.remainingQuota }} analyses offertes restantes)
             </strong>
@@ -741,9 +758,11 @@ async function clearPhotoQueueAndForm() {
             {{
               showByokSetup
                 ? 'Masquer l’assistant clé'
-                : serverVisionStatus?.serverAvailable && !byokVisionService.getSettings()
-                  ? 'Utiliser ma propre clé'
-                  : 'Configurer ma clé gratuite'
+                : hasPersonalByokKey
+                  ? 'Gérer / retirer ma clé'
+                  : serverVisionStatus?.serverAvailable
+                    ? 'Utiliser ma propre clé'
+                    : 'Configurer ma clé gratuite'
             }}
           </button>
         </div>
@@ -788,6 +807,18 @@ async function clearPhotoQueueAndForm() {
               @click="handleSaveAndTestByok"
             >
               {{ isTestingKey ? 'Vérification...' : 'Tester & Enregistrer ma clé' }}
+            </button>
+            <button
+              v-if="hasPersonalByokKey"
+              type="button"
+              class="action-btn"
+              @click="handleClearByok"
+            >
+              {{
+                serverVisionStatus?.serverAvailable
+                  ? "Utiliser l'IA incluse (retirer ma clé)"
+                  : 'Retirer ma clé personnelle'
+              }}
             </button>
           </div>
 
