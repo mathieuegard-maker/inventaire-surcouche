@@ -24,6 +24,7 @@ export interface DatabaseBinding {
 export interface CoverBucketBinding {
   get(key: string): Promise<{
     body: ReadableStream | null;
+    arrayBuffer?: () => Promise<ArrayBuffer>;
     httpMetadata?: { contentType?: string };
     etag?: string;
   } | null>;

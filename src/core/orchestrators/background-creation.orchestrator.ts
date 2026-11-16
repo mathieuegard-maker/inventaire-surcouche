@@ -635,11 +635,17 @@ export const backgroundCreationOrchestrator = {
           if (vol.publishDate) {
             editionClaims['wdt:P577'] = [vol.publishDate];
           }
+          if (vol.pageCount && Number.isFinite(vol.pageCount)) {
+            editionClaims['wdt:P1104'] = [vol.pageCount];
+          }
           if (vol.coverUrl) {
             editionClaims['invp:P2'] = [vol.coverUrl];
           }
 
-          const editionUri = await inventaireSyncService.createEntity('edition', vol.title, editionClaims);
+          const editionUri = await inventaireSyncService.createEntity('edition', vol.title, editionClaims, {
+            publisher: vol.publisher,
+            genres: seedBook.genres
+          });
 
           await databaseService.saveBookToCache({
             uri: editionUri,

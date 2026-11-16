@@ -17,20 +17,36 @@ export const imageUtil = {
       if (bookOrUrl.localCover) {
         return bookOrUrl.localCover;
       }
-      return this.resolveExternalUrl(bookOrUrl.coverUrl);
+      const rawIsbn = bookOrUrl.isbn13 || bookOrUrl.isbn10 || '';
+      const cleanIsbn13 = rawIsbn ? isbnUtil.normalize(rawIsbn) : '';
+      const isbn13 = cleanIsbn13.length === 10 ? isbnUtil.toIsbn13(cleanIsbn13) : cleanIsbn13;
+      if (bookOrUrl.coverUrl) {
+        return this.resolveExternalUrl(bookOrUrl.coverUrl, isbn13);
+      }
+      if (isbn13.length === 13) {
+        return `/api/gateway?action=image-proxy&isbn=${encodeURIComponent(isbn13)}`;
+      }
+      return '';
     }
 
     return this.resolveExternalUrl(bookOrUrl);
   },
 
   /**
-   * Fait passer une URL externe par le proxy d'image du Gateway.
+   * Fait passer une URL externe par le proxy d'image du Gateway (avec cache central R2/D1 par ISBN).
    */
-  resolveExternalUrl(url: string | undefined | null): string {
+  resolveExternalUrl(url: string | undefined | null, isbn13?: string): string {
     if (!url) return '';
-    if (url.startsWith('data:') || url.startsWith('/api/gateway?')) return url;
+    if (url.startsWith('data:')) return url;
+    if (url.startsWith('/api/gateway?')) {
+      if (isbn13 && !url.includes('isbn=')) {
+        return `${url}&isbn=${encodeURIComponent(isbn13)}`;
+      }
+      return url;
+    }
     const normalized = url.replace(/^http:\/\//i, 'https://');
-    return `/api/gateway?action=image-proxy&url=${encodeURIComponent(normalized)}`;
+    const isbnSuffix = isbn13 ? `&isbn=${encodeURIComponent(isbn13)}` : '';
+    return `/api/gateway?action=image-proxy&url=${encodeURIComponent(normalized)}${isbnSuffix}`;
   },
 
   /**

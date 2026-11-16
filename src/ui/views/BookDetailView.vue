@@ -21,7 +21,11 @@ import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
-import { resolveCollectionOrderedUrisForBook } from '../../state/bookNavigation';
+import {
+  getSavedBookNavigationOrigin,
+  resolveCollectionOrderedUrisForBook,
+  sortSeriesTomes
+} from '../../state/bookNavigation';
 
 const route = useRoute();
 const router = useRouter();
@@ -143,6 +147,15 @@ const addSelectedSeriesTomesToCollection = async () => {
 
 const activeNavUris = computed(() => {
   if (!book.value) return [] as string[];
+  const origin = getSavedBookNavigationOrigin();
+  if (
+    origin === 'series' &&
+    seriesTomes.value.length > 1 &&
+    seriesTomes.value.some((t) => t.uri === book.value?.uri) &&
+    seriesTomes.value.length >= collectionOrderedUris.value.length
+  ) {
+    return seriesTomes.value.map((t) => t.uri);
+  }
   if (collectionOrderedUris.value.length > 1 && collectionOrderedUris.value.includes(book.value.uri)) {
     return collectionOrderedUris.value;
   }
@@ -180,12 +193,7 @@ const loadSeriesContext = async () => {
     }
   } else if (book.value?.series) {
     const tomes = await databaseService.findLocalSeriesMatches(book.value.series);
-    tomes.sort((a, b) => {
-      const numA = parseFloat(a.seriesNumber || '0') || 0;
-      const numB = parseFloat(b.seriesNumber || '0') || 0;
-      return numA - numB;
-    });
-    seriesTomes.value = tomes;
+    seriesTomes.value = sortSeriesTomes(tomes);
   } else {
     seriesTomes.value = [];
   }

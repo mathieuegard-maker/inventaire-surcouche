@@ -2,7 +2,32 @@
 import { databaseService } from '../database/database.service';
 import { imageService } from './image.service';
 import { imageUtil } from '../utils/image.util';
+import { isbnUtil } from '../utils/isbn.util';
 import type { HumanizedBook } from '../types';
+
+async function uploadCompressedCoverToCentralStorage(params: {
+  isbn?: string;
+  url?: string;
+  dataUrl: string;
+}): Promise<void> {
+  if (typeof fetch !== 'function' || !params.dataUrl.startsWith('data:image/')) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+  const rawNorm = params.isbn ? isbnUtil.normalize(params.isbn) : '';
+  const isbn13 = rawNorm.length === 10 ? isbnUtil.toIsbn13(rawNorm) : rawNorm;
+  try {
+    await fetch('/api/gateway?action=cover-store', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        isbn13: isbn13.length === 13 ? isbn13 : undefined,
+        url: params.url && !params.url.startsWith('data:') ? params.url : undefined,
+        dataUrl: params.dataUrl
+      })
+    });
+  } catch {
+    // Non bloquant : la copie locale IndexedDB reste active
+  }
+}
 
 export const bookCacheService = {
   /**
@@ -52,8 +77,14 @@ export const bookCacheService = {
       }
       await databaseService.saveBookToCache(book);
 
-      // 4. Compression Asynchrone multi-candidats (Non-bloquant / Fire and Forget)
-      if (candidates.length > 0 && !book.localCover) {
+      // 4. Compression Asynchrone multi-candidats + sauvegarde centrale WebP (R2 / D1)
+      if (book.localCover && book.localCover.startsWith('data:image/')) {
+        void uploadCompressedCoverToCentralStorage({
+          isbn: book.isbn13 || book.isbn10,
+          url: book.coverUrl,
+          dataUrl: book.localCover
+        });
+      } else if (candidates.length > 0 && !book.localCover) {
         setTimeout(async () => {
           try {
             for (const candidateUrl of candidates) {
@@ -66,6 +97,11 @@ export const bookCacheService = {
                   updatedBook.coverFallbackUrls = candidates;
                   await databaseService.saveBookToCache(updatedBook);
                 }
+                await uploadCompressedCoverToCentralStorage({
+                  isbn: book.isbn13 || book.isbn10,
+                  url: candidateUrl,
+                  dataUrl: base64
+                });
                 break;
               }
             }

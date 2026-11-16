@@ -9,3 +9,10 @@ binding = "DB"
 database_name = "biblio-catalog-db"
 database_id = "f1f0f7a3-f319-4c97-a495-1ef143881795"
 migrations_dir = "migrations"
+
+# 2. Stockage objet Cloudflare R2 (10 Go gratuits) — à décommenter après activation de R2 dans le Dashboard Cloudflare :
+#    1. Créez le bucket `biblio-covers-webp` dans Cloudflare R2
+#    2. Décommentez les lignes ci-dessous et redéployez (`npm run cf:deploy`)
+# [[r2_buckets]]
+# binding = "COVERS_BUCKET"
+# bucket_name = "biblio-covers-webp"

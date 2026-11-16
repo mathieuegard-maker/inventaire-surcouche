@@ -4,12 +4,14 @@ import { bookSemanticOrchestrator } from './book-semantic.orchestrator';
 import { inventaireSyncService } from '../services/inventaire-sync.service';
 import { inventoryService } from '../services/inventory.service';
 import { bookCacheService } from '../services/book-cache.service';
+import { databaseService } from '../database/database.service';
 import type { HumanizedBook } from '../types';
 
 // Mock database service
 vi.mock('../database/database.service', () => ({
   databaseService: {
-    saveBookToCache: vi.fn().mockResolvedValue(undefined)
+    saveBookToCache: vi.fn().mockResolvedValue(undefined),
+    getAllBooksFromCache: vi.fn().mockResolvedValue([])
   }
 }));
 
@@ -239,6 +241,83 @@ describe('Book Semantic Orchestrator', () => {
         { forceOverwrite: true }
       );
       expect(updatedBook.isLocallyEdited).toBe(true);
+    });
+
+    it('propage la modification du genre à tous les autres tomes de la même série', async () => {
+      const originalBook: HumanizedBook = {
+        uri: 'isbn:9782205000011',
+        workUri: 'inv:work_1',
+        type: 'edition',
+        title: 'Thorgal T1',
+        authors: ['Van Hamme', 'Rosinski'],
+        illustrators: [],
+        scriptwriters: [],
+        series: 'Thorgal',
+        seriesId: 'inv:series_thorgal',
+        seriesNumber: '1',
+        ownershipStatus: 'owned',
+        genres: ['BD']
+      };
+
+      const siblingSameSeries: HumanizedBook = {
+        ...originalBook,
+        uri: 'isbn:9782205000028',
+        workUri: 'inv:work_2',
+        title: 'Thorgal T2',
+        seriesNumber: '2',
+        genres: ['BD']
+      };
+
+      const otherSeriesBook: HumanizedBook = {
+        ...originalBook,
+        uri: 'isbn:9782205000099',
+        workUri: 'inv:work_other',
+        title: 'Astérix T1',
+        series: 'Astérix',
+        seriesId: 'inv:series_asterix',
+        genres: ['BD']
+      };
+
+      vi.mocked(inventaireSyncService.patchBookOnInventaire).mockResolvedValue({
+        editionUri: 'isbn:9782205000011',
+        workUri: 'inv:work_1',
+        seriesUri: 'inv:series_thorgal'
+      });
+      vi.mocked(databaseService.getAllBooksFromCache).mockResolvedValue([
+        originalBook,
+        siblingSameSeries,
+        otherSeriesBook
+      ]);
+
+      await bookSemanticOrchestrator.saveEditedBook(
+        originalBook,
+        {
+          title: 'Thorgal T1',
+          authors: ['Van Hamme', 'Rosinski'],
+          series: 'Thorgal',
+          seriesNumber: '1',
+          publisher: 'Le Lombard',
+          publishDate: '1980',
+          coverUrl: '',
+          genres: ['BD', 'Fantasy', 'Aventure']
+        },
+        'inv:series_thorgal',
+        {}
+      );
+
+      expect(databaseService.saveBookToCache).toHaveBeenCalledWith(
+        expect.objectContaining({
+          uri: 'isbn:9782205000028',
+          genres: ['BD', 'Fantasy', 'Aventure'],
+          isLocallyEdited: true
+        })
+      );
+      expect(databaseService.saveBookToCache).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          uri: 'isbn:9782205000099',
+          genres: ['BD', 'Fantasy', 'Aventure']
+        })
+      );
     });
   });
 });

@@ -5,6 +5,11 @@
 
 import type { AppBackendEnv } from '../../src/core/adapters/storage-db.interface';
 import { handleD1GatewayAction } from '../../src/core/services/d1-gateway-actions.service';
+import {
+  getStoredCover,
+  parseCoverDataUrl,
+  storeCompressedCover
+} from '../../src/core/services/d1-cover-storage.service';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -79,6 +84,7 @@ function jsonResp(data: unknown, status = 200): Response {
 export const onRequest = async (context: {
   request: Request;
   env: AppBackendEnv;
+  waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<Response> => {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -243,12 +249,51 @@ export const onRequest = async (context: {
         });
       }
 
+      case 'cover-store': {
+        if (request.method !== 'POST') {
+          return jsonResp({ error: 'Méthode POST requise' }, 405);
+        }
+        const parsedData = parseCoverDataUrl(String(body?.dataUrl || ''));
+        if (!parsedData) {
+          return jsonResp({ error: 'Image WebP/JPEG valide requise' }, 400);
+        }
+        const isbnParam = body?.isbn13 ? String(body.isbn13) : undefined;
+        const urlParam = body?.url ? String(body.url) : undefined;
+        const saved = await storeCompressedCover(env, {
+          isbn: isbnParam,
+          url: urlParam,
+          contentType: parsedData.contentType,
+          bytes: parsedData.bytes,
+          base64Data: parsedData.base64
+        });
+        return jsonResp(saved, saved.ok ? 200 : 500);
+      }
+
       case 'image-proxy': {
         const rawUrl = url.searchParams.get('url');
-        if (!rawUrl || !rawUrl.trim()) {
-          return jsonResp({ error: 'URL requise' }, 400);
+        const isbnParam = url.searchParams.get('isbn');
+        const trimmedUrl = rawUrl?.trim() || '';
+
+        // 1. Vérifier d'abord le stockage central Cloudflare R2 / D1 (couverture déjà sauvegardée)
+        const stored = await getStoredCover(env, {
+          isbn: isbnParam,
+          url: trimmedUrl || undefined
+        });
+        if (stored) {
+          return new Response(stored.bytes, {
+            status: 200,
+            headers: {
+              'Content-Type': stored.contentType,
+              'Cache-Control': 'public, max-age=31536000, immutable',
+              'X-Cover-Cache': `${stored.storage.toUpperCase()}-HIT`
+            }
+          });
         }
-        const validatedUrl = validateImageProxyUrl(rawUrl.trim());
+
+        if (!trimmedUrl) {
+          return jsonResp({ error: 'URL ou couverture en cache requise' }, 404);
+        }
+        const validatedUrl = validateImageProxyUrl(trimmedUrl);
         if (!validatedUrl) {
           return jsonResp({ error: 'URL image invalide ou interdite' }, 400);
         }
@@ -282,11 +327,25 @@ export const onRequest = async (context: {
           return jsonResp({ error: 'Image trop volumineuse' }, 413);
         }
 
+        // 2. Mise en cache read-through asynchrone vers R2 / D1 pour résister à l'extinction future du CDN source
+        const persistTask = storeCompressedCover(env, {
+          isbn: isbnParam,
+          url: trimmedUrl,
+          contentType,
+          bytes: new Uint8Array(arrayBuffer)
+        });
+        if (typeof context.waitUntil === 'function') {
+          context.waitUntil(persistTask);
+        } else {
+          await persistTask;
+        }
+
         return new Response(arrayBuffer, {
           status: 200,
           headers: {
             'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=31536000, immutable'
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Cover-Cache': 'MISS'
           }
         });
       }

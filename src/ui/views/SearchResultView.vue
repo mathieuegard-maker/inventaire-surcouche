@@ -10,6 +10,7 @@ import { TEXTS } from '../locales/fr';
 import { workUriResolver } from '../../core/resolvers/workUri.resolver';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import {
   keywordSearchService,
   type GroupedKeywordSearchResult,
@@ -118,6 +119,7 @@ function handleInlineKeywords(q: string) {
 }
 
 function handleInlineIsbn(isbn: string) {
+  saveBookNavigationOrder([isbn, `isbn:${isbn}`], 'direct');
   router.push(`/book/${encodeURIComponent(isbn)}`);
 }
 
@@ -146,12 +148,14 @@ const handleSelectAuthor = (author: KeywordAuthorEntry) => {
 
 const handleSelectBook = async (entry: KeywordBookEntry) => {
   if (entry.isbn13) {
+    saveBookNavigationOrder([entry.isbn13, `isbn:${entry.isbn13}`], 'direct');
     router.push(`/book/${encodeURIComponent(entry.isbn13)}`);
     return;
   }
   if (!entry.uri) return;
 
   if (connectionState.isOffline.value) {
+    saveBookNavigationOrder([entry.uri], 'direct');
     router.push(`/book/${encodeURIComponent(entry.uri)}`);
     return;
   }
@@ -160,8 +164,10 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
   try {
     const isbn = await workUriResolver.resolveIsbnFromWorkUri(entry.uri);
     if (isbn) {
+      saveBookNavigationOrder([isbn, `isbn:${isbn}`], 'direct');
       router.push(`/book/${encodeURIComponent(isbn)}`);
     } else {
+      saveBookNavigationOrder([entry.uri], 'direct');
       router.push(`/book/${encodeURIComponent(entry.uri)}`);
     }
   } catch {

@@ -14,6 +14,7 @@ import BatchActionBar from '../components/BatchActionBar.vue';
 import { TEXTS } from '../locales/fr';
 import type { LoanRecord, HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 
 interface HydratedLoan {
   loan: LoanRecord;
@@ -107,6 +108,14 @@ const fetchLoansRecords = async () => {
   }
 };
 
+const translateFriendName = (name?: string): string => {
+  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
+  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
+  return name;
+};
+
 /**
  * SOURCE DES PRÊTS TRIÉE : Alimentation brute du paginateur selon le mode
  */
@@ -115,7 +124,10 @@ const filteredLoansSource = computed(() => {
   if (currentMode.value === 'chrono') {
     return list.sort((a, b) => (b.loan.loanDate || 0) - (a.loan.loanDate || 0));
   }
-  return list.sort((a, b) => (a.loan.friendName || '').localeCompare(b.loan.friendName || ''));
+  return list.sort((a, b) => {
+    const cmp = translateFriendName(a.loan.friendName).localeCompare(translateFriendName(b.loan.friendName));
+    return cmp !== 0 ? cmp : (b.loan.loanDate || 0) - (a.loan.loanDate || 0);
+  });
 });
 
 const enrichLoansForPagination = computed(() => {
@@ -127,14 +139,6 @@ const enrichLoansForPagination = computed(() => {
     searchAuthors: item.book.authors || []
   }));
 });
-
-const translateFriendName = (name?: string): string => {
-  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
-  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
-  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
-  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
-  return name;
-};
 
 /**
  * RE-GROUPEMENT POST-PAGINATION (Mode Emprunteur)
@@ -220,6 +224,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((i: any) => i.book.uri), 'loans')"
         @update:processedItems="(val) => displayedLoans = val"
       >
         <div class="main-content-wrapper">

@@ -577,33 +577,39 @@ async function clearPhotoQueueAndForm() {
   <Teleport to="body">
     <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop" @click.self="scannerState.stopScan()">
       <div ref="modalCardRef" class="scanner-modal-card" role="dialog" aria-modal="true" aria-label="Scanner de livres">
-      <!-- En-tête + Sélecteur 3 Modes (Simple par défaut / Rafale / Photo) -->
+      <!-- En-tête + Sélecteur 3 Modes sur une seule ligne (Simple / Rafale / Photo IA) -->
       <div class="scanner-header">
-        <div class="mode-tabs">
+        <div class="mode-tabs" role="tablist" aria-label="Mode de numérisation">
           <button
             type="button"
+            role="tab"
+            :aria-selected="activeMode === 'simple'"
             class="mode-tab"
             :class="{ active: activeMode === 'simple' }"
             @click="scannerState.switchMode('simple')"
           >
-            Scan simple
+            <span class="mode-tab-label">Simple</span>
           </button>
           <button
             type="button"
+            role="tab"
+            :aria-selected="activeMode === 'burst'"
             class="mode-tab"
             :class="{ active: activeMode === 'burst' }"
             @click="scannerState.switchMode('burst')"
           >
-            Scan rafale
+            <span class="mode-tab-label">Rafale</span>
             <span v-if="burstBooks.length > 0" class="tab-count-badge">{{ burstBooks.length }}</span>
           </button>
           <button
             type="button"
+            role="tab"
+            :aria-selected="activeMode === 'photo'"
             class="mode-tab"
             :class="{ active: activeMode === 'photo' }"
             @click="scannerState.switchMode('photo')"
           >
-            Photo étagère / couv
+            <span class="mode-tab-label">Photo IA</span>
             <span v-if="photoStats.totalPhotos > 0" class="tab-count-badge">{{ photoStats.totalPhotos }}</span>
           </button>
         </div>
@@ -1127,31 +1133,51 @@ async function clearPhotoQueueAndForm() {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.75rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .mode-tabs {
-  display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.2rem;
+  background: var(--color-bg-alt, #f1f5f9);
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 10px);
 }
 
 .mode-tab {
-  border: 1px solid var(--color-border, #e2e8f0);
-  border-radius: var(--radius-sm, 8px);
-  background: var(--color-bg-alt, #f8fafc);
-  color: var(--color-text-main, #0f172a);
-  min-block-size: 38px;
-  padding: 0.4rem 0.75rem;
-  font-size: 0.8125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  min-block-size: 36px;
+  padding: 0.3rem 0.35rem;
+  font-size: 0.78rem;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mode-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mode-tab:hover:not(.active) {
-  background: #e2e8f0;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--color-text-main, #0f172a);
 }
 
 .mode-tab.active {
@@ -1162,21 +1188,29 @@ async function clearPhotoQueueAndForm() {
 }
 
 .close-scan-btn {
-  border: 1px solid #fecaca;
-  border-radius: var(--radius-sm, 8px);
-  background: #fef2f2;
-  color: #b91c1c;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  min-block-size: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: 999px;
+  background: var(--color-bg-alt, #f8fafc);
+  color: var(--color-text-muted, #475569);
   font-weight: 600;
-  min-block-size: 38px;
-  padding: 0.4rem 0.8rem;
-  font-size: 0.8125rem;
-  line-height: 1.25;
+  padding: 0;
+  font-size: 0.9rem;
+  line-height: 1;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .close-scan-btn:hover {
   background: #fee2e2;
+  border-color: #fecaca;
+  color: #b91c1c;
 }
 
 .burst-toolbar {

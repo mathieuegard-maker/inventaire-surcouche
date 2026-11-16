@@ -19,6 +19,7 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { fetchWithTimeout } from '../../state/connection';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 
 const route = useRoute();
 const router = useRouter();
@@ -246,6 +247,7 @@ const confirmGroupLend = async (friendName: string) => {
           :selectAllValue="isAllSelected"
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
+          @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'author')"
           @update:processedItems="(val) => displayedTomes = val"
         >
           <div v-if="displayedTomes.length === 0">

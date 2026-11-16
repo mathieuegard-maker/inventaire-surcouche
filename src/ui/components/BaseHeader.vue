@@ -42,14 +42,14 @@ const toggleScan = () => {
       <button class="wireframe-btn header-nav-btn" @click="handleLoans">
         {{ TEXTS.header?.loans || 'PRÊTS' }}
       </button>
-      <button class="wireframe-btn header-nav-btn" @click="handleStats">
-        KPIs
-      </button>
       <button class="wireframe-btn header-nav-btn" @click="handleFriends">
         MES AMIS
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleFamilyShare">
         FOYER &amp; PARTAGE
+      </button>
+      <button class="wireframe-btn header-nav-btn" @click="handleStats">
+        STATISTIQUES
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleBack">
         {{ TEXTS.header?.back || 'RETOUR' }}
@@ -90,14 +90,14 @@ const toggleScan = () => {
         <button class="wireframe-btn menu-drawer-item" @click="handleLoans">
           {{ TEXTS.header?.loans || 'PRÊTS' }}
         </button>
-        <button class="wireframe-btn menu-drawer-item" @click="handleStats">
-          STATISTIQUES / KPIs
-        </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleFriends">
           MES AMIS
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleFamilyShare">
           FOYER &amp; PARTAGE
+        </button>
+        <button class="wireframe-btn menu-drawer-item" @click="handleStats">
+          STATISTIQUES
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleBack">
           {{ TEXTS.header?.back || 'RETOUR' }}

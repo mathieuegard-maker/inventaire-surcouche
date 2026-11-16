@@ -9,6 +9,7 @@ import type { Router } from 'vue-router';
 import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
 import { externalMetadataService } from '../core/services/external-metadata.service';
 import { imageUtil } from '../core/utils/image.util';
+import { saveBookNavigationOrder } from './bookNavigation';
 import type { HumanizedBook } from '../core/types';
 
 export type ScannerMode = 'simple' | 'burst' | 'photo';
@@ -81,6 +82,7 @@ export const scannerState = {
                   query: { isbn: response.isbn || rawIsbn || '' }
                 });
               } else if (response.mainBook?.uri) {
+                saveBookNavigationOrder([response.mainBook.uri], 'direct');
                 await router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
               } else {
                 errorMessage.value = 'Ouvrage non trouvé.';

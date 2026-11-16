@@ -16,6 +16,7 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { fetchWithTimeout } from '../../state/connection';
+import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
@@ -63,7 +64,8 @@ const fetchSeriesMetadata = async () => {
 const loadLocalData = async () => {
   const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
   if (context && context.tomes.length > 0) {
-    seriesTomes.value = context.tomes;
+    seriesTomes.value = sortSeriesTomes(context.tomes);
+    saveBookNavigationOrder(seriesTomes.value.map((t) => t.uri), 'series');
   } else {
     await fetchSeriesMetadata();
   }
@@ -236,6 +238,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
           :selectAllValue="isAllSelected"
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
+          @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'series')"
           @update:processedItems="(val) => displayedTomes = val"
         >
           <div v-if="displayedTomes.length === 0">

@@ -15,6 +15,7 @@ import WireframePagination from '../components/WireframePagination.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
 import { scannerState } from '../../state/scanner';
 
 const allWishBooks = ref<HumanizedBook[]>([]);
@@ -150,38 +151,42 @@ const filteredBooks = computed(() => {
   return list;
 });
 
-const sortedSeriesGroups = computed(() => {
-  const list = displayedWishBooks.value;
+const groupSeriesAndIndependentBooks = (list: HumanizedBook[]) => {
   const seriesGroups: Record<string, HumanizedBook[]> = {};
+  const independent: HumanizedBook[] = [];
 
-  list.forEach(book => {
+  list.forEach((book) => {
     if (book.series || book.seriesId) {
       const key = book.series || book.seriesId || 'unknown';
       if (!seriesGroups[key]) {
         seriesGroups[key] = [];
       }
       seriesGroups[key].push(book);
+    } else {
+      independent.push(book);
     }
   });
 
-  for (const key in seriesGroups) {
-    seriesGroups[key].sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
-  }
+  const cleanSortKey = (name: string) =>
+    name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
 
-  return Object.keys(seriesGroups)
-    .map(name => ({ name, tomes: seriesGroups[name] }))
-    .sort((a, b) => {
-      const cleanA = a.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      const cleanB = b.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      return cleanA.localeCompare(cleanB);
-    });
+  const sortedGroups = Object.keys(seriesGroups)
+    .map((name) => ({ name, tomes: sortSeriesTomes(seriesGroups[name]) }))
+    .sort((a, b) => cleanSortKey(a.name).localeCompare(cleanSortKey(b.name)));
+
+  const sortedIndependent = [...independent].sort((a, b) => a.title.localeCompare(b.title));
+
+  return { sortedGroups, sortedIndependent };
+};
+
+const orderedFilteredWishBooks = computed(() => {
+  const { sortedGroups, sortedIndependent } = groupSeriesAndIndependentBooks(filteredBooks.value);
+  return [...sortedGroups.flatMap((g) => g.tomes), ...sortedIndependent];
 });
 
-const independentBooksSorted = computed(() => {
-  return displayedWishBooks.value
-    .filter(b => !b.series && !b.seriesId)
-    .sort((a, b) => a.title.localeCompare(b.title));
-});
+const sortedSeriesGroups = computed(() => groupSeriesAndIndependentBooks(displayedWishBooks.value).sortedGroups);
+
+const independentBooksSorted = computed(() => groupSeriesAndIndependentBooks(displayedWishBooks.value).sortedIndependent);
 
 const handleToggleAll = (checked: boolean) => {
   if (!checked) {
@@ -253,7 +258,7 @@ const resetFilters = () => {
 
     <template v-else>
       <WireframePagination
-        :items="filteredBooks"
+        :items="orderedFilteredWishBooks"
         :searchKeys="['title', 'series', 'authors']"
         :hasSelectAll="true"
         :selectAllValue="isAllSelected"
@@ -262,6 +267,7 @@ const resetFilters = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'wishlist')"
         @update:processedItems="(val) => displayedWishBooks = val"
       >
         <div class="main-content-wrapper">

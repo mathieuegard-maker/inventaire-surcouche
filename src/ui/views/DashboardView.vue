@@ -11,6 +11,7 @@ import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
@@ -33,6 +34,7 @@ const handleSearch = async (isbn: string) => {
       if ('isUnknown' in response && (response as any).isUnknown) {
         router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
       } else if (response.mainBook?.uri) {
+        saveBookNavigationOrder([response.mainBook.uri], 'direct');
         router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
       }
     } else {
@@ -77,6 +79,7 @@ const loadDashboardData = async () => {
 };
 
 const openBook = (uri: string) => {
+  saveBookNavigationOrder([uri], 'direct');
   router.push(`/book/${encodeURIComponent(uri)}`);
 };
 

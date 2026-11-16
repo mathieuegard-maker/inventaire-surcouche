@@ -963,7 +963,7 @@ export async function handleD1GatewayAction(
     }
 
     case 'entities-create': {
-      const claims = (body?.claims || {}) as Record<string, any[]>;
+      const claims = { ...((body?.claims || {}) as Record<string, any[]>) };
       const label =
         body?.labels?.fr ||
         body?.labels?.en ||
@@ -990,10 +990,44 @@ export async function handleD1GatewayAction(
       else if (p31 === 'wd:Q277759' || p31 === 'wd:Q14406742') entityType = 'serie';
       else if (p31 === 'wd:Q5') entityType = 'human';
 
-      const classification = classifyBookMetadata({
-        title: String(label),
-        series: seriesUri ? String(label) : undefined
-      });
+      const publisherLabel = typeof body?.publisher === 'string' ? body.publisher.trim() : '';
+      if (publisherLabel && !claims['wdt:P123']?.length) {
+        const pubUri = await upsertCatalogEntity(db, {
+          entityType: 'publisher',
+          label: publisherLabel,
+          claims: {}
+        });
+        claims['wdt:P123'] = [pubUri];
+      }
+
+      const providedGenres: string[] = Array.isArray(body?.genres)
+        ? body.genres.map((g: unknown) => String(g).trim()).filter(Boolean)
+        : [];
+
+      let mainCategory: string;
+      let subgenres: string[];
+      if (providedGenres.length > 0) {
+        const gUris: string[] = [];
+        for (const gLabel of providedGenres) {
+          const gUri = await upsertCatalogEntity(db, {
+            entityType: 'genre',
+            label: gLabel,
+            claims: {}
+          });
+          gUris.push(gUri);
+        }
+        claims['wdt:P136'] = gUris;
+        mainCategory = providedGenres[0];
+        subgenres = providedGenres.slice(1);
+      } else {
+        const classification = classifyBookMetadata({
+          title: String(label),
+          series: seriesUri ? String(label) : undefined,
+          publisher: publisherLabel || undefined
+        });
+        mainCategory = classification.mainCategory;
+        subgenres = classification.subgenres;
+      }
 
       const createdUri = await upsertCatalogEntity(db, {
         entityType,
@@ -1003,9 +1037,11 @@ export async function handleD1GatewayAction(
         seriesUri,
         seriesNumber,
         authorUris,
-        mainCategory: classification.mainCategory,
-        subgenres: classification.subgenres,
+        mainCategory,
+        subgenres,
         imageUrl: imageUrl ? String(imageUrl) : undefined,
+        descriptions:
+          body?.descriptions && typeof body.descriptions === 'object' ? body.descriptions : {},
         claims
       });
 
@@ -1084,13 +1120,38 @@ export async function handleD1GatewayAction(
     }
 
     case 'entities-update-genres': {
-      const targetUris = Array.from(
-        new Set([String(body?.uri || '').trim(), String(body?.workUri || '').trim()].filter(Boolean))
+      const targetUris = new Set(
+        [String(body?.uri || '').trim(), String(body?.workUri || '').trim()].filter(Boolean)
       );
       const cleanGenres: string[] = Array.isArray(body?.genres)
         ? body.genres.map((g: unknown) => String(g).trim()).filter(Boolean)
         : [];
-      if (targetUris.length === 0) return jsonResp({ error: 'uri requis' }, 400);
+      if (targetUris.size === 0) return jsonResp({ error: 'uri requis' }, 400);
+
+      let resolvedSeriesUri = String(body?.seriesUri || '').trim();
+      if (!resolvedSeriesUri) {
+        for (const u of targetUris) {
+          const sLookup = await db
+            .prepare('SELECT series_uri FROM catalog_entities WHERE uri = ? AND series_uri IS NOT NULL LIMIT 1')
+            .bind(u)
+            .first<{ series_uri: string | null }>();
+          if (sLookup?.series_uri) {
+            resolvedSeriesUri = sLookup.series_uri;
+            break;
+          }
+        }
+      }
+
+      if (resolvedSeriesUri && body?.propagateSeries !== false) {
+        targetUris.add(resolvedSeriesUri);
+        const seriesRows = await db
+          .prepare('SELECT uri FROM catalog_entities WHERE series_uri = ?')
+          .bind(resolvedSeriesUri)
+          .all<{ uri: string }>();
+        for (const sr of seriesRows.results || []) {
+          if (sr.uri) targetUris.add(sr.uri);
+        }
+      }
 
       const genreUris: string[] = [];
       for (const gLabel of cleanGenres) {
@@ -1115,6 +1176,8 @@ export async function handleD1GatewayAction(
 
         const entityObj = JSON.parse(row.entity_json);
         entityObj.claims = entityObj.claims || {};
+        entityObj.mainCategory = mainCategory;
+        entityObj.subgenres = subgenres;
         if (genreUris.length > 0) {
           entityObj.claims['wdt:P136'] = genreUris;
         } else {
@@ -1129,7 +1192,151 @@ export async function handleD1GatewayAction(
           .run();
       }
 
-      return jsonResp({ ok: true, genres: cleanGenres, genreUris });
+      return jsonResp({
+        ok: true,
+        genres: cleanGenres,
+        genreUris,
+        propagatedSeriesUri: resolvedSeriesUri || null
+      });
+    }
+
+    case 'entities-patch': {
+      const editionUri = String(body?.editionUri || '').trim();
+      const workUri = String(body?.workUri || '').trim();
+      if (!editionUri) return jsonResp({ error: 'editionUri requis' }, 400);
+
+      const title = typeof body?.title === 'string' ? body.title.trim() : '';
+      const seriesUri = typeof body?.seriesUri === 'string' ? body.seriesUri.trim() : '';
+      const rawSeriesNumber =
+        typeof body?.seriesNumber === 'string' ? body.seriesNumber.trim() : '';
+      const seriesNumber = rawSeriesNumber ? normalizeSeriesNumber(rawSeriesNumber) : null;
+      const sortOrder =
+        seriesNumber && /^\d+(\.\d+)?$/.test(seriesNumber) ? parseFloat(seriesNumber) : 1000.0;
+      const authorUris: string[] | null = Array.isArray(body?.authorUris)
+        ? body.authorUris.map(String).filter(Boolean)
+        : null;
+      const publisherLabel =
+        typeof body?.publisher === 'string' ? body.publisher.trim() : undefined;
+      const publishDate =
+        typeof body?.publishDate === 'string' ? body.publishDate.trim() : undefined;
+      const pageCount =
+        body?.pageCount !== undefined && body?.pageCount !== null && body?.pageCount !== ''
+          ? Number(body.pageCount)
+          : undefined;
+      const coverUrl =
+        typeof body?.coverUrl === 'string' ? body.coverUrl.trim() : undefined;
+
+      let publisherUri: string | null | undefined = undefined;
+      if (publisherLabel !== undefined) {
+        publisherUri = publisherLabel
+          ? await upsertCatalogEntity(db, {
+              entityType: 'publisher',
+              label: publisherLabel,
+              claims: {}
+            })
+          : null;
+      }
+
+      const targetEntries: Array<{ uri: string; isEdition: boolean }> = [
+        { uri: editionUri, isEdition: true }
+      ];
+      if (workUri && workUri !== editionUri) {
+        targetEntries.push({ uri: workUri, isEdition: false });
+      }
+
+      for (const entry of targetEntries) {
+        const row = await db
+          .prepare('SELECT * FROM catalog_entities WHERE uri = ? LIMIT 1')
+          .bind(entry.uri)
+          .first<Record<string, any>>();
+        if (!row) continue;
+
+        const entityObj = JSON.parse(row.entity_json);
+        entityObj.claims = entityObj.claims || {};
+
+        if (title) {
+          entityObj.label = title;
+          entityObj.labels = { ...(entityObj.labels || {}), fr: title, en: title };
+          if (entry.isEdition) entityObj.claims['wdt:P1476'] = [title];
+        }
+        if (seriesUri) {
+          entityObj.claims['wdt:P179'] = [seriesUri];
+        } else if (body?.seriesUri === '') {
+          delete entityObj.claims['wdt:P179'];
+        }
+        if (seriesNumber) {
+          entityObj.claims['wdt:P1545'] = [seriesNumber];
+        } else if (body?.seriesNumber === '') {
+          delete entityObj.claims['wdt:P1545'];
+        }
+        if (authorUris) {
+          if (authorUris.length > 0) entityObj.claims['wdt:P50'] = authorUris;
+          else delete entityObj.claims['wdt:P50'];
+        }
+
+        if (entry.isEdition) {
+          if (publisherUri) entityObj.claims['wdt:P123'] = [publisherUri];
+          else if (publisherUri === null) delete entityObj.claims['wdt:P123'];
+
+          if (publishDate) entityObj.claims['wdt:P577'] = [publishDate];
+          else if (publishDate === '') delete entityObj.claims['wdt:P577'];
+
+          if (pageCount && Number.isFinite(pageCount) && pageCount > 0) {
+            entityObj.claims['wdt:P1104'] = [pageCount];
+          } else if (body?.pageCount === null || body?.pageCount === '') {
+            delete entityObj.claims['wdt:P1104'];
+          }
+        }
+
+        let nextImageUrl = row.image_url;
+        if (coverUrl !== undefined) {
+          const isDataUrl = coverUrl.startsWith('data:');
+          if (!coverUrl) {
+            nextImageUrl = null;
+            delete entityObj.image;
+            delete entityObj.claims['invp:P2'];
+          } else if (!isDataUrl) {
+            nextImageUrl = coverUrl;
+            entityObj.image = { url: coverUrl, value: coverUrl };
+            entityObj.claims['invp:P2'] = [coverUrl];
+          }
+        }
+
+        const finalLabel = title || row.label;
+        const finalWorkUri =
+          entry.isEdition && workUri ? workUri : row.work_uri;
+        const finalSeriesUri =
+          body?.seriesUri !== undefined ? (seriesUri || null) : row.series_uri;
+        const finalSeriesNumber =
+          body?.seriesNumber !== undefined ? seriesNumber : row.series_number;
+        const finalSortOrder =
+          body?.seriesNumber !== undefined ? sortOrder : row.sort_order;
+        const finalAuthorJson = authorUris ? JSON.stringify(authorUris) : row.author_uris_json;
+
+        await db
+          .prepare(
+            `UPDATE catalog_entities
+             SET label = ?, normalized_label = ?, work_uri = ?, series_uri = ?, series_number = ?, sort_order = ?,
+                 author_uris_json = ?, image_url = ?, entity_json = ?, updated_at = ?
+             WHERE uri = ?`
+          )
+          .bind(
+            finalLabel,
+            normalizeTextKey(finalLabel),
+            finalWorkUri,
+            finalSeriesUri,
+            finalSeriesNumber,
+            finalSortOrder,
+            finalAuthorJson,
+            nextImageUrl,
+            JSON.stringify(entityObj),
+            now,
+            entry.uri
+          )
+          .run();
+      }
+
+      return jsonResp({ ok: true });
     }
 
     case 'reverse-claims':

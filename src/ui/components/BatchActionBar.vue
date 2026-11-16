@@ -79,7 +79,7 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             class="batch-chip-btn primary"
             @click="emit('execute', 'ADD_INVENTORY')"
           >
-            Collection
+            Ajouter
           </button>
 
           <button

@@ -371,7 +371,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
-        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri))"
+        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'collection')"
         @update:processedItems="(val) => displayedBooks = val"
       >
         <div v-if="displayedBooks.length === 0">
