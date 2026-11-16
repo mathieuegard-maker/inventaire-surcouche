@@ -19,6 +19,21 @@ import {
   resolveBestCoverUrl,
   upsertCatalogEntity
 } from './d1-gateway.service';
+import { runCentralizedSeriesReleaseSweep } from './series-digest.service';
+
+async function requireAdmin(
+  db: DatabaseBinding,
+  request: Request,
+  fallbackUri?: string | null
+) {
+  const auth = await resolveAuthSession(db, request, fallbackUri);
+  if (!auth) return null;
+  const row = await db
+    .prepare('SELECT is_admin FROM users WHERE id = ? LIMIT 1')
+    .bind(auth.userId)
+    .first<{ is_admin?: number }>();
+  return row?.is_admin === 1 ? auth : null;
+}
 
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
@@ -194,9 +209,16 @@ export async function handleD1GatewayAction(
       const passHash = await sha256Hex(`biblio_salt_v2:${rawPassword}`);
 
       let userRow = await db
-        .prepare('SELECT id, email, display_name, password_hash, recovery_email FROM users WHERE email = ? LIMIT 1')
+        .prepare('SELECT id, email, display_name, password_hash, recovery_email, is_admin FROM users WHERE email = ? LIMIT 1')
         .bind(emailKey)
-        .first<{ id: string; email: string; display_name: string; password_hash: string; recovery_email?: string | null }>();
+        .first<{
+          id: string;
+          email: string;
+          display_name: string;
+          password_hash: string;
+          recovery_email?: string | null;
+          is_admin?: number;
+        }>();
 
       if (userRow) {
         if (mode === 'register') {
@@ -321,6 +343,7 @@ export async function handleD1GatewayAction(
           id: userRow.id,
           username: userRow.display_name,
           recoveryEmail: userRow.recovery_email || null,
+          isAdmin: Boolean(userRow.is_admin),
           libraryId: targetLibraryId,
           sessionToken: rawSessionToken,
           inviteCode: tokens.inviteCode,
@@ -338,9 +361,9 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Session invalide' }, 401);
       }
       const userDetails = await db
-        .prepare('SELECT recovery_email FROM users WHERE id = ? LIMIT 1')
+        .prepare('SELECT recovery_email, is_admin FROM users WHERE id = ? LIMIT 1')
         .bind(auth.userId)
-        .first<{ recovery_email?: string | null }>();
+        .first<{ recovery_email?: string | null; is_admin?: number }>();
       const tokens = await getOrCreateShareTokens(db, auth.libraryId, auth.userId);
       const members = await db
         .prepare(
@@ -357,6 +380,7 @@ export async function handleD1GatewayAction(
         id: auth.userId,
         username: auth.username,
         recoveryEmail: userDetails?.recovery_email || null,
+        isAdmin: Boolean(userDetails?.is_admin),
         libraryId: auth.libraryId,
         libraryName: auth.libraryName,
         role: auth.role,
@@ -852,6 +876,260 @@ export async function handleD1GatewayAction(
       const remainingQuota = Math.max(0, monthlyQuota - nextMonthUsed);
 
       return jsonResp({ text: rawText, monthlyQuota, remainingQuota });
+    }
+
+    case 'admin-overview': {
+      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const currentMonthKey = now.slice(0, 7);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const [
+        usersAgg,
+        recentUsersRow,
+        libsRow,
+        notifRows,
+        catalogTypeRows,
+        coversAgg,
+        aiAgg,
+        seriesAgg,
+        alertsAgg
+      ] = await Promise.all([
+        db.prepare('SELECT COUNT(*) as total FROM users').first<{ total: number }>(),
+        db
+          .prepare('SELECT COUNT(*) as cnt FROM users WHERE created_at >= ?')
+          .bind(sevenDaysAgo)
+          .first<{ cnt: number }>(),
+        db.prepare('SELECT COUNT(*) as total FROM libraries').first<{ total: number }>(),
+        db
+          .prepare(
+            `SELECT digest_frequency, digest_channel, COUNT(*) as cnt
+             FROM user_notification_prefs
+             GROUP BY digest_frequency, digest_channel`
+          )
+          .all<{ digest_frequency: string; digest_channel: string; cnt: number }>(),
+        db
+          .prepare(
+            `SELECT entity_type, COUNT(*) as cnt
+             FROM catalog_entities
+             GROUP BY entity_type`
+          )
+          .all<{ entity_type: string; cnt: number }>(),
+        db
+          .prepare('SELECT COUNT(*) as cnt, COALESCE(SUM(size_bytes), 0) as bytes FROM catalog_covers')
+          .first<{ cnt: number; bytes: number }>(),
+        db
+          .prepare(
+            `SELECT COALESCE(SUM(total_used), 0) as totalAll,
+                    COALESCE(SUM(CASE WHEN month_key = ? THEN month_used ELSE 0 END), 0) as totalMonth
+             FROM user_ai_usage`
+          )
+          .bind(currentMonthKey)
+          .first<{ totalAll: number; totalMonth: number }>(),
+        db
+          .prepare(
+            `SELECT COUNT(*) as totalSeries,
+                    SUM(CASE WHEN series_checked_at IS NOT NULL THEN 1 ELSE 0 END) as checkedSeries
+             FROM catalog_entities WHERE entity_type = 'serie'`
+          )
+          .first<{ totalSeries: number; checkedSeries: number }>(),
+        db
+          .prepare('SELECT COUNT(*) as cnt FROM series_release_alerts WHERE dismissed = 0')
+          .first<{ cnt: number }>()
+      ]);
+
+      const totalUsers = usersAgg?.total || 0;
+      const catalogByType: Record<string, number> = {};
+      for (const r of catalogTypeRows.results || []) {
+        catalogByType[r.entity_type || 'unknown'] = r.cnt || 0;
+      }
+
+      let activeNotifUsers = 0;
+      for (const n of notifRows.results || []) {
+        if (n.digest_frequency && n.digest_frequency !== 'off') {
+          activeNotifUsers += n.cnt || 0;
+        }
+      }
+
+      return jsonResp({
+        users: {
+          total: totalUsers,
+          recent7d: recentUsersRow?.cnt || 0,
+          totalLibraries: libsRow?.total || 0,
+          activeNotifUsers
+        },
+        catalog: {
+          editions: catalogByType.edition || 0,
+          works: catalogByType.work || 0,
+          series: catalogByType.serie || 0,
+          authors: catalogByType.human || 0,
+          coversCount: coversAgg?.cnt || 0,
+          coversBytes: coversAgg?.bytes || 0
+        },
+        ai: {
+          monthKey: currentMonthKey,
+          monthUsed: aiAgg?.totalMonth || 0,
+          allTimeUsed: aiAgg?.totalAll || 0,
+          monthlyQuotaPerUser: computeMonthlyAiQuota(totalUsers)
+        },
+        releases: {
+          totalSeries: seriesAgg?.totalSeries || 0,
+          checkedSeries: seriesAgg?.checkedSeries || 0,
+          activeAlerts: alertsAgg?.cnt || 0
+        }
+      });
+    }
+
+    case 'admin-catalog-list': {
+      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+
+      const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+      const entityType = (url.searchParams.get('type') || 'edition').trim();
+      const filterMode = (url.searchParams.get('filter') || 'all').trim();
+      const page = Math.max(1, Math.trunc(Number(url.searchParams.get('page') || 1)));
+      const pageSize = Math.min(60, Math.max(10, Math.trunc(Number(url.searchParams.get('pageSize') || 24))));
+      const offset = (page - 1) * pageSize;
+
+      const conditions: string[] = [];
+      const bindings: unknown[] = [];
+
+      if (entityType !== 'all') {
+        conditions.push('entity_type = ?');
+        bindings.push(entityType);
+      }
+      if (q) {
+        conditions.push('(LOWER(label) LIKE ? OR LOWER(uri) LIKE ?)');
+        bindings.push(`%${q}%`, `%${q}%`);
+      }
+      if (filterMode === 'no_cover') {
+        conditions.push("(image_url IS NULL OR image_url = '')");
+      } else if (filterMode === 'no_series') {
+        conditions.push("(series_uri IS NULL OR series_uri = '')");
+      }
+
+      const whereSql = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const countRow = await db
+        .prepare(`SELECT COUNT(*) as total FROM catalog_entities ${whereSql}`)
+        .bind(...bindings)
+        .first<{ total: number }>();
+
+      const rows = await db
+        .prepare(
+          `SELECT uri, entity_type, label, image_url, main_category, series_uri, series_number, publisher, publication_date, updated_at
+           FROM catalog_entities
+           ${whereSql}
+           ORDER BY updated_at DESC
+           LIMIT ? OFFSET ?`
+        )
+        .bind(...bindings, pageSize, offset)
+        .all<{
+          uri: string;
+          entity_type: string;
+          label: string;
+          image_url: string | null;
+          main_category: string | null;
+          series_uri: string | null;
+          series_number: string | null;
+          publisher: string | null;
+          publication_date: string | null;
+          updated_at: string;
+        }>();
+
+      return jsonResp({
+        items: rows.results || [],
+        total: countRow?.total || 0,
+        page,
+        pageSize
+      });
+    }
+
+    case 'admin-users-list': {
+      const admin = await requireAdmin(db, request, url.searchParams.get('uri'));
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const currentMonthKey = now.slice(0, 7);
+      const rows = await db
+        .prepare(
+          `SELECT u.id, u.display_name, u.recovery_email, u.is_admin, u.created_at,
+                  COALESCE(CASE WHEN ai.month_key = ? THEN ai.month_used ELSE 0 END, 0) as ai_month_used,
+                  COALESCE(np.digest_frequency, 'off') as digest_frequency,
+                  COALESCE(np.digest_channel, 'push') as digest_channel
+           FROM users u
+           LEFT JOIN user_ai_usage ai ON ai.user_id = u.id
+           LEFT JOIN user_notification_prefs np ON np.user_id = u.id
+           ORDER BY u.created_at DESC`
+        )
+        .bind(currentMonthKey)
+        .all<{
+          id: string;
+          display_name: string;
+          recovery_email: string | null;
+          is_admin: number;
+          created_at: string;
+          ai_month_used: number;
+          digest_frequency: string;
+          digest_channel: string;
+        }>();
+
+      return jsonResp({
+        users: (rows.results || []).map((r) => ({
+          id: r.id,
+          displayName: r.display_name,
+          hasRecoveryEmail: Boolean(r.recovery_email),
+          maskedEmail: r.recovery_email ? maskEmail(r.recovery_email) : null,
+          isAdmin: r.is_admin === 1,
+          createdAt: r.created_at,
+          aiMonthUsed: r.ai_month_used,
+          digestFrequency: r.digest_frequency,
+          digestChannel: r.digest_channel
+        }))
+      });
+    }
+
+    case 'admin-reset-user-ai-quota': {
+      const admin = await requireAdmin(db, request, body?.userUri);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const targetUserId = String(body?.targetUserId || '').trim();
+      if (!targetUserId) {
+        return jsonResp({ error: 'targetUserId requis.' }, 400);
+      }
+      const currentMonthKey = now.slice(0, 7);
+      await db
+        .prepare(
+          `UPDATE user_ai_usage SET month_used = 0, month_key = ?, updated_at = ? WHERE user_id = ?`
+        )
+        .bind(currentMonthKey, now, targetUserId)
+        .run();
+      return jsonResp({ ok: true });
+    }
+
+    case 'admin-rehydrate-catalog': {
+      const admin = await requireAdmin(db, request, body?.userUri);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const offset = Math.max(0, Number(body?.offset ?? 0));
+      const limit = Math.min(25, Math.max(1, Number(body?.limit ?? 20)));
+      const res = await rehydrateAllCatalogEntitiesInD1(db, { offset, limit });
+      return jsonResp({ ok: true, ...res });
+    }
+
+    case 'admin-run-release-sweep': {
+      const admin = await requireAdmin(db, request, body?.userUri);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const res = await runCentralizedSeriesReleaseSweep(db, { limit: 6, staleDays: 3 });
+      return jsonResp({ ok: true, ...res });
     }
 
     case 'family-join': {

@@ -11,6 +11,7 @@ const router = useRouter();
 
 const username = ref(sessionStore.state.user?.username || '');
 const recoveryEmail = ref(sessionStore.state.user?.recoveryEmail || '');
+const isAdmin = ref(Boolean(sessionStore.state.user?.isAdmin));
 const currentPassword = ref('');
 const newPassword = ref('');
 const confirmPassword = ref('');
@@ -52,6 +53,7 @@ onMounted(async () => {
     if (profile) {
       username.value = profile.username || '';
       recoveryEmail.value = profile.recoveryEmail || '';
+      isAdmin.value = Boolean(profile.isAdmin);
     }
     if (prefs) {
       digestFrequency.value = prefs.digestFrequency;
@@ -355,6 +357,17 @@ const handleLogout = async () => {
           {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences' }}
         </button>
       </form>
+
+      <template v-if="isAdmin">
+        <hr class="section-sep logout-sep" />
+        <button
+          type="button"
+          class="wireframe-btn save-btn"
+          @click="router.push('/admin')"
+        >
+          Interface Administrateur
+        </button>
+      </template>
 
       <hr class="section-sep logout-sep" />
       <button

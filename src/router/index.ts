@@ -72,6 +72,11 @@ export const router = createRouter({
       component: () => import('../ui/views/ProfileView.vue')
     },
     {
+      path: '/admin',
+      name: 'AdminView',
+      component: () => import('../ui/views/AdminView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView

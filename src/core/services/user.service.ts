@@ -324,5 +324,80 @@ export const userService = {
     if (!res.ok) return [];
     const data = await res.json();
     return Array.isArray(data?.contacts) ? data.contacts : [];
+  },
+
+  async fetchAdminOverview(): Promise<any> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=admin-overview${query}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Accès administrateur refusé.');
+    return data;
+  },
+
+  async fetchAdminCatalog(params: {
+    q?: string;
+    type?: string;
+    filter?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<{ items: any[]; total: number; page: number; pageSize: number }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = new URLSearchParams({
+      ...(savedUri ? { uri: savedUri } : {}),
+      ...(params.q ? { q: params.q } : {}),
+      ...(params.type ? { type: params.type } : {}),
+      ...(params.filter ? { filter: params.filter } : {}),
+      page: String(params.page || 1),
+      pageSize: String(params.pageSize || 24)
+    });
+    const res = await fetchWithTimeout(`/api/gateway?action=admin-catalog-list&${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Impossible de charger le catalogue.');
+    return data;
+  },
+
+  async fetchAdminUsers(): Promise<any[]> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=admin-users-list${query}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Impossible de charger les comptes.');
+    return data.users || [];
+  },
+
+  async resetUserAiQuota(targetUserId: string): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-reset-user-ai-quota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targetUserId, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Échec réinitialisation quota.');
+  },
+
+  async runAdminRehydrate(offset = 0, limit = 20): Promise<any> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-rehydrate-catalog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ offset, limit, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Échec ré-hydratation.');
+    return data;
+  },
+
+  async runAdminReleaseSweep(): Promise<{ checkedCount: number; alertsCreated: number }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-run-release-sweep', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Échec vérification nouveautés.');
+    return data;
   }
 };

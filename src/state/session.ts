@@ -3,6 +3,7 @@ export interface SessionUser {
   uri: string;
   username: string;
   recoveryEmail?: string | null;
+  isAdmin?: boolean;
   libraryId?: string;
   libraryName?: string;
   inviteCode?: string;
@@ -23,6 +24,7 @@ export const sessionStore = {
       uri: finalUri,
       username: u.username || u.label || u.name || 'Utilisateur',
       recoveryEmail: u.recoveryEmail !== undefined ? u.recoveryEmail : this.state.user?.recoveryEmail ?? null,
+      isAdmin: u.isAdmin !== undefined ? Boolean(u.isAdmin) : Boolean(this.state.user?.isAdmin),
       libraryId: u.libraryId,
       libraryName: u.libraryName,
       inviteCode: u.inviteCode,
