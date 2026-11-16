@@ -564,6 +564,18 @@ export async function handleD1GatewayAction(
       return jsonResp({ ok: true });
     }
 
+    case 'auth-logout': {
+      const cookieHeader = request.headers.get('Cookie') || '';
+      const match = /(?:^|;\s*)biblio_session=([^;]+)/.exec(cookieHeader);
+      if (match?.[1]) {
+        const tokenHash = await sha256Hex(match[1]);
+        await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
+      }
+      const isHttps = url.protocol === 'https:';
+      const clearCookie = `biblio_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${isHttps ? '; Secure' : ''}`;
+      return jsonResp({ ok: true }, 200, { 'Set-Cookie': clearCookie });
+    }
+
     case 'family-join': {
       const auth = await resolveAuthSession(db, request, body?.userUri);
       const inviteCode = String(body?.inviteCode || '').trim().toUpperCase();

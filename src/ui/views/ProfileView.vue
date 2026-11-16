@@ -1,9 +1,13 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import { userService } from '../../core/services/user.service';
+import { connectionService } from '../../core/orchestrators/connection.orchestrator';
 import { sessionStore } from '../../state/session';
+
+const router = useRouter();
 
 const username = ref(sessionStore.state.user?.username || '');
 const recoveryEmail = ref(sessionStore.state.user?.recoveryEmail || '');
@@ -77,6 +81,17 @@ const handleSave = async () => {
     errorMsg.value = e instanceof Error ? e.message : 'Erreur lors de la sauvegarde.';
   } finally {
     saving.value = false;
+  }
+};
+
+const loggingOut = ref(false);
+const handleLogout = async () => {
+  loggingOut.value = true;
+  try {
+    await connectionService.logout();
+    router.push('/login');
+  } finally {
+    loggingOut.value = false;
   }
 };
 </script>
@@ -162,6 +177,16 @@ const handleSave = async () => {
           {{ saving ? 'Enregistrement...' : 'Enregistrer les modifications' }}
         </button>
       </form>
+
+      <hr class="section-sep logout-sep" />
+      <button
+        type="button"
+        class="wireframe-btn danger logout-btn"
+        :disabled="loggingOut"
+        @click="handleLogout"
+      >
+        {{ loggingOut ? 'Déconnexion...' : 'Se déconnecter' }}
+      </button>
     </div>
   </div>
 </template>
@@ -246,9 +271,21 @@ const handleSave = async () => {
   font-weight: 600;
 }
 
-.save-btn {
+.save-btn,
+.logout-btn {
   min-block-size: 44px;
   font-weight: 600;
+  width: 100%;
+}
+
+.logout-sep {
+  margin: 1.25rem 0 1rem;
+}
+
+.logout-btn {
+  background: #fee2e2;
+  color: #991b1b;
+  border-color: #fecaca;
 }
 
 .loading-text {

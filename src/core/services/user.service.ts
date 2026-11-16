@@ -158,6 +158,19 @@ export const userService = {
     return data;
   },
 
+  async logout(): Promise<void> {
+    try {
+      await fetchWithTimeout('/api/gateway?action=auth-logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+    } catch {
+      // Ignore network errors on logout; local session will still be cleared
+    }
+    sessionStore.clearSession();
+  },
+
   /**
    * Rejoint une bibliothèque familiale existante via son code d'invitation (ex: FAM-XXXXXX)
    */

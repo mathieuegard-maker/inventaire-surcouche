@@ -154,5 +154,11 @@ export const connectionService = {
       sessionStore.clearSession();
       return false;
     }
+  },
+
+  async logout(): Promise<void> {
+    await userService.logout();
+    this.isInitialized = false;
+    this.userUri = null;
   }
 };
