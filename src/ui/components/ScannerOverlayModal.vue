@@ -407,7 +407,7 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [
   doubtItems.value.length,
   unresolvedItems.value.length,
   seriesExtraItems.value.length,
-  showByokSetup.value
+  hidePhotoHelp.value
 ]);
 
 const photoItemToBook = (item: ResolvedPhotoItem): HumanizedBook => {
@@ -456,11 +456,11 @@ const toggleAllPhotoDetected = (checked: boolean) => {
 };
 
 const allSelectedPhotoItems = computed(() => {
-  const sure = resolvedDetectedItems.value.filter((c) => c.selected && c.isbn13);
+  const sure = resolvedDetectedItems.value.filter((c) => c.selected && (c.isbn13 || c.existingUri));
   const doubts = doubtItems.value.filter(
-    (c) => c.selected && c.isbn13 && c.selectedAlternativeIsbn !== '__ignore__'
+    (c) => c.selected && (c.isbn13 || c.existingUri) && c.selectedAlternativeIsbn !== '__ignore__'
   );
-  const extras = seriesExtraItems.value.filter((c) => c.selected && c.isbn13);
+  const extras = seriesExtraItems.value.filter((c) => c.selected && (c.isbn13 || c.existingUri));
   return [...sure, ...doubts, ...extras];
 });
 
@@ -477,37 +477,56 @@ const clearPhotoSelections = () => {
 const dispatchPhotoBatchAction = async (
   action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
 ) => {
-  const target: 'owned' | 'wish' = action === 'ADD_WISHLIST' ? 'wish' : 'owned';
   const itemsToSave = allSelectedPhotoItems.value;
   if (itemsToSave.length === 0) return;
 
-  const processedIsbns = new Set<string>();
-  let savedCount = 0;
-  for (const item of itemsToSave) {
-    if (!item.isbn13 || processedIsbns.has(item.isbn13)) continue;
-    processedIsbns.add(item.isbn13);
-    await enqueueResolvedItem(item, target);
-    savedCount++;
-  }
+  photoError.value = '';
+  try {
+    if (action === 'DELETE') {
+      const removedSet = new Set(itemsToSave.map((i) => i.id));
+      resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !removedSet.has(i.id));
+      doubtItems.value = doubtItems.value.filter((d) => !removedSet.has(d.id));
+      seriesExtraItems.value = seriesExtraItems.value.filter((e) => !removedSet.has(e.id));
+      return;
+    }
 
-  // Retirer uniquement les éléments validés tout en préservant les éventuels restants/doutes non cochés
-  const savedSet = new Set(itemsToSave.map((i) => i.id));
-  resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !savedSet.has(i.id));
-  doubtItems.value = doubtItems.value.filter((d) => !savedSet.has(d.id));
-  seriesExtraItems.value = seriesExtraItems.value.filter((e) => !savedSet.has(e.id));
+    const target: 'owned' | 'wish' = action === 'ADD_WISHLIST' ? 'wish' : 'owned';
+    const processedKeys = new Set<string>();
+    let savedCount = 0;
+    for (const item of itemsToSave) {
+      const key = item.isbn13 || item.existingUri || item.id;
+      if (processedKeys.has(key)) continue;
+      processedKeys.add(key);
+      await enqueueResolvedItem(item, target);
+      savedCount++;
+    }
 
-  if (resolvedDetectedItems.value.length === 0 && doubtItems.value.length === 0 && unresolvedItems.value.length === 0) {
-    await photoBatchQueueService.clearCompletedJobs();
+    // Retirer uniquement les éléments validés tout en préservant les éventuels restants/doutes non cochés
+    const savedSet = new Set(itemsToSave.map((i) => i.id));
+    resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !savedSet.has(i.id));
+    doubtItems.value = doubtItems.value.filter((d) => !savedSet.has(d.id));
+    seriesExtraItems.value = seriesExtraItems.value.filter((e) => !savedSet.has(e.id));
+
+    if (
+      resolvedDetectedItems.value.length === 0 &&
+      doubtItems.value.length === 0 &&
+      unresolvedItems.value.length === 0
+    ) {
+      await photoBatchQueueService.clearCompletedJobs();
+    }
+    scannerState.notifyCatalogChanged();
+    photoSavingFeedback.value = `${savedCount} livre(s) ajouté(s) à ${target === 'owned' ? 'ma Collection' : 'ma Wishlist'} ✓`;
+    setTimeout(() => {
+      photoSavingFeedback.value = '';
+    }, 4000);
+  } catch (err: unknown) {
+    photoError.value =
+      err instanceof Error ? err.message : "Erreur lors de l'ajout des livres sélectionnés.";
   }
-  scannerState.notifyCatalogChanged();
-  photoSavingFeedback.value = `${savedCount} livre(s) ajouté(s) à ${target === 'owned' ? 'ma Collection' : 'ma Wishlist'} ✓`;
-  setTimeout(() => {
-    photoSavingFeedback.value = '';
-  }, 4000);
 };
 
 async function enqueueResolvedItem(item: ResolvedPhotoItem, target: 'owned' | 'wish' | 'none') {
-  if (!item.isbn13) return;
+  if (!item.isbn13 && !item.existingUri) return;
 
   if (item.existingUri && (target === 'owned' || target === 'wish')) {
     await queueService.enqueueAction(target === 'owned' ? 'ADD_INVENTORY' : 'ADD_WISHLIST', item.existingUri);
