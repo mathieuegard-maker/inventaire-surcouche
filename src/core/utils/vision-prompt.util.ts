@@ -1,6 +1,16 @@
 // src/core/utils/vision-prompt.util.ts
 // Prompt et liste de modèles Gemini Flash partagés entre le client BYOK et la passerelle serveur.
 
+export const GLOBAL_MONTHLY_AI_BUDGET = 15000;
+export const MAX_MONTHLY_AI_QUOTA_PER_USER = 100;
+export const MIN_MONTHLY_AI_QUOTA_PER_USER = 5;
+
+export function computeMonthlyAiQuota(userCount: number): number {
+  const safeUsers = Math.max(1, Math.trunc(userCount || 1));
+  const scaled = Math.floor(GLOBAL_MONTHLY_AI_BUDGET / safeUsers);
+  return Math.max(MIN_MONTHLY_AI_QUOTA_PER_USER, Math.min(MAX_MONTHLY_AI_QUOTA_PER_USER, scaled));
+}
+
 export const PREFERRED_GEMINI_MODELS = [
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash-lite',

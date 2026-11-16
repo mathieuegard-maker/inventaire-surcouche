@@ -6,7 +6,11 @@ import type { AppBackendEnv, DatabaseBinding } from '../adapters/storage-db.inte
 import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
-import { buildVisionPrompt, PREFERRED_GEMINI_MODELS } from '../utils/vision-prompt.util';
+import {
+  buildVisionPrompt,
+  computeMonthlyAiQuota,
+  PREFERRED_GEMINI_MODELS
+} from '../utils/vision-prompt.util';
 import {
   expandSeriesVolumesInD1,
   rehydrateAllCatalogEntitiesInD1,
@@ -716,25 +720,25 @@ export async function handleD1GatewayAction(
       if (!auth) {
         return jsonResp({ error: 'Session invalide' }, 401);
       }
-      const ONBOARDING_FREE_QUOTA = 40;
-      const MONTHLY_FREE_QUOTA = 10;
       const currentMonthKey = now.slice(0, 7);
-      const usageRow = await db
-        .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
-        .bind(auth.userId)
-        .first<{ total_used: number; month_key: string; month_used: number }>();
+      const [usageRow, userCountRow] = await Promise.all([
+        db
+          .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
+          .bind(auth.userId)
+          .first<{ total_used: number; month_key: string; month_used: number }>(),
+        db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>()
+      ]);
 
+      const monthlyQuota = computeMonthlyAiQuota(userCountRow?.cnt || 1);
       const totalUsed = usageRow?.total_used || 0;
       const monthUsed = usageRow?.month_key === currentMonthKey ? usageRow.month_used : 0;
-      const remainingQuota =
-        totalUsed < ONBOARDING_FREE_QUOTA
-          ? ONBOARDING_FREE_QUOTA - totalUsed
-          : Math.max(0, MONTHLY_FREE_QUOTA - monthUsed);
+      const remainingQuota = Math.max(0, monthlyQuota - monthUsed);
 
       return jsonResp({
         serverAvailable: Boolean(env?.GEMINI_API_KEY),
         totalUsed,
         monthUsed,
+        monthlyQuota,
         remainingQuota
       });
     }
@@ -746,10 +750,7 @@ export async function handleD1GatewayAction(
       }
       const geminiKey = env?.GEMINI_API_KEY;
       if (!geminiKey) {
-        return jsonResp(
-          { error: 'Analyse IA serveur non configurée. Configurez votre propre clé gratuite ci-dessus.' },
-          503
-        );
+        return jsonResp({ error: 'Service de reconnaissance IA temporairement indisponible.' }, 503);
       }
 
       const imageBase64 = String(body?.imageBase64 || '').trim();
@@ -759,21 +760,23 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Image manquante.' }, 400);
       }
 
-      const ONBOARDING_FREE_QUOTA = 40;
-      const MONTHLY_FREE_QUOTA = 10;
       const currentMonthKey = now.slice(0, 7);
-      const usageRow = await db
-        .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
-        .bind(auth.userId)
-        .first<{ total_used: number; month_key: string; month_used: number }>();
+      const [usageRow, userCountRow] = await Promise.all([
+        db
+          .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
+          .bind(auth.userId)
+          .first<{ total_used: number; month_key: string; month_used: number }>(),
+        db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>()
+      ]);
 
+      const monthlyQuota = computeMonthlyAiQuota(userCountRow?.cnt || 1);
       const totalUsed = usageRow?.total_used || 0;
       const monthUsed = usageRow?.month_key === currentMonthKey ? usageRow.month_used : 0;
 
-      if (totalUsed >= ONBOARDING_FREE_QUOTA && monthUsed >= MONTHLY_FREE_QUOTA) {
+      if (monthUsed >= monthlyQuota) {
         return jsonResp(
           {
-            error: `Quota d'analyses IA offertes atteint (${ONBOARDING_FREE_QUOTA} au démarrage + ${MONTHLY_FREE_QUOTA}/mois). Vous pouvez saisir votre propre clé gratuite Gemini/Groq.`
+            error: `Quota mensuel d'analyses IA atteint (${monthlyQuota} photos ce mois-ci). Il sera renouvelé le mois prochain.`
           },
           429
         );
@@ -832,7 +835,7 @@ export async function handleD1GatewayAction(
       }
 
       const nextTotal = totalUsed + 1;
-      const nextMonthUsed = totalUsed < ONBOARDING_FREE_QUOTA ? monthUsed : monthUsed + 1;
+      const nextMonthUsed = monthUsed + 1;
       await db
         .prepare(
           `INSERT INTO user_ai_usage (user_id, total_used, month_key, month_used, updated_at)
@@ -846,12 +849,9 @@ export async function handleD1GatewayAction(
         .bind(auth.userId, nextTotal, currentMonthKey, nextMonthUsed, now)
         .run();
 
-      const remainingQuota =
-        nextTotal < ONBOARDING_FREE_QUOTA
-          ? ONBOARDING_FREE_QUOTA - nextTotal
-          : Math.max(0, MONTHLY_FREE_QUOTA - nextMonthUsed);
+      const remainingQuota = Math.max(0, monthlyQuota - nextMonthUsed);
 
-      return jsonResp({ text: rawText, remainingQuota });
+      return jsonResp({ text: rawText, monthlyQuota, remainingQuota });
     }
 
     case 'family-join': {

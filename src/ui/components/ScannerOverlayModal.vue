@@ -8,7 +8,7 @@ import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import {
   byokVisionService,
-  type ByokProvider
+  type ServerVisionStatus
 } from '../../core/services/byok-vision.service';
 import {
   type ResolvedPhotoItem,
@@ -141,23 +141,13 @@ const confirmBurstGroupLend = async (friendName: string) => {
 };
 
 // ============================================================================
-// MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (BYOK + VALIDATION LIVRE PAR LIVRE)
+// MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (IA SERVEUR + VALIDATION LIVRE PAR LIVRE)
 // ============================================================================
-const existingByok = byokVisionService.getSettings();
-const byokProvider = ref<ByokProvider>(existingByok?.provider || 'gemini');
-const byokKey = ref<string>(existingByok?.apiKey || '');
-const hasPersonalByokKey = ref<boolean>(Boolean(existingByok?.apiKey));
-const serverVisionStatus = ref<{ serverAvailable: boolean; remainingQuota: number } | null>(null);
-const showByokSetup = ref<boolean>(!existingByok?.apiKey);
-const byokTestStatus = ref<{ ok?: boolean; message: string } | null>(null);
-const isTestingKey = ref(false);
+const serverVisionStatus = ref<ServerVisionStatus | null>(null);
 
 const refreshServerVisionStatus = () => {
   byokVisionService.fetchServerVisionStatus().then((st) => {
     serverVisionStatus.value = st;
-    if (st.serverAvailable && !byokVisionService.getSettings()) {
-      showByokSetup.value = false;
-    }
   });
 };
 
@@ -260,37 +250,6 @@ function selectDoubtOption(item: ResolvedPhotoItem, option: PhotoResolutionOptio
   item.selected = true;
 }
 
-async function handleSaveAndTestByok() {
-  isTestingKey.value = true;
-  byokTestStatus.value = null;
-  const res = await byokVisionService.testKey({
-    provider: byokProvider.value,
-    apiKey: byokKey.value
-  });
-  isTestingKey.value = false;
-  byokTestStatus.value = res;
-  if (res.ok) {
-    byokVisionService.saveSettings({
-      provider: byokProvider.value,
-      apiKey: byokKey.value
-    });
-    hasPersonalByokKey.value = true;
-    setTimeout(() => {
-      showByokSetup.value = false;
-    }, 900);
-  }
-}
-
-function handleClearByok() {
-  byokVisionService.clearSettings();
-  byokKey.value = '';
-  hasPersonalByokKey.value = false;
-  byokTestStatus.value = null;
-  if (serverVisionStatus.value?.serverAvailable) {
-    showByokSetup.value = false;
-  }
-}
-
 async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   const input = event.target as HTMLInputElement;
   const files = input.files ? Array.from(input.files) : [];
@@ -298,8 +257,8 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
 
   photoError.value = '';
   try {
-    if (!byokVisionService.getSettings() && !serverVisionStatus.value?.serverAvailable) {
-      throw new Error("Aucune clé API configurée. Configurez votre clé gratuite ci-dessus.");
+    if (serverVisionStatus.value && !serverVisionStatus.value.serverAvailable) {
+      throw new Error('Service de reconnaissance IA temporairement indisponible.');
     }
     const count = await photoBatchQueueService.enqueuePhotos(files, mode);
     photoSavingFeedback.value = `${count} photo(s) ajoutée(s) à la file ! Vous pouvez continuer à prendre d'autres photos pendant le traitement en arrière-fond.`;
@@ -310,6 +269,7 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
     photoError.value = err instanceof Error ? err.message : "Erreur lors de l'ajout des photos.";
   } finally {
     input.value = '';
+    refreshServerVisionStatus();
   }
 }
 
@@ -737,98 +697,17 @@ async function clearPhotoQueueAndForm() {
       </div>
 
       <!-- ================================================================ -->
-      <!-- MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (IA BYOK + VALIDATION)      -->
+      <!-- MODE 3 : PHOTO COUVERTURE / ÉTAGÈRE (IA SERVEUR + VALIDATION)    -->
       <!-- ================================================================ -->
       <div v-if="activeMode === 'photo'" class="photo-mode-box">
         <div class="byok-header-bar">
           <span>
             Reconnaissance IA :
-            <strong v-if="hasPersonalByokKey">
-              Clé personnelle active
-              <template v-if="serverVisionStatus?.serverAvailable">
-                (ou IA incluse : {{ serverVisionStatus.remainingQuota }} offertes)
-              </template>
+            <strong v-if="serverVisionStatus?.serverAvailable">
+              {{ serverVisionStatus.remainingQuota }} / {{ serverVisionStatus.monthlyQuota }} analyses restantes ce mois-ci
             </strong>
-            <strong v-else-if="serverVisionStatus?.serverAvailable">
-              IA incluse ({{ serverVisionStatus.remainingQuota }} analyses offertes restantes)
-            </strong>
-            <strong v-else>À configurer</strong>
+            <strong v-else>Vérification...</strong>
           </span>
-          <button type="button" class="link-btn" @click="showByokSetup = !showByokSetup">
-            {{
-              showByokSetup
-                ? 'Masquer l’assistant clé'
-                : hasPersonalByokKey
-                  ? 'Gérer / retirer ma clé'
-                  : serverVisionStatus?.serverAvailable
-                    ? 'Utiliser ma propre clé'
-                    : 'Configurer ma clé gratuite'
-            }}
-          </button>
-        </div>
-
-        <!-- Assistant ultra-simple pour non-technophiles -->
-        <div v-if="showByokSetup" class="byok-wizard">
-          <h4>Assistant en 3 clics (100 % gratuit, sans carte bancaire)</h4>
-          <ol class="wizard-steps">
-            <li>
-              Cliquez ici pour ouvrir la page officielle :
-              <a
-                v-if="byokProvider === 'gemini'"
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noopener"
-              >
-                Obtenir une clé gratuite Google Gemini (AI Studio) ↗
-              </a>
-              <a v-else href="https://console.groq.com/keys" target="_blank" rel="noopener">
-                Obtenir une clé gratuite Groq ↗
-              </a>
-            </li>
-            <li>Cliquez sur <strong>"Create API Key"</strong> et copiez la clé générée.</li>
-            <li>Collez-la ci-dessous (elle reste uniquement sur votre téléphone) :</li>
-          </ol>
-
-          <div class="wizard-controls">
-            <select v-model="byokProvider" class="provider-select">
-              <option value="gemini">Google Gemini Flash (Recommandé)</option>
-              <option value="groq">Groq Llama Vision</option>
-            </select>
-            <input
-              v-model="byokKey"
-              type="password"
-              placeholder="Collez votre clé API ici (ex: AIzaSy...)"
-              class="key-input"
-            />
-            <button
-              type="button"
-              class="action-btn primary"
-              :disabled="isTestingKey || !byokKey.trim()"
-              @click="handleSaveAndTestByok"
-            >
-              {{ isTestingKey ? 'Vérification...' : 'Tester & Enregistrer ma clé' }}
-            </button>
-            <button
-              v-if="hasPersonalByokKey"
-              type="button"
-              class="action-btn"
-              @click="handleClearByok"
-            >
-              {{
-                serverVisionStatus?.serverAvailable
-                  ? "Utiliser l'IA incluse (retirer ma clé)"
-                  : 'Retirer ma clé personnelle'
-              }}
-            </button>
-          </div>
-
-          <div
-            v-if="byokTestStatus"
-            class="key-status"
-            :class="byokTestStatus.ok ? 'ok' : 'err'"
-          >
-            {{ byokTestStatus.message }}
-          </div>
         </div>
 
         <!-- Boutons de capture photo (rafale d'appareils photo ou multi-sélection galerie) -->
