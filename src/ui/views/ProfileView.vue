@@ -20,12 +20,49 @@ const saving = ref(false);
 const errorMsg = ref('');
 const successMsg = ref('');
 
+const digestFrequency = ref<'off' | 'daily' | 'weekly' | 'monthly'>('off');
+const digestHour = ref(9);
+const digestWeekday = ref(6);
+const digestDayOfMonth = ref(1);
+const digestTimezone = ref(
+  (typeof Intl !== 'undefined' && Intl.DateTimeFormat().resolvedOptions().timeZone) || 'Europe/Paris'
+);
+const digestChannel = ref<'push' | 'email' | 'both'>('email');
+const hasPushSubscription = ref(false);
+const vapidPublicKey = ref<string | null>(null);
+const pushBusy = ref(false);
+const savingNotif = ref(false);
+const notifMsg = ref('');
+const notifError = ref('');
+
+const urlBase64ToUint8Array = (base64String: string) => {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const out = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) out[i] = rawData.charCodeAt(i);
+  return out;
+};
+
 onMounted(async () => {
   try {
-    const profile = await userService.fetchProfile();
+    const [profile, prefs] = await Promise.all([
+      userService.fetchProfile(),
+      userService.getNotificationPrefs().catch(() => null)
+    ]);
     if (profile) {
       username.value = profile.username || '';
       recoveryEmail.value = profile.recoveryEmail || '';
+    }
+    if (prefs) {
+      digestFrequency.value = prefs.digestFrequency;
+      digestHour.value = prefs.digestHour;
+      digestWeekday.value = prefs.digestWeekday;
+      digestDayOfMonth.value = prefs.digestDayOfMonth;
+      digestTimezone.value = prefs.digestTimezone || digestTimezone.value;
+      digestChannel.value = prefs.digestChannel;
+      hasPushSubscription.value = prefs.hasPushSubscription;
+      vapidPublicKey.value = prefs.vapidPublicKey;
     }
   } catch (e: unknown) {
     errorMsg.value = e instanceof Error ? e.message : 'Impossible de charger le profil.';
@@ -33,6 +70,86 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+
+const handleSaveNotifs = async () => {
+  notifError.value = '';
+  notifMsg.value = '';
+  savingNotif.value = true;
+  try {
+    await userService.saveNotificationPrefs({
+      digestFrequency: digestFrequency.value,
+      digestHour: Number(digestHour.value),
+      digestWeekday: Number(digestWeekday.value),
+      digestDayOfMonth: Number(digestDayOfMonth.value),
+      digestTimezone: digestTimezone.value,
+      digestChannel: digestChannel.value
+    });
+    notifMsg.value = 'Préférences de notification enregistrées.';
+  } catch (e: unknown) {
+    notifError.value = e instanceof Error ? e.message : 'Erreur lors de la sauvegarde.';
+  } finally {
+    savingNotif.value = false;
+  }
+};
+
+const handleEnablePush = async () => {
+  notifError.value = '';
+  notifMsg.value = '';
+  if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
+    notifError.value = 'Les notifications Push ne sont pas supportées sur ce navigateur (sur iPhone, installez d’abord l’app sur l’écran d’accueil).';
+    return;
+  }
+  if (!vapidPublicKey.value) {
+    notifError.value = 'Clé VAPID serveur non configurée.';
+    return;
+  }
+  pushBusy.value = true;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      notifError.value = 'Permission de notification refusée.';
+      return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(vapidPublicKey.value)
+    });
+    await userService.subscribeWebPush(sub.toJSON());
+    hasPushSubscription.value = true;
+    notifMsg.value = 'Notifications Push activées sur cet appareil.';
+  } catch (e: unknown) {
+    notifError.value = e instanceof Error ? e.message : "Impossible d'activer les notifications Push.";
+  } finally {
+    pushBusy.value = false;
+  }
+};
+
+const handleDisablePush = async () => {
+  notifError.value = '';
+  notifMsg.value = '';
+  pushBusy.value = true;
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await userService.unsubscribeWebPush(sub.endpoint);
+        await sub.unsubscribe();
+      } else {
+        await userService.unsubscribeWebPush();
+      }
+    } else {
+      await userService.unsubscribeWebPush();
+    }
+    hasPushSubscription.value = false;
+    notifMsg.value = 'Notifications Push désactivées sur cet appareil.';
+  } catch (e: unknown) {
+    notifError.value = e instanceof Error ? e.message : 'Erreur lors de la désactivation.';
+  } finally {
+    pushBusy.value = false;
+  }
+};
 
 const handleSave = async () => {
   errorMsg.value = '';
@@ -179,6 +296,92 @@ const handleLogout = async () => {
       </form>
 
       <hr class="section-sep logout-sep" />
+      <h3 class="notif-title">Notifications &amp; Digest des nouveautés</h3>
+      <p class="notif-sub">
+        Recevez un récapitulatif des nouveaux tomes détectés dans les séries dont vous possédez au moins un tome.
+      </p>
+
+      <form class="profile-form" @submit.prevent="handleSaveNotifs">
+        <div class="field">
+          <label for="notif-freq">Fréquence du digest</label>
+          <select id="notif-freq" v-model="digestFrequency">
+            <option value="off">Désactivé</option>
+            <option value="daily">Quotidien</option>
+            <option value="weekly">Hebdomadaire</option>
+            <option value="monthly">Mensuel</option>
+          </select>
+        </div>
+
+        <template v-if="digestFrequency !== 'off'">
+          <div v-if="digestFrequency === 'weekly'" class="field">
+            <label for="notif-weekday">Jour de la semaine</label>
+            <select id="notif-weekday" v-model.number="digestWeekday">
+              <option :value="1">Lundi</option>
+              <option :value="2">Mardi</option>
+              <option :value="3">Mercredi</option>
+              <option :value="4">Jeudi</option>
+              <option :value="5">Vendredi</option>
+              <option :value="6">Samedi</option>
+              <option :value="0">Dimanche</option>
+            </select>
+          </div>
+
+          <div v-if="digestFrequency === 'monthly'" class="field">
+            <label for="notif-dom">Jour du mois</label>
+            <select id="notif-dom" v-model.number="digestDayOfMonth">
+              <option v-for="d in 28" :key="d" :value="d">Le {{ d }}</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="notif-hour">Heure d'envoi ({{ digestTimezone }})</label>
+            <select id="notif-hour" v-model.number="digestHour">
+              <option v-for="h in 24" :key="h - 1" :value="h - 1">
+                {{ String(h - 1).padStart(2, '0') }}h00
+              </option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="notif-channel">Canal de réception</label>
+            <select id="notif-channel" v-model="digestChannel">
+              <option value="email">E-mail</option>
+              <option value="push">Notification Push (PWA)</option>
+              <option value="both">E-mail + Notification Push</option>
+            </select>
+          </div>
+
+          <div v-if="digestChannel !== 'email'" class="push-box">
+            <button
+              v-if="!hasPushSubscription"
+              type="button"
+              class="wireframe-btn save-btn"
+              :disabled="pushBusy"
+              @click="handleEnablePush"
+            >
+              {{ pushBusy ? 'Activation...' : 'Activer les notifications Push sur cet appareil' }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="wireframe-btn save-btn"
+              :disabled="pushBusy"
+              @click="handleDisablePush"
+            >
+              {{ pushBusy ? 'Désactivation...' : 'Désactiver les notifications Push sur cet appareil' }}
+            </button>
+          </div>
+        </template>
+
+        <p v-if="notifError" class="error-msg">{{ notifError }}</p>
+        <p v-if="notifMsg" class="success-msg">{{ notifMsg }}</p>
+
+        <button type="submit" class="wireframe-btn primary save-btn" :disabled="savingNotif">
+          {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences de digest' }}
+        </button>
+      </form>
+
+      <hr class="section-sep logout-sep" />
       <button
         type="button"
         class="wireframe-btn danger logout-btn"
@@ -230,12 +433,25 @@ const handleLogout = async () => {
   font-weight: 600;
 }
 
-.field input {
+.field input,
+.field select {
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: 8px;
   min-block-size: 42px;
   padding: 0.5rem 0.75rem;
   font-size: 0.95rem;
+  background: #fff;
+}
+
+.notif-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.05rem;
+}
+
+.notif-sub {
+  margin: 0 0 0.9rem;
+  font-size: 0.84rem;
+  color: #64748b;
 }
 
 .section-sep {

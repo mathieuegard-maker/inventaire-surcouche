@@ -3,6 +3,9 @@ name = "biblio-collection-pwa"
 pages_build_output_dir = "dist"
 compatibility_date = "2025-01-01"
 
+[vars]
+VAPID_PUBLIC_KEY = "BNB_NGB7iCIPWJtwbw3uLsRpUyPXbERkJe0YwQtKrhwFSQmdBuSjJoNZNMwF4dWUfFIWzyCoOfRx8-gO94q3-bw"
+
 # 1. Liaison Base de données SQLite Serverless (Cloudflare D1 - Région WEUR)
 [[d1_databases]]
 binding = "DB"

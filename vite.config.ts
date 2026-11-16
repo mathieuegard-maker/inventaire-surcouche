@@ -22,7 +22,8 @@ export default defineConfig({
       },
       // Ajout de cette section pour corriger l'avertissement
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'] // On retire .wasm de la liste
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'], // On retire .wasm de la liste
+        importScripts: ['/sw-push.js']
       },
       manifest: {
         name: 'Ma Bibliothèque Cloud',

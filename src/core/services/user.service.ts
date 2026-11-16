@@ -171,6 +171,69 @@ export const userService = {
     sessionStore.clearSession();
   },
 
+  async getNotificationPrefs(): Promise<{
+    digestFrequency: 'off' | 'daily' | 'weekly' | 'monthly';
+    digestHour: number;
+    digestWeekday: number;
+    digestDayOfMonth: number;
+    digestTimezone: string;
+    digestChannel: 'push' | 'email' | 'both';
+    lastNotifiedAt: string | null;
+    hasPushSubscription: boolean;
+    vapidPublicKey: string | null;
+  }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const query = savedUri ? `&uri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/gateway?action=notif-prefs-get${query}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de charger les préférences de notification.');
+    }
+    return data;
+  },
+
+  async saveNotificationPrefs(prefs: {
+    digestFrequency: 'off' | 'daily' | 'weekly' | 'monthly';
+    digestHour: number;
+    digestWeekday: number;
+    digestDayOfMonth: number;
+    digestTimezone: string;
+    digestChannel: 'push' | 'email' | 'both';
+  }): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=notif-prefs-save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...prefs, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de sauvegarder les préférences.');
+    }
+  },
+
+  async subscribeWebPush(subscription: PushSubscriptionJSON): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=push-subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription, userUri: savedUri })
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data?.error || "Impossible d'enregistrer l'abonnement Push.");
+    }
+  },
+
+  async unsubscribeWebPush(endpoint?: string): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    await fetchWithTimeout('/api/gateway?action=push-unsubscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint, userUri: savedUri })
+    });
+  },
+
   /**
    * Rejoint une bibliothèque familiale existante via son code d'invitation (ex: FAM-XXXXXX)
    */

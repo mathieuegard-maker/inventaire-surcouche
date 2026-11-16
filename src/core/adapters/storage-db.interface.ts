@@ -46,4 +46,7 @@ export interface AppBackendEnv {
   JWT_SECRET?: string;
   RESEND_API_KEY?: string;
   MAIL_FROM?: string;
+  VAPID_PUBLIC_KEY?: string;
+  VAPID_PRIVATE_JWK?: string;
+  VAPID_SUBJECT?: string;
 }
