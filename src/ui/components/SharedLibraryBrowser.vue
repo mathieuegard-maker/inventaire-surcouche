@@ -3,7 +3,7 @@
     <div v-if="!hideHeader" class="browser-hero">
       <div class="hero-top">
         <div>
-          <span class="readonly-pill">👀 LECTURE SEULE</span>
+          <span class="readonly-pill">LECTURE SEULE</span>
           <h1 class="hero-title">{{ library.libraryName || 'Bibliothèque partagée' }}</h1>
           <p v-if="library.ownerName" class="hero-owner">Par {{ library.ownerName }}</p>
         </div>
@@ -34,14 +34,14 @@
           :class="['filter-tab', { active: ownershipFilter === 'owned' }]"
           @click="ownershipFilter = 'owned'"
         >
-          📚 Possédés ({{ ownedCount }})
+          Possédés ({{ ownedCount }})
         </button>
         <button
           type="button"
           :class="['filter-tab', { active: ownershipFilter === 'wishlist' }]"
           @click="ownershipFilter = 'wishlist'"
         >
-          🎁 Wishlist ({{ wishlistCount }})
+          Wishlist ({{ wishlistCount }})
         </button>
       </div>
 
@@ -74,7 +74,7 @@
             class="cover-img"
             loading="lazy"
           />
-          <div v-else class="cover-fallback">📖</div>
+          <div v-else class="cover-fallback">—</div>
           <span v-if="item.main_category" class="cat-badge">{{ item.main_category }}</span>
         </div>
 
@@ -89,9 +89,9 @@
           <h3 class="book-title">{{ item.title || 'Titre inconnu' }}</h3>
 
           <div class="status-row">
-            <span v-if="item.ownership_status === 'wishlist'" class="status-pill wish">🎁 Wishlist</span>
-            <span v-else-if="Boolean(item.is_lent)" class="status-pill lent">📤 Déjà prêté</span>
-            <span v-else class="status-pill avail">✅ Disponible</span>
+            <span v-if="item.ownership_status === 'wishlist'" class="status-pill wish">Wishlist</span>
+            <span v-else-if="Boolean(item.is_lent)" class="status-pill lent">Déjà prêté</span>
+            <span v-else class="status-pill avail">Disponible</span>
           </div>
         </div>
       </article>

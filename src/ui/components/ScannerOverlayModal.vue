@@ -52,7 +52,7 @@ const checkStatusBanner = computed(() => {
   if (r.ownership?.isEditionOwned) {
     return {
       color: 'owned',
-      badge: '✅ VOUS AVEZ DÉJÀ CE LIVRE !',
+      badge: 'VOUS AVEZ DÉJÀ CE LIVRE',
       headline: r.mainBook?.title || 'Déjà possédé',
       sub: r.loan?.isLent
         ? `Actuellement prêté à ${r.loan.details?.friendName}`
@@ -62,7 +62,7 @@ const checkStatusBanner = computed(() => {
   if (r.ownership?.isWorkOwned) {
     return {
       color: 'owned-other',
-      badge: '✅ DÉJÀ POSSÉDÉ (AUTRE ÉDITION)',
+      badge: 'DÉJÀ POSSÉDÉ (AUTRE ÉDITION)',
       headline: r.mainBook?.title || 'Déjà possédé',
       sub: `Vous possédez déjà cette œuvre (${r.ownership.duplicateEdition?.publisher || 'autre édition'}).`
     };
@@ -70,7 +70,7 @@ const checkStatusBanner = computed(() => {
   if (r.ownership?.isWished) {
     return {
       color: 'wish',
-      badge: '💙 DANS VOTRE WISHLIST !',
+      badge: 'DANS VOTRE WISHLIST',
       headline: r.mainBook?.title || 'Dans vos envies',
       sub: 'Ce livre figure dans votre liste d’envies.'
     };
@@ -78,14 +78,14 @@ const checkStatusBanner = computed(() => {
   if (r.series && r.series.ownedCount > 0) {
     return {
       color: 'series-gap',
-      badge: '🟠 VOUS NE L’AVEZ PAS (SÉRIE SUIVIE)',
+      badge: 'VOUS NE L’AVEZ PAS (SÉRIE SUIVIE)',
       headline: r.mainBook?.title || 'Tome manquant',
       sub: `Vous avez ${r.series.ownedCount}/${r.series.tomes.length} tomes de "${r.series.name || r.mainBook?.series}".`
     };
   }
   return {
     color: 'not-owned',
-    badge: '➕ ABSENT DE VOTRE BIBLIOTHÈQUE',
+    badge: 'ABSENT DE VOTRE BIBLIOTHÈQUE',
     headline: r.mainBook?.title || 'Non possédé',
     sub: 'Vous ne possédez pas encore cet ouvrage.'
   };
@@ -474,16 +474,24 @@ async function clearPhotoQueueAndForm() {
 <template>
   <div v-show="scannerState.isScanningActive.value" class="scanner-modal-backdrop">
     <div class="scanner-modal-card">
-      <!-- En-tête + Sélecteur 2 Onglets (Code-Barres avec Simple/Rafale ou Photo) -->
+      <!-- En-tête + Sélecteur 3 Modes (Simple / Rafale / Photo) -->
       <div class="scanner-header">
         <div class="mode-tabs">
           <button
             type="button"
             class="mode-tab"
-            :class="{ active: activeMode !== 'photo' }"
-            @click="scannerState.switchMode(activeMode === 'burst' ? 'burst' : 'simple')"
+            :class="{ active: activeMode === 'simple' }"
+            @click="scannerState.switchMode('simple')"
           >
-            📷 Scan Code-Barres
+            Scan simple
+          </button>
+          <button
+            type="button"
+            class="mode-tab"
+            :class="{ active: activeMode === 'burst' }"
+            @click="scannerState.switchMode('burst')"
+          >
+            Scan rafale
           </button>
           <button
             type="button"
@@ -491,39 +499,40 @@ async function clearPhotoQueueAndForm() {
             :class="{ active: activeMode === 'photo' }"
             @click="scannerState.switchMode('photo')"
           >
-            📸 Photo Étagère / Couv
+            Photo étagère / couv
             <span v-if="photoStats.totalPhotos > 0" class="tab-count-badge">{{ photoStats.totalPhotos }}</span>
           </button>
         </div>
         <button type="button" class="close-scan-btn" @click="scannerState.stopScan()">
-          ✕ Fermer
+          Fermer
         </button>
       </div>
 
       <!-- ================================================================ -->
-      <!-- FLUX CAMÉRA CODE-BARRES (Switch Simple / Rafale intégré)         -->
+      <!-- ÉCRAN DE CHOIX PAR DÉFAUT LORSQU'ON CLIQUE SUR "SCANNER"         -->
       <!-- ================================================================ -->
-      <div v-if="activeMode !== 'photo'" class="burst-toolbar mode-switch-bar">
-        <span class="burst-label">Mode de scan :</span>
-        <div class="burst-target-switch">
-          <button
-            type="button"
-            :class="{ active: activeMode === 'simple' }"
-            @click="scannerState.switchMode('simple')"
-          >
-            📖 Simple (Vérif + Fiche)
-          </button>
-          <button
-            type="button"
-            :class="{ active: activeMode === 'burst' }"
-            @click="scannerState.switchMode('burst')"
-          >
-            ⚡ Rafale continu
-          </button>
-        </div>
+      <div v-if="activeMode === 'chooser'" class="scanner-chooser-grid">
+        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('simple')">
+          <strong>Scan simple</strong>
+          <small>Scanner un code-barres avec vérification immédiate et fiche complète</small>
+        </button>
+        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('burst')">
+          <strong>Scan rafale</strong>
+          <small>Enchaîner plusieurs codes-barres à la suite vers la collection ou la wishlist</small>
+        </button>
+        <button type="button" class="chooser-mode-card" @click="scannerState.switchMode('photo')">
+          <strong>Recherche par photo (étagère, pile ou couverture)</strong>
+          <small>
+            Identifier un ou plusieurs livres sans code-barres via l'IA en file d'attente
+            <template v-if="photoStats.totalPhotos > 0"> ({{ photoStats.totalPhotos }} photo(s) en file)</template>
+          </small>
+        </button>
       </div>
 
-      <div v-show="activeMode !== 'photo' && !checkRes" class="camera-section">
+      <!-- ================================================================ -->
+      <!-- FLUX CAMÉRA CODE-BARRES (Simple ou Rafale)                       -->
+      <!-- ================================================================ -->
+      <div v-show="(activeMode === 'simple' || activeMode === 'burst') && !checkRes" class="camera-section">
         <div v-if="activeMode === 'burst'" class="burst-toolbar">
           <span class="burst-label">Enregistrer à la volée dans :</span>
           <div class="burst-target-switch">
@@ -532,14 +541,14 @@ async function clearPhotoQueueAndForm() {
               :class="{ active: burstTarget === 'owned' }"
               @click="burstTarget = 'owned'"
             >
-              📥 Ma Collection
+              Ma Collection
             </button>
             <button
               type="button"
               :class="{ active: burstTarget === 'wishlist' }"
               @click="burstTarget = 'wishlist'"
             >
-              💙 Ma Wishlist
+              Ma Wishlist
             </button>
           </div>
         </div>
@@ -559,10 +568,10 @@ async function clearPhotoQueueAndForm() {
         >
           <div class="toast-main">
             <strong v-if="scannerState.latestBurstToast.value.status === 'already_owned'">
-              ⚠️ Déjà possédé : {{ scannerState.latestBurstToast.value.title }}
+              Déjà possédé : {{ scannerState.latestBurstToast.value.title }}
             </strong>
             <strong v-else>
-              ✓ Enregistré : {{ scannerState.latestBurstToast.value.title }}
+              Enregistré : {{ scannerState.latestBurstToast.value.title }}
               <span v-if="scannerState.latestBurstToast.value.seriesNumber">
                 (T.{{ scannerState.latestBurstToast.value.seriesNumber }})
               </span>
@@ -590,7 +599,7 @@ async function clearPhotoQueueAndForm() {
           <ul class="burst-list">
             <li v-for="item in scannerState.burstHistory.value.slice(0, 10)" :key="item.timestamp">
               <span>
-                {{ item.status === 'already_owned' ? '⚠️' : '✅' }}
+                [{{ item.status === 'already_owned' ? 'Déjà acquis' : 'OK' }}]
                 <strong>{{ item.title }}</strong>
                 <em v-if="item.series"> — {{ item.series }}</em>
               </span>
@@ -610,7 +619,7 @@ async function clearPhotoQueueAndForm() {
             style="margin-top: 0.65rem;"
             @click="scannerState.finishAndOpenBurstTarget(router)"
           >
-            ✅ Valider et voir mes {{ scannerState.burstHistory.value.length }} livre(s) dans {{ burstTarget === 'owned' ? 'Ma Collection' : 'Ma Wishlist' }}
+            Valider et voir mes {{ scannerState.burstHistory.value.length }} livre(s) dans {{ burstTarget === 'owned' ? 'Ma Collection' : 'Ma Wishlist' }}
           </button>
         </div>
       </div>
@@ -641,7 +650,7 @@ async function clearPhotoQueueAndForm() {
             class="action-btn primary"
             @click="quickAddFromCheck('owned')"
           >
-            📥 Ajouter à ma Collection
+            Ajouter à ma Collection
           </button>
           <button
             v-if="!checkRes.ownership?.isWorkOwned && !checkRes.ownership?.isWished"
@@ -649,7 +658,7 @@ async function clearPhotoQueueAndForm() {
             class="action-btn secondary"
             @click="quickAddFromCheck('wish')"
           >
-            💙 Ajouter à ma Wishlist
+            Ajouter à ma Wishlist
           </button>
           <button
             v-if="checkRes.series?.id || checkRes.mainBook?.seriesId"
@@ -657,17 +666,17 @@ async function clearPhotoQueueAndForm() {
             class="action-btn series"
             @click="openSeriesFromCheck"
           >
-            📚 Voir / Sélectionner toute la série ({{ checkRes.series?.tomes?.length || '?' }} tomes)
+            Voir / Sélectionner toute la série ({{ checkRes.series?.tomes?.length || '?' }} tomes)
           </button>
           <button type="button" class="action-btn outline" @click="openFullBookFromCheck">
-            📄 Ouvrir la fiche complète
+            Ouvrir la fiche complète
           </button>
           <button
             type="button"
             class="action-btn rescan"
             @click="scannerState.resumeCameraInCheckMode()"
           >
-            🔄 Scanner un autre code-barres
+            Scanner un autre code-barres
           </button>
         </div>
       </div>
@@ -678,8 +687,8 @@ async function clearPhotoQueueAndForm() {
       <div v-if="activeMode === 'photo'" class="photo-mode-box">
         <div class="byok-header-bar">
           <span>
-            🔑 Reconnaissance IA (0 € serveur) :
-            <strong>{{ byokVisionService.getSettings() ? 'Clé active ✓' : 'À configurer' }}</strong>
+            Reconnaissance IA (0 € serveur) :
+            <strong>{{ byokVisionService.getSettings() ? 'Clé active' : 'À configurer' }}</strong>
           </span>
           <button type="button" class="link-btn" @click="showByokSetup = !showByokSetup">
             {{ showByokSetup ? 'Masquer l’assistant clé' : 'Configurer ma clé gratuite' }}
@@ -749,7 +758,6 @@ async function clearPhotoQueueAndForm() {
                 hidden
                 @change="(e) => handlePhotoSelected(e, 'cover')"
               />
-              <span class="trigger-icon">📕</span>
               <strong>Photo Couverture (Appareil)</strong>
               <small>Enchaînez les couvertures — ajout au lot en arrière-fond</small>
             </label>
@@ -761,7 +769,7 @@ async function clearPhotoQueueAndForm() {
                 hidden
                 @change="(e) => handlePhotoSelected(e, 'cover')"
               />
-              🖼️ Importer plusieurs couvertures (galerie)
+              Importer plusieurs couvertures (galerie)
             </label>
           </div>
 
@@ -774,7 +782,6 @@ async function clearPhotoQueueAndForm() {
                 hidden
                 @change="(e) => handlePhotoSelected(e, 'shelf')"
               />
-              <span class="trigger-icon">📚</span>
               <strong>Photo Étagère / Pile (Appareil)</strong>
               <small>Prenez plusieurs étagères d’affilée, tout est analysé en file</small>
             </label>
@@ -786,7 +793,7 @@ async function clearPhotoQueueAndForm() {
                 hidden
                 @change="(e) => handlePhotoSelected(e, 'shelf')"
               />
-              🖼️ Importer plusieurs étagères (galerie)
+              Importer plusieurs étagères (galerie)
             </label>
           </div>
         </div>
@@ -795,7 +802,7 @@ async function clearPhotoQueueAndForm() {
         <div v-if="photoStats.totalPhotos > 0" class="photo-queue-progress-card">
           <div class="queue-progress-header">
             <strong>
-              {{ isPhotoProcessing ? '⏳ Traitement IA & BnF en arrière-fond' : '📦 Résumé du lot photo' }}
+              {{ isPhotoProcessing ? 'Traitement IA & BnF en arrière-fond' : 'Résumé du lot photo' }}
             </strong>
             <div style="display: flex; gap: 0.4rem;">
               <button
@@ -804,29 +811,29 @@ async function clearPhotoQueueAndForm() {
                 class="link-btn"
                 @click="photoBatchQueueService.retryFailedJobs()"
               >
-                🔄 Relancer erreurs ({{ photoStats.errorPhotos }})
+                Relancer erreurs ({{ photoStats.errorPhotos }})
               </button>
               <button
                 type="button"
                 class="link-btn"
                 @click="clearPhotoQueueAndForm"
               >
-                🗑️ Vider le lot
+                Vider le lot
               </button>
             </div>
           </div>
 
           <div class="queue-metrics-grid">
-            <span>📸 <strong>{{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }}</strong> photos lues par l'IA</span>
-            <span>📚 <strong>{{ photoStats.totalBooksDetected }}</strong> tranches/livres extraits</span>
-            <span>🔍 <strong>{{ photoStats.totalExternalLookups }}</strong> recherches multi-sources</span>
-            <span>✅ <strong>{{ photoStats.sureCount }}</strong> sûr(s) • 🤔 <strong>{{ photoStats.doubtCount }}</strong> doute(s) • ⚠️ <strong>{{ photoStats.unresolvedCount }}</strong> non trouvé(s)</span>
+            <span><strong>{{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }}</strong> photos lues par l'IA</span>
+            <span><strong>{{ photoStats.totalBooksDetected }}</strong> tranches/livres extraits</span>
+            <span><strong>{{ photoStats.totalExternalLookups }}</strong> recherches multi-sources</span>
+            <span><strong>{{ photoStats.sureCount }}</strong> sûr(s) • <strong>{{ photoStats.doubtCount }}</strong> doute(s) • <strong>{{ photoStats.unresolvedCount }}</strong> non trouvé(s)</span>
           </div>
 
           <div v-if="isPhotoProcessing" class="queue-live-step">
             <div>{{ photoLoadingStatus }}</div>
             <small class="keep-awake-notice">
-              💡 Gardez l'application allumée pendant le traitement (un gros lot peut prendre plusieurs minutes à plusieurs heures). Vous pouvez naviguer dans l'appli, tout reste prêt à valider ici.
+              Gardez l'application allumée pendant le traitement (un gros lot peut prendre plusieurs minutes à plusieurs heures). Vous pouvez naviguer dans l'appli, tout reste prêt à valider ici.
             </small>
           </div>
         </div>
@@ -842,7 +849,7 @@ async function clearPhotoQueueAndForm() {
           <!-- SECTION 1 : LIVRES IDENTIFIÉS AVEC CERTITUDE -->
           <div v-if="resolvedDetectedItems.length > 0" class="validation-section">
             <div class="validation-header">
-              <h4>✅ Identifiés sur les photos ({{ resolvedDetectedItems.filter(c => c.selected).length }}/{{ resolvedDetectedItems.length }})</h4>
+              <h4>Identifiés sur les photos ({{ resolvedDetectedItems.filter(c => c.selected).length }}/{{ resolvedDetectedItems.length }})</h4>
               <select v-model="photoTargetStatus" class="provider-select">
                 <option value="owned">Ajouter à ma Collection</option>
                 <option value="wish">Ajouter à ma Wishlist</option>
@@ -863,7 +870,7 @@ async function clearPhotoQueueAndForm() {
                   class="cand-cover-thumb"
                   @error="imageUtil.advanceCoverFallback(item)"
                 />
-                <div v-else class="cand-cover-fallback">📖</div>
+                <div v-else class="cand-cover-fallback">—</div>
                 <div class="cand-meta">
                   <div class="cand-title-line">
                     <span v-if="item.series" class="cand-series-pill">
@@ -878,12 +885,12 @@ async function clearPhotoQueueAndForm() {
                   </div>
                   <div class="cand-badges">
                     <code class="isbn-tag">{{ item.isbn13 }}</code>
-                    <span v-if="item.correctedFromAi" class="mini-badge corrected">✨ Corrigé par BnF</span>
+                    <span v-if="item.correctedFromAi" class="mini-badge corrected">Corrigé par BnF</span>
                     <span v-if="item.sourcesCount && item.sourcesCount > 1" class="mini-badge consensus">
                       {{ item.sourcesCount }} sources
                     </span>
-                    <span v-if="item.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
-                    <span v-else-if="item.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                    <span v-if="item.alreadyOwned" class="mini-badge owned">Déjà possédé</span>
+                    <span v-else-if="item.alreadyWished" class="mini-badge wish">En wishlist</span>
                     <span v-if="!item.coverUrl" class="mini-badge warn">Sans couverture trouvée</span>
                   </div>
                 </div>
@@ -894,7 +901,7 @@ async function clearPhotoQueueAndForm() {
           <!-- SECTION 1B : DOUTES (ARBITRAGE ENTRE 2–3 PISTES CROISÉES) -->
           <div v-if="doubtItems.length > 0" class="validation-section doubt-section">
             <div class="validation-header">
-              <h4>🤔 Doutes à arbitrer ({{ selectedDoubtCount }}/{{ doubtItems.length }})</h4>
+              <h4>Doutes à arbitrer ({{ selectedDoubtCount }}/{{ doubtItems.length }})</h4>
             </div>
             <div class="candidates-list doubt-list">
               <div v-for="d in doubtItems" :key="d.id" class="candidate-row doubt-row">
@@ -926,7 +933,7 @@ async function clearPhotoQueueAndForm() {
                         class="cand-cover-thumb small-thumb"
                         @error="imageUtil.advanceCoverFallback(opt)"
                       />
-                      <div v-else class="cand-cover-fallback small-thumb">📖</div>
+                      <div v-else class="cand-cover-fallback small-thumb">—</div>
                       <div class="doubt-opt-meta">
                         <div>
                           <span v-if="opt.series" class="cand-series-pill">
@@ -963,7 +970,7 @@ async function clearPhotoQueueAndForm() {
           <!-- SECTION 2 : AUTRES TOMES DES SÉRIES DÉTECTÉES (FERMÉES PAR DÉFAUT) -->
           <div v-if="groupedSeriesExtras.length > 0" class="validation-section series-extras-section">
             <div class="validation-header">
-              <h4>📚 Autres tomes des séries ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
+              <h4>Autres tomes des séries ({{ selectedSeriesCount }}/{{ seriesExtraItems.length }})</h4>
               <div class="series-controls-inline">
                 <select v-model="seriesExtraTarget" class="provider-select">
                   <option value="none">Fiches série (catalogue seul)</option>
@@ -1014,7 +1021,7 @@ async function clearPhotoQueueAndForm() {
                       class="cand-cover-thumb"
                       @error="imageUtil.advanceCoverFallback(extra)"
                     />
-                    <div v-else class="cand-cover-fallback">📖</div>
+                    <div v-else class="cand-cover-fallback">—</div>
                     <div class="cand-meta">
                       <div class="cand-title-line">
                         <span v-if="extra.series" class="cand-series-pill">
@@ -1029,8 +1036,8 @@ async function clearPhotoQueueAndForm() {
                       </div>
                       <div class="cand-badges">
                         <code class="isbn-tag">{{ extra.isbn13 }}</code>
-                        <span v-if="extra.alreadyOwned" class="mini-badge owned">✓ Déjà possédé</span>
-                        <span v-else-if="extra.alreadyWished" class="mini-badge wish">🎁 En wishlist</span>
+                        <span v-if="extra.alreadyOwned" class="mini-badge owned">Déjà possédé</span>
+                        <span v-else-if="extra.alreadyWished" class="mini-badge wish">En wishlist</span>
                       </div>
                     </div>
                   </div>
@@ -1042,7 +1049,7 @@ async function clearPhotoQueueAndForm() {
           <!-- SECTION 3 : NON IDENTIFIÉS SUR BNF / GOOGLE BOOKS (NON VALIDABLES TEL QUEL) -->
           <div v-if="unresolvedItems.length > 0" class="validation-section unresolved-section">
             <div class="validation-header">
-              <h4>⚠️ Non identifiés sur BnF ({{ unresolvedItems.length }}) — Non validables sans notice</h4>
+              <h4>Non identifiés sur BnF ({{ unresolvedItems.length }}) — Non validables sans notice</h4>
             </div>
             <div class="candidates-list unresolved-list">
               <div
@@ -1066,7 +1073,7 @@ async function clearPhotoQueueAndForm() {
                       :disabled="retryingItemId === u.id"
                       @click="retryUnresolvedItem(u)"
                     >
-                      {{ retryingItemId === u.id ? 'Recherche...' : '🔍 BnF' }}
+                      {{ retryingItemId === u.id ? 'Recherche...' : 'Chercher BnF' }}
                     </button>
                   </div>
                   <small v-if="u.rawCandidate.rawSpineText" class="spine-ocr-preview">
@@ -1085,7 +1092,7 @@ async function clearPhotoQueueAndForm() {
             :disabled="totalSelectedToSave === 0"
             @click="confirmAndSaveCandidates"
           >
-            ✅ Valider {{ selectedDetectedCount }} livre(s) + {{ selectedSeriesCount }} tome(s) de série
+            Valider {{ selectedDetectedCount }} livre(s) + {{ selectedSeriesCount }} tome(s) de série
           </button>
         </div>
       </div>
@@ -1928,5 +1935,37 @@ async function clearPhotoQueueAndForm() {
   gap: 2px;
   min-width: 0;
   flex: 1;
+}
+
+.scanner-chooser-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+}
+
+.chooser-mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.85rem 0.9rem;
+  border: 2px solid #0f172a;
+  background: #f8fafc;
+  color: #0f172a;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chooser-mode-card strong {
+  font-size: 0.95rem;
+  text-transform: uppercase;
+}
+
+.chooser-mode-card small {
+  font-size: 0.78rem;
+  color: #475569;
+  line-height: 1.3;
 }
 </style>

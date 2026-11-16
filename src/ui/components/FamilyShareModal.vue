@@ -2,7 +2,7 @@
   <div v-if="show" class="modal-backdrop" @click.self="closeModal">
     <div class="modal-card" role="dialog" aria-modal="true" aria-label="Partage Foyer et Amis">
       <div class="modal-header">
-        <h3>👨‍👩‍👧‍👦 Foyer &amp; Amis</h3>
+        <h3>Foyer &amp; Amis</h3>
         <button type="button" class="close-btn" @click="closeModal" aria-label="Fermer">✕</button>
       </div>
 
@@ -15,7 +15,7 @@
           :class="['tab-btn', { active: activeTab === 'family', 'tab-family': activeTab === 'family' }]"
           @click="activeTab = 'family'"
         >
-          👨‍👩‍👧‍👦 Famille (Synchro)
+          Famille (Synchro)
         </button>
         <button
           type="button"
@@ -24,7 +24,7 @@
           :class="['tab-btn', { active: activeTab === 'friends', 'tab-friends': activeTab === 'friends' }]"
           @click="activeTab = 'friends'"
         >
-          👀 Vitrine Amis
+          Vitrine Amis
         </button>
       </div>
 

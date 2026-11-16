@@ -216,7 +216,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
             style="flex: 1; min-width: 180px; background: #eef2ff; font-weight: 700;"
             @click="showMergeSeriesModal = true"
           >
-            🔗 Fusionner / Regrouper la série
+            Fusionner / Regrouper la série
           </button>
         </div>
 

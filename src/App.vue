@@ -82,7 +82,7 @@ onMounted(async () => {
 
   <div v-else class="app-main-layout">
     <div v-if="isOffline" class="offline-global-banner">
-      ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)' }}
+      {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)' }}
     </div>
 
     <div
@@ -96,11 +96,11 @@ onMounted(async () => {
     >
       <span>
         <template v-if="bgStatus.isActive">
-          ⏳ {{ bgStatus.stepLabel || 'Enrichissement en cours...' }}
+          {{ bgStatus.stepLabel || 'Enrichissement en cours...' }}
           <strong v-if="bgStatus.pendingCount > 1">({{ bgStatus.pendingCount }} en file)</strong>
         </template>
         <template v-else-if="bgStatus.lastError">
-          ⚠️ {{ bgStatus.lastError }}
+          {{ bgStatus.lastError }}
         </template>
       </span>
       <button
@@ -120,15 +120,15 @@ onMounted(async () => {
       <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
         <div>
           <strong>
-            {{ photoProcessing ? '⏳ Traitement photo en arrière-fond' : '📋 Lot photo prêt à valider' }}
+            {{ photoProcessing ? 'Traitement photo en arrière-fond' : 'Lot photo prêt à valider' }}
             — {{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }} photo(s) lue(s) par l'IA
           </strong>
           <div style="font-size: 12px; color: #475569; margin-top: 2px;">
-            📚 {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • 🔍 {{ photoStats.totalExternalLookups }} recherche(s) croisée(s) •
-            ✅ {{ photoStats.sureCount }} sûr(s) • 🤔 {{ photoStats.doubtCount }} doute(s) • ⚠️ {{ photoStats.unresolvedCount }} non trouvé(s)
+            {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • {{ photoStats.totalExternalLookups }} recherche(s) croisée(s) •
+            {{ photoStats.sureCount }} sûr(s) • {{ photoStats.doubtCount }} doute(s) • {{ photoStats.unresolvedCount }} non trouvé(s)
           </div>
           <div v-if="photoProcessing" style="font-size: 11px; color: #92400e; margin-top: 2px;">
-            💡 {{ photoMsg || 'Analyse en cours...' }} — Gardez l'application allumée pendant le traitement.
+            {{ photoMsg || 'Analyse en cours...' }} — Gardez l'application allumée pendant le traitement.
           </div>
         </div>
         <div style="display: flex; gap: 6px; flex-wrap: wrap;">
@@ -139,7 +139,7 @@ onMounted(async () => {
             style="width: auto; padding: 5px 10px; background: #16a34a; color: #fff; font-weight: 800; font-size: 12px;"
             @click="scannerState.startScan(router, 'photo')"
           >
-            📋 Valider ({{ photoStats.donePhotos }})
+            Valider ({{ photoStats.donePhotos }})
           </button>
           <button
             v-if="photoStats.errorPhotos > 0"
@@ -148,7 +148,7 @@ onMounted(async () => {
             style="width: auto; padding: 5px 10px; background: #fef2f2; color: #991b1b; font-weight: 700; font-size: 12px;"
             @click="photoBatchQueueService.retryFailedJobs()"
           >
-            🔄 Relancer ({{ photoStats.errorPhotos }})
+            Relancer ({{ photoStats.errorPhotos }})
           </button>
         </div>
       </div>

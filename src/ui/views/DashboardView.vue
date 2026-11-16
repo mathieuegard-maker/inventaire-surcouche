@@ -1,25 +1,27 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { databaseService } from '../../core/database/database.service';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
+import { imageUtil } from '../../core/utils/image.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
 import SmartSearchBar from '../components/SmartSearchBar.vue';
-import FamilyShareModal from '../components/FamilyShareModal.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService, type DashboardStats } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
+import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
-const showFamilyModal = ref(false);
 
 const searchQuery = ref('');
 const errorMessage = ref<string | null>(null);
 
-/**
- * Lance la résolution sémantique de l'ISBN via le service du cœur
- */
+const previewCollection = ref<HumanizedBook[]>([]);
+const previewWishlist = ref<HumanizedBook[]>([]);
+const previewLoans = ref<HumanizedBook[]>([]);
+
 const handleSearch = async (isbn: string) => {
   if (!isbn) return;
   errorMessage.value = null;
@@ -35,41 +37,59 @@ const handleSearch = async (isbn: string) => {
     } else {
       errorMessage.value = TEXTS.scanner.notFound;
     }
-  } catch (err: any) {
+  } catch {
     errorMessage.value = TEXTS.scanner.errorGeneral;
   }
 };
 
-/**
- * Redirige vers l'écran intermédiaire sémantique pour la recherche textuelle
- */
 const handleKeywordsSearch = (query: string) => {
   router.push({ name: 'SearchResultView', query: { q: query } });
 };
 
 const stats = ref<DashboardStats | null>(null);
-const selectedPeriod = ref(30); // 30 jours par défaut
+const selectedPeriod = ref(30);
 const isStatsLoading = ref(true);
 
-const loadStats = async () => {
+const loadDashboardData = async () => {
   isStatsLoading.value = true;
   try {
-    stats.value = await statsService.getDashboardStats(selectedPeriod.value);
+    const [statsRes, cachedBooks, loans] = await Promise.all([
+      statsService.getDashboardStats(selectedPeriod.value),
+      databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
+      databaseService.getAllLoans().catch(() => [])
+    ]);
+    stats.value = statsRes;
+
+    const byRecent = (list: HumanizedBook[]) =>
+      [...list]
+        .filter((b) => Boolean(b.localCover || b.coverUrl))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .slice(0, 5);
+
+    previewCollection.value = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'owned'));
+    previewWishlist.value = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'wish'));
+
+    const loanUris = new Set(loans.map((l) => l.uri));
+    previewLoans.value = byRecent(cachedBooks.filter((b) => loanUris.has(b.uri)));
   } catch (e) {
-    console.error("Erreur chargement statistiques :", e);
+    console.error('Erreur chargement tableau de bord :', e);
   } finally {
     isStatsLoading.value = false;
   }
 };
 
+const openBook = (uri: string) => {
+  router.push(`/book/${encodeURIComponent(uri)}`);
+};
+
 onMounted(async () => {
-  await loadStats();
+  await loadDashboardData();
 });
 
 watch(
   () => scannerState.lastUpdatedTick.value,
   () => {
-    loadStats();
+    loadDashboardData();
   }
 );
 </script>
@@ -79,53 +99,72 @@ watch(
     <BaseHeader />
 
     <BaseTitle :text="TEXTS.home.title" level="h2" />
-    
-    <SmartSearchBar 
-      v-model="searchQuery" 
-      @isbn-detected="handleSearch" 
-      @keywords-detected="handleKeywordsSearch" 
+
+    <SmartSearchBar
+      v-model="searchQuery"
+      @isbn-detected="handleSearch"
+      @keywords-detected="handleKeywordsSearch"
     />
-
-    <!-- Barre d'actions rapides : Scan, Photo Étagère & Partage -->
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 0.6rem; margin: 1rem 0;">
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #2563eb; color: #fff; font-weight: 800; padding: 0.65rem;"
-        @click="scannerState.startScan(router, 'simple')"
-      >
-        📷 Scanner un livre
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #f8fafc; font-weight: 800; padding: 0.65rem;"
-        @click="scannerState.startScan(router, 'photo')"
-      >
-        📸 Photo Étagère / Couv
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #ecfdf5; color: #065f46; font-weight: 800; padding: 0.65rem;"
-        @click="showFamilyModal = true"
-      >
-        👨‍👩‍👧‍👦 Foyer &amp; Partage
-      </button>
-      <button
-        type="button"
-        class="wireframe-btn"
-        style="background: #f0f9ff; color: #0369a1; font-weight: 800; padding: 0.65rem;"
-        @click="router.push('/friends')"
-      >
-        👥 Mes Amis
-      </button>
-    </div>
-
-    <FamilyShareModal :show="showFamilyModal" @close="showFamilyModal = false" />
 
     <div v-if="errorMessage" class="error-banner">
       {{ errorMessage }}
+    </div>
+
+    <!-- Accès rapides : Ma Collection, Ma Wishlist, Mes Prêts avec aperçu couvertures -->
+    <div class="home-spaces-grid">
+      <div class="home-space-card">
+        <button type="button" class="home-space-link" @click="router.push({ name: 'CollectionView', query: { mode: 'books' } })">
+          <span>MA COLLECTION</span>
+          <span class="home-space-count" v-if="stats">{{ stats.totalOwned }}</span>
+        </button>
+        <div v-if="previewCollection.length" class="home-covers-strip">
+          <img
+            v-for="book in previewCollection"
+            :key="book.uri"
+            :src="imageUtil.resolveCoverUrl(book)"
+            :alt="book.title"
+            :title="book.title"
+            class="home-preview-cover"
+            @click="openBook(book.uri)"
+          />
+        </div>
+      </div>
+
+      <div class="home-space-card">
+        <button type="button" class="home-space-link" @click="router.push({ name: 'WishlistView' })">
+          <span>MA WISHLIST</span>
+          <span class="home-space-count" v-if="stats">{{ stats.totalWishlist }}</span>
+        </button>
+        <div v-if="previewWishlist.length" class="home-covers-strip">
+          <img
+            v-for="book in previewWishlist"
+            :key="book.uri"
+            :src="imageUtil.resolveCoverUrl(book)"
+            :alt="book.title"
+            :title="book.title"
+            class="home-preview-cover"
+            @click="openBook(book.uri)"
+          />
+        </div>
+      </div>
+
+      <div class="home-space-card">
+        <button type="button" class="home-space-link" @click="router.push({ name: 'LoansView' })">
+          <span>MES PRÊTS</span>
+          <span class="home-space-count" v-if="stats">{{ stats.totalLoans }}</span>
+        </button>
+        <div v-if="previewLoans.length" class="home-covers-strip">
+          <img
+            v-for="book in previewLoans"
+            :key="book.uri"
+            :src="imageUtil.resolveCoverUrl(book)"
+            :alt="book.title"
+            :title="book.title"
+            class="home-preview-cover"
+            @click="openBook(book.uri)"
+          />
+        </div>
+      </div>
     </div>
 
     <!-- Panneau de Statistiques de la Bibliothèque -->
@@ -145,10 +184,10 @@ watch(
       <template v-else>
         <!-- Grille des statistiques clés (Globaux) -->
         <div class="stats-grid">
-          <div 
-            class="stats-card card-owned" 
-            role="button" 
-            tabindex="0" 
+          <div
+            class="stats-card card-owned"
+            role="button"
+            tabindex="0"
             @click="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
             @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
             @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'books' } })"
@@ -156,10 +195,10 @@ watch(
             <div class="stats-value">{{ stats.totalOwned }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalOwned }}</div>
           </div>
-          <div 
-            class="stats-card card-series" 
-            role="button" 
-            tabindex="0" 
+          <div
+            class="stats-card card-series"
+            role="button"
+            tabindex="0"
             @click="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
             @keydown.enter="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
             @keydown.space.prevent="router.push({ name: 'CollectionView', query: { mode: 'series' } })"
@@ -167,10 +206,10 @@ watch(
             <div class="stats-value">{{ stats.totalSeries }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalSeries }}</div>
           </div>
-          <div 
-            class="stats-card card-wishlist" 
-            role="button" 
-            tabindex="0" 
+          <div
+            class="stats-card card-wishlist"
+            role="button"
+            tabindex="0"
             @click="router.push({ name: 'WishlistView' })"
             @keydown.enter="router.push({ name: 'WishlistView' })"
             @keydown.space.prevent="router.push({ name: 'WishlistView' })"
@@ -178,10 +217,10 @@ watch(
             <div class="stats-value">{{ stats.totalWishlist }}</div>
             <div class="stats-label">{{ TEXTS.dashboardStats.totalWishlist }}</div>
           </div>
-          <div 
-            class="stats-card card-loans" 
-            role="button" 
-            tabindex="0" 
+          <div
+            class="stats-card card-loans"
+            role="button"
+            tabindex="0"
             @click="router.push({ name: 'LoansView' })"
             @keydown.enter="router.push({ name: 'LoansView' })"
             @keydown.space.prevent="router.push({ name: 'LoansView' })"
@@ -195,12 +234,11 @@ watch(
 
         <!-- Détails avancés (Activité, Genres, Auteurs) -->
         <div class="stats-extra-row">
-          <!-- Carte d'Activité / Flux sur la période -->
           <div class="stats-extra-card">
             <div class="stats-card-header">
               <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.activityTitle }}</h4>
               <div class="stats-period-selector">
-                <select v-model="selectedPeriod" @change="loadStats" class="stats-select">
+                <select v-model="selectedPeriod" @change="loadDashboardData" class="stats-select">
                   <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
                   <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>
                   <option :value="365">{{ TEXTS.dashboardStats.period365 }}</option>
@@ -208,7 +246,7 @@ watch(
                 </select>
               </div>
             </div>
-            
+
             <div class="stats-flux-container">
               <div class="stats-flux-item">
                 <div class="stats-flux-value">+{{ stats.acquiredInPeriod }}</div>
@@ -221,7 +259,6 @@ watch(
             </div>
           </div>
 
-          <!-- Genres Favoris -->
           <div class="stats-extra-card">
             <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.topGenres }}</h4>
             <ul class="stats-list" v-if="stats.topGenres.length > 0">
@@ -235,7 +272,6 @@ watch(
             </p>
           </div>
 
-          <!-- Auteurs Favoris -->
           <div class="stats-extra-card">
             <h4 class="stats-extra-title">{{ TEXTS.dashboardStats.topAuthors }}</h4>
             <ul class="stats-list" v-if="stats.topAuthors.length > 0">
@@ -253,3 +289,62 @@ watch(
     </div>
   </div>
 </template>
+
+<style scoped>
+.home-spaces-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin: 0.85rem 0 1.25rem;
+}
+
+.home-space-card {
+  border: var(--border-width, 2px) solid var(--color-border, #000);
+  background: var(--color-bg-main, #fff);
+  padding: 0.55rem 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.home-space-link {
+  background: none;
+  border: none;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-main);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: var(--color-text-main, #000);
+  cursor: pointer;
+  text-align: left;
+}
+
+.home-space-count {
+  font-size: 12px;
+  padding: 1px 7px;
+  border: 1.5px solid var(--color-border, #000);
+  background: var(--color-bg-alt, #f1f5f9);
+}
+
+.home-covers-strip {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-top: 2px;
+}
+
+.home-preview-cover {
+  width: 44px;
+  height: 62px;
+  object-fit: cover;
+  border: 1px solid var(--color-border, #000);
+  cursor: pointer;
+  flex-shrink: 0;
+  background: #f1f5f9;
+}
+</style>

@@ -4,9 +4,9 @@
 
     <div class="friends-page">
       <div class="friends-header-row">
-        <BaseTitle text="👥 Mes Amis &amp; Collections suivies" level="h2" />
+        <BaseTitle text="Mes Amis &amp; Collections suivies" level="h2" />
         <button type="button" class="wireframe-btn share-self-btn" @click="showShareModal = true">
-          👀 Mon QR Code Amis
+          Mon QR Code Amis
         </button>
       </div>
 
@@ -25,7 +25,7 @@
       <!-- Liste des amis suivis + ajout par code/lien -->
       <template v-else>
         <section class="add-friend-card">
-          <h3 class="card-subtitle">➕ Suivre la bibliothèque d'un ami</h3>
+          <h3 class="card-subtitle">Suivre la bibliothèque d'un ami</h3>
           <p class="card-help">
             Collez le code ami (<code>PUB-...</code>) ou le lien de partage reçu d'un ami (ou scannez son QR code Amis avec l'appareil photo du téléphone).
           </p>
@@ -54,7 +54,7 @@
         <div v-else-if="friends.length === 0" class="empty-friends-card">
           <p class="empty-title">Vous ne suivez encore aucune bibliothèque d'ami.</p>
           <p class="empty-desc">
-            Demandez à un ami de vous montrer son QR code dans l'onglet <strong>« Vitrine Amis »</strong>, ou partagez le vôtre avec le bouton <strong>« 👀 Mon QR Code Amis »</strong> ci-dessus.
+            Demandez à un ami de vous montrer son QR code dans l'onglet <strong>« Vitrine Amis »</strong>, ou partagez le vôtre avec le bouton <strong>« Mon QR Code Amis »</strong> ci-dessus.
           </p>
         </div>
 
@@ -69,8 +69,8 @@
             </div>
 
             <div class="friend-stats">
-              <span class="stat-badge owned">📚 {{ friend.ownedCount }} possédé(s)</span>
-              <span class="stat-badge wish">🎁 {{ friend.wishlistCount }} wishlist</span>
+              <span class="stat-badge owned">{{ friend.ownedCount }} possédé(s)</span>
+              <span class="stat-badge wish">{{ friend.wishlistCount }} wishlist</span>
             </div>
 
             <div class="friend-actions">
@@ -80,7 +80,7 @@
                 :disabled="loadingLibraryId === friend.libraryId"
                 @click="openFriendLibrary(friend)"
               >
-                {{ loadingLibraryId === friend.libraryId ? 'Ouverture...' : '👀 Voir sa collection' }}
+                {{ loadingLibraryId === friend.libraryId ? 'Ouverture...' : 'Voir sa collection' }}
               </button>
               <button
                 type="button"

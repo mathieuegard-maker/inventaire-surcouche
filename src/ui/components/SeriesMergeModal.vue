@@ -130,7 +130,7 @@ async function handleConfirmMerge() {
   <div v-if="show" class="modal-backdrop" @click.self="emit('close')">
     <div class="modal-card">
       <div class="modal-header">
-        <h3>🔗 Rattacher ou Fusionner dans une Série</h3>
+        <h3>Rattacher ou Fusionner dans une Série</h3>
         <button type="button" class="close-btn" @click="emit('close')">✕</button>
       </div>
 
@@ -200,7 +200,7 @@ async function handleConfirmMerge() {
           :disabled="isSaving"
           @click="handleConfirmMerge"
         >
-          {{ isSaving ? 'Regroupement...' : '✅ Appliquer le rattachement' }}
+          {{ isSaving ? 'Regroupement...' : 'Appliquer le rattachement' }}
         </button>
       </div>
     </div>

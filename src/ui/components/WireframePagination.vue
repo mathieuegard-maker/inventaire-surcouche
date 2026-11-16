@@ -22,6 +22,7 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:processedItems', filteredList: any[]): void;
+  (e: 'update:filteredItems', allFilteredList: any[]): void;
   (e: 'update:selectAllValue', value: boolean): void;
   (e: 'update:currentPage', page: number): void;
   (e: 'update:pageSize', size: number): void;
@@ -102,7 +103,11 @@ watch([internalSearchQuery, internalPageSize], () => {
   internalPage.value = 1;
 });
 
-// Émission automatique de la liste finale vers le tableau d'affichage parent
+// Émission automatique de la liste finale (et de la liste complète filtrée) vers le parent
+watch(filteredItems, (allFiltered) => {
+  emit('update:filteredItems', allFiltered);
+}, { immediate: true });
+
 watch(paginatedItems, (newList) => {
   emit('update:processedItems', newList);
 }, { immediate: true });

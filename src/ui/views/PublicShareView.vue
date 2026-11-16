@@ -27,7 +27,7 @@
               :disabled="addingFriend"
               @click="handleAddFriend"
             >
-              {{ addingFriend ? 'Ajout...' : '👥 Ajouter à mes Amis' }}
+              {{ addingFriend ? 'Ajout...' : 'Ajouter à mes Amis' }}
             </button>
             <button
               v-if="addedAsFriend"
@@ -35,17 +35,17 @@
               class="action-btn success"
               @click="router.push('/friends')"
             >
-              ✓ Ajouté — Voir mes Amis →
+              Ajouté — Voir mes Amis
             </button>
             <button type="button" class="action-btn" @click="router.push('/dashboard')">
-              🏠 Mon tableau de bord
+              Mon tableau de bord
             </button>
           </div>
         </template>
 
         <template v-else>
           <div class="banner-text">
-            <strong>📖 Découvrez l'application Biblio</strong>
+            <strong>Découvrez l'application Biblio</strong>
             <span> — Consultez les albums et la wishlist ci-dessous, ou créez votre compte personnel pour suivre cet ami dans votre onglet Amis.</span>
           </div>
           <div class="banner-actions">
@@ -55,14 +55,14 @@
               class="action-btn"
               @click="handleInstall"
             >
-              📲 Installer l'app
+              Installer l'app
             </button>
             <button type="button" class="action-btn success" @click="goToCreateAccount">
               🚀 Créer mon compte &amp; suivre cet ami
             </button>
           </div>
           <p v-if="iosHint" class="ios-hint">
-            Sur iPhone/iPad : appuyez sur Partager ⬆️ puis « Sur l'écran d'accueil » pour installer l'app.
+            Sur iPhone/iPad : appuyez sur Partager puis « Sur l'écran d'accueil » pour installer l'app.
           </p>
         </template>
 

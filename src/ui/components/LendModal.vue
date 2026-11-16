@@ -136,7 +136,7 @@ const handleClose = () => {
             ]"
             @click="selectContact(c.name)"
           >
-            {{ c.source === 'friend_share' ? '👥' : '👤' }} {{ c.name }}
+            {{ c.source === 'friend_share' ? '[Ami] ' : '' }}{{ c.name }}
           </button>
         </div>
       </div>

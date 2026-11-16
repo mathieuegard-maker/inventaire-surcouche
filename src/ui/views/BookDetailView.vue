@@ -13,7 +13,6 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import LendModal from '../components/LendModal.vue';
-import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
@@ -21,8 +20,8 @@ import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import { imageUtil } from '../../core/utils/image.util';
-import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
 import { connectionState } from '../../state/connection';
+import { resolveCollectionOrderedUrisForBook } from '../../state/bookNavigation';
 
 const route = useRoute();
 const router = useRouter();
@@ -33,7 +32,7 @@ const errorMsg = ref('');
 const successMessage = ref('');
 const showLendModal = ref(false);
 const showDeleteModal = ref(false);
-const showSeriesMergeModal = ref(false);
+const collectionOrderedUris = ref<string[]>([]);
 
 // Statut de lecture optionnel (stocké localement par URI d'œuvre/édition)
 const readingStatus = ref<string>('none');
@@ -62,38 +61,7 @@ function saveLocalReadingMeta() {
     `biblio_reading_${book.value.uri}`,
     JSON.stringify({ status: readingStatus.value, rating: readingRating.value })
   );
-  successMessage.value = 'Statut de lecture mis à jour ✓';
-}
-
-async function handleCustomCoverUpload(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file || !book.value) return;
-  try {
-    const webpDataUrl = await compressImageToWebpDataUrl(file, {
-      maxWidth: 420,
-      maxHeight: 600,
-      quality: 0.8,
-      cropRatio: 0.7
-    });
-    book.value.localCover = webpDataUrl;
-    book.value.coverUrl = webpDataUrl;
-    book.value.isLocallyEdited = true;
-    await databaseService.saveBookToCache(book.value);
-    successMessage.value = 'Couverture recadrée et compressée en WebP ✓';
-  } catch (e: any) {
-    errorMsg.value = e.message || 'Impossible de compresser la couverture.';
-  } finally {
-    input.value = '';
-  }
-}
-
-async function handleSeriesMerged(payload: { seriesId: string; seriesTitle: string }) {
-  if (!book.value) return;
-  book.value.seriesId = payload.seriesId;
-  book.value.series = payload.seriesTitle;
-  successMessage.value = `Rattaché à la série "${payload.seriesTitle}" ✓`;
-  await loadSeriesContext();
+  successMessage.value = 'Statut de lecture mis à jour.';
 }
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
@@ -154,21 +122,32 @@ const addSelectedSeriesTomesToCollection = async () => {
   }
 };
 
-const currentTomeIndex = computed(() => {
-  if (!book.value || seriesTomes.value.length === 0) return -1;
-  return seriesTomes.value.findIndex(t => t.uri === book.value?.uri);
+const activeNavUris = computed(() => {
+  if (!book.value) return [] as string[];
+  if (collectionOrderedUris.value.length > 1 && collectionOrderedUris.value.includes(book.value.uri)) {
+    return collectionOrderedUris.value;
+  }
+  if (seriesTomes.value.length > 1 && seriesTomes.value.some((t) => t.uri === book.value?.uri)) {
+    return seriesTomes.value.map((t) => t.uri);
+  }
+  return [] as string[];
 });
 
-const previousBook = computed(() => {
-  const idx = currentTomeIndex.value;
-  if (idx > 0) return seriesTomes.value[idx - 1];
-  return null;
+const hasSiblingNavigation = computed(() => activeNavUris.value.length > 1);
+
+const currentNavIndex = computed(() => {
+  if (!book.value || activeNavUris.value.length === 0) return -1;
+  return activeNavUris.value.indexOf(book.value.uri);
 });
 
-const nextBook = computed(() => {
-  const idx = currentTomeIndex.value;
-  if (idx !== -1 && idx < seriesTomes.value.length - 1) return seriesTomes.value[idx + 1];
-  return null;
+const previousBookUri = computed(() => {
+  const idx = currentNavIndex.value;
+  return idx > 0 ? activeNavUris.value[idx - 1] : null;
+});
+
+const nextBookUri = computed(() => {
+  const idx = currentNavIndex.value;
+  return idx !== -1 && idx < activeNavUris.value.length - 1 ? activeNavUris.value[idx + 1] : null;
 });
 
 const loadSeriesContext = async () => {
@@ -286,6 +265,9 @@ const loadBookDetails = async (uriParam: string) => {
     isLoading.value = false;
     if (book.value?.uri) {
       loadLocalReadingMeta(book.value.uri);
+      collectionOrderedUris.value = await resolveCollectionOrderedUrisForBook(book.value.uri);
+    } else {
+      collectionOrderedUris.value = [];
     }
     await loadSeriesContext();
   }
@@ -455,12 +437,12 @@ const confirmDelete = async () => {
 
       <div class="book-card-layout">
         <div class="book-cover-nav-container">
-          <button 
-            v-if="hasSeries"
-            class="wireframe-btn cover-nav-btn prev-btn" 
-            :disabled="!previousBook" 
-            @click="previousBook && navigateToBook(previousBook.uri)"
-            aria-label="Tome précédent"
+          <button
+            v-if="hasSiblingNavigation"
+            class="wireframe-btn cover-nav-btn prev-btn"
+            :disabled="!previousBookUri"
+            @click="previousBookUri && navigateToBook(previousBookUri)"
+            aria-label="Œuvre précédente"
           >
             &lt;
           </button>
@@ -469,20 +451,20 @@ const confirmDelete = async () => {
             <div v-if="!book.localCover && !book.coverUrl" class="book-cover-placeholder">
               {{ TEXTS.bookDetail.noCover }}
             </div>
-            <img 
-              v-else 
-              :src="imageUtil.resolveCoverUrl(book)" 
-              :alt="book.title" 
-              class="book-cover-image" 
+            <img
+              v-else
+              :src="imageUtil.resolveCoverUrl(book)"
+              :alt="book.title"
+              class="book-cover-image"
             />
           </div>
 
-          <button 
-            v-if="hasSeries"
-            class="wireframe-btn cover-nav-btn next-btn" 
-            :disabled="!nextBook" 
-            @click="nextBook && navigateToBook(nextBook.uri)"
-            aria-label="Tome suivant"
+          <button
+            v-if="hasSiblingNavigation"
+            class="wireframe-btn cover-nav-btn next-btn"
+            :disabled="!nextBookUri"
+            @click="nextBookUri && navigateToBook(nextBookUri)"
+            aria-label="Œuvre suivante"
           >
             &gt;
           </button>
@@ -496,7 +478,7 @@ const confirmDelete = async () => {
 
           <div v-if="hasSeries" class="book-meta-group">
             <p class="book-meta-item">
-              <strong>{{ TEXTS.bookCard.series }} :</strong> 
+              <strong>{{ TEXTS.bookCard.series }} :</strong>
               {{ book.series }}
               <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
             </p>
@@ -516,7 +498,7 @@ const confirmDelete = async () => {
 
           <div class="book-meta-group">
             <p class="book-meta-item" v-if="book.publisher">
-              <strong>{{ TEXTS.bookCard.meta.publisher }} :</strong> {{ book.publisher }} 
+              <strong>{{ TEXTS.bookCard.meta.publisher }} :</strong> {{ book.publisher }}
               <span v-if="book.collection">[{{ book.collection }}]</span>
             </p>
             <p class="book-meta-item" v-if="book.genres?.length">
@@ -532,13 +514,36 @@ const confirmDelete = async () => {
               <strong>ISBN :</strong> {{ book.isbn13 || book.isbn10 }}
             </p>
           </div>
+
+          <!-- Lu / Non lu et Note discrets entre métadonnées et synopsis -->
+          <div class="book-meta-group book-reading-discreet">
+            <p class="book-meta-item reading-inline-row">
+              <strong>Lecture :</strong>
+              <select v-model="readingStatus" @change="saveLocalReadingMeta" class="discreet-meta-select">
+                <option value="none">Non renseigné</option>
+                <option value="unread">Non lu (À lire)</option>
+                <option value="reading">En cours</option>
+                <option value="read">Lu</option>
+                <option value="abandoned">Abandonné</option>
+              </select>
+              <strong style="margin-left: 8px;">Note :</strong>
+              <select v-model.number="readingRating" @change="saveLocalReadingMeta" class="discreet-meta-select">
+                <option :value="0">—</option>
+                <option :value="5">5 / 5</option>
+                <option :value="4">4 / 5</option>
+                <option :value="3">3 / 5</option>
+                <option :value="2">2 / 5</option>
+                <option :value="1">1 / 5</option>
+              </select>
+            </p>
+          </div>
         </div>
       </div>
 
       <div v-if="hasSeries" style="margin-top: var(--spacing-md); margin-bottom: var(--spacing-md); width: 100%; border: 2px solid #000; background: #fff; padding: 0.75rem;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.6rem;">
           <strong style="font-size: 0.95rem;">
-            📚 Série : {{ book.series || 'SAGA' }} ({{ seriesTomes.length }} tome{{ seriesTomes.length > 1 ? 's' : '' }})
+            Série : {{ book.series || 'SAGA' }} ({{ seriesTomes.length }} tome{{ seriesTomes.length > 1 ? 's' : '' }})
           </strong>
           <button class="wireframe-btn" style="width: auto; padding: 0.3rem 0.65rem; font-size: 0.8rem;" @click="navigateToSeries">
             [ {{ TEXTS.bookDetail.btnSeries.toUpperCase() }} ]
@@ -546,7 +551,7 @@ const confirmDelete = async () => {
         </div>
 
         <div v-if="seriesProgress.isActive" style="font-size: 0.82rem; font-weight: 700; color: #1d4ed8; margin-bottom: 0.6rem; padding: 0.4rem 0.6rem; background: #eff6ff; border: 1px dashed #1d4ed8;">
-          ⏳ Récupération automatique de tous les tomes de la série via BnF ({{ seriesProgress.current }} / {{ seriesProgress.total || '...' }})...
+          Récupération automatique des tomes de la série via BnF ({{ seriesProgress.current }} / {{ seriesProgress.total || '...' }})...
         </div>
 
         <div v-if="seriesTomes.length > 0" style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.6rem;">
@@ -557,7 +562,7 @@ const confirmDelete = async () => {
             style="width: auto; padding: 0.35rem 0.65rem; font-size: 0.8rem;"
             @click="selectAllMissingSeriesTomes"
           >
-            {{ selectedSeriesTomeUris.length === missingSeriesTomes.length ? 'Tout décocher' : `Tout cocher (${missingSeriesTomes.length} manquant${missingSeriesTomes.length > 1 ? 's' : ''})` }}
+            {{ selectedSeriesTomeUris.length === missingSeriesTomes.length ? 'Tout décocher' : `Tout cocher (${missingSeriesTomeUris.length === 0 ? missingSeriesTomes.length : missingSeriesTomes.length} manquant${missingSeriesTomes.length > 1 ? 's' : ''})` }}
           </button>
           <button
             v-if="selectedSeriesTomeUris.length > 0"
@@ -585,7 +590,7 @@ const confirmDelete = async () => {
                 @change="toggleSeriesTomeSelection(tome.uri)"
                 style="width: 18px; height: 18px; cursor: pointer;"
               />
-              <span v-else style="color: #15803d; font-weight: 800; font-size: 0.8rem; min-width: 18px; text-align: center;">✓</span>
+              <span v-else style="color: #15803d; font-weight: 800; font-size: 0.8rem; min-width: 18px; text-align: center;">OK</span>
               <span>
                 <strong v-if="tome.seriesNumber">T.{{ tome.seriesNumber }} — </strong>
                 <span>{{ tome.title }}</span>
@@ -617,43 +622,6 @@ const confirmDelete = async () => {
         <p>{{ book.description }}</p>
       </div>
 
-      <!-- Statut de lecture optionnel + Actions V2 (Couverture WebP & Rattachement Série / Hors-Série) -->
-      <div style="margin: 1rem 0; padding: 0.75rem; border: 2px solid #000; background: #f8fafc; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; justify-content: space-between;">
-        <div style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
-          <strong style="font-size: 0.85rem;">📖 Lecture (optionnel) :</strong>
-          <select v-model="readingStatus" @change="saveLocalReadingMeta" style="border: 2px solid #000; padding: 0.3rem 0.5rem; font-weight: 700; font-size: 0.82rem;">
-            <option value="none">— Non renseigné —</option>
-            <option value="unread">📚 À lire (PAL)</option>
-            <option value="reading">⏳ En cours de lecture</option>
-            <option value="read">✅ Lu</option>
-            <option value="abandoned">⏸️ Abandonné</option>
-          </select>
-          <select v-model.number="readingRating" @change="saveLocalReadingMeta" style="border: 2px solid #000; padding: 0.3rem 0.5rem; font-weight: 700; font-size: 0.82rem;">
-            <option :value="0">Note : —</option>
-            <option :value="5">★★★★★ (5/5)</option>
-            <option :value="4">★★★★☆ (4/5)</option>
-            <option :value="3">★★★☆☆ (3/5)</option>
-            <option :value="2">★★☆☆☆ (2/5)</option>
-            <option :value="1">★☆☆☆☆ (1/5)</option>
-          </select>
-        </div>
-
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-          <label class="wireframe-btn" style="cursor: pointer; padding: 0.35rem 0.65rem; font-size: 0.8rem; width: auto;">
-            <input type="file" accept="image/*" capture="environment" hidden @change="handleCustomCoverUpload" />
-            📸 Photo Couverture (WebP)
-          </label>
-          <button
-            type="button"
-            class="wireframe-btn"
-            style="padding: 0.35rem 0.65rem; font-size: 0.8rem; width: auto; background: #eef2ff;"
-            @click="showSeriesMergeModal = true"
-          >
-            🔗 {{ hasSeries ? 'Changer / Fusionner la série' : 'Rattacher à une série (ou Hors-Série)' }}
-          </button>
-        </div>
-      </div>
-
       <div class="book-actions-layout">
         <BookActionButtons 
           :ownership-status="book.ownershipStatus"
@@ -676,17 +644,6 @@ const confirmDelete = async () => {
         </div>
       </div>
     </div>
-
-    <SeriesMergeModal
-      v-if="book"
-      :show="showSeriesMergeModal"
-      :bookUris="[book.uri, ...(book.workUri ? [book.workUri] : [])]"
-      :currentSeriesId="book.seriesId"
-      :currentSeriesTitle="book.series"
-      :initialVolumeLabel="book.seriesNumber"
-      @close="showSeriesMergeModal = false"
-      @merged="handleSeriesMerged"
-    />
 
     <LendModal
       :show="showLendModal"
@@ -757,5 +714,22 @@ const confirmDelete = async () => {
 .cover-nav-btn:disabled {
   opacity: 0.25 !important;
   cursor: not-allowed !important;
+}
+
+.reading-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.discreet-meta-select {
+  border: 1px solid #cbd5e1;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  padding: 1px 4px;
+  cursor: pointer;
 }
 </style>

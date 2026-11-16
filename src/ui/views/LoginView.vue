@@ -1,23 +1,23 @@
 <template>
   <div class="login-page">
     <div class="login-card">
-      <h1 class="login-title">📚 Biblio Collection</h1>
+      <h1 class="login-title">Biblio Collection</h1>
       <p class="login-subtitle">Connectez-vous ou créez un compte instantanément</p>
 
       <!-- Bouton d'installation PWA si disponible -->
       <div v-if="canInstallPwa" class="pwa-install-box">
         <p class="pwa-text">Installez l'application sur votre appareil pour scanner et consulter hors ligne.</p>
         <button type="button" class="pwa-btn" @click="handleInstallPwa">
-          📲 Installer l'application
+          Installer l'application
         </button>
       </div>
       <p v-else-if="showIosTip" class="ios-install-tip">
-        📲 Sur iPhone/iPad : touchez <strong>Partager ⬆️</strong> puis <strong>« Sur l'écran d'accueil »</strong>.
+        Sur iPhone/iPad : touchez <strong>Partager</strong> puis <strong>« Sur l'écran d'accueil »</strong>.
       </p>
 
       <!-- Bannière d'invitation Famille -->
       <div v-if="inviteCodeFromUrl" class="invite-box family-invite">
-        <div class="invite-title">👨‍👩‍👧‍👦 Invitation Foyer détectée (<code>{{ inviteCodeFromUrl }}</code>)</div>
+        <div class="invite-title">Invitation Foyer détectée (<code>{{ inviteCodeFromUrl }}</code>)</div>
         <label class="sync-check">
           <input v-model="syncFamily" type="checkbox" />
           <span><strong>Synchroniser avec la famille</strong> (partager la même bibliothèque en lecture &amp; écriture)</span>
@@ -29,7 +29,7 @@
 
       <!-- Bannière d'invitation Vitrine Amis -->
       <div v-if="friendTokenFromUrl" class="invite-box friend-invite">
-        <div class="invite-title">👀 Invitation Ami détectée (<code>{{ friendTokenFromUrl }}</code>)</div>
+        <div class="invite-title">Invitation Ami détectée (<code>{{ friendTokenFromUrl }}</code>)</div>
         <label class="sync-check">
           <input v-model="followFriend" type="checkbox" />
           <span><strong>Suivre cette bibliothèque dans ma page Amis</strong> (tout en gardant ma propre collection séparée)</span>

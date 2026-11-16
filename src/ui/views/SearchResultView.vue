@@ -214,7 +214,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               :class="{ active: selectedSection === 'series' }"
               @click="selectedSection = 'series'"
             >
-              📚 Séries ({{ filteredSeries.length }})
+              Séries ({{ filteredSeries.length }})
             </button>
             <button
               v-if="grouped.volumes.length"
@@ -223,7 +223,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               :class="{ active: selectedSection === 'volumes' }"
               @click="selectedSection = 'volumes'"
             >
-              📖 Tomes ({{ filteredVolumes.length }})
+              Tomes ({{ filteredVolumes.length }})
             </button>
             <button
               v-if="grouped.standaloneWorks.length"
@@ -232,7 +232,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               :class="{ active: selectedSection === 'standalone' }"
               @click="selectedSection = 'standalone'"
             >
-              📕 Œuvres uniques ({{ filteredStandalone.length }})
+              Œuvres uniques ({{ filteredStandalone.length }})
             </button>
             <button
               v-if="grouped.authors.length"
@@ -241,7 +241,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
               :class="{ active: selectedSection === 'authors' }"
               @click="selectedSection = 'authors'"
             >
-              ✍️ Auteurs ({{ grouped.authors.length }})
+              Auteurs ({{ grouped.authors.length }})
             </button>
           </div>
 
@@ -274,7 +274,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
           class="semantic-bucket-section"
         >
           <div class="wishlist-section-header">
-            📚 Séries ({{ filteredSeries.length }})
+            Séries ({{ filteredSeries.length }})
           </div>
           <div class="wireframe-table-container">
             <div v-for="series in filteredSeries" :key="series.key" class="series-result-block">
@@ -316,7 +316,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
                     class="search-thumb"
                     @error="imageUtil.advanceCoverFallback(vol)"
                   />
-                  <div v-else class="search-thumb-fallback">📖</div>
+                  <div v-else class="search-thumb-fallback">—</div>
                   <div class="row-info-content">
                     <p class="row-title">
                       <strong v-if="vol.seriesNumber">T.{{ vol.seriesNumber }} — </strong>
@@ -340,7 +340,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
           class="semantic-bucket-section"
         >
           <div class="wishlist-section-header">
-            📖 Tomes ({{ filteredVolumes.length }})
+            Tomes ({{ filteredVolumes.length }})
           </div>
           <div class="wireframe-table-container">
             <div
@@ -356,7 +356,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
                 class="search-thumb"
                 @error="imageUtil.advanceCoverFallback(vol)"
               />
-              <div v-else class="search-thumb-fallback">📖</div>
+              <div v-else class="search-thumb-fallback">—</div>
               <div class="row-info-content">
                 <p class="row-title">
                   <span class="mini-tag">{{ vol.series }}<template v-if="vol.seriesNumber"> T.{{ vol.seriesNumber }}</template></span>
@@ -382,7 +382,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
           class="semantic-bucket-section"
         >
           <div class="wishlist-section-header">
-            📕 Œuvres uniques par sous-catégorie ({{ filteredStandalone.length }})
+            Œuvres uniques par sous-catégorie ({{ filteredStandalone.length }})
           </div>
           <div v-for="group in standaloneByCategory" :key="group.category" class="subcat-group-box">
             <div class="subcat-group-title">{{ group.category }} ({{ group.items.length }})</div>
@@ -400,7 +400,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
                   class="search-thumb"
                   @error="imageUtil.advanceCoverFallback(work)"
                 />
-                <div v-else class="search-thumb-fallback">📕</div>
+                <div v-else class="search-thumb-fallback">—</div>
                 <div class="row-info-content">
                   <p class="row-title">{{ work.title }}</p>
                   <p class="row-series-meta">
@@ -424,7 +424,7 @@ const handleSelectBook = async (entry: KeywordBookEntry) => {
           class="semantic-bucket-section"
         >
           <div class="wishlist-section-header">
-            ✍️ Auteurs ({{ grouped.authors.length }})
+            Auteurs ({{ grouped.authors.length }})
           </div>
           <div class="wireframe-table-container">
             <div

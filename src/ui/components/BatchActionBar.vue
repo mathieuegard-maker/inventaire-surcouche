@@ -21,7 +21,7 @@ const isOffline = computed(() => connectionState.isOffline.value);
     <div class="group-actions-grid" style="margin-top: 0; display: flex; flex-direction: column; gap: var(--spacing-sm);">
       
       <div v-if="isOffline" class="error-banner offline-group-warning-container">
-        <p class="error-text-line">⚠️ {{ TEXTS.batchActionBar?.offlineActionsBlocked || 'Les actions groupées sont désactivées en mode hors-ligne.' }}</p>
+        <p class="error-text-line">{{ TEXTS.batchActionBar?.offlineActionsBlocked || 'Les actions groupées sont désactivées en mode hors-ligne.' }}</p>
       </div>
 
       <div v-else-if="isMixed" class="error-banner" style="margin-bottom: var(--spacing-sm);">

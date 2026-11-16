@@ -19,8 +19,10 @@ import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
 import { imageUtil } from '../../core/utils/image.util';
+import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 import { scannerState } from '../../state/scanner';
 import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
+import { saveBookNavigationOrder, sortBooksByCollectionMode } from '../../state/bookNavigation';
 
 const router = useRouter();
 const route = useRoute();
@@ -38,14 +40,14 @@ const pageState = getOrCreateViewState(stateKey, {
   searchQuery: '',
   filters: {
     mode: 'books',
-    genre: 'all',
+    genre: '',
     sort: 'date'
   }
 });
 
 // COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante ou l'état sauvegardé
 const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || pageState.filters.mode || 'books');
-const selectedGenre = ref(pageState.filters.genre || 'all');
+const filterText = ref(pageState.filters.genre === 'all' ? '' : (pageState.filters.genre || ''));
 const currentSort = ref(pageState.filters.sort || 'date');
 
 const currentPage = ref(pageState.currentPage);
@@ -65,8 +67,8 @@ watch(currentMode, (newMode) => {
   router.replace({ query: { ...route.query, mode: newMode } });
   pageState.filters.mode = newMode;
 });
-watch(selectedGenre, (newGenre) => {
-  pageState.filters.genre = newGenre;
+watch(filterText, (newFilter) => {
+  pageState.filters.genre = newFilter;
 });
 watch(currentSort, (newSort) => {
   pageState.filters.sort = newSort;
@@ -142,21 +144,43 @@ const navigateToSeries = (seriesId: string) => {
   }
 };
 
-const dynamicGenres = computed(() => {
-  const genresSet = new Set<string>();
-  allOwnedBooks.value.forEach(book => {
-    if (book.genres && Array.isArray(book.genres)) {
-      book.genres.forEach(g => genresSet.add(g));
+const dynamicFilterSuggestions = computed(() => {
+  const set = new Set<string>();
+  for (const book of allOwnedBooks.value) {
+    if (Array.isArray(book.genres)) {
+      for (const g of book.genres) {
+        if (g?.trim()) set.add(g.trim());
+      }
     }
-  });
-  return Array.from(genresSet).sort();
+    if (book.series?.trim()) set.add(book.series.trim());
+    if (Array.isArray(book.authors)) {
+      for (const a of book.authors) {
+        if (a?.trim()) set.add(a.trim());
+      }
+    }
+    if (book.publisher?.trim()) set.add(book.publisher.trim());
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
 });
+
+const matchesFreeFilter = (book: HumanizedBook, rawFilter: string): boolean => {
+  const needle = normalizeTextKey(rawFilter);
+  if (!needle) return true;
+  const fields: string[] = [
+    book.title || '',
+    book.series || '',
+    book.publisher || '',
+    ...(book.genres || []),
+    ...(book.authors || [])
+  ];
+  return fields.some((f) => normalizeTextKey(f).includes(needle));
+};
 
 const processedBooks = computed(() => {
   let list = [...allOwnedBooks.value];
 
-  if (selectedGenre.value !== 'all') {
-    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  if (filterText.value.trim()) {
+    list = list.filter((b) => matchesFreeFilter(b, filterText.value));
   }
 
   if (currentMode.value === 'oneshots') {
@@ -168,8 +192,8 @@ const processedBooks = computed(() => {
 const seriesGondolas = computed(() => {
   let list = allOwnedBooks.value.filter(b => b.seriesId || b.series);
 
-  if (selectedGenre.value !== 'all') {
-    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  if (filterText.value.trim()) {
+    list = list.filter((b) => matchesFreeFilter(b, filterText.value));
   }
 
   const groups: Record<string, { id: string; name: string; tomes: HumanizedBook[] }> = {};
@@ -204,24 +228,7 @@ const seriesGondolas = computed(() => {
 });
 
 const currentSortBooks = computed(() => {
-  const list = [...processedBooks.value];
-
-  if (currentSort.value === 'title') {
-    return list.sort((a, b) => {
-      const cleanA = a.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      const cleanB = b.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      return cleanA.localeCompare(cleanB);
-    });
-  } else if (currentSort.value === 'author') {
-    return list.sort((a, b) => {
-      const authA = a.authors && a.authors[0] ? a.authors[0] : '';
-      const authB = b.authors && b.authors[0] ? b.authors[0] : '';
-      return authA.localeCompare(authB);
-    });
-  } else if (currentSort.value === 'date') {
-    return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  }
-  return list;
+  return sortBooksByCollectionMode(processedBooks.value, currentSort.value);
 });
 
 const selectedBooks = computed(() => {
@@ -315,11 +322,11 @@ const resetSelection = () => {
 
     <CollectionControls
       v-if="!isLoading"
-      :genres="dynamicGenres"
+      :filterSuggestions="dynamicFilterSuggestions"
       :currentMode="currentMode"
-      :genreValue="selectedGenre"
+      :filterValue="filterText"
       :sortValue="currentSort"
-      @update:genreValue="(val) => { selectedGenre = val; resetSelection(); }"
+      @update:filterValue="(val) => { filterText = val; resetSelection(); }"
       @update:sortValue="(val) => currentSort = val"
     />
 
@@ -363,6 +370,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri))"
         @update:processedItems="(val) => displayedBooks = val"
       >
         <div v-if="displayedBooks.length === 0">

@@ -9,9 +9,11 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
 import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
 import { imageUtil } from '../../core/utils/image.util';
+import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
@@ -41,6 +43,40 @@ const coverUrlInput = ref('');
 const genresInput = ref<string[]>([]);
 const customGenreInput = ref('');
 const noSeries = ref(false);
+const showSeriesMergeModal = ref(false);
+
+async function handleCustomCoverUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !originalBook.value) return;
+  try {
+    const webpDataUrl = await compressImageToWebpDataUrl(file, {
+      maxWidth: 420,
+      maxHeight: 600,
+      quality: 0.8,
+      cropRatio: 0.7
+    });
+    coverUrlInput.value = webpDataUrl;
+    originalBook.value.localCover = webpDataUrl;
+    originalBook.value.coverUrl = webpDataUrl;
+    originalBook.value.isLocallyEdited = true;
+    await databaseService.saveBookToCache(originalBook.value);
+  } catch (e: any) {
+    errorMsg.value = e.message || 'Impossible de compresser la couverture.';
+  } finally {
+    input.value = '';
+  }
+}
+
+function handleSeriesMerged(payload: { seriesId: string; seriesTitle: string }) {
+  seriesInput.value = payload.seriesTitle;
+  resolvedSeriesUri.value = payload.seriesId;
+  noSeries.value = false;
+  if (originalBook.value) {
+    originalBook.value.seriesId = payload.seriesId;
+    originalBook.value.series = payload.seriesTitle;
+  }
+}
 
 const toggleGenreTag = (tag: string) => {
   const idx = genresInput.value.findIndex((g) => g.toLowerCase() === tag.toLowerCase());
@@ -326,7 +362,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -351,7 +387,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -373,6 +409,16 @@ const saveChanges = async () => {
                 <input type="checkbox" id="noSeriesCheckbox" v-model="noSeries" class="wireframe-checkbox" />
                 <label for="noSeriesCheckbox" class="checkbox-label">Ce livre ne fait pas partie d'une série</label>
               </div>
+              <div v-if="originalBook" style="margin-top: 6px;">
+                <button
+                  type="button"
+                  class="wireframe-btn apply-btn-inline"
+                  style="width: auto;"
+                  @click="showSeriesMergeModal = true"
+                >
+                  [ {{ originalBook.series ? 'CHANGER / FUSIONNER LA SÉRIE' : 'RATTACHER À UNE SÉRIE' }} ]
+                </button>
+              </div>
             </div>
             
             <div class="suggestion-group">
@@ -387,7 +433,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -419,7 +465,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -444,7 +490,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -469,7 +515,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -494,7 +540,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -505,6 +551,18 @@ const saveChanges = async () => {
             <div class="form-group">
               <label class="form-label">URL de la couverture</label>
               <input type="text" v-model="coverUrlInput" class="wireframe-input" />
+              <div style="margin-top: 6px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <label class="wireframe-btn apply-btn-inline" style="cursor: pointer; width: auto;">
+                  <input type="file" accept="image/*" capture="environment" hidden @change="handleCustomCoverUpload" />
+                  [ PHOTO COUVERTURE (WEBP) ]
+                </label>
+                <img
+                  v-if="coverUrlInput"
+                  :src="imageUtil.resolveCoverUrl(coverUrlInput)"
+                  alt="Couverture actuelle"
+                  style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover;"
+                />
+              </div>
             </div>
             
             <div class="suggestion-group">
@@ -522,7 +580,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -576,7 +634,7 @@ const saveChanges = async () => {
                 >
                   [ ➔ COPIER ]
                 </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                <span v-else class="suggestion-match-inline">Conforme</span>
               </div>
               <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
@@ -601,6 +659,18 @@ const saveChanges = async () => {
       v-model:selectedUri="selectedOptionUri"
       @confirm="confirmResolutionStep"
       @cancel="cancelResolution"
+    />
+
+    <!-- Modale de rattachement / fusion de série -->
+    <SeriesMergeModal
+      v-if="originalBook"
+      :show="showSeriesMergeModal"
+      :bookUris="[originalBook.uri, ...(originalBook.workUri ? [originalBook.workUri] : [])]"
+      :currentSeriesId="originalBook.seriesId"
+      :currentSeriesTitle="seriesInput || originalBook.series"
+      :initialVolumeLabel="seriesNumberInput || originalBook.seriesNumber"
+      @close="showSeriesMergeModal = false"
+      @merged="handleSeriesMerged"
     />
   </div>
 </template>

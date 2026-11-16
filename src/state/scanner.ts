@@ -13,7 +13,7 @@ import { externalMetadataService } from '../core/services/external-metadata.serv
 import { databaseService } from '../core/database/database.service';
 import type { SearchResponse } from '../core/types';
 
-export type ScannerMode = 'simple' | 'burst' | 'photo';
+export type ScannerMode = 'chooser' | 'simple' | 'burst' | 'photo';
 export type BurstTarget = 'owned' | 'wishlist';
 
 export interface BurstScannedEntry {
@@ -30,7 +30,7 @@ export interface BurstScannedEntry {
 const isScanningActive = ref(false);
 const isSearching = ref(false);
 const errorMessage = ref<string | null>(null);
-const activeMode = ref<ScannerMode>('simple');
+const activeMode = ref<ScannerMode>('chooser');
 const burstTarget = ref<BurstTarget>('owned');
 const lastCheckResult = ref<(SearchResponse & { isUnknown?: boolean; isbn?: string }) | null>(null);
 const burstHistory = ref<BurstScannedEntry[]>([]);
@@ -53,14 +53,14 @@ export const scannerState = {
     lastUpdatedTick.value = Date.now();
   },
 
-  async startScan(router: Router, mode?: ScannerMode) {
+  async startScan(router: Router, mode: ScannerMode = 'chooser') {
     activeRouter = router;
-    if (mode) activeMode.value = mode;
+    activeMode.value = mode;
     errorMessage.value = null;
     lastCheckResult.value = null;
     isScanningActive.value = true;
 
-    if (activeMode.value === 'photo') {
+    if (activeMode.value === 'chooser' || activeMode.value === 'photo') {
       isSearching.value = false;
       await barcodeIsbnProvider.stopScanner();
       return;
@@ -271,7 +271,7 @@ export const scannerState = {
     if (isScanningActive.value && (!mode || activeMode.value === mode)) {
       this.stopScan();
     } else {
-      this.startScan(router, mode || activeMode.value);
+      this.startScan(router, mode || 'chooser');
     }
   }
 };
