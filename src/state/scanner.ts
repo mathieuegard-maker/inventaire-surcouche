@@ -10,6 +10,8 @@ import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-is
 import { externalMetadataService } from '../core/services/external-metadata.service';
 import { imageUtil } from '../core/utils/image.util';
 import { saveBookNavigationOrder } from './bookNavigation';
+import { connectionState } from './connection';
+import { pendingScansStore } from './pendingScans';
 import type { HumanizedBook } from '../core/types';
 
 export type ScannerMode = 'simple' | 'burst' | 'photo';
@@ -73,6 +75,19 @@ export const scannerState = {
 
             // Mode 'simple' : dès que le livre est trouvé, on ferme la fenêtre de scan et on ouvre sa fiche complète
             isSearching.value = false;
+            const cleanScanned = (response?.isbn || rawIsbn || '').trim();
+            if (response?.isOfflineUnavailable || (!response && connectionState.isOffline.value)) {
+              playScanBeep('success');
+              if (cleanScanned) {
+                pendingScansStore.addPendingScan(cleanScanned);
+              }
+              await barcodeIsbnProvider.stopScanner();
+              errorMessage.value = cleanScanned
+                ? `Pas de réseau actuellement : ce livre est absent de votre base locale. Le code-barres (${cleanScanned}) a été mémorisé pour consulter sa fiche dès le retour du réseau.`
+                : 'Pas de réseau actuellement : impossible de rechercher cet ouvrage pour le moment.';
+              return;
+            }
+
             if (response) {
               playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
               await this.stopScan();
@@ -122,7 +137,7 @@ export const scannerState = {
     }
 
     // Cas 1 : Livre déjà connu (cache local / D1) — aucun enregistrement automatique !
-    if (response && response.mainBook?.uri && !response.isUnknown) {
+    if (response && response.mainBook?.uri && !response.isUnknown && !response.isOfflineUnavailable) {
       const book: HumanizedBook = {
         ...response.mainBook,
         loan: response.loan?.details || response.mainBook.loan
@@ -131,6 +146,27 @@ export const scannerState = {
       triggerBurstFeedback('success');
       burstBooks.value.unshift(book);
       latestBurstBook.value = book;
+      return;
+    }
+
+    // Cas 1b : Pas de réseau et absent du cache local -> mémoriser le code-barres pour plus tard
+    if (response?.isOfflineUnavailable || connectionState.isOffline.value) {
+      pendingScansStore.addPendingScan(scannedIsbn);
+      playScanBeep('success');
+      triggerBurstFeedback('success');
+      const offlineBook: HumanizedBook = {
+        uri: `isbn:${scannedIsbn}`,
+        type: 'edition',
+        isbn13: scannedIsbn,
+        title: `Code-barres mémorisé (${scannedIsbn})`,
+        authors: ['Hors réseau — à consulter dès le retour de la connexion'],
+        illustrators: [],
+        scriptwriters: [],
+        genres: [],
+        ownershipStatus: 'none'
+      };
+      burstBooks.value.unshift(offlineBook);
+      latestBurstBook.value = offlineBook;
       return;
     }
 

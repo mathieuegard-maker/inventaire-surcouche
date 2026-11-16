@@ -85,11 +85,11 @@ const onDialogPointerUp = (e: PointerEvent) => {
       @pointerdown="onDialogPointerDown"
       @pointerup="onDialogPointerUp"
     >
-      <div class="pwa-dialog-surface">
+      <div class="modal-box pwa-modal-card">
         <div class="modal-header-row">
-          <h3 id="pwa-modal-title" class="modal-title">
+          <h2 id="pwa-modal-title" class="modal-title">
             {{ needRefresh ? 'Nouvelle version disponible' : 'Mode hors-ligne prêt' }}
-          </h3>
+          </h2>
           <button
             type="button"
             class="modal-close-icon"
@@ -100,33 +100,31 @@ const onDialogPointerUp = (e: PointerEvent) => {
           </button>
         </div>
 
-        <p class="modal-text pwa-explanation">
+        <p class="modal-text highlight">
           <template v-if="needRefresh">
-            Une mise à jour de <strong>Biblio Collection</strong> est prête à être installée avec les dernières améliorations et corrections.
-            <br />
-            Vos livres, notes et prêts enregistrés sont intégralement conservés.
+            Une mise à jour de l'application est prête avec les dernières améliorations. Vos livres, prêts et paramètres sont conservés.
           </template>
           <template v-else>
-            {{ TEXTS.pwa.offlineReady }} Vous pouvez consulter votre bibliothèque même sans connexion Internet.
+            {{ TEXTS.pwa.offlineReady }} Vous pouvez consulter votre bibliothèque mémorisée même sans réseau.
           </template>
         </p>
 
-        <div class="modal-actions pwa-dialog-actions">
-          <button
-            type="button"
-            class="btn-close"
-            @click="closeModal"
-          >
-            {{ needRefresh ? 'Plus tard' : 'Compris' }}
-          </button>
+        <div class="modal-actions">
           <button
             v-if="needRefresh"
             type="button"
-            class="btn-action"
+            class="btn-action pwa-btn-lg"
             autofocus
             @click="updateServiceWorker()"
           >
             Mettre à jour maintenant
+          </button>
+          <button
+            type="button"
+            class="btn-close pwa-btn-lg"
+            @click="closeModal"
+          >
+            {{ needRefresh ? 'Plus tard' : 'Compris' }}
           </button>
         </div>
       </div>
@@ -139,8 +137,8 @@ dialog.pwa-dialog {
   padding: 0;
   border: none;
   background: transparent;
-  inline-size: min(92vw, 430px);
-  max-inline-size: 430px;
+  inline-size: min(92vw, 460px);
+  max-inline-size: 460px;
   margin: auto;
   overflow: visible;
 }
@@ -150,30 +148,19 @@ dialog.pwa-dialog:modal {
 }
 
 dialog.pwa-dialog::backdrop {
-  background: rgba(15, 23, 42, 0.58);
+  background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(4px);
   overflow: hidden;
   overscroll-behavior: contain;
 }
 
-.pwa-dialog-surface {
-  background: var(--color-bg-main, #ffffff);
-  color: var(--color-text-main, #0f172a);
-  border: 1px solid var(--color-border, #e2e8f0);
-  border-radius: var(--radius-lg, 16px);
-  box-shadow: var(--shadow-modal, 0 20px 25px -5px rgba(15, 23, 42, 0.16));
-  padding: 1.35rem;
-  font-family: var(--font-main);
+.pwa-modal-card {
+  gap: 1rem !important;
 }
 
-.pwa-explanation {
-  font-size: 0.9rem;
-  line-height: 1.5;
-  margin-bottom: 1.15rem;
-}
-
-.pwa-dialog-actions {
-  justify-content: flex-end;
-  gap: 0.65rem;
+.pwa-btn-lg {
+  min-block-size: 46px !important;
+  font-size: 0.9375rem !important;
+  padding: 0.7rem 1.15rem !important;
 }
 </style>

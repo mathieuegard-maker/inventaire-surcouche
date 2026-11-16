@@ -32,12 +32,26 @@ export const searchService = {
       if (connectionState.isOffline.value) {
         console.warn(`[SEARCH] Absent du cache local et pas de réseau disponible pour l'ISBN ${isbn}`);
         console.groupEnd();
-        return null;
+        return { isOfflineUnavailable: true, isbn } as any;
       }
       console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
+      try {
+        book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
+      } catch (networkErr: any) {
+        if (connectionState.isOffline.value || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+          console.warn(`[SEARCH] Coupure réseau pendant la résolution pour ${isbn}`, networkErr);
+          console.groupEnd();
+          return { isOfflineUnavailable: true, isbn } as any;
+        }
+        throw networkErr;
+      }
       
       if (!book) {
+        if (connectionState.isOffline.value) {
+          console.warn(`[SEARCH] Bascule hors-ligne pendant la recherche pour ${isbn}`);
+          console.groupEnd();
+          return { isOfflineUnavailable: true, isbn } as any;
+        }
         console.warn(`[SEARCH] Échec de la résolution réseau pour : ${isbn}. Bascule vers l'agrégation de création.`);
         console.groupEnd();
         return { isUnknown: true, isbn } as any;

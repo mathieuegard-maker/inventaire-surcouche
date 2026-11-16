@@ -11,6 +11,8 @@ import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
+import { connectionState } from '../../state/connection';
+import { pendingScansStore } from '../../state/pendingScans';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
@@ -18,6 +20,9 @@ const router = useRouter();
 
 const searchQuery = ref('');
 const errorMessage = ref<string | null>(null);
+const offlineNoticeMessage = ref<string | null>(null);
+const pendingScans = pendingScansStore.pendingScans;
+const isOffline = connectionState.isOffline;
 
 const previewCollection = ref<HumanizedBook[]>([]);
 const previewWishlist = ref<HumanizedBook[]>([]);
@@ -27,9 +32,15 @@ const counts = ref({ owned: 0, wishlist: 0, loans: 0 });
 const handleSearch = async (isbn: string) => {
   if (!isbn) return;
   errorMessage.value = null;
+  offlineNoticeMessage.value = null;
   try {
     const cleanedIsbn = isbnUtil.normalize(isbn);
     const response = await searchService.searchByIsbn(cleanedIsbn);
+    if ((response as any)?.isOfflineUnavailable || (!response && isOffline.value)) {
+      pendingScansStore.addPendingScan(cleanedIsbn);
+      offlineNoticeMessage.value = `Pas de réseau actuellement : ce livre n'est pas encore dans votre base locale. Le code-barres (${cleanedIsbn}) a été mémorisé ci-dessous pour pouvoir consulter sa fiche dès le retour du réseau.`;
+      return;
+    }
     if (response) {
       if ('isUnknown' in response && (response as any).isUnknown) {
         router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
@@ -44,6 +55,23 @@ const handleSearch = async (isbn: string) => {
     errorMessage.value = TEXTS.scanner.errorGeneral;
   }
 };
+
+const openPendingScan = (isbn: string) => {
+  if (isOffline.value) {
+    offlineNoticeMessage.value = 'Toujours sans réseau : réessayez dès que la connexion Internet revient.';
+    return;
+  }
+  saveBookNavigationOrder([isbn, `isbn:${isbn}`], 'direct');
+  router.push(`/book/${encodeURIComponent(isbn)}`);
+};
+
+const formatScanTime = (ts: number) =>
+  new Date(ts).toLocaleString('fr-FR', {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 
 const handleKeywordsSearch = (query: string) => {
   router.push({ name: 'SearchResultView', query: { q: query } });
@@ -107,8 +135,55 @@ watch(
       @keywords-detected="handleKeywordsSearch"
     />
 
+    <div v-if="offlineNoticeMessage" class="offline-info-banner">
+      {{ offlineNoticeMessage }}
+    </div>
+
     <div v-if="errorMessage" class="error-banner">
       {{ errorMessage }}
+    </div>
+
+    <!-- Scans mémorisés hors réseau en attente de connexion -->
+    <div v-if="pendingScans.length > 0" class="pending-scans-card">
+      <div class="pending-scans-header">
+        <strong>Scans hors-ligne mémorisés ({{ pendingScans.length }})</strong>
+        <button type="button" class="pending-clear-btn" @click="pendingScansStore.clearAll()">
+          Tout effacer
+        </button>
+      </div>
+      <p class="pending-scans-hint">
+        {{
+          isOffline
+            ? 'Pas de réseau actuellement : ces codes-barres restent gardés en mémoire pour consultation ultérieure.'
+            : 'Connexion rétablie : vous pouvez maintenant ouvrir et consulter la fiche de ces livres.'
+        }}
+      </p>
+      <div class="pending-scans-list">
+        <div v-for="scan in pendingScans" :key="scan.isbn" class="pending-scan-row">
+          <div class="pending-scan-meta">
+            <code class="pending-isbn">{{ scan.isbn }}</code>
+            <span class="pending-date">{{ formatScanTime(scan.scannedAt) }}</span>
+          </div>
+          <div class="pending-scan-actions">
+            <button
+              type="button"
+              class="pending-open-btn"
+              :disabled="isOffline"
+              @click="openPendingScan(scan.isbn)"
+            >
+              {{ isOffline ? 'En attente de réseau' : 'Consulter la fiche' }}
+            </button>
+            <button
+              type="button"
+              class="pending-remove-btn"
+              aria-label="Retirer"
+              @click="pendingScansStore.removePendingScan(scan.isbn)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Accès rapides sobres : Ma Collection, Ma Wishlist, Mes Prêts -->
@@ -236,5 +311,125 @@ watch(
   cursor: pointer;
   flex-shrink: 0;
   background: #f1f5f9;
+}
+
+.offline-info-banner {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md, 10px);
+  border: 1px solid #fcd34d;
+  background: #fefce8;
+  color: #854d0e;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.pending-scans-card {
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #c7d2fe;
+  border-radius: var(--radius-md, 12px);
+  background: #eef2ff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.pending-scans-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: #312e81;
+}
+
+.pending-clear-btn {
+  border: none;
+  background: transparent;
+  color: #4f46e5;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+}
+
+.pending-scans-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #3730a3;
+  line-height: 1.4;
+}
+
+.pending-scans-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.pending-scan-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  background: #ffffff;
+  border: 1px solid #c7d2fe;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.45rem 0.65rem;
+}
+
+.pending-scan-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.pending-isbn {
+  font-weight: 700;
+  font-size: 0.84rem;
+  color: #0f172a;
+}
+
+.pending-date {
+  font-size: 0.75rem;
+  color: var(--color-text-muted, #64748b);
+}
+
+.pending-scan-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.pending-open-btn {
+  border: 1px solid var(--color-primary, #4f46e5);
+  background: var(--color-primary, #4f46e5);
+  color: #ffffff;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pending-open-btn:disabled {
+  background: #cbd5e1;
+  border-color: #cbd5e1;
+  color: #475569;
+  cursor: not-allowed;
+}
+
+.pending-remove-btn {
+  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--color-bg-alt, #f8fafc);
+  color: var(--color-text-muted, #64748b);
+  border-radius: var(--radius-sm, 8px);
+  width: 30px;
+  height: 30px;
+  font-weight: 700;
+  cursor: pointer;
 }
 </style>

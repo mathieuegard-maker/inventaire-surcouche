@@ -1072,8 +1072,19 @@ async function clearPhotoQueueAndForm() {
         </div>
       </div>
 
-      <div v-if="scannerState.errorMessage.value" class="error-banner">
-        {{ scannerState.errorMessage.value }}
+      <div
+        v-if="scannerState.errorMessage.value"
+        :class="scannerState.errorMessage.value.includes('mémorisé') ? 'offline-memorized-banner' : 'error-banner'"
+      >
+        <p style="margin: 0;">{{ scannerState.errorMessage.value }}</p>
+        <button
+          v-if="scannerState.errorMessage.value.includes('mémorisé') && activeMode === 'simple'"
+          type="button"
+          class="retry-simple-scan-btn"
+          @click="scannerState.switchMode('simple')"
+        >
+          Scanner un autre code-barres
+        </button>
       </div>
 
       <div v-if="isScrollable" class="modal-bottom-close-bar">
@@ -1957,6 +1968,32 @@ async function clearPhotoQueueAndForm() {
   padding: 0 6px;
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+.offline-memorized-banner {
+  margin-top: 0.65rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid #fcd34d;
+  background: #fefce8;
+  color: #854d0e;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.retry-simple-scan-btn {
+  align-self: flex-start;
+  border: 1px solid var(--color-primary, #4f46e5);
+  background: var(--color-primary, #4f46e5);
+  color: #ffffff;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .mode-switch-bar {

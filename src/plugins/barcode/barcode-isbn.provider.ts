@@ -2,6 +2,7 @@
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { searchService } from '../../core/orchestrators/search.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
+import { connectionState } from '../../state/connection';
 import type { SearchResponse } from '../../core/types';
 
 let html5QrcodeInstance: Html5Qrcode | null = null;
@@ -97,6 +98,10 @@ export const barcodeIsbnProvider = {
             onResult(searchResponse, cleanIsbn);
           } catch (err: any) {
             console.error('[BARCODE PLUGIN] Échec lors de la transmission à l orchestrateur :', err);
+            if (connectionState.isOffline.value || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+              onResult({ isOfflineUnavailable: true, isbn: cleanIsbn } as any, cleanIsbn);
+              return;
+            }
             if (!continuous) {
               onError(err.message || "Erreur lors du traitement de l'ouvrage.");
             }

@@ -43,7 +43,7 @@ const commonSummary = computed(() => {
   if (props.context === 'unowned') {
     return { count: props.selectedCount, actions: ['ADD_INVENTORY', 'ADD_WISHLIST'] as BatchActionType[], isHomogeneousDelete: null };
   }
-  return { count: props.selectedCount, actions: ['LEND', 'TOGGLE_WISHLIST', 'DELETE'] as BatchActionType[], isHomogeneousDelete: 'owned' as const };
+  return { count: props.selectedCount, actions: ['LEND', 'DELETE'] as BatchActionType[], isHomogeneousDelete: 'owned' as const };
 });
 
 const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes(act);
@@ -107,15 +107,6 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             @click="emit('execute', 'RETURN')"
           >
             Rendre
-          </button>
-
-          <button
-            v-if="hasAction('TOGGLE_WISHLIST')"
-            type="button"
-            class="batch-chip-btn"
-            @click="emit('execute', 'ADD_WISHLIST')"
-          >
-            Basculer
           </button>
 
           <button

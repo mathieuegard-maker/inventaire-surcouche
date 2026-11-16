@@ -21,6 +21,7 @@ import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
+import { pendingScansStore } from '../../state/pendingScans';
 import {
   getSavedBookNavigationOrigin,
   resolveCollectionOrderedUrisForBook,
@@ -286,7 +287,14 @@ const loadBookDetails = async (rawUriParam: string) => {
       const response = await searchService.searchByIsbn(normalized);
       if (loadToken !== activeLoadToken) return;
       if (response) {
+        if ((response as any).isOfflineUnavailable) {
+          pendingScansStore.addPendingScan(normalized);
+          book.value = null;
+          errorMsg.value = `Pas de réseau actuellement : cet ouvrage n'est pas encore dans votre base locale. Le code-barres (${normalized}) a été mémorisé sur l'accueil pour le consulter dès le retour du réseau.`;
+          return;
+        }
         if ('isUnknown' in response && (response as any).isUnknown) {
+          pendingScansStore.removePendingScan(normalized);
           router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
           return;
         }
@@ -294,6 +302,8 @@ const loadBookDetails = async (rawUriParam: string) => {
         if (response.loan?.details) {
           mainBook.loan = response.loan.details;
         }
+        pendingScansStore.removePendingScan(normalized);
+        if (mainBook.isbn13) pendingScansStore.removePendingScan(mainBook.isbn13);
         book.value = mainBook;
         checkAndTriggerRehumanize(mainBook);
       } else {

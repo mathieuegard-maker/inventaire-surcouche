@@ -75,12 +75,13 @@ export const connectionState = {
 };
 
 /**
- * Wrapper intelligent de fetch avec timeout intégré et basculement automatique en mode hors-ligne.
- * Si le serveur de développement local ou la passerelle /api/gateway est inaccessible (erreur réseau ou timeout),
- * le mode hors-ligne est activé immédiatement.
+ * Wrapper intelligent de fetch avec timeout intégré.
+ * On évite de basculer en mode hors-ligne sur un simple timeout (ex: réponse BnF lente) :
+ * le basculement hors-ligne ne survient que sur une vraie coupure réseau navigateur (`!navigator.onLine`)
+ * ou une erreur réseau franche (`Failed to fetch` / `NetworkError`) sur la passerelle locale.
  */
 export async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit & { timeout?: number }): Promise<Response> {
-  const timeout = init?.timeout ?? 4000; // 4 secondes par défaut
+  const timeout = init?.timeout ?? 10000; // 10 secondes par défaut
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
 
@@ -99,11 +100,15 @@ export async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestI
   } catch (error: any) {
     const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input as Request).url);
     const isGateway = urlStr && urlStr.includes('/api/gateway');
+    const browserOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    const isHardNetworkDrop =
+      error?.message?.includes('Failed to fetch') ||
+      error?.message?.includes('network error') ||
+      error?.message?.includes('NetworkError');
 
-    // On attrape l'annulation du contrôleur (timeout) ou une erreur réseau brute du navigateur (TypeError / Failed to fetch)
-    if (error.name === 'AbortError' || error.message?.includes('Failed to fetch') || error.message?.includes('network error') || error.message?.includes('NetworkError')) {
-      console.warn(`[NETWORK] Échec de la requête vers ${urlStr} (Timeout/Erreur Réseau)`);
-      if (isGateway) {
+    if (error?.name === 'AbortError' || isHardNetworkDrop || browserOffline) {
+      console.warn(`[NETWORK] Échec de la requête vers ${urlStr} (${error?.name || 'Réseau'})`);
+      if (isGateway && (browserOffline || isHardNetworkDrop)) {
         setOfflineState(true);
       }
     }

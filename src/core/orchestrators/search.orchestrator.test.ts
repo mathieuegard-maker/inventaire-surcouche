@@ -95,4 +95,49 @@ describe('Search Orchestrator (TTL & Cache)', () => {
       isbn: '9782355848858'
     });
   });
+
+  it('renvoie la fiche locale même hors-ligne si l’œuvre existe déjà dans cache_books (possédée ou non)', async () => {
+    const { connectionState } = await import('../../state/connection');
+    const { entityResolver } = await import('../resolvers/entity.resolver');
+    connectionState.isOffline.value = true;
+
+    const cachedUnownedBook = {
+      uri: 'isbn:9782012101524',
+      isbn13: '9782012101524',
+      title: 'Tome déjà en base',
+      ownershipStatus: 'none',
+      updatedAt: Date.now() - 1000
+    };
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(cachedUnownedBook as any);
+    vi.mocked(databaseService.isUriInRegistry).mockResolvedValue(false);
+    vi.mocked(wishlistService.isUriWished).mockResolvedValue(false);
+    vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
+
+    try {
+      const res = await searchService.searchByIsbn('9782012101524');
+      expect(res?.source).toBe('cache');
+      expect(res?.mainBook.title).toBe('Tome déjà en base');
+      expect(entityResolver.resolvePhysicalEntity).not.toHaveBeenCalled();
+    } finally {
+      connectionState.isOffline.value = false;
+    }
+  });
+
+  it('signale isOfflineUnavailable sans requêter le réseau si absent du cache hors-ligne', async () => {
+    const { connectionState } = await import('../../state/connection');
+    const { entityResolver } = await import('../resolvers/entity.resolver');
+    connectionState.isOffline.value = true;
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(undefined);
+
+    try {
+      const res = await searchService.searchByIsbn('9782355848858');
+      expect(res).toEqual({
+        isOfflineUnavailable: true,
+        isbn: '9782355848858'
+      });
+      expect(entityResolver.resolvePhysicalEntity).not.toHaveBeenCalled();
+    } finally {
+      connectionState.isOffline.value = false;
+    }
+  });
 });

@@ -4,7 +4,6 @@ import type { HumanizedBook } from '../types';
 export type BatchActionType =
   | 'ADD_INVENTORY'
   | 'ADD_WISHLIST'
-  | 'TOGGLE_WISHLIST'
   | 'LEND'
   | 'RETURN'
   | 'DELETE';
@@ -60,7 +59,6 @@ export function computeCommonBatchActions(
   // Prêter : uniquement si TOUS sont possédés et disponibles (non prêtés)
   if (hasOwned && !hasLent && !hasWish && !hasNone) {
     actions.push('LEND');
-    actions.push('TOGGLE_WISHLIST');
   }
 
   // Rendre : uniquement si TOUS sont actuellement prêtés

@@ -21,12 +21,12 @@ describe('computeCommonBatchActions', () => {
     expect(res.isHomogeneousDelete).toBeNull();
   });
 
-  it('autorise Prêter, Basculer et Supprimer si tous sont Possédés disponibles', () => {
+  it('autorise Prêter et Supprimer si tous sont Possédés disponibles', () => {
     const res = computeCommonBatchActions([
       { ownershipStatus: 'owned' },
       { ownershipStatus: 'owned' }
     ]);
-    expect(res.actions).toEqual(['LEND', 'TOGGLE_WISHLIST', 'DELETE']);
+    expect(res.actions).toEqual(['LEND', 'DELETE']);
     expect(res.isHomogeneousDelete).toBe('owned');
   });
 

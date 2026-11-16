@@ -4,7 +4,7 @@ export const TEXTS = {
   app: {
     name: "Ma Bibliothèque Cloud",
     description: "Gestionnaire de bibliothèque personnelle et familiale",
-    offlineGlobalBanner: "MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)"
+    offlineGlobalBanner: "PAS DE CONNEXION INTERNET — CONSULTATION LOCALE UNIQUEMENT"
   },
   status: {
     initializing: "Chargement en cours...",
