@@ -3,6 +3,36 @@ import Dexie, { type Table } from 'dexie';
 import type { HumanizedBook, LoanRecord, RegistryEntry, QueueActionPayload } from '../types';
 import type { PhotoBatchResolutionResult } from '../services/photo-book-resolution.service';
 
+/**
+ * Supprime récursivement les Proxies réactifs Vue et champs non clonables
+ * tout en préservant les types binaires/natifs supportés par IndexedDB (Blob, Date, ArrayBuffer...).
+ */
+function toPlainCloneable<T>(value: T): T {
+  if (value === null || typeof value !== 'object') {
+    return value;
+  }
+  if (
+    value instanceof Blob ||
+    value instanceof Date ||
+    value instanceof RegExp ||
+    value instanceof ArrayBuffer ||
+    ArrayBuffer.isView(value)
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => toPlainCloneable(item)) as unknown as T;
+  }
+  const plain: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    const prop = (value as Record<string, unknown>)[key];
+    if (typeof prop !== 'function' && typeof prop !== 'symbol' && prop !== undefined) {
+      plain[key] = toPlainCloneable(prop);
+    }
+  }
+  return plain as T;
+}
+
 export interface PendingAction {
   id?: number;
   action: 'LEND' | 'RETURN' | 'ADD_INVENTORY' | 'REMOVE_INVENTORY' | 'ADD_WISHLIST' | 'REMOVE_WISHLIST';
@@ -130,8 +160,9 @@ export const databaseService = {
   
   async saveBookToCache(book: HumanizedBook): Promise<void> {
     console.log(`[DEBUG-DB] Écriture cache pour ${book.uri}. localCover: ${!!book.localCover}`);
-    book.updatedAt = Date.now(); // AJOUT : Marquage temporel automatique (TTL)
-    await db.cache_books.put(book);
+    const plainBook = toPlainCloneable(book);
+    plainBook.updatedAt = Date.now(); // AJOUT : Marquage temporel automatique (TTL)
+    await db.cache_books.put(plainBook);
   },
 
   async getBookFromCache(uri: string): Promise<HumanizedBook | undefined> {
@@ -195,7 +226,7 @@ export const databaseService = {
   // --- GESTION DES PRÊTS (Table locale) ---
 
   async saveLoan(loan: LoanRecord): Promise<void> {
-    await db.loans.put(loan);
+    await db.loans.put(toPlainCloneable(loan));
   },
 
   async deleteLoan(uri: string): Promise<void> {
@@ -225,7 +256,7 @@ export const databaseService = {
   // --- NOUVEAU : GESTION DE LA FILE D'ATTENTE (Optimistic UI) ---
 
   async savePendingAction(action: PendingAction): Promise<number> {
-    return await db.pending_actions.put(action);
+    return await db.pending_actions.put(toPlainCloneable(action));
   },
 
   async getPendingActions(): Promise<PendingAction[]> {
@@ -350,7 +381,7 @@ export const databaseService = {
   },
 
   async updatePendingCreation(id: number, patch: Partial<PendingCreation>): Promise<void> {
-    await db.pending_creations.update(id, patch);
+    await db.pending_creations.update(id, toPlainCloneable(patch));
   },
 
   async deletePendingCreation(id: number): Promise<void> {
