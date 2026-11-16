@@ -10,6 +10,7 @@ import ScannerOverlayModal from './ui/components/ScannerOverlayModal.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
 import { photoBatchQueueService } from './core/services/photo-batch-queue.service';
+import { seriesReleaseService } from './core/services/series-release.service';
 
 const isOffline = computed(() => connectionState.isOffline.value);
 const bgStatus = backgroundCreationOrchestrator.status;
@@ -30,6 +31,7 @@ watch(isOffline, async (newOfflineVal) => {
       queueService.processQueue();
       backgroundCreationOrchestrator.resumePendingJobs();
       photoBatchQueueService.initAndResume();
+      void seriesReleaseService.checkNewReleasesOnOpen();
       if (route.path === '/login') {
         router.push('/dashboard');
       }
@@ -59,6 +61,7 @@ onMounted(async () => {
     if (isConnected) {
       backgroundCreationOrchestrator.resumePendingJobs();
       photoBatchQueueService.initAndResume();
+      void seriesReleaseService.checkNewReleasesOnOpen();
       if (route.path === '/login' || route.path === '/') {
         router.push('/dashboard');
       }

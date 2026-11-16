@@ -611,12 +611,28 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
  * 2. Les données Wikidata / Inventaire (`wdt:P179` + `wdt:P1545`)
  * avec contrôle de cohérence d'auteur pour éliminer les erreurs de catalogage BnF.
  */
+export interface ExpandedSeriesVolume {
+  workUri: string;
+  editionUri?: string;
+  title: string;
+  seriesNumber?: string;
+  isbn13?: string;
+  coverUrl?: string;
+}
+
+export interface ExpandSeriesResult {
+  wasAlreadyExpanded: boolean;
+  addedVolumes: ExpandedSeriesVolume[];
+}
+
 export async function expandSeriesVolumesInD1(
   db: DatabaseBinding,
   seriesUri: string,
   seriesTitle?: string,
   authorHint?: string
-): Promise<void> {
+): Promise<ExpandSeriesResult> {
+  const addedVolumes: ExpandedSeriesVolume[] = [];
+  let wasAlreadyExpanded = false;
   try {
     const sRow = await db
       .prepare(
@@ -632,11 +648,11 @@ export async function expandSeriesVolumesInD1(
       }>();
 
     const targetTitle = seriesTitle || sRow?.label;
-    if (!targetTitle) return;
+    if (!targetTitle) return { wasAlreadyExpanded, addedVolumes };
 
     const cleanTargetSeries = cleanSeriesName(targetTitle);
     const targetSeriesKey = normalizeTextKey(cleanTargetSeries);
-    if (!targetSeriesKey) return;
+    if (!targetSeriesKey) return { wasAlreadyExpanded, addedVolumes };
 
     const ensembleIds = new Set<string>();
     let externalSeriesUri = '';
@@ -646,6 +662,7 @@ export async function expandSeriesVolumesInD1(
         const parsedEnt = JSON.parse(sRow.entity_json);
         if (parsedEnt?.claims && typeof parsedEnt.claims === 'object') {
           serieClaims = parsedEnt.claims;
+          wasAlreadyExpanded = parsedEnt.claims['invp:bnfExpanded']?.[0] === 'true';
           const storedEns = parsedEnt.claims['wdt:P268'];
           if (Array.isArray(storedEns)) {
             for (const id of storedEns) {
@@ -1032,6 +1049,14 @@ export async function expandSeriesVolumesInD1(
 
       existingIsbns.add(top.isbn);
       if (normNum) existingVolNums.add(normNum);
+      addedVolumes.push({
+        workUri,
+        editionUri: `isbn:${top.isbn}`,
+        title: finalTitle,
+        seriesNumber: normNum || undefined,
+        isbn13: top.isbn,
+        coverUrl: resolvedCoverUrl
+      });
     }
 
     // 4. Complétion mutuelle depuis Wikidata/Inventaire pour tout tome absent côté BnF
@@ -1044,7 +1069,7 @@ export async function expandSeriesVolumesInD1(
         'owl:sameAs': [wdItem.uri]
       };
       if (authorUris.length) workClaims['wdt:P50'] = authorUris;
-      await upsertCatalogEntity(db, {
+      const wdWorkUri = await upsertCatalogEntity(db, {
         entityType: 'work',
         label: wdItem.title,
         seriesUri,
@@ -1056,6 +1081,12 @@ export async function expandSeriesVolumesInD1(
         claims: workClaims
       });
       existingVolNums.add(normNum);
+      addedVolumes.push({
+        workUri: wdWorkUri,
+        title: wdItem.title,
+        seriesNumber: normNum,
+        coverUrl: wdItem.imageUrl
+      });
     }
 
     // Marquer la série comme expansée et persister les identifiants d'ensemble BnF (wdt:P268) + Wikidata
@@ -1075,9 +1106,16 @@ export async function expandSeriesVolumesInD1(
         'invp:bnfExpanded': ['true']
       }
     });
+
+    await db
+      .prepare('UPDATE catalog_entities SET series_checked_at = ? WHERE uri = ?')
+      .bind(new Date().toISOString(), seriesUri)
+      .run()
+      .catch(() => {});
   } catch (e) {
     console.warn('[D1 SERIES EXPAND] Erreur expansion automatique de série :', e);
   }
+  return { wasAlreadyExpanded, addedVolumes };
 }
 
 /**

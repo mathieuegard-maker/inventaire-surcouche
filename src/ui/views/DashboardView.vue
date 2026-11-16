@@ -13,6 +13,7 @@ import { statsService } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
 import { connectionState } from '../../state/connection';
 import { pendingScansStore } from '../../state/pendingScans';
+import { seriesReleaseService, type SeriesReleaseAlert } from '../../core/services/series-release.service';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
@@ -22,6 +23,7 @@ const searchQuery = ref('');
 const errorMessage = ref<string | null>(null);
 const offlineNoticeMessage = ref<string | null>(null);
 const pendingScans = pendingScansStore.pendingScans;
+const releaseAlerts = seriesReleaseService.alerts;
 const isOffline = connectionState.isOffline;
 
 const previewCollection = ref<HumanizedBook[]>([]);
@@ -63,6 +65,12 @@ const openPendingScan = (isbn: string) => {
   }
   saveBookNavigationOrder([isbn, `isbn:${isbn}`], 'direct');
   router.push(`/book/${encodeURIComponent(isbn)}`);
+};
+
+const openReleaseAlert = (alert: SeriesReleaseAlert) => {
+  const target = alert.isbn13 || alert.volumeUri;
+  saveBookNavigationOrder([target], 'direct');
+  router.push(`/book/${encodeURIComponent(target)}`);
 };
 
 const formatScanTime = (ts: number) =>
@@ -178,6 +186,45 @@ watch(
               class="pending-remove-btn"
               aria-label="Retirer"
               @click="pendingScansStore.removePendingScan(scan.isbn)"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Nouveaux tomes parus détectés automatiquement dans vos séries suivies -->
+    <div v-if="releaseAlerts.length > 0" class="release-alerts-card">
+      <div class="release-alerts-header">
+        <strong>Nouveaux tomes parus ({{ releaseAlerts.length }})</strong>
+        <button type="button" class="pending-clear-btn" @click="seriesReleaseService.dismissAlert()">
+          Tout masquer
+        </button>
+      </div>
+      <div class="release-alerts-list">
+        <div v-for="alert in releaseAlerts" :key="alert.id" class="release-alert-row">
+          <img
+            v-if="alert.coverUrl || alert.isbn13"
+            :src="imageUtil.resolveCoverUrl({ coverUrl: alert.coverUrl, isbn13: alert.isbn13 } as any)"
+            :alt="alert.volumeTitle"
+            class="release-alert-cover"
+          />
+          <div class="release-alert-info">
+            <span class="release-alert-series">
+              {{ alert.seriesTitle }}<template v-if="alert.seriesNumber"> — Tome {{ alert.seriesNumber }}</template>
+            </span>
+            <span class="release-alert-title">{{ alert.volumeTitle }}</span>
+          </div>
+          <div class="pending-scan-actions">
+            <button type="button" class="pending-open-btn" @click="openReleaseAlert(alert)">
+              Voir la fiche
+            </button>
+            <button
+              type="button"
+              class="pending-remove-btn"
+              aria-label="Masquer"
+              @click="seriesReleaseService.dismissAlert(alert.id)"
             >
               ✕
             </button>
@@ -431,5 +478,72 @@ watch(
   height: 30px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.release-alerts-card {
+  margin-top: 0.85rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-md, 12px);
+  background: #ecfdf5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.release-alerts-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: #065f46;
+}
+
+.release-alerts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.release-alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  background: #ffffff;
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.45rem 0.65rem;
+}
+
+.release-alert-cover {
+  width: 34px;
+  height: 48px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  flex-shrink: 0;
+}
+
+.release-alert-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.release-alert-series {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #065f46;
+}
+
+.release-alert-title {
+  font-size: 0.82rem;
+  color: #0f172a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

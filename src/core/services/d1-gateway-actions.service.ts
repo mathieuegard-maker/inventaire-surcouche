@@ -1352,9 +1352,9 @@ export async function handleD1GatewayAction(
 
       if (property === 'wdt:P179') {
         const sRow = await db
-          .prepare('SELECT entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+          .prepare('SELECT entity_json, series_checked_at FROM catalog_entities WHERE uri = ? LIMIT 1')
           .bind(value)
-          .first<{ entity_json: string | null }>();
+          .first<{ entity_json: string | null; series_checked_at?: string | null }>();
 
         let isAlreadyExpanded = false;
         if (sRow?.entity_json) {
@@ -1366,6 +1366,9 @@ export async function handleD1GatewayAction(
           }
         }
 
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        const isCheckStale = !sRow?.series_checked_at || sRow.series_checked_at < sevenDaysAgo;
+
         let rows = await db
           .prepare(
             "SELECT uri FROM catalog_entities WHERE series_uri = ? AND entity_type = 'work' ORDER BY sort_order ASC, label ASC"
@@ -1373,10 +1376,9 @@ export async function handleD1GatewayAction(
           .bind(value)
           .all<{ uri: string }>();
 
-        // Si la série n'a pas encore été expansée via BnF (ou a moins de 2 tomes en base D1),
-        // on déclenche automatiquement l'expansion relationnelle BnF (460$3 / bib.ens2bib / bib.recordtype="ens")
-        // pour que l'utilisateur puisse immédiatement sélectionner toute la série à la main !
-        if (!isAlreadyExpanded || (rows.results || []).length < 2) {
+        // Si la série n'a pas encore été expansée via BnF (ou a moins de 2 tomes en base D1, ou n'a pas été vérifiée depuis 7 jours),
+        // on déclenche automatiquement l'expansion relationnelle BnF (460$3 / bib.ens2bib / bib.recordtype="ens").
+        if (!isAlreadyExpanded || (rows.results || []).length < 2 || isCheckStale) {
           await expandSeriesVolumesInD1(db, value);
           rows = await db
             .prepare(
@@ -1585,6 +1587,139 @@ export async function handleD1GatewayAction(
         seriesId: finalSeriesUri,
         seriesTitle: finalSeriesLabel
       });
+    }
+
+    case 'series-check-releases': {
+      const auth = await resolveAuthSession(db, request, null);
+      if (!auth) {
+        return jsonResp({ ok: true, checkedCount: 0, alerts: [] });
+      }
+      const limit = Math.min(Math.max(Number(body?.limit ?? 3), 0), 5);
+      const staleDays = Math.min(Math.max(Number(body?.staleDays ?? 7), 1), 30);
+      const staleCutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000).toISOString();
+
+      let checkedCount = 0;
+      if (limit > 0) {
+        try {
+          const staleSeries = await db
+            .prepare(
+              `SELECT DISTINCT s.uri, s.label
+               FROM library_items li
+               JOIN catalog_entities ce ON (ce.uri = li.edition_id OR ce.uri = li.work_id)
+               JOIN catalog_entities s ON s.uri = ce.series_uri
+               WHERE li.library_id = ?
+                 AND ce.series_uri IS NOT NULL
+                 AND s.entity_type = 'serie'
+                 AND (s.series_checked_at IS NULL OR s.series_checked_at < ?)
+               ORDER BY s.series_checked_at IS NOT NULL ASC, s.series_checked_at ASC
+               LIMIT ?`
+            )
+            .bind(auth.libraryId, staleCutoff, limit)
+            .all<{ uri: string; label: string }>();
+
+          for (const s of staleSeries.results || []) {
+            checkedCount++;
+            const expandRes = await expandSeriesVolumesInD1(db, s.uri, s.label);
+            if (expandRes.wasAlreadyExpanded && expandRes.addedVolumes.length > 0) {
+              for (const vol of expandRes.addedVolumes) {
+                const alertId = `${auth.libraryId}:${vol.workUri}`;
+                await db
+                  .prepare(
+                    `INSERT OR IGNORE INTO series_release_alerts (
+                       id, library_id, series_uri, series_title, volume_uri, volume_title,
+                       series_number, isbn13, cover_url, detected_at, dismissed
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+                  )
+                  .bind(
+                    alertId,
+                    auth.libraryId,
+                    s.uri,
+                    s.label,
+                    vol.editionUri || vol.workUri,
+                    vol.title,
+                    vol.seriesNumber || null,
+                    vol.isbn13 || null,
+                    vol.coverUrl || null,
+                    now
+                  )
+                  .run();
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[SERIES RELEASE CHECK] Erreur non bloquante :', err);
+        }
+      }
+
+      try {
+        const alertRows = await db
+          .prepare(
+            `SELECT a.id, a.series_uri, a.series_title, a.volume_uri, a.volume_title,
+                    a.series_number, a.isbn13, a.cover_url, a.detected_at
+             FROM series_release_alerts a
+             WHERE a.library_id = ?
+               AND a.dismissed = 0
+               AND NOT EXISTS (
+                 SELECT 1 FROM library_items li
+                 WHERE li.library_id = a.library_id
+                   AND (li.edition_id = a.volume_uri OR li.work_id = a.volume_uri OR (a.isbn13 IS NOT NULL AND li.edition_id = ('isbn:' || a.isbn13)))
+               )
+             ORDER BY a.detected_at DESC
+             LIMIT 20`
+          )
+          .bind(auth.libraryId)
+          .all<{
+            id: string;
+            series_uri: string;
+            series_title: string;
+            volume_uri: string;
+            volume_title: string;
+            series_number: string | null;
+            isbn13: string | null;
+            cover_url: string | null;
+            detected_at: string;
+          }>();
+
+        const alerts = (alertRows.results || []).map((r) => ({
+          id: r.id,
+          seriesUri: r.series_uri,
+          seriesTitle: r.series_title,
+          volumeUri: r.volume_uri,
+          volumeTitle: r.volume_title,
+          seriesNumber: r.series_number || undefined,
+          isbn13: r.isbn13 || undefined,
+          coverUrl: r.cover_url || undefined,
+          detectedAt: r.detected_at
+        }));
+
+        return jsonResp({ ok: true, checkedCount, alerts });
+      } catch {
+        return jsonResp({ ok: true, checkedCount, alerts: [] });
+      }
+    }
+
+    case 'series-dismiss-alert': {
+      const auth = await resolveAuthSession(db, request, null);
+      if (!auth) return jsonResp({ error: 'Non authentifié' }, 401);
+
+      const alertId = String(body?.alertId || '').trim();
+      const dismissAll = Boolean(body?.dismissAll);
+      try {
+        if (dismissAll) {
+          await db
+            .prepare('UPDATE series_release_alerts SET dismissed = 1 WHERE library_id = ?')
+            .bind(auth.libraryId)
+            .run();
+        } else if (alertId) {
+          await db
+            .prepare('UPDATE series_release_alerts SET dismissed = 1 WHERE id = ? AND library_id = ?')
+            .bind(alertId, auth.libraryId)
+            .run();
+        }
+      } catch {
+        // ignore if table not present
+      }
+      return jsonResp({ ok: true });
     }
 
     default:
