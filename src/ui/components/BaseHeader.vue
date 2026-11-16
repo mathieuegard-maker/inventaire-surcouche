@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import FamilyShareModal from './FamilyShareModal.vue';
 import { TEXTS } from '../locales/fr';
 import { scannerState } from '../../state/scanner';
 
 const router = useRouter();
 const isMenuOpen = ref(false);
-const showFamilyModal = ref(false);
 
 const handleHome = () => { isMenuOpen.value = false; router.push('/dashboard'); };
 const handleCollection = () => { isMenuOpen.value = false; router.push('/collection'); };
@@ -17,7 +15,7 @@ const handleStats = () => { isMenuOpen.value = false; router.push('/stats'); };
 const handleFriends = () => { isMenuOpen.value = false; router.push('/friends'); };
 const handleFamilyShare = () => {
   isMenuOpen.value = false;
-  showFamilyModal.value = true;
+  router.push('/family');
 };
 const handleBack = () => { isMenuOpen.value = false; router.back(); };
 
@@ -104,7 +102,5 @@ const toggleScan = () => {
         </button>
       </div>
     </div>
-
-    <FamilyShareModal :show="showFamilyModal" @close="showFamilyModal = false" />
   </header>
 </template>

@@ -57,6 +57,11 @@ export const router = createRouter({
       component: () => import('../ui/views/FriendsView.vue')
     },
     {
+      path: '/family',
+      name: 'FamilyShareView',
+      component: () => import('../ui/views/FamilyShareView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView

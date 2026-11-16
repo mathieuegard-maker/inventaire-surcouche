@@ -486,10 +486,16 @@ const saveChanges = async () => {
                 type="text"
                 v-model="customGenreInput"
                 placeholder="Ajouter un genre personnalisé..."
-                class="wireframe-input"
+                class="wireframe-input custom-genre-input"
                 @keydown.enter.prevent="addCustomGenreTag"
               />
-              <BaseButton @click="addCustomGenreTag" class="apply-btn-inline">+ Ajouter</BaseButton>
+              <button
+                type="button"
+                class="wireframe-btn custom-genre-add-btn"
+                @click="addCustomGenreTag"
+              >
+                + Ajouter
+              </button>
             </div>
           </div>
         </div>
@@ -770,6 +776,20 @@ const saveChanges = async () => {
   gap: 0.5rem;
   align-items: center;
   margin-top: 0.3rem;
+}
+
+.custom-genre-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.custom-genre-add-btn {
+  flex: 0 0 auto;
+  width: auto !important;
+  white-space: nowrap;
+  padding: 0 0.95rem;
+  font-size: 0.82rem;
 }
 
 .form-actions-row {

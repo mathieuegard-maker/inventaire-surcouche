@@ -649,7 +649,7 @@ const confirmDelete = async () => {
             :disabled="connectionState.isOffline.value"
             @click="navigateToEdit"
           >
-            [ MODIFIER / CORRIGER LA FICHE ]
+            Modifier / Corriger la fiche
           </BaseButton>
         </div>
       </div>
