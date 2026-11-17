@@ -36,6 +36,13 @@ const onCoverError = (event: Event) => {
   });
 };
 
+const onCoverLoad = (event: Event) => {
+  const img = event.target as HTMLImageElement | null;
+  if (img && img.naturalWidth > 0 && (img.naturalWidth < 15 || img.naturalHeight < 15)) {
+    onCoverError(event);
+  }
+};
+
 const translateFriendName = (name?: string): string => {
   if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
   if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
@@ -68,6 +75,7 @@ const handleZoneClick = () => {
         :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
         :alt="book.title"
         class="row-cover-image"
+        @load="onCoverLoad"
         @error="onCoverError"
       />
       <div v-else class="row-cover-fallback">

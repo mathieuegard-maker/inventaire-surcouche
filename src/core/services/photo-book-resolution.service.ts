@@ -589,13 +589,56 @@ export const photoBookResolutionService = {
                 ? [cand.author]
                 : [];
 
+      let workEditionCoverUrls: string[] = [];
+      const hasExplicitCover = Boolean(
+        ownership.cachedCover ||
+          d1Entity?.localCover ||
+          d1Entity?.coverUrl ||
+          externalMeta?.coverUrl ||
+          hintMatchMeta?.coverUrl
+      );
+      if (!hasExplicitCover && typeof fetch === 'function' && (mergedTitle || isbn13)) {
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 2500);
+          try {
+            const qs = new URLSearchParams({
+              isbn: isbn13 || '',
+              workUri: ownership.existingWorkUri || d1Entity?.workUri || '',
+              title: mergedTitle || '',
+              author: mergedAuthors[0] || ''
+            });
+            const res = await fetch(`/api/gateway?action=work-edition-covers&${qs.toString()}`, {
+              signal: controller.signal
+            }).catch(() => null);
+            if (res && res.ok) {
+              const data = (await res.json()) as { coverUrls?: string[] };
+              if (Array.isArray(data?.coverUrls)) {
+                workEditionCoverUrls = data.coverUrls;
+              }
+            }
+          } finally {
+            clearTimeout(timer);
+          }
+        } catch {
+          // Ignorer en cas de timeout/réseau
+        }
+      }
+
+      const knownIsbnCandidates = (knownIsbns || [])
+        .filter((k) => k && k !== isbn13)
+        .slice(0, 4)
+        .flatMap((k) => imageUtil.buildCoverCandidates(k, []).slice(0, 2));
+
       const coverFallbackUrls = imageUtil.buildCoverCandidates(isbn13, [
         ownership.cachedCover,
         d1Entity?.localCover,
         d1Entity?.coverUrl,
         externalMeta?.coverUrl,
+        hintMatchMeta?.coverUrl,
+        ...workEditionCoverUrls,
         ...(externalMeta?.coverFallbackUrls || []),
-        hintMatchMeta?.coverUrl
+        ...knownIsbnCandidates
       ]);
       const mergedCover =
         ownership.cachedCover ||
@@ -603,6 +646,7 @@ export const photoBookResolutionService = {
         d1Entity?.coverUrl ||
         externalMeta?.coverUrl ||
         hintMatchMeta?.coverUrl ||
+        workEditionCoverUrls[0] ||
         coverFallbackUrls[0];
 
       const mergedSeries =

@@ -84,26 +84,71 @@ export const bookCacheService = {
           url: book.coverUrl,
           dataUrl: book.localCover
         });
-      } else if (candidates.length > 0 && !book.localCover) {
+      } else if (!book.localCover) {
         setTimeout(async () => {
           try {
-            for (const candidateUrl of candidates) {
+            let resolvedBase64: string | null = null;
+            let resolvedUrl: string | undefined;
+            let allCandidates = [...candidates];
+
+            for (const candidateUrl of allCandidates) {
               const base64 = await imageService.compressAndEncode(candidateUrl);
               if (base64) {
-                const updatedBook = await databaseService.getBookFromCache(book.uri);
-                if (updatedBook) {
-                  updatedBook.localCover = base64;
-                  updatedBook.coverUrl = candidateUrl;
-                  updatedBook.coverFallbackUrls = candidates;
-                  await databaseService.saveBookToCache(updatedBook);
-                }
-                await uploadCompressedCoverToCentralStorage({
-                  isbn: book.isbn13 || book.isbn10,
-                  url: candidateUrl,
-                  dataUrl: base64
-                });
+                resolvedBase64 = base64;
+                resolvedUrl = candidateUrl;
                 break;
               }
+            }
+
+            // Repli orienté Œuvre : si aucune couverture n'a fonctionné sur cet ISBN,
+            // interroger `/api/gateway?action=work-edition-covers` + `knownIsbns` (comme dans BookEdit).
+            if (!resolvedBase64 && typeof fetch === 'function' && (book.title || book.workUri || book.isbn13)) {
+              try {
+                const extraUrls: string[] = [];
+                for (const altIsbn of (book.knownIsbns || []).slice(0, 6)) {
+                  extraUrls.push(...imageUtil.buildCoverCandidates(altIsbn, []));
+                }
+                const params = new URLSearchParams({
+                  isbn: book.isbn13 || book.isbn10 || '',
+                  workUri: book.workUri || '',
+                  title: book.title || '',
+                  author: book.authors?.[0] || ''
+                });
+                const res = await fetch(`/api/gateway?action=work-edition-covers&${params.toString()}`).catch(() => null);
+                if (res && res.ok) {
+                  const data = (await res.json()) as { coverUrls?: string[] };
+                  if (Array.isArray(data?.coverUrls)) {
+                    extraUrls.push(...data.coverUrls);
+                  }
+                }
+                const dedupExtra = Array.from(new Set(extraUrls)).filter((u) => !allCandidates.includes(u));
+                for (const candidateUrl of dedupExtra.slice(0, 10)) {
+                  const base64 = await imageService.compressAndEncode(candidateUrl);
+                  if (base64) {
+                    resolvedBase64 = base64;
+                    resolvedUrl = candidateUrl;
+                    allCandidates = [candidateUrl, ...allCandidates, ...dedupExtra];
+                    break;
+                  }
+                }
+              } catch {
+                // Ignorer si hors-ligne ou environnement de test sans réseau
+              }
+            }
+
+            if (resolvedBase64 && resolvedUrl) {
+              const updatedBook = await databaseService.getBookFromCache(book.uri);
+              if (updatedBook) {
+                updatedBook.localCover = resolvedBase64;
+                updatedBook.coverUrl = resolvedUrl;
+                updatedBook.coverFallbackUrls = Array.from(new Set(allCandidates));
+                await databaseService.saveBookToCache(updatedBook);
+              }
+              await uploadCompressedCoverToCentralStorage({
+                isbn: book.isbn13 || book.isbn10,
+                url: resolvedUrl,
+                dataUrl: resolvedBase64
+              });
             }
           } catch (e) {
             console.error(`[BOOK CACHE] Erreur compression image pour ${book.uri}`, e);

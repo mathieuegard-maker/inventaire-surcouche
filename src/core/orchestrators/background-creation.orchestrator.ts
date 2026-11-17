@@ -573,8 +573,7 @@ export const backgroundCreationOrchestrator = {
 
       const normNum = vol.seriesNumber ? normalizeSeriesNumber(vol.seriesNumber) : '';
       if (normNum && knownVolumeNums.has(normNum)) continue;
-      if (!normNum && isTitleAlreadyKnown(vol.title)) continue;
-      if (normNum && isTitleAlreadyKnown(vol.title) && knownNormalizedTitles.length > 0 && !knownVolumeNums.size) continue;
+      if (isTitleAlreadyKnown(vol.title)) continue;
 
       missingCandidates.push(vol);
       if (missingCandidates.length >= MAX_SERIES_VOLUMES_TO_CREATE) break;

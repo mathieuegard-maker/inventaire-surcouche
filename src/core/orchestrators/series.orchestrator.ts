@@ -1,6 +1,7 @@
 // src/core/orchestrators/series.orchestrator.ts
 import { ref, computed } from 'vue';
 import { databaseService } from '../database/database.service';
+import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { syncOrchestrator } from './sync.orchestrator';
 import type { SeriesContext, HumanizedBook } from '../types';
 
@@ -88,6 +89,64 @@ export const seriesOrchestrator = {
       }
     }
 
+    // 2B. Déduplication par Œuvre dans la série (même workUri, même n° de tome ou même titre normalisé)
+    // Priorité : owned > wish > none, tout en fusionnant numéro de tome, couvertures et knownIsbns
+    const statusWeight = (s?: string) => (s === 'owned' ? 3 : s === 'wish' ? 2 : 1);
+    const sortedForDedup = [...tomes].sort((a, b) => {
+      const diff = statusWeight(b.ownershipStatus) - statusWeight(a.ownershipStatus);
+      if (diff !== 0) return diff;
+      const aCover = a.localCover || a.coverUrl ? 1 : 0;
+      const bCover = b.localCover || b.coverUrl ? 1 : 0;
+      if (bCover !== aCover) return bCover - aCover;
+      return (b.seriesNumber ? 1 : 0) - (a.seriesNumber ? 1 : 0);
+    });
+
+    const mergedTomes: HumanizedBook[] = [];
+    const seenWorkKeys = new Map<string, HumanizedBook>();
+    const registerKeys = (b: HumanizedBook, target: HumanizedBook) => {
+      if (b.workUri) seenWorkKeys.set(`work:${b.workUri}`, target);
+      const normNum = b.seriesNumber ? normalizeSeriesNumber(b.seriesNumber) : '';
+      if (normNum) seenWorkKeys.set(`num:${normNum}`, target);
+      const normTitle = b.title ? normalizeTextKey(b.title) : '';
+      if (normTitle.length >= 3) seenWorkKeys.set(`title:${normTitle}`, target);
+    };
+
+    for (const tome of sortedForDedup) {
+      const normNum = tome.seriesNumber ? normalizeSeriesNumber(tome.seriesNumber) : '';
+      const normTitle = tome.title ? normalizeTextKey(tome.title) : '';
+      const existing =
+        (tome.workUri ? seenWorkKeys.get(`work:${tome.workUri}`) : undefined) ||
+        (normNum ? seenWorkKeys.get(`num:${normNum}`) : undefined) ||
+        (normTitle.length >= 3 ? seenWorkKeys.get(`title:${normTitle}`) : undefined);
+
+      if (existing) {
+        if (!existing.seriesNumber && tome.seriesNumber) existing.seriesNumber = tome.seriesNumber;
+        if (!existing.localCover && tome.localCover) existing.localCover = tome.localCover;
+        if (!existing.coverUrl && tome.coverUrl) existing.coverUrl = tome.coverUrl;
+        const extraFallbacks = [tome.coverUrl, ...(tome.coverFallbackUrls || [])].filter(
+          (u): u is string => Boolean(u)
+        );
+        if (extraFallbacks.length > 0) {
+          existing.coverFallbackUrls = Array.from(
+            new Set([...(existing.coverFallbackUrls || []), ...extraFallbacks])
+          );
+        }
+        const mergedIsbns = new Set<string>([
+          ...(existing.knownIsbns || []),
+          ...(existing.isbn13 ? [existing.isbn13] : []),
+          ...(tome.isbn13 ? [tome.isbn13] : []),
+          ...(tome.knownIsbns || [])
+        ]);
+        if (mergedIsbns.size > 0) existing.knownIsbns = Array.from(mergedIsbns);
+        registerKeys(tome, existing);
+        continue;
+      }
+
+      const clone: HumanizedBook = { ...tome };
+      mergedTomes.push(clone);
+      registerKeys(clone, clone);
+    }
+
     // 3. Tri numérique robuste (Tomes numérotés 1, 2... puis Hors-Séries HS1, HS2... puis Intégrales / non-numérotés)
     const getSortWeight = (vol?: string): number => {
       if (!vol) return 9999;
@@ -98,23 +157,23 @@ export const seriesOrchestrator = {
       if (hsMatch) return 5000 + (hsMatch[1] ? parseInt(hsMatch[1], 10) : 0);
       return 8000;
     };
-    tomes.sort((a, b) => {
+    mergedTomes.sort((a, b) => {
       const diff = getSortWeight(a.seriesNumber) - getSortWeight(b.seriesNumber);
       return diff !== 0 ? diff : (a.title || '').localeCompare(b.title || '', 'fr');
     });
     
     // 4. Calcul des métadonnées de possession
-    const ownedCount = tomes.filter(t => t.ownershipStatus === 'owned').length;
+    const ownedCount = mergedTomes.filter(t => t.ownershipStatus === 'owned').length;
 
     console.groupEnd();
 
     // 5. Envoi du paquet complet standardisé à la vue
     return {
       id: seriesId,
-      name: seriesName || (tomes.length > 0 ? tomes[0].series : undefined),
-      tomes: tomes,
+      name: seriesName || (mergedTomes.length > 0 ? mergedTomes[0].series : undefined),
+      tomes: mergedTomes,
       ownedCount: ownedCount,
-      isComplete: tomes.length > 0 && ownedCount === tomes.length
+      isComplete: mergedTomes.length > 0 && ownedCount === mergedTomes.length
     };
   }
 };

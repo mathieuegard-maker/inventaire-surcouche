@@ -19,6 +19,10 @@ export const imageService = {
       
       const img = await createImageBitmap(blob);
       console.log(`[DEBUG-IMAGE-SERVICE] Bitmap créé : ${img.width}x${img.height}`);
+      if (img.width < 15 || img.height < 15) {
+        console.warn(`[IMAGE SERVICE] Image placeholder ignorée (${img.width}x${img.height}) pour ${imageUrl}`);
+        return null;
+      }
       
       let width = img.width;
       let height = img.height;

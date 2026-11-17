@@ -941,9 +941,9 @@ export async function expandSeriesVolumesInD1(
     }
 
     const existingRows = await db
-      .prepare('SELECT isbn13, series_number FROM catalog_entities WHERE series_uri = ?')
+      .prepare('SELECT isbn13, series_number, normalized_label FROM catalog_entities WHERE series_uri = ?')
       .bind(seriesUri)
-      .all<{ isbn13: string | null; series_number: string | null }>();
+      .all<{ isbn13: string | null; series_number: string | null; normalized_label: string | null }>();
 
     const existingIsbns = new Set(
       (existingRows.results || []).map((r) => r.isbn13).filter(Boolean) as string[]
@@ -952,6 +952,9 @@ export async function expandSeriesVolumesInD1(
       (existingRows.results || [])
         .map((r) => (r.series_number ? normalizeSeriesNumber(r.series_number) : ''))
         .filter(Boolean)
+    );
+    const existingTitles = new Set(
+      (existingRows.results || []).map((r) => r.normalized_label).filter(Boolean) as string[]
     );
 
     const seriesCategory = sRow?.main_category || 'BD';
@@ -973,12 +976,16 @@ export async function expandSeriesVolumesInD1(
       });
       const top = group[0];
       const normNum = top.seriesNumber ? normalizeSeriesNumber(top.seriesNumber) : '';
-      if (existingIsbns.has(top.isbn) || (normNum && existingVolNums.has(normNum))) {
-        continue;
-      }
-
       const wdMatch = normNum ? wdWorksByNum.get(normNum) : undefined;
       const finalTitle = top.title || wdMatch?.title || cleanTargetSeries;
+      const normFinalTitle = normalizeTextKey(finalTitle);
+      if (
+        existingIsbns.has(top.isbn) ||
+        (normNum && existingVolNums.has(normNum)) ||
+        (normFinalTitle && existingTitles.has(normFinalTitle))
+      ) {
+        continue;
+      }
 
       // Ne stocker que des couvertures explicites vérifiables (BnF/Wikidata);
       // les replis CDN (Amazon/Eyrolles/OL) sont résolus avec vérification d'octets
@@ -1050,6 +1057,7 @@ export async function expandSeriesVolumesInD1(
 
       existingIsbns.add(top.isbn);
       if (normNum) existingVolNums.add(normNum);
+      if (normFinalTitle) existingTitles.add(normFinalTitle);
       addedVolumes.push({
         workUri,
         editionUri: `isbn:${top.isbn}`,
@@ -1153,11 +1161,28 @@ export async function upsertCatalogEntity(
   let mergedClaims = { ...params.claims };
   let effectiveLabel = params.label;
   let effectiveNormalizedLabel = normalizedLabel;
-  if (!uri && (params.entityType === 'serie' || params.entityType === 'human' || params.entityType === 'genre' || params.entityType === 'publisher' || params.entityType === 'collection') && normalizedLabel) {
-    let existing = await db
-      .prepare('SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = ? AND normalized_label = ? LIMIT 1')
-      .bind(params.entityType, normalizedLabel)
-      .first<{ uri: string; label?: string; entity_json: string | null }>();
+  if (!uri && (params.entityType === 'serie' || params.entityType === 'human' || params.entityType === 'genre' || params.entityType === 'publisher' || params.entityType === 'collection' || params.entityType === 'work') && normalizedLabel) {
+    let existing =
+      params.entityType === 'work'
+        ? params.seriesUri && params.seriesNumber
+          ? await db
+              .prepare(
+                "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND (normalized_label = ? OR series_number = ?) LIMIT 1"
+              )
+              .bind(params.seriesUri, normalizedLabel, params.seriesNumber)
+              .first<{ uri: string; label?: string; entity_json: string | null }>()
+          : params.seriesUri
+            ? await db
+                .prepare(
+                  "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND normalized_label = ? LIMIT 1"
+                )
+                .bind(params.seriesUri, normalizedLabel)
+                .first<{ uri: string; label?: string; entity_json: string | null }>()
+            : null
+        : await db
+            .prepare('SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = ? AND normalized_label = ? LIMIT 1')
+            .bind(params.entityType, normalizedLabel)
+            .first<{ uri: string; label?: string; entity_json: string | null }>();
 
     // Déduplication canonique de série côté serveur (ex: "Boule & Bill" == "Boule et Bill", "Astérix, la grande collection" == "Astérix")
     if (!existing?.uri && params.entityType === 'serie') {
@@ -1182,7 +1207,7 @@ export async function upsertCatalogEntity(
 
     if (existing?.uri) {
       uri = existing.uri;
-      if (params.entityType === 'serie' && existing.entity_json) {
+      if ((params.entityType === 'serie' || params.entityType === 'work') && existing.entity_json) {
         try {
           const parsedExisting = JSON.parse(existing.entity_json);
           if (parsedExisting?.claims && typeof parsedExisting.claims === 'object') {
@@ -1242,8 +1267,8 @@ export async function upsertCatalogEntity(
         normalized_label = excluded.normalized_label,
         isbn13 = COALESCE(excluded.isbn13, catalog_entities.isbn13),
         work_uri = COALESCE(excluded.work_uri, catalog_entities.work_uri),
-        series_uri = excluded.series_uri,
-        series_number = excluded.series_number,
+        series_uri = COALESCE(excluded.series_uri, catalog_entities.series_uri),
+        series_number = COALESCE(excluded.series_number, catalog_entities.series_number),
         sort_order = excluded.sort_order,
         author_uris_json = excluded.author_uris_json,
         main_category = excluded.main_category,
