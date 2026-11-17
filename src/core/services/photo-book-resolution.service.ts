@@ -173,12 +173,13 @@ const MULTI_SOURCE_WORK_BONUS = 14;
 const BNF_AUTHORITY_TIEBREAK = 6;
 
 function buildHintQuery(cand: RecognizedBookCandidate): BnfHintQuery {
+  const useSemantic = Boolean(cand.semanticKnown && cand.semanticConfidence !== 'low');
   return {
-    title: cand.title,
+    title: (useSemantic && (cand.bnfSearchTitle || cand.canonicalWorkTitle)) || cand.title,
     subtitle: cand.subtitle,
-    series: cand.series,
-    volumeNumber: cand.volumeNumber,
-    author: cand.author,
+    series: (useSemantic && cand.canonicalSeries) || cand.series,
+    volumeNumber: cand.volumeNumber || (useSemantic ? cand.canonicalVolumeNumber : undefined),
+    author: (useSemantic && cand.bnfSearchAuthor) || cand.author,
     illustrator: cand.illustrator,
     publisher: cand.publisher,
     collection: cand.collection,
@@ -649,13 +650,19 @@ export const photoBookResolutionService = {
         workEditionCoverUrls[0] ||
         coverFallbackUrls[0];
 
+      const useSemantic = Boolean(cand.semanticKnown && cand.semanticConfidence !== 'low');
       const mergedSeries =
-        externalMeta?.series || d1Entity?.series || hintMatchMeta?.series || cand.series;
+        (useSemantic ? cand.canonicalSeries : undefined) ||
+        externalMeta?.series ||
+        d1Entity?.series ||
+        hintMatchMeta?.series ||
+        cand.series;
       const mergedSeriesNum =
         externalMeta?.seriesNumber ||
         d1Entity?.seriesNumber ||
         hintMatchMeta?.seriesNumber ||
-        cand.volumeNumber;
+        cand.volumeNumber ||
+        (useSemantic ? cand.canonicalVolumeNumber : undefined);
 
       const correctedFromAi = detectAiCorrection(cand, mergedTitle, mergedAuthors);
 

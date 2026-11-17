@@ -36,6 +36,13 @@ export interface RecognizedBookCandidate {
   collection?: string;
   isbn?: string;
   confidence?: 'high' | 'medium' | 'low';
+  semanticKnown?: boolean;
+  semanticConfidence?: 'high' | 'medium' | 'low';
+  canonicalSeries?: string;
+  canonicalVolumeNumber?: string;
+  canonicalWorkTitle?: string;
+  bnfSearchTitle?: string;
+  bnfSearchAuthor?: string;
   selected?: boolean;
 }
 
@@ -164,6 +171,20 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
         collection: item.collection ? String(item.collection).trim() : undefined,
         isbn: item.isbn ? String(item.isbn).replace(/[^0-9Xx]/g, '').trim() : undefined,
         confidence: conf,
+        semanticKnown: Boolean(item.semanticKnown),
+        semanticConfidence:
+          item.semanticConfidence === 'high' ||
+          item.semanticConfidence === 'medium' ||
+          item.semanticConfidence === 'low'
+            ? item.semanticConfidence
+            : undefined,
+        canonicalSeries: item.canonicalSeries ? String(item.canonicalSeries).trim() : undefined,
+        canonicalVolumeNumber: item.canonicalVolumeNumber
+          ? String(item.canonicalVolumeNumber).trim()
+          : undefined,
+        canonicalWorkTitle: item.canonicalWorkTitle ? String(item.canonicalWorkTitle).trim() : undefined,
+        bnfSearchTitle: item.bnfSearchTitle ? String(item.bnfSearchTitle).trim() : undefined,
+        bnfSearchAuthor: item.bnfSearchAuthor ? String(item.bnfSearchAuthor).trim() : undefined,
         selected: true
       };
     });

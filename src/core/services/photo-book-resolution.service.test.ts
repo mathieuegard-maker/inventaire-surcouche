@@ -424,4 +424,61 @@ describe('photoBookResolutionService', () => {
     expect(result.detectedItems[0].selected).toBe(false);
     expect(result.seriesExtraItems).toHaveLength(0);
   });
+
+  it('exploite la Couche 2 (sémantique) pour combler un numéro absent sur une vieille notice BnF', async () => {
+    const bnfSpy = vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockResolvedValue([
+      {
+        score: 32,
+        meta: {
+          isbn: '9782014001266',
+          title: "La serpe d'or",
+          authors: ['René Goscinny', 'Albert Uderzo'],
+          series: 'Astérix',
+          genres: []
+        }
+      }
+    ]);
+    vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockResolvedValue({
+      isbn: '9782014001266',
+      title: "La serpe d'or",
+      authors: ['René Goscinny', 'Albert Uderzo'],
+      series: 'Astérix',
+      coverUrl: 'https://example.com/serpe.jpg',
+      genres: []
+    });
+    vi.spyOn(bnfResolver, 'searchSeriesVolumes').mockResolvedValue([]);
+
+    const result = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries([
+      {
+        rawSpineText: "LA SERPE D'OR Texte de GOSCINNY",
+        title: "La Serpe d'or",
+        author: 'Goscinny',
+        confidence: 'high',
+        semanticKnown: true,
+        semanticConfidence: 'high',
+        canonicalSeries: "Une aventure d'Astérix",
+        canonicalVolumeNumber: '2',
+        canonicalWorkTitle: "La Serpe d'or",
+        bnfSearchTitle: "La serpe d'or",
+        bnfSearchAuthor: 'Goscinny'
+      }
+    ]);
+
+    expect(bnfSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "La serpe d'or",
+        series: "Une aventure d'Astérix",
+        volumeNumber: '2',
+        author: 'Goscinny'
+      }),
+      12
+    );
+    expect(result.detectedItems).toHaveLength(1);
+    expect(result.detectedItems[0]).toMatchObject({
+      status: 'resolved',
+      isbn13: '9782014001266',
+      series: "Une aventure d'Astérix",
+      seriesNumber: '2'
+    });
+  });
 });

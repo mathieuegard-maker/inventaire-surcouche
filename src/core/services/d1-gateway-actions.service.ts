@@ -7,9 +7,15 @@ import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolv
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
 import {
+  buildSemanticWorkNormalizationPrompt,
   buildVisionPrompt,
   computeMonthlyAiQuota,
-  PREFERRED_GEMINI_MODELS
+  mergeOcrAndSemanticLayers,
+  parseJsonArraySafe,
+  PREFERRED_GEMINI_MODELS,
+  PREFERRED_SEMANTIC_GEMINI_MODELS,
+  SEMANTIC_NORMALIZATION_RESPONSE_SCHEMA,
+  type SemanticWorkNormalizationItem
 } from '../utils/vision-prompt.util';
 import {
   expandSeriesVolumesInD1,
@@ -858,6 +864,52 @@ export async function handleD1GatewayAction(
         );
       }
 
+      // Couche 2 (Texte pur JSON strict) : identification sémantique de l'Œuvre canonique
+      // indépendamment de l'édition imprimée, sans jamais inventer si inconnu/récent.
+      let finalText = rawText;
+      const ocrItems = parseJsonArraySafe<Record<string, unknown>>(rawText);
+      if (ocrItems.length > 0) {
+        try {
+          const existingSeriesRows = await db
+            .prepare("SELECT DISTINCT label FROM catalog_entities WHERE entity_type = 'serie' ORDER BY label ASC LIMIT 80")
+            .all<{ label: string }>();
+          const existingSeriesNames = (existingSeriesRows.results || []).map((r) => r.label).filter(Boolean);
+          const semanticPrompt = buildSemanticWorkNormalizationPrompt(ocrItems, existingSeriesNames);
+
+          for (const semModelId of PREFERRED_SEMANTIC_GEMINI_MODELS) {
+            const semRes = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(semModelId)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: semanticPrompt }] }],
+                  generationConfig: {
+                    temperature: 0,
+                    responseMimeType: 'application/json',
+                    responseSchema: SEMANTIC_NORMALIZATION_RESPONSE_SCHEMA
+                  }
+                })
+              }
+            ).catch(() => null);
+
+            if (semRes && semRes.ok) {
+              const semJson = (await semRes.json().catch(() => null)) as any;
+              const semRaw = semJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (semRaw) {
+                const semanticItems = parseJsonArraySafe<SemanticWorkNormalizationItem>(semRaw);
+                if (semanticItems.length > 0) {
+                  finalText = JSON.stringify(mergeOcrAndSemanticLayers(ocrItems, semanticItems));
+                }
+              }
+              break;
+            }
+          }
+        } catch (semErr) {
+          console.warn('[VISION LAYER 2] Repli sur OCR brut :', semErr);
+        }
+      }
+
       const nextTotal = totalUsed + 1;
       const nextMonthUsed = monthUsed + 1;
       await db
@@ -875,7 +927,7 @@ export async function handleD1GatewayAction(
 
       const remainingQuota = Math.max(0, monthlyQuota - nextMonthUsed);
 
-      return jsonResp({ text: rawText, monthlyQuota, remainingQuota });
+      return jsonResp({ text: finalText, monthlyQuota, remainingQuota });
     }
 
     case 'admin-overview': {
