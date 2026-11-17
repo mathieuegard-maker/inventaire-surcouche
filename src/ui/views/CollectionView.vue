@@ -111,7 +111,7 @@ const fetchCatalogue = async () => {
     let cached = await databaseService.getAllBooksFromCache();
     let owned = cached.filter(b => b.ownershipStatus === 'owned');
     const registryUris = await databaseService.getAllRegistryUris('inventory');
-    if (registryUris.length > owned.length) {
+    if (registryUris.length !== owned.length) {
       await syncOrchestrator.hydrateCacheInBackground();
       cached = await databaseService.getAllBooksFromCache();
       owned = cached.filter(b => b.ownershipStatus === 'owned');

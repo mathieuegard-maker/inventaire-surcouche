@@ -10,6 +10,21 @@ const {
 } = useRegisterSW({
   onRegistered(r) {
     console.log('[PWA] Service Worker correctement enregistré.', r);
+    if (r) {
+      r.update().catch(() => {});
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            r.update().catch(() => {});
+          }
+        });
+      }
+      if (typeof window !== 'undefined') {
+        window.addEventListener('focus', () => {
+          r.update().catch(() => {});
+        });
+      }
+    }
   },
   onRegisterError(error) {
     console.error('[PWA] Échec lors de l\'enregistrement du Service Worker:', error);

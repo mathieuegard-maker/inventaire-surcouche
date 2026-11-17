@@ -117,7 +117,7 @@ export const syncOrchestrator = {
     activeHydrationPromise = (async () => {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const DB_RESET_TOKEN = 'reset_2026_11_17_clean_slate_v14';
+      const DB_RESET_TOKEN = 'reset_2026_11_17_clean_slate_v15';
       if (
         typeof localStorage !== 'undefined' &&
         localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&
@@ -134,6 +134,16 @@ export const syncOrchestrator = {
       const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
 
       if (inventoryRaw.length === 0 && wishlistRaw.length === 0) {
+        // Si les registres distants sont vides (ex: purge serveur), réinitialiser tout statut local obsolète
+        const staleBooks = (await databaseService.getAllBooksFromCache()).filter(
+          (b) => b.ownershipStatus === 'owned' || b.ownershipStatus === 'wish'
+        );
+        if (staleBooks.length > 0) {
+          for (const stale of staleBooks) {
+            await databaseService.saveBookToCache({ ...stale, ownershipStatus: 'none' });
+          }
+          scannerState.lastUpdatedTick.value++;
+        }
         return;
       }
       
