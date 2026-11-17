@@ -20,7 +20,8 @@ const EDITORIAL_COLLECTION_MARKERS = [
   'hachette',
   'classique',
   'folio',
-  'livre de poche'
+  'livre de poche',
+  'presente'
 ];
 
 const SERIES_LEADING_PREFIXES = [
@@ -32,6 +33,10 @@ const SERIES_LEADING_PREFIXES = [
   'une histoire de ',
   'le cycle d ',
   'le cycle de ',
+  'albums de ',
+  'album de ',
+  'albums d ',
+  'album d ',
   'les archives ',
   'la saga ',
   'saga '
@@ -70,7 +75,7 @@ export function stripEditorialCollectionSuffixes(rawSeries: string): {
   const normFull = normalizeWithAmpersand(display);
   for (const marker of EDITORIAL_COLLECTION_MARKERS) {
     if (normFull.includes(marker)) {
-      const splitDash = display.split(/\s+[-–—:]\s+|,\s+(?=la collection|collection)/i);
+      const splitDash = display.split(/\s+[-–—:]\s+|,\s+/);
       if (splitDash.length > 1 && normalizeWithAmpersand(splitDash[splitDash.length - 1]).includes(marker)) {
         display = splitDash.slice(0, -1).join(' - ').trim();
       }

@@ -27,8 +27,11 @@ describe('series-matcher.util', () => {
 
   it('nettoie les suffixes de collection éditoriale et préfixes de série', () => {
     expect(stripEditorialCollectionSuffixes('Astérix - La Grande Collection').coreKey).toBe('asterix');
+    expect(stripEditorialCollectionSuffixes('Astérix, la grande collection').coreKey).toBe('asterix');
     expect(stripEditorialCollectionSuffixes("Une aventure d'Astérix").coreKey).toBe('asterix');
     expect(stripEditorialCollectionSuffixes('Astérix (Édition Luxe)').coreKey).toBe('asterix');
+    expect(stripEditorialCollectionSuffixes('Album de Boule & Bill').coreKey).toBe('boule bill');
+    expect(stripEditorialCollectionSuffixes('Le petit Spirou présente').coreKey).toBe('petit spirou');
   });
 
   it("rattache 'Astérix - La Grande Collection' / Le Devin à 'Une aventure d'Astérix'", () => {

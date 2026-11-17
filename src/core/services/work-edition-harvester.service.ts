@@ -7,6 +7,7 @@ import { isbnUtil } from '../utils/isbn.util';
 export interface HarvestWorkEditionsResult {
   knownIsbns: string[];
   openLibraryWorkKey?: string;
+  fallbackCoverUrl?: string;
 }
 
 function addNormalizedIsbn(target: Set<string>, raw?: string): void {
@@ -53,7 +54,7 @@ export const workEditionHarvesterService = {
           const qs = new URLSearchParams({
             title: cleanTitle,
             limit: '2',
-            fields: 'key,title,isbn'
+            fields: 'key,title,isbn,cover_i'
           });
           if (primaryAuthor) qs.set('author', primaryAuthor);
           const res = await fetch(`https://openlibrary.org/search.json?${qs.toString()}`, {
@@ -61,7 +62,7 @@ export const workEditionHarvesterService = {
           });
           if (!res.ok) return null;
           return (await res.json()) as {
-            docs?: Array<{ key?: string; title?: string; isbn?: string[] }>;
+            docs?: Array<{ key?: string; title?: string; isbn?: string[]; cover_i?: number }>;
           };
         } finally {
           clearTimeout(timer);
@@ -69,11 +70,15 @@ export const workEditionHarvesterService = {
       })()
     ]);
 
+    let fallbackCoverUrl: string | undefined;
     if (bnfRes.status === 'fulfilled' && Array.isArray(bnfRes.value)) {
       for (const cand of bnfRes.value.slice(0, 12)) {
         const candTitleNorm = normalizeTextKey(cand.meta.title || '');
         if (candTitleNorm === normTargetTitle || candTitleNorm.startsWith(`${normTargetTitle} `)) {
           addNormalizedIsbn(isbns, cand.meta.isbn);
+          if (!fallbackCoverUrl && cand.meta.coverUrl) {
+            fallbackCoverUrl = cand.meta.coverUrl;
+          }
         }
       }
     }
@@ -83,6 +88,9 @@ export const workEditionHarvesterService = {
       for (const doc of olRes.value.docs) {
         if (normalizeTextKey(doc.title || '') !== normTargetTitle) continue;
         if (!openLibraryWorkKey && doc.key) openLibraryWorkKey = doc.key;
+        if (!fallbackCoverUrl && doc.cover_i) {
+          fallbackCoverUrl = `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
+        }
         for (const rawIsbn of (doc.isbn || []).slice(0, 40)) {
           addNormalizedIsbn(isbns, rawIsbn);
         }
@@ -91,7 +99,8 @@ export const workEditionHarvesterService = {
 
     return {
       knownIsbns: Array.from(isbns),
-      openLibraryWorkKey
+      openLibraryWorkKey,
+      fallbackCoverUrl
     };
   }
 };

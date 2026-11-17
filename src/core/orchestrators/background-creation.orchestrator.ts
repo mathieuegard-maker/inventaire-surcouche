@@ -185,11 +185,16 @@ export const backgroundCreationOrchestrator = {
           seedIsbns: [optimisticBook.isbn13, optimisticBook.isbn10, ...(optimisticBook.knownIsbns || [])]
         })
         .then(async (harvest) => {
-          if (harvest.knownIsbns.length === 0) return;
+          if (harvest.knownIsbns.length === 0 && !harvest.fallbackCoverUrl) return;
           const current = await databaseService.getBookFromCache(optimisticBook.uri).catch(() => null);
           if (!current) return;
           const merged = Array.from(new Set([...(current.knownIsbns || []), ...harvest.knownIsbns]));
-          await databaseService.saveBookToCache({ ...current, knownIsbns: merged });
+          const nextCoverUrl = current.coverUrl || harvest.fallbackCoverUrl;
+          await databaseService.saveBookToCache({
+            ...current,
+            knownIsbns: merged,
+            ...(nextCoverUrl ? { coverUrl: nextCoverUrl } : {})
+          });
         })
         .catch(() => {});
     }

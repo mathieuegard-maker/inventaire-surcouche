@@ -14,7 +14,11 @@ import { externalMetadataService } from './external-metadata.service';
 import { wishlistService } from './wishlist.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { imageUtil } from '../utils/image.util';
-import { findBestMatchingSeries, findMatchingOwnedWork } from '../utils/series-matcher.util';
+import {
+  findBestMatchingSeries,
+  findMatchingOwnedWork,
+  stripEditorialCollectionSuffixes
+} from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 
@@ -710,6 +714,7 @@ export const photoBookResolutionService = {
 
     for (const item of detectedItems) {
       if (item.status !== 'resolved') continue;
+      let skipBnfExpand = false;
       if (localBooks.length > 0 && (item.series?.trim() || item.title?.trim())) {
         const matched = findBestMatchingSeries({
           candidateSeries: item.series,
@@ -720,24 +725,27 @@ export const photoBookResolutionService = {
         });
         if (matched) {
           item.series = matched.series;
-          const seriesKey = normalizeTextKey(matched.series);
-          if (seriesKey && matched.volumeCount >= 2 && !seriesMap.has(seriesKey)) {
-            seriesMap.set(seriesKey, {
-              seriesName: matched.series,
-              author: item.authors[0],
-              skipBnfExpand: true
-            });
+          if (matched.volumeCount >= 2) {
+            skipBnfExpand = true;
           }
         }
       }
 
       if (!item.series?.trim()) continue;
-      const seriesKey = normalizeTextKey(item.series);
+      const { cleanDisplay, coreKey } = stripEditorialCollectionSuffixes(item.series);
+      const seriesKey = coreKey || normalizeTextKey(item.series);
       if (!seriesKey) continue;
 
       if (!seriesMap.has(seriesKey)) {
-        seriesMap.set(seriesKey, { seriesName: item.series.trim(), author: item.authors[0] });
+        seriesMap.set(seriesKey, {
+          seriesName: cleanDisplay || item.series.trim(),
+          author: item.authors[0],
+          ...(skipBnfExpand ? { skipBnfExpand: true } : {})
+        });
       }
+      // Aligner tous les tomes de la même photo sur le même nom de série canonique
+      item.series = seriesMap.get(seriesKey)!.seriesName;
+
       const volSet = knownVolKeysBySeries.get(seriesKey) || new Set<string>();
       const normNum = normalizeSeriesNumber(item.seriesNumber);
       if (normNum) volSet.add(`num:${normNum}`);

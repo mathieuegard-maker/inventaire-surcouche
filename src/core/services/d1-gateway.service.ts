@@ -20,6 +20,7 @@ import {
 } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { stripEditorialCollectionSuffixes } from '../utils/series-matcher.util';
 import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
@@ -1150,11 +1151,35 @@ export async function upsertCatalogEntity(
   }
 
   let mergedClaims = { ...params.claims };
+  let effectiveLabel = params.label;
+  let effectiveNormalizedLabel = normalizedLabel;
   if (!uri && (params.entityType === 'serie' || params.entityType === 'human' || params.entityType === 'genre' || params.entityType === 'publisher' || params.entityType === 'collection') && normalizedLabel) {
-    const existing = await db
-      .prepare('SELECT uri, entity_json FROM catalog_entities WHERE entity_type = ? AND normalized_label = ? LIMIT 1')
+    let existing = await db
+      .prepare('SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = ? AND normalized_label = ? LIMIT 1')
       .bind(params.entityType, normalizedLabel)
-      .first<{ uri: string; entity_json: string | null }>();
+      .first<{ uri: string; label?: string; entity_json: string | null }>();
+
+    // Déduplication canonique de série côté serveur (ex: "Boule & Bill" == "Boule et Bill", "Astérix, la grande collection" == "Astérix")
+    if (!existing?.uri && params.entityType === 'serie') {
+      const { coreKey: candCoreKey, cleanDisplay } = stripEditorialCollectionSuffixes(params.label);
+      if (candCoreKey) {
+        const allSeries = await db
+          .prepare("SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'serie'")
+          .all<{ uri: string; label: string; entity_json: string | null }>();
+        const coreMatch = (allSeries.results || []).find(
+          (row) => stripEditorialCollectionSuffixes(row.label).coreKey === candCoreKey
+        );
+        if (coreMatch) {
+          existing = coreMatch;
+          effectiveLabel = coreMatch.label;
+          effectiveNormalizedLabel = normalizeTextKey(coreMatch.label);
+        } else if (cleanDisplay && cleanDisplay !== params.label) {
+          effectiveLabel = cleanDisplay;
+          effectiveNormalizedLabel = normalizeTextKey(cleanDisplay);
+        }
+      }
+    }
+
     if (existing?.uri) {
       uri = existing.uri;
       if (params.entityType === 'serie' && existing.entity_json) {
@@ -1189,8 +1214,8 @@ export async function upsertCatalogEntity(
   const entityObj: Record<string, unknown> = {
     uri,
     type: params.entityType,
-    label: params.label,
-    labels: { fr: params.label, en: params.label },
+    label: effectiveLabel,
+    labels: { fr: effectiveLabel, en: effectiveLabel },
     descriptions: params.descriptions || {},
     claims: mergedClaims,
     image: params.imageUrl ? { url: params.imageUrl, value: params.imageUrl } : undefined,
@@ -1225,8 +1250,8 @@ export async function upsertCatalogEntity(
     .bind(
       uri,
       params.entityType,
-      params.label,
-      normalizedLabel,
+      effectiveLabel,
+      effectiveNormalizedLabel,
       params.isbn13 || null,
       params.workUri || null,
       params.seriesUri || null,
