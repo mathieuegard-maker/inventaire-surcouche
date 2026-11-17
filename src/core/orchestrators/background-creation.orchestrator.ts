@@ -9,7 +9,8 @@ import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolve
 import { getLevenshteinDistance } from '../utils/string.util';
 import { isbnUtil } from '../utils/isbn.util';
 import { imageUtil } from '../utils/image.util';
-import { findBestMatchingSeries } from '../utils/series-matcher.util';
+import { findBestMatchingSeries, findMatchingOwnedWork } from '../utils/series-matcher.util';
+import { workEditionHarvesterService } from '../services/work-edition-harvester.service';
 import { connectionState, fetchWithTimeout } from '../../state/connection';
 import type { ExternalBookMetadata, HumanizedBook } from '../types';
 
@@ -90,11 +91,46 @@ export const backgroundCreationOrchestrator = {
     let effectiveSeriesUri = resolvedSeriesUri;
     let effectiveSeriesTitle = tempBook.series;
     let effectiveExpandSeries = expandSeries;
+    const localBooks =
+      typeof databaseService.getAllBooksFromCache === 'function'
+        ? await databaseService.getAllBooksFromCache().catch(() => [])
+        : [];
+
+    // 1A. Si cette œuvre est déjà possédée sous une autre édition, fusionner simplement son ISBN dans knownIsbns
+    if (ownershipTarget === 'owned' && localBooks.length > 0) {
+      const existingOwned = findMatchingOwnedWork({
+        candidateIsbns: [tempBook.isbn13, tempBook.isbn10, ...(tempBook.knownIsbns || [])].filter(
+          (x): x is string => Boolean(x)
+        ),
+        candidateWorkUri: tempBook.workUri,
+        candidateTitle: tempBook.title,
+        candidateAuthors: tempBook.authors,
+        candidateSeries: tempBook.series,
+        candidateSeriesNumber: tempBook.seriesNumber,
+        existingBooks: localBooks,
+        targetStatuses: ['owned']
+      });
+      if (existingOwned) {
+        const existingFull = localBooks.find((b) => b.uri === existingOwned.book.uri);
+        if (existingFull) {
+          const mergedIsbns = new Set<string>([
+            ...(existingFull.knownIsbns || []),
+            ...(existingFull.isbn13 ? [existingFull.isbn13] : []),
+            ...(tempBook.isbn13 ? [tempBook.isbn13] : []),
+            ...(tempBook.isbn10 ? [tempBook.isbn10] : []),
+            ...(tempBook.knownIsbns || [])
+          ]);
+          const updatedExisting = {
+            ...existingFull,
+            knownIsbns: Array.from(mergedIsbns)
+          };
+          await databaseService.saveBookToCache(updatedExisting);
+          return updatedExisting;
+        }
+      }
+    }
+
     if (!effectiveSeriesUri && (tempBook.series?.trim() || tempBook.title?.trim())) {
-      const localBooks =
-        typeof databaseService.getAllBooksFromCache === 'function'
-          ? await databaseService.getAllBooksFromCache().catch(() => [])
-          : [];
       const matched = findBestMatchingSeries({
         candidateSeries: tempBook.series,
         candidateTitle: tempBook.title,
@@ -138,6 +174,24 @@ export const backgroundCreationOrchestrator = {
     // Mise en cache image en non-bloquant
     if (optimisticBook.coverUrl || optimisticBook.isbn13 || optimisticBook.isbn10) {
       bookCacheService.saveAndProcessImage(optimisticBook, ownershipTarget).catch(() => {});
+    }
+
+    // Moissonnage multi-ISBN en arrière-plan (BnF + OpenLibrary) pour enrichir knownIsbns de l'Œuvre
+    if (optimisticBook.title) {
+      workEditionHarvesterService
+        .harvestKnownIsbnsForWork({
+          title: optimisticBook.title,
+          authors: optimisticBook.authors,
+          seedIsbns: [optimisticBook.isbn13, optimisticBook.isbn10, ...(optimisticBook.knownIsbns || [])]
+        })
+        .then(async (harvest) => {
+          if (harvest.knownIsbns.length === 0) return;
+          const current = await databaseService.getBookFromCache(optimisticBook.uri).catch(() => null);
+          if (!current) return;
+          const merged = Array.from(new Set([...(current.knownIsbns || []), ...harvest.knownIsbns]));
+          await databaseService.saveBookToCache({ ...current, knownIsbns: merged });
+        })
+        .catch(() => {});
     }
 
     // 3. Ajout dans la file persistante de création distante

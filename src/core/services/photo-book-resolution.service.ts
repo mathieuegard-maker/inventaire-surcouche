@@ -14,7 +14,7 @@ import { externalMetadataService } from './external-metadata.service';
 import { wishlistService } from './wishlist.service';
 import { isbnUtil } from '../utils/isbn.util';
 import { imageUtil } from '../utils/image.util';
-import { findBestMatchingSeries } from '../utils/series-matcher.util';
+import { findBestMatchingSeries, findMatchingOwnedWork } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 
@@ -92,7 +92,10 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
-async function checkOwnershipByIsbn(isbn13: string): Promise<{
+async function checkOwnershipByIsbn(
+  isbn13: string,
+  hints?: { title?: string; authors?: string[]; series?: string; seriesNumber?: string }
+): Promise<{
   alreadyOwned: boolean;
   alreadyWished: boolean;
   existingUri?: string;
@@ -100,7 +103,22 @@ async function checkOwnershipByIsbn(isbn13: string): Promise<{
   cachedCover?: string;
 }> {
   try {
-    const localBook = await databaseService.getBookByIsbn(isbn13);
+    let localBook = await databaseService.getBookByIsbn(isbn13);
+    if (!localBook && typeof databaseService.getAllBooksFromCache === 'function') {
+      const allBooks = await databaseService.getAllBooksFromCache().catch(() => []);
+      const matched = findMatchingOwnedWork({
+        candidateIsbns: [isbn13],
+        candidateTitle: hints?.title,
+        candidateAuthors: hints?.authors,
+        candidateSeries: hints?.series,
+        candidateSeriesNumber: hints?.seriesNumber,
+        existingBooks: allBooks,
+        targetStatuses: ['owned', 'wish']
+      });
+      if (matched) {
+        localBook = allBooks.find((b) => b.uri === matched.book.uri);
+      }
+    }
     if (!localBook) {
       return { alreadyOwned: false, alreadyWished: false };
     }
@@ -437,11 +455,25 @@ export const photoBookResolutionService = {
 
       // 2. Flux classique complet par ISBN : BnF -> Open Library -> Google Books + vérification D1 / cache local
       onExternalLookup?.(1);
-      const [externalMeta, ownership, d1Entity] = await Promise.all([
+      const [externalMeta, initialOwnership, d1Entity] = await Promise.all([
         externalMetadataService.fetchFromExternalSources(isbn13),
-        checkOwnershipByIsbn(isbn13),
+        checkOwnershipByIsbn(isbn13, {
+          title: hintMatchMeta?.title || cand.title,
+          authors: hintMatchMeta?.authors?.length ? hintMatchMeta.authors : cand.author ? [cand.author] : undefined,
+          series: hintMatchMeta?.series || cand.series,
+          seriesNumber: hintMatchMeta?.seriesNumber || cand.volumeNumber
+        }),
         entityResolver.resolvePhysicalEntity(`isbn:${isbn13}`).catch(() => null)
       ]);
+      const ownership =
+        !initialOwnership.alreadyOwned && !initialOwnership.alreadyWished && externalMeta
+          ? await checkOwnershipByIsbn(isbn13, {
+              title: externalMeta.title,
+              authors: externalMeta.authors,
+              series: externalMeta.series,
+              seriesNumber: externalMeta.seriesNumber
+            })
+          : initialOwnership;
 
       // Si doute : enrichir brièvement les alternatives 2..3 (couverture/série/auteur BnF + repli CDN) si nécessaire
       if (isDoubt && alternatives.length > 0) {
@@ -748,7 +780,12 @@ export const photoBookResolutionService = {
       );
 
       const enrichedExtras = await runWithConcurrency(candidateExtras, 3, async (vol, idx) => {
-        const ownership = await checkOwnershipByIsbn(vol.isbn);
+        const ownership = await checkOwnershipByIsbn(vol.isbn, {
+          title: vol.title,
+          authors: vol.authors,
+          series: vol.series || seriesName,
+          seriesNumber: vol.seriesNumber
+        });
         let finalMeta: ExternalBookMetadata = vol;
         let d1ExtraCover: string | undefined;
 

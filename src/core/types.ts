@@ -11,6 +11,7 @@ export interface BaseBook {
   workUri?: string;
   isbn13?: string;
   isbn10?: string;
+  knownIsbns?: string[];
   type: 'edition' | 'work' | 'unknown';
   title: string;
   subtitle?: string;

@@ -8,6 +8,8 @@ import { ref } from 'vue';
 import type { Router } from 'vue-router';
 import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
 import { externalMetadataService } from '../core/services/external-metadata.service';
+import { databaseService } from '../core/database/database.service';
+import { findMatchingOwnedWork } from '../core/utils/series-matcher.util';
 import { imageUtil } from '../core/utils/image.util';
 import { saveBookNavigationOrder } from './bookNavigation';
 import { connectionState } from './connection';
@@ -190,15 +192,33 @@ export const scannerState = {
 
     externalMetadataService
       .fetchFromExternalSources(scannedIsbn)
-      .then((meta) => {
+      .then(async (meta) => {
         const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
         if (idx === -1) return;
         const coverFallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn, [
           meta?.coverUrl,
           ...(meta?.coverFallbackUrls || [])
         ]);
+        const localBooks =
+          typeof databaseService.getAllBooksFromCache === 'function'
+            ? await databaseService.getAllBooksFromCache().catch(() => [])
+            : [];
+        const ownedMatch = findMatchingOwnedWork({
+          candidateIsbns: [scannedIsbn],
+          candidateTitle: meta?.title,
+          candidateAuthors: meta?.authors,
+          candidateSeries: meta?.series,
+          candidateSeriesNumber: meta?.seriesNumber,
+          existingBooks: localBooks,
+          targetStatuses: ['owned', 'wish']
+        });
+        if (ownedMatch?.book.ownershipStatus === 'owned') {
+          playScanBeep('duplicate');
+        }
         burstBooks.value[idx] = {
           ...burstBooks.value[idx],
+          uri: ownedMatch?.book.uri || burstBooks.value[idx].uri,
+          workUri: ownedMatch?.book.workUri,
           title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
           authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
           publisher: meta?.publisher || '',
@@ -206,11 +226,13 @@ export const scannerState = {
           pageCount: meta?.pageCount,
           coverUrl: meta?.coverUrl || coverFallbackUrls[0],
           ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
-          series: meta?.series,
+          series: ownedMatch?.book.series || meta?.series,
+          seriesId: ownedMatch?.book.seriesId,
           seriesNumber: meta?.seriesNumber,
-          genres: meta?.genres || []
+          genres: meta?.genres || [],
+          ownershipStatus: ownedMatch?.book.ownershipStatus || 'none'
         };
-        if (latestBurstBook.value?.uri === placeholderUri) {
+        if (latestBurstBook.value?.uri === placeholderUri || latestBurstBook.value?.uri === burstBooks.value[idx].uri) {
           latestBurstBook.value = burstBooks.value[idx];
         }
       })
