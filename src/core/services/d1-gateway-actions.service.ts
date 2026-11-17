@@ -1021,7 +1021,7 @@ export async function handleD1GatewayAction(
 
       const rows = await db
         .prepare(
-          `SELECT uri, entity_type, label, image_url, main_category, series_uri, series_number, publisher, publication_date, updated_at
+          `SELECT uri, entity_type, label, image_url, main_category, series_uri, series_number, entity_json, updated_at
            FROM catalog_entities
            ${whereSql}
            ORDER BY updated_at DESC
@@ -1036,13 +1036,43 @@ export async function handleD1GatewayAction(
           main_category: string | null;
           series_uri: string | null;
           series_number: string | null;
-          publisher: string | null;
-          publication_date: string | null;
+          entity_json: string | null;
           updated_at: string;
         }>();
 
+      const items = (rows.results || []).map((row) => {
+        let publisher: string | null = null;
+        let publication_date: string | null = null;
+        if (row.entity_json) {
+          try {
+            const parsed = JSON.parse(row.entity_json) as {
+              claims?: Record<string, unknown[]>;
+              publisher?: string;
+              publishDate?: string;
+            };
+            publisher = parsed.publisher || null;
+            const rawDate = parsed.publishDate || parsed.claims?.['wdt:P577']?.[0];
+            if (typeof rawDate === 'string') publication_date = rawDate;
+          } catch {
+            // Ignorer un JSON malformé
+          }
+        }
+        return {
+          uri: row.uri,
+          entity_type: row.entity_type,
+          label: row.label,
+          image_url: row.image_url,
+          main_category: row.main_category,
+          series_uri: row.series_uri,
+          series_number: row.series_number,
+          publisher,
+          publication_date,
+          updated_at: row.updated_at
+        };
+      });
+
       return jsonResp({
-        items: rows.results || [],
+        items,
         total: countRow?.total || 0,
         page,
         pageSize
