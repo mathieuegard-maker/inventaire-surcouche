@@ -547,6 +547,7 @@ async function enqueueResolvedItem(rawItem: ResolvedPhotoItem, target: 'owned' |
       workUri: item.existingWorkUri,
       type: 'edition',
       isbn13: item.isbn13,
+      knownIsbns: item.knownIsbns,
       title: item.title,
       authors: item.authors.length ? item.authors : ['Auteur inconnu'],
       illustrators: [],

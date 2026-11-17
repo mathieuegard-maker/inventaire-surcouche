@@ -4,6 +4,7 @@ import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
+import { findMatchingOwnedWork } from '../utils/series-matcher.util';
 import { seriesOrchestrator } from './series.orchestrator';
 import { syncOrchestrator } from './sync.orchestrator';
 import { connectionState } from '../../state/connection';
@@ -81,6 +82,26 @@ export const searchService = {
       if (other) {
         isWorkOwned = true;
         duplicateEdition = other;
+      }
+    }
+
+    if (!isWorkOwned && typeof databaseService.getAllBooksFromCache === 'function') {
+      const allCached = await databaseService.getAllBooksFromCache().catch(() => []);
+      const workMatch = findMatchingOwnedWork({
+        candidateIsbns: [isbn, book.isbn13, book.isbn10, ...(book.knownIsbns || [])].filter(
+          (x): x is string => Boolean(x)
+        ),
+        candidateWorkUri: book.workUri,
+        candidateTitle: book.title,
+        candidateAuthors: book.authors,
+        candidateSeries: book.series,
+        candidateSeriesNumber: book.seriesNumber,
+        existingBooks: allCached,
+        targetStatuses: ['owned']
+      });
+      if (workMatch) {
+        isWorkOwned = true;
+        duplicateEdition = allCached.find((b) => b.uri === workMatch.book.uri);
       }
     }
 

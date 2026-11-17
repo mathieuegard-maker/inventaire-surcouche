@@ -1193,6 +1193,11 @@ export async function upsertCatalogEntity(
                 new Set([...(prevClaims['wdt:P268'] || []), ...(params.claims['wdt:P268'] || [])])
               );
             }
+            if (Array.isArray(prevClaims['invp:knownIsbns']) || Array.isArray(params.claims['invp:knownIsbns'])) {
+              mergedClaims['invp:knownIsbns'] = Array.from(
+                new Set([...(prevClaims['invp:knownIsbns'] || []), ...(params.claims['invp:knownIsbns'] || [])])
+              );
+            }
           }
         } catch {
           // ignore

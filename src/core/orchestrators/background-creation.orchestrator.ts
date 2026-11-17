@@ -195,6 +195,11 @@ export const backgroundCreationOrchestrator = {
             knownIsbns: merged,
             ...(nextCoverUrl ? { coverUrl: nextCoverUrl } : {})
           });
+          if (current.workUri && current.workUri.startsWith('inv:') && merged.length > 0) {
+            inventaireSyncService
+              .updateClaim(current.workUri, 'invp:knownIsbns', undefined, merged)
+              .catch(() => {});
+          }
         })
         .catch(() => {});
     }
@@ -336,6 +341,13 @@ export const backgroundCreationOrchestrator = {
 
     // 2. Remplacement atomique isbn:... -> inv:... en base locale
     const savedBook = await databaseService.replaceBookUri(tempBook.uri, finalBook);
+
+    // 2B. Synchroniser knownIsbns sur l'entité Work distante dans D1
+    if (syncResult.workUri?.startsWith('inv:') && savedBook.knownIsbns?.length) {
+      inventaireSyncService
+        .updateClaim(syncResult.workUri, 'invp:knownIsbns', undefined, savedBook.knownIsbns)
+        .catch(() => {});
+    }
 
     // 3. Rattachement au registre distant (Inventaire ou Wishlist)
     if (ownershipTarget === 'owned') {

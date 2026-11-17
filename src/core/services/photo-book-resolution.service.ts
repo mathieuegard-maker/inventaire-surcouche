@@ -46,6 +46,7 @@ export interface ResolvedPhotoItem {
   alreadyOwned: boolean;
   alreadyWished: boolean;
   isbn13?: string;
+  knownIsbns?: string[];
   title: string;
   authors: string[];
   publisher?: string;
@@ -186,11 +187,15 @@ function buildHintQuery(cand: RecognizedBookCandidate): BnfHintQuery {
 }
 
 function computeWorkKey(meta: { series?: string; seriesNumber?: string; title?: string }): string {
-  const normSeries = meta.series ? normalizeTextKey(meta.series) : '';
+  const seriesCore = meta.series ? stripEditorialCollectionSuffixes(meta.series).coreKey : '';
   const normNum = meta.seriesNumber ? normalizeSeriesNumber(meta.seriesNumber) : '';
   const normTitle = meta.title ? normalizeTextKey(meta.title) : '';
 
-  if (normSeries && normNum) return `series:${normSeries}#${normNum}`;
+  if (seriesCore && normNum) return `series:${seriesCore}#${normNum}`;
+  if (!seriesCore && normNum && normTitle) {
+    const titleCore = stripEditorialCollectionSuffixes(meta.title || '').coreKey;
+    if (titleCore) return `series:${titleCore}#${normNum}`;
+  }
   if (normTitle && normNum) return `title:${normTitle}#${normNum}`;
   if (normTitle) return `title:${normTitle}`;
   return '';
@@ -239,6 +244,7 @@ async function discoverConsensusByHints(
   onExternalLookup?: (delta: number) => void
 ): Promise<{
   isbn13?: string;
+  knownIsbns?: string[];
   meta?: ExternalBookMetadata;
   sourcesCount: number;
   isDoubt: boolean;
@@ -363,8 +369,19 @@ async function discoverConsensusByHints(
 
   const isDoubt = isBorderlineScore || hasCompetingWork || isLowConfidenceSingle;
 
+  const topWorkIsbns = top.bucket.workKey
+    ? Array.from(
+        new Set(
+          ranked
+            .filter((r) => r.bucket.workKey === top.bucket.workKey)
+            .map((r) => r.bucket.isbn13)
+        )
+      )
+    : [top.bucket.isbn13];
+
   return {
     isbn13: top.bucket.isbn13,
+    knownIsbns: topWorkIsbns,
     meta: top.bucket.bestMeta,
     sourcesCount: top.effectiveSources,
     isDoubt,
@@ -421,6 +438,7 @@ export const photoBookResolutionService = {
     try {
       // 1. Retrouver un ISBN-13 officiel par consensus multi-sources à partir des indices visuels (si absent)
       let isbn13 = normalizeToIsbn13(cand.isbn);
+      let knownIsbns: string[] | undefined = isbn13 ? [isbn13] : undefined;
       let hintMatchMeta: ExternalBookMetadata | undefined;
       let sourcesCount = isbn13 ? 1 : 0;
       let isDoubt = false;
@@ -433,6 +451,7 @@ export const photoBookResolutionService = {
           onExternalLookup
         );
         isbn13 = consensus.isbn13;
+        knownIsbns = consensus.knownIsbns;
         hintMatchMeta = consensus.meta;
         sourcesCount = consensus.sourcesCount;
         isDoubt = consensus.isDoubt;
@@ -593,6 +612,7 @@ export const photoBookResolutionService = {
         alreadyOwned: ownership.alreadyOwned,
         alreadyWished: ownership.alreadyWished,
         isbn13,
+        knownIsbns,
         title: mergedTitle,
         authors: mergedAuthors,
         publisher: externalMeta?.publisher || d1Entity?.publisher || hintMatchMeta?.publisher || cand.publisher,
