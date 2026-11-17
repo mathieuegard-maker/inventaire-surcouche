@@ -556,6 +556,7 @@ async function enqueueResolvedItem(rawItem: ResolvedPhotoItem, target: 'owned' |
       publishDate: item.publishDate,
       pageCount: item.pageCount,
       coverUrl: item.coverUrl,
+      coverFallbackUrls: item.coverFallbackUrls,
       series: item.series,
       seriesNumber: item.seriesNumber,
       genres: [],

@@ -186,9 +186,21 @@ function buildHintQuery(cand: RecognizedBookCandidate): BnfHintQuery {
   };
 }
 
-function computeWorkKey(meta: { series?: string; seriesNumber?: string; title?: string }): string {
+function extractVolumeFromTitle(title?: string): string {
+  if (!title) return '';
+  const m = title.match(/(?:n°|no|tome|t\.?)\s*(\d+)/i) || title.match(/\s(\d{1,3})$/);
+  return m ? normalizeSeriesNumber(m[1]) : '';
+}
+
+function computeWorkKey(
+  meta: { series?: string; seriesNumber?: string; title?: string },
+  fallbackVolumeNumber?: string
+): string {
   const seriesCore = meta.series ? stripEditorialCollectionSuffixes(meta.series).coreKey : '';
-  const normNum = meta.seriesNumber ? normalizeSeriesNumber(meta.seriesNumber) : '';
+  const normNum =
+    (meta.seriesNumber ? normalizeSeriesNumber(meta.seriesNumber) : '') ||
+    extractVolumeFromTitle(meta.title) ||
+    (fallbackVolumeNumber ? normalizeSeriesNumber(fallbackVolumeNumber) : '');
   const normTitle = meta.title ? normalizeTextKey(meta.title) : '';
 
   if (seriesCore && normNum) return `series:${seriesCore}#${normNum}`;
@@ -269,7 +281,7 @@ async function discoverConsensusByHints(
     if (!normIsbn) return;
 
     const score = typeof precomputedScore === 'number' ? precomputedScore : scoreHintMatch(meta, hints);
-    const workKey = computeWorkKey(meta);
+    const workKey = computeWorkKey(meta, hints.volumeNumber);
 
     if (workKey) {
       const wkSet = workKeySources.get(workKey) || new Set<DiscoverySource>();
@@ -861,7 +873,7 @@ export const photoBookResolutionService = {
             isbn: vol.isbn
           },
           status: 'resolved' as const,
-          selected: !ownership.alreadyOwned,
+          selected: false,
           alreadyOwned: ownership.alreadyOwned,
           alreadyWished: ownership.alreadyWished,
           isbn13: vol.isbn,
@@ -872,7 +884,7 @@ export const photoBookResolutionService = {
           pageCount: finalMeta.pageCount,
           coverUrl,
           coverFallbackUrls,
-          series: finalMeta.series || seriesName,
+          series: seriesName,
           seriesNumber: finalMeta.seriesNumber,
           existingUri: ownership.existingUri,
           existingWorkUri: ownership.existingWorkUri

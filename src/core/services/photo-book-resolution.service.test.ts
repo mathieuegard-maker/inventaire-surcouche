@@ -132,7 +132,7 @@ describe('photoBookResolutionService', () => {
       isbn13: '9782800120928',
       seriesNumber: '1',
       coverUrl: 'https://covers.openlibrary.org/9782800120928.jpg',
-      selected: true
+      selected: false
     });
   });
 

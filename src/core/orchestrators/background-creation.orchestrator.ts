@@ -190,11 +190,20 @@ export const backgroundCreationOrchestrator = {
           if (!current) return;
           const merged = Array.from(new Set([...(current.knownIsbns || []), ...harvest.knownIsbns]));
           const nextCoverUrl = current.coverUrl || harvest.fallbackCoverUrl;
-          await databaseService.saveBookToCache({
+          const updatedBook = {
             ...current,
             knownIsbns: merged,
             ...(nextCoverUrl ? { coverUrl: nextCoverUrl } : {})
-          });
+          };
+          await databaseService.saveBookToCache(updatedBook);
+          if (!current.localCover && nextCoverUrl) {
+            bookCacheService
+              .saveAndProcessImage(
+                updatedBook,
+                current.ownershipStatus === 'wish' ? 'wish' : 'owned'
+              )
+              .catch(() => {});
+          }
           if (current.workUri && current.workUri.startsWith('inv:') && merged.length > 0) {
             inventaireSyncService
               .updateClaim(current.workUri, 'invp:knownIsbns', undefined, merged)
