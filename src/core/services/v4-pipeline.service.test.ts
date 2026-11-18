@@ -4,6 +4,7 @@ import {
   checkBookIndexLayer2,
   consolidateBookLayer4,
   detectIntegralAndIncludedVolumes,
+  discoverMultiSourceLayer3,
   electCanonicalSeriesFromVotes,
   normalizeIsbnWithPressFallback,
   searchLocalBooksForCanal3,
@@ -385,5 +386,94 @@ describe('v4-pipeline.service', () => {
     expect(l2IntegralForLib2.includedOwnedWorkIds).toContain(t2Book.id);
 
     vi.unstubAllGlobals();
+  });
+
+  it('priorise 460$t/$v sur Folio 295/410 (#6561) et empêche C3-bis d absorber le Tome 2 dans Tome 1', async () => {
+    const { db } = createInMemoryV4Db();
+
+    const culotteesT1Xml = `<?xml version="1.0" encoding="UTF-8"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+<srw:record><mxc:record>
+  <mxc:datafield tag="020"><mxc:subfield code="a">978-2-07-279410-0</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="100"><mxc:subfield code="a">Bagieu</mxc:subfield><mxc:subfield code="m">Pénélope</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="245"><mxc:subfield code="a">Culottées</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="295"><mxc:subfield code="a">Folio</mxc:subfield><mxc:subfield code="v">6561</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="410"><mxc:subfield code="t">Collection Folio</mxc:subfield><mxc:subfield code="v">6561</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="460"><mxc:subfield code="3">45646405</mxc:subfield><mxc:subfield code="t">Culottées</mxc:subfield><mxc:subfield code="v">1</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="280"><mxc:subfield code="a">1 vol. (75 p.)</mxc:subfield></mxc:datafield>
+</mxc:record></srw:record>
+</srw:searchRetrieveResponse>`;
+
+    const culotteesSistersXml = `<?xml version="1.0" encoding="UTF-8"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+<srw:record><mxc:record>
+  <mxc:datafield tag="020"><mxc:subfield code="a">9782072794100</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="245"><mxc:subfield code="a">Culottées</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="460"><mxc:subfield code="3">45646405</mxc:subfield><mxc:subfield code="t">Culottées</mxc:subfield><mxc:subfield code="v">1</mxc:subfield></mxc:datafield>
+</mxc:record></srw:record>
+<srw:record><mxc:record>
+  <mxc:datafield tag="020"><mxc:subfield code="a">9782075212007</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="245"><mxc:subfield code="a">Culottées</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="460"><mxc:subfield code="3">45646405</mxc:subfield><mxc:subfield code="t">Culottées</mxc:subfield><mxc:subfield code="v">2</mxc:subfield></mxc:datafield>
+</mxc:record></srw:record>
+</srw:searchRetrieveResponse>`;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('catalogue.bnf.fr') && url.includes('9782072794100')) {
+          return new Response(culotteesT1Xml, { status: 200 });
+        }
+        if (url.includes('catalogue.bnf.fr') && url.includes('Culott')) {
+          return new Response(culotteesSistersXml, { status: 200 });
+        }
+        return new Response('', { status: 404 });
+      })
+    );
+
+    const staging = await discoverMultiSourceLayer3('9782072794100');
+    expect(staging).not.toBeNull();
+    // Tome 2 (9782075212007) ne doit PAS être aspiré dans les sœurs du Tome 1 !
+    expect(staging!.sisterEditions.some((s) => s.isbn13 === '9782075212007')).toBe(false);
+    // Folio ne doit jamais voter comme série
+    expect(staging!.seriesCandidates.some((c) => /folio/i.test(c.rawName))).toBe(false);
+
+    const bookT1 = await consolidateBookLayer4(db, staging!, {
+      sourceChannel: 'canal_4_ai_photo',
+      libraryId: 'lib_1',
+      action: 'owned'
+    });
+    expect(bookT1.seriesName).toBe('Culottées');
+    expect(bookT1.volumeNumber).toBe(1);
+    expect(bookT1.knownIsbns).not.toContain('9782075212007');
+
+    // Tome 2 doit rester un FULL_MISS indépendant prêt à être ingéré séparément
+    const l2T2 = await checkBookIndexLayer2(db, '9782075212007', 'lib_1');
+    expect(l2T2.status).toBe('FULL_MISS');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('unifie Collection les Schtroumpfs et Les Schtroumpfs: série classique dans le même cluster série', () => {
+    const elected = electCanonicalSeriesFromVotes([
+      {
+        source: 'bnf_anchor',
+        rawName: 'Collection les Schtroumpfs',
+        coreKey: 'schtroumpfs',
+        cleanDisplay: 'Les Schtroumpfs',
+        weight: 3
+      },
+      {
+        source: 'inventaire_p179',
+        rawName: 'Les Schtroumpfs: série classique',
+        coreKey: 'schtroumpfs',
+        cleanDisplay: 'Les Schtroumpfs',
+        weight: 3
+      }
+    ]);
+    expect(elected?.coreKey).toBe('schtroumpfs');
+    expect(elected?.canonicalName).toBe('Les Schtroumpfs');
+    expect(elected?.confidenceRatio).toBe(1);
   });
 });

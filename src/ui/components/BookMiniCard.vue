@@ -111,6 +111,10 @@ const handleZoneClick = () => {
           {{ badge.label }}
         </span>
       </div>
+
+      <div v-if="$slots.extra" class="row-extra-slot" @click.stop>
+        <slot name="extra" />
+      </div>
     </div>
 
     <div class="row-status-text-column">

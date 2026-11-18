@@ -19,10 +19,11 @@ import type { HumanizedBook } from '../core/types';
 
 export type ScannerMode = 'simple' | 'burst' | 'photo';
 
-const isScanningActive = ref(false);
+const isCameraModalOpen = ref(false);
+const isScanningActive = isCameraModalOpen;
 const isSearching = ref(false);
 const errorMessage = ref<string | null>(null);
-const activeMode = ref<ScannerMode>('simple');
+const activeMode = ref<ScannerMode>('photo');
 const burstBooks = ref<HumanizedBook[]>([]);
 const latestBurstBook = ref<HumanizedBook | null>(null);
 const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate' } | null>(null);
@@ -39,6 +40,7 @@ function triggerBurstFeedback(status: 'success' | 'duplicate') {
 }
 
 export const scannerState = {
+  isCameraModalOpen,
   isScanningActive,
   isSearching,
   errorMessage,
@@ -52,19 +54,37 @@ export const scannerState = {
     lastUpdatedTick.value = Date.now();
   },
 
-  async startScan(router: Router, mode: ScannerMode = 'simple') {
+  /**
+   * Navigue vers la page dédiée `/scan` dans le mode demandé,
+   * et n'ouvre la modale caméra que lorsque la lecture caméra code-barres est lancée explicitement.
+   */
+  async startScan(router: Router, mode: ScannerMode = 'photo', options?: { openCamera?: boolean }) {
     activeRouter = router;
     activeMode.value = mode;
     errorMessage.value = null;
-    isScanningActive.value = true;
 
-    if (activeMode.value === 'photo') {
+    const currentRoute = router.currentRoute.value;
+    if (currentRoute.name !== 'ScanView' || currentRoute.query.mode !== mode) {
+      await router.push({ name: 'ScanView', query: { mode } });
+    }
+
+    if (mode === 'photo' || !options?.openCamera) {
       isSearching.value = false;
-      await barcodeIsbnProvider.stopScanner();
+      isCameraModalOpen.value = false;
+      await barcodeIsbnProvider.stopScanner().catch(() => {});
       return;
     }
 
-    const isContinuous = activeMode.value === 'burst';
+    await this.openCameraModal(router, mode);
+  },
+
+  async openCameraModal(router: Router, mode: 'simple' | 'burst' = 'simple') {
+    activeRouter = router;
+    activeMode.value = mode;
+    errorMessage.value = null;
+    isCameraModalOpen.value = true;
+
+    const isContinuous = mode === 'burst';
 
     setTimeout(async () => {
       try {
@@ -76,7 +96,7 @@ export const scannerState = {
               return;
             }
 
-            // Mode 'simple' : dès que le livre est trouvé, on ferme la fenêtre de scan et on ouvre sa fiche complète
+            // Mode 'simple' : dès que le livre est trouvé, on ferme la caméra et on ouvre sa fiche complète
             isSearching.value = false;
             const cleanScanned = (response?.isbn || rawIsbn || '').trim();
             if (response?.isOfflineUnavailable || (!response && connectionState.isOffline.value)) {
@@ -119,7 +139,7 @@ export const scannerState = {
           { continuous: isContinuous }
         );
       } catch (err: any) {
-        isScanningActive.value = false;
+        isCameraModalOpen.value = false;
         isSearching.value = false;
         errorMessage.value = err.message || 'Erreur de démarrage du scanner.';
       }
@@ -278,23 +298,29 @@ export const scannerState = {
   async switchMode(newMode: ScannerMode) {
     activeMode.value = newMode;
     errorMessage.value = null;
-    if (isScanningActive.value && activeRouter) {
-      await this.startScan(activeRouter, newMode);
+    if (isCameraModalOpen.value) {
+      await this.stopScan();
+    }
+    if (activeRouter) {
+      await activeRouter.push({ name: 'ScanView', query: { mode: newMode } });
     }
   },
 
   async stopScan() {
-    await barcodeIsbnProvider.stopScanner();
-    isScanningActive.value = false;
+    await barcodeIsbnProvider.stopScanner().catch(() => {});
+    isCameraModalOpen.value = false;
     isSearching.value = false;
   },
 
   toggleScan(router: Router, mode?: ScannerMode) {
-    if (isScanningActive.value && (!mode || activeMode.value === mode)) {
-      this.stopScan();
+    if (router.currentRoute.value.name === 'ScanView' && (!mode || activeMode.value === mode)) {
+      if (isCameraModalOpen.value) {
+        this.stopScan();
+      } else {
+        router.back();
+      }
     } else {
-      // Par défaut, cliquer sur Scanner ouvre le Scan simple
-      this.startScan(router, mode || 'simple');
+      this.startScan(router, mode || activeMode.value || 'photo');
     }
   }
 };

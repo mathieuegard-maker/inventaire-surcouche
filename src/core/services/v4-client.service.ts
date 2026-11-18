@@ -140,51 +140,119 @@ export function checkLocalIntegralConflict(
   return { ownedIntegralMatches, includedOwnedWorkIds };
 }
 
+export async function pushClientPipelineLogs(params: {
+  traceId?: string;
+  sourceChannel: SourceChannel;
+  steps: Array<{
+    layer: 'C1' | 'C2' | 'C3';
+    stepName: string;
+    status: 'ok' | 'warn' | 'error';
+    summary: string;
+    payload?: unknown;
+    durationMs?: number;
+  }>;
+}): Promise<void> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function' || !params.steps.length) return;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    await fetchWithTimeout('/api/v2/logs/client', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 6000,
+      body: JSON.stringify({
+        traceId: params.traceId,
+        sourceChannel: params.sourceChannel,
+        userUri: savedUri,
+        steps: params.steps
+      })
+    }).catch(() => {});
+  } catch {
+    // Non-bloquant
+  }
+}
+
 export async function ingestIsbnsViaV4(params: {
   isbns: string[];
   sourceChannel: SourceChannel;
   action?: 'owned' | 'wishlist' | 'preview';
+  traceId?: string;
+  chunkSize?: number;
+  onProgress?: (processed: number, total: number) => void;
 }): Promise<IngestBatchResult | null> {
   if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
-  if (!params.isbns.length) return null;
+  const uniqueIsbns = Array.from(new Set(params.isbns.map((s) => String(s || '').trim()).filter(Boolean)));
+  if (!uniqueIsbns.length) return null;
+
+  // Micro-lots de 2 ISBNs maximum par appel HTTP pour rester sous la limite de 50 sous-requêtes Cloudflare
+  // et garantir que 100 % des livres passent par Couche 3 -> Couche 4 (0 bascule V2 legacy).
+  const step = Math.min(3, Math.max(1, Math.trunc(params.chunkSize || 2)));
+  const savedUri = sessionStore.getUserUri() || undefined;
+  const allResults: IngestSingleResult[] = [];
+  let effectiveTraceId = params.traceId || '';
+  let anyNetworkSuccess = false;
 
   try {
-    const savedUri = sessionStore.getUserUri() || undefined;
-    const res = await fetchWithTimeout('/api/v2/books/ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 18000,
-      body: JSON.stringify({
-        isbns: params.isbns,
-        source_channel: params.sourceChannel,
-        action: params.action || 'preview',
-        userUri: savedUri
-      })
-    });
+    for (let i = 0; i < uniqueIsbns.length; i += step) {
+      const slice = uniqueIsbns.slice(i, i + step);
+      const res = await fetchWithTimeout('/api/v2/books/ingest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 24000,
+        body: JSON.stringify({
+          isbns: slice,
+          source_channel: params.sourceChannel,
+          action: params.action || 'preview',
+          userUri: savedUri,
+          ...(effectiveTraceId ? { traceId: effectiveTraceId } : {})
+        })
+      });
 
-    if (!res?.ok) return null;
-    const data = (await res.json()) as IngestBatchResult;
-    if (!data || !Array.isArray(data.results)) return null;
+      if (!res?.ok) {
+        if (i === 0) return null;
+        continue;
+      }
+      const data = (await res.json()) as IngestBatchResult;
+      if (!data || !Array.isArray(data.results)) {
+        if (i === 0) return null;
+        continue;
+      }
+      anyNetworkSuccess = true;
+      if (!effectiveTraceId && data.traceId) effectiveTraceId = data.traceId;
+      allResults.push(...data.results);
+      params.onProgress?.(Math.min(uniqueIsbns.length, i + slice.length), uniqueIsbns.length);
 
-    // Synchroniser les livres V4 consolidés dans IndexedDB (saveBookToCache indexe automatiquement knownIsbns dans book_isbn_index)
-    for (const r of data.results) {
-      if (!r.book) continue;
-      const targetStatus: 'owned' | 'wish' | 'none' =
-        params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED'
-          ? 'owned'
-          : params.action === 'wishlist'
-            ? 'wish'
-            : 'none';
-      const humanized = v4BookRecordToHumanizedBook(r.book, targetStatus);
-      if (typeof databaseService.saveBookToCache === 'function') {
-        await databaseService.saveBookToCache(humanized).catch(() => {});
-      } else if (typeof databaseService.indexBookIsbns === 'function') {
-        await databaseService.indexBookIsbns(humanized).catch(() => {});
+      // Synchroniser immédiatement chaque livre consolidé dans IndexedDB
+      for (const r of data.results) {
+        if (!r.book) continue;
+        const targetStatus: 'owned' | 'wish' | 'none' =
+          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED'
+            ? 'owned'
+            : params.action === 'wishlist'
+              ? 'wish'
+              : 'none';
+        const humanized = v4BookRecordToHumanizedBook(r.book, targetStatus);
+        if (typeof databaseService.saveBookToCache === 'function') {
+          await databaseService.saveBookToCache(humanized).catch(() => {});
+        } else if (typeof databaseService.indexBookIsbns === 'function') {
+          await databaseService.indexBookIsbns(humanized).catch(() => {});
+        }
       }
     }
 
-    return data;
+    return anyNetworkSuccess
+      ? {
+          traceId: effectiveTraceId || '',
+          sourceChannel: params.sourceChannel,
+          results: allResults
+        }
+      : null;
   } catch {
-    return null;
+    return anyNetworkSuccess
+      ? {
+          traceId: effectiveTraceId || '',
+          sourceChannel: params.sourceChannel,
+          results: allResults
+        }
+      : null;
   }
 }

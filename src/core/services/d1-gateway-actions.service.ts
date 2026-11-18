@@ -810,6 +810,7 @@ export async function handleD1GatewayAction(
       }
 
       // Couche 1 (Canal 4) : 1 seule passe IA Gemini Vision en OCR strict (JSON 6 champs contraint)
+      // avec bascule multi-modèles et backoff automatique sur HTTP 503 / 429
       const tracer = new PipelineTracer({
         userId: auth.userId,
         sourceChannel: 'canal_4_ai_photo'
@@ -820,41 +821,79 @@ export async function handleD1GatewayAction(
       let usedModelId: string | null = null;
       let lastStatus = 0;
       let lastBody = '';
+      const attemptsLog: Array<{ model: string; round: number; status: number; durationMs: number; error?: string }> = [];
 
-      for (const modelId of PREFERRED_GEMINI_MODELS.slice(0, 4)) {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: prompt },
-                    { inline_data: { mime_type: mimeType, data: imageBase64 } }
-                  ]
-                }
-              ],
-              generationConfig: {
-                temperature: 0.1,
-                responseMimeType: 'application/json',
-                responseSchema: VISION_OCR_RESPONSE_SCHEMA
-              }
-            })
-          }
-        );
+      const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+      const candidateModels = PREFERRED_GEMINI_MODELS.slice(0, 6);
 
-        if (res.ok) {
-          const json = (await res.json()) as any;
-          rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
-          usedModelId = modelId;
-          break;
+      for (let round = 1; round <= 2 && rawText === null; round++) {
+        if (round > 1) {
+          // Court backoff avant la 2e passe si tous les modèles ont répondu 503/429
+          await sleepMs(750);
         }
-        lastStatus = res.status;
-        lastBody = await res.text().catch(() => '');
-        if (lastStatus !== 404 && lastStatus !== 429 && lastStatus < 500) {
-          break;
+        for (const modelId of candidateModels) {
+          const attStart = Date.now();
+          const abortCtrl = new AbortController();
+          const timer = setTimeout(() => abortCtrl.abort(), 14000);
+          try {
+            const res = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                signal: abortCtrl.signal,
+                body: JSON.stringify({
+                  contents: [
+                    {
+                      parts: [
+                        { text: prompt },
+                        { inline_data: { mime_type: mimeType, data: imageBase64 } }
+                      ]
+                    }
+                  ],
+                  generationConfig: {
+                    temperature: 0.1,
+                    responseMimeType: 'application/json',
+                    responseSchema: VISION_OCR_RESPONSE_SCHEMA
+                  }
+                })
+              }
+            );
+
+            if (res.ok) {
+              const json = (await res.json()) as any;
+              rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+              usedModelId = modelId;
+              attemptsLog.push({ model: modelId, round, status: res.status, durationMs: Date.now() - attStart });
+              break;
+            }
+            lastStatus = res.status;
+            lastBody = await res.text().catch(() => '');
+            attemptsLog.push({
+              model: modelId,
+              round,
+              status: lastStatus,
+              durationMs: Date.now() - attStart,
+              error: lastBody.slice(0, 220)
+            });
+            // Arrêt anticipé seulement sur erreur client non récupérable (hors 404/429/5xx)
+            if (lastStatus !== 404 && lastStatus !== 429 && lastStatus < 500) {
+              round = 99;
+              break;
+            }
+          } catch (fetchErr: unknown) {
+            lastStatus = 502;
+            lastBody = fetchErr instanceof Error ? fetchErr.message : 'Erreur réseau';
+            attemptsLog.push({
+              model: modelId,
+              round,
+              status: 502,
+              durationMs: Date.now() - attStart,
+              error: lastBody.slice(0, 220)
+            });
+          } finally {
+            clearTimeout(timer);
+          }
         }
       }
 
@@ -863,20 +902,31 @@ export async function handleD1GatewayAction(
           'C1',
           'vision_ocr',
           'error',
-          `Échec OCR Gemini Vision (HTTP ${lastStatus})`,
-          { mode, httpStatus: lastStatus, errorPreview: lastBody.slice(0, 200) },
+          `Échec OCR Gemini Vision après ${attemptsLog.length} tentative(s) (dernier HTTP ${lastStatus})`,
+          {
+            requestSent: {
+              mode,
+              mimeType,
+              imageBytesApprox: Math.round((imageBase64.length * 3) / 4),
+              promptLength: prompt.length,
+              modelsTried: candidateModels
+            },
+            attempts: attemptsLog,
+            lastErrorPreview: lastBody.slice(0, 300)
+          },
           Date.now() - visionStart
         );
         await tracer.flush(db);
+        const isOverloaded = lastStatus === 503 || lastStatus === 429;
         return jsonResp(
           {
-            error:
-              lastStatus === 429
-                ? 'Serveur IA temporairement saturé (quota gratuit). Réessayez dans un instant ou utilisez votre clé personnelle.'
-                : `Erreur API Gemini serveur (${lastStatus}): ${lastBody.slice(0, 140)}`,
-            traceId: tracer.traceId
+            error: isOverloaded
+              ? `Serveur Gemini temporairement surchargé (HTTP ${lastStatus} après ${attemptsLog.length} essais). Nouvel essai automatique recommandé.`
+              : `Erreur API Gemini serveur (${lastStatus}): ${lastBody.slice(0, 140)}`,
+            traceId: tracer.traceId,
+            retryable: isOverloaded
           },
-          lastStatus === 429 ? 429 : 502
+          isOverloaded ? lastStatus : 502
         );
       }
 
@@ -885,10 +935,16 @@ export async function handleD1GatewayAction(
         'C1',
         'vision_ocr',
         parsedCandidates.length > 0 ? 'ok' : 'warn',
-        `OCR strict (${mode}, ${usedModelId || 'gemini'}) : ${parsedCandidates.length} tranche(s)/couverture(s) détectée(s)`,
+        `OCR strict (${mode}, ${usedModelId || 'gemini'}, ${attemptsLog.length} essai(s)) : ${parsedCandidates.length} tranche(s)/couverture(s) détectée(s)`,
         {
-          mode,
-          modelUsed: usedModelId,
+          requestSent: {
+            mode,
+            mimeType,
+            imageBytesApprox: Math.round((imageBase64.length * 3) / 4),
+            promptLength: prompt.length,
+            modelUsed: usedModelId
+          },
+          attempts: attemptsLog,
           candidatesCount: parsedCandidates.length,
           candidates: parsedCandidates
         },
@@ -2485,6 +2541,60 @@ export async function handleD1GatewayAction(
             .bind(finalSeriesUri, volLabel || null, sortVal, JSON.stringify(obj), now, r.uri)
             .run();
         }
+      }
+
+      // Synchronisation bidirectionnelle avec les tables V4 (`v4_series` + `books`) sans jamais fusionner ni supprimer deux tomes
+      try {
+        const cleanCoreKey = normalizeTextKey(finalSeriesLabel.replace(/^(?:la\s+)?collection\s+/i, ''));
+        if (finalSeriesLabel) {
+          await db
+            .prepare(
+              `INSERT OR IGNORE INTO v4_series (id, canonical_name, normalized_core_key, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?)`
+            )
+            .bind(finalSeriesUri, finalSeriesLabel, cleanCoreKey || finalSeriesUri, now, now)
+            .run();
+        }
+        if (sourceSeriesId && sourceSeriesId !== finalSeriesUri) {
+          await db
+            .prepare('UPDATE books SET series_id = ?, series_name = ?, updated_at = ? WHERE series_id = ?')
+            .bind(finalSeriesUri, finalSeriesLabel, now, sourceSeriesId)
+            .run();
+        }
+        for (const bUri of bookUris) {
+          const cleanIsbn = bUri.startsWith('isbn:') ? bUri.slice(5) : '';
+          await db
+            .prepare(
+              `UPDATE books
+               SET series_id = ?,
+                   series_name = ?,
+                   volume_label = COALESCE(?, volume_label),
+                   volume_number = COALESCE(?, volume_number),
+                   is_hors_serie = CASE WHEN ? IS NOT NULL THEN 0 ELSE is_hors_serie END,
+                   updated_at = ?
+               WHERE legacy_entity_uri = ? OR (? != '' AND known_isbns_json LIKE ?)`
+            )
+            .bind(
+              finalSeriesUri,
+              finalSeriesLabel,
+              customVolumeLabel || null,
+              customVolumeLabel && /^\d+$/.test(customVolumeLabel) ? parseInt(customVolumeLabel, 10) : null,
+              customVolumeLabel && /^\d+$/.test(customVolumeLabel) ? 1 : null,
+              now,
+              bUri,
+              cleanIsbn,
+              `%${cleanIsbn}%`
+            )
+            .run();
+        }
+        await db
+          .prepare(
+            'UPDATE v4_series SET known_volumes_count = (SELECT COUNT(*) FROM books WHERE series_id = ?), updated_at = ? WHERE id = ?'
+          )
+          .bind(finalSeriesUri, now, finalSeriesUri)
+          .run();
+      } catch {
+        // Non-bloquant si tables V4 absentes dans un contexte de test partiel
       }
 
       return jsonResp({

@@ -20,7 +20,10 @@ import {
 } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
-import { stripEditorialCollectionSuffixes } from '../utils/series-matcher.util';
+import {
+  isEditorialPaperbackCollectionName,
+  stripEditorialCollectionSuffixes
+} from '../utils/series-matcher.util';
 import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
@@ -339,10 +342,18 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
   let deweyCode = '';
   const rawSubjects: string[] = [];
 
-  // 1. Extraction BnF InterMarc (prioritaire pour titre, série 460$t/$v, tome, auteurs, Dewey, RAMEAU)
+  // 1. Extraction BnF InterMarc (prioritaire : 460/461 > 245$p > 290/410 hors Folio/Poche)
   if (bnfRes.status === 'fulfilled' && bnfRes.value) {
     const xml = bnfRes.value;
     const fields = parseMarcFieldsFromXml(xml);
+
+    let f460Series = '';
+    let f460Vol = '';
+    let f460EnsId = '';
+    let f290Series = '';
+    let f290Vol = '';
+    let f410Series = '';
+    let f410Vol = '';
 
     for (const f of fields) {
       const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
@@ -370,26 +381,44 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
           }
         }
       } else if (f.tag === '460' || f.tag === '461') {
-        // Notice d'ensemble = vraie série si numérotée ($v présent ou numéro de tome connu), sinon candidate série/collection
         const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
         const sVol = normalizeSeriesNumber(getSf('v'));
         const sEnsId = getSf('3').replace(/\D/g, '');
-        if (sTitle && sVol && !seriesTitle) {
-          seriesTitle = sTitle;
-          seriesNumber = sVol;
-          if (sEnsId) bnfEnsembleId = sEnsId;
+        if (sTitle && sVol && !f460Series) {
+          f460Series = sTitle;
+          f460Vol = sVol;
+          if (sEnsId) f460EnsId = sEnsId;
         } else if (sTitle && !unnumberedEnsembleTitle) {
           unnumberedEnsembleTitle = sTitle;
           if (sEnsId) unnumberedEnsembleId = sEnsId;
         }
-      } else if (f.tag === '290' || f.tag === '410' || f.tag === '295') {
-        // Collection éditoriale vs Série numérotée :
-        // Uniquement considérée comme série si un numéro de volume ($v) est présent ! Sinon c'est une collection éditoriale (ex: "Les Arènes BD").
+      } else if (f.tag === '290') {
         const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
         const sVol = normalizeSeriesNumber(getSf('v'));
-        if (sTitle && sVol && !seriesTitle) {
-          seriesTitle = sTitle;
-          seriesNumber = sVol;
+        if (
+          sTitle &&
+          sVol &&
+          !f290Series &&
+          !isEditorialPaperbackCollectionName(sTitle) &&
+          (!/^\d+$/.test(sVol) || Number(sVol) <= 150)
+        ) {
+          f290Series = sTitle;
+          f290Vol = sVol;
+        } else if (sTitle && !collection) {
+          collection = sTitle;
+        }
+      } else if (f.tag === '410' || f.tag === '295') {
+        const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
+        const sVol = normalizeSeriesNumber(getSf('v'));
+        if (
+          sTitle &&
+          sVol &&
+          !f410Series &&
+          !isEditorialPaperbackCollectionName(sTitle) &&
+          (!/^\d+$/.test(sVol) || Number(sVol) <= 150)
+        ) {
+          f410Series = sTitle;
+          f410Vol = sVol;
         } else if (sTitle && !collection) {
           collection = sTitle;
         }
@@ -421,6 +450,18 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       } else if (f.tag === '830') {
         description = description || getSf('a');
       }
+    }
+
+    if (f460Series) {
+      seriesTitle = f460Series;
+      seriesNumber = f460Vol || seriesNumber;
+      bnfEnsembleId = f460EnsId || bnfEnsembleId;
+    } else if (!seriesTitle && f290Series) {
+      seriesTitle = f290Series;
+      seriesNumber = f290Vol || seriesNumber;
+    } else if (!seriesTitle && f410Series) {
+      seriesTitle = f410Series;
+      seriesNumber = f410Vol || seriesNumber;
     }
   }
 

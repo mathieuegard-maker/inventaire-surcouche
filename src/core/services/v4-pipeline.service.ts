@@ -16,7 +16,10 @@ import {
 } from '../resolvers/bnf.resolver';
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
-import { stripEditorialCollectionSuffixes } from '../utils/series-matcher.util';
+import {
+  isEditorialPaperbackCollectionName,
+  stripEditorialCollectionSuffixes
+} from '../utils/series-matcher.util';
 import { getLevenshteinDistance } from '../utils/string.util';
 import { resolveBestCoverUrl, upsertCatalogEntity } from './d1-gateway.service';
 import { generateTraceId, PipelineTracer } from './pipeline-logger.service';
@@ -612,21 +615,58 @@ export async function checkBookIndexLayer2(
 // COUCHE 3 : DÉCOUVERTE MULTI-SOURCES EN PARALLÈLE + ÉDITIONS SŒURS FR
 // ============================================================================
 
-function extractMarcRecordMetadata(recXml: string, fallbackIsbn?: string): SisterEditionCandidate | null {
+function isPlausibleVolumeNumberStr(vol?: string): boolean {
+  if (!vol) return false;
+  if (/^\d+$/.test(vol)) {
+    const n = Number(vol);
+    return n > 0 && n <= 150;
+  }
+  return vol.length <= 6;
+}
+
+function isIntegralCandidateTitleOrPages(title: string, pageCount?: number): boolean {
+  if (
+    /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+      title || ''
+    )
+  ) {
+    return true;
+  }
+  const slashParts = (title || '')
+    .split(/\s+\/\s+|\s+;\s+/)
+    .map((p) => cleanTitle(p))
+    .filter((p) => p.length >= 4);
+  return slashParts.length >= 2 && (!pageCount || pageCount >= 64);
+}
+
+function extractMarcRecordMetadata(
+  recXml: string,
+  fallbackIsbn?: string
+): (SisterEditionCandidate & { _isIntegral?: boolean }) | null {
   const fields = parseMarcFieldsFromXml(recXml);
   if (!fields.length) return null;
 
   let isbn13 = fallbackIsbn || '';
   let title = '';
-  let seriesRaw = '';
-  let volumeNumber = '';
-  let bnfEnsembleId = '';
+  let series245 = '';
+  let vol245 = '';
+  let series460 = '';
+  let vol460 = '';
+  let ensId460 = '';
+  let unnumberedEns = '';
+  let unnumberedEnsId = '';
+  let series290 = '';
+  let vol290 = '';
+  let series410 = '';
+  let vol410 = '';
   let collectionRaw = '';
   let publisher = '';
   let publishDate = '';
   let pageCount: number | undefined;
   let coverUrl = '';
   let language = '';
+  let isDualPages = false;
+  let secondTitleHint = '';
 
   for (const f of fields) {
     const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
@@ -646,39 +686,62 @@ function extractMarcRecordMetadata(recXml: string, fallbackIsbn?: string): Siste
       }
     } else if (f.tag === '245') {
       const a = cleanTitle(getSf('a'));
+      const b = cleanTitle(getSf('b'));
       const e = cleanTitle(getSf('e'));
       const p = cleanTitle(getSf('p'));
       const n = getSf('n');
       const u = getSf('u');
+      if (b) secondTitleHint = b;
       if (p && a) {
-        seriesRaw = seriesRaw || cleanSeriesName(a);
+        series245 = series245 || cleanSeriesName(a);
         title = p;
-        if (n || u) volumeNumber = volumeNumber || normalizeSeriesNumber(n || u);
+        if (n || u) vol245 = vol245 || normalizeSeriesNumber(n || u);
       } else {
         title = title || a;
-        if (u) volumeNumber = volumeNumber || normalizeSeriesNumber(u);
-        if (e && !seriesRaw && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
-          volumeNumber = volumeNumber || normalizeSeriesNumber(e);
+        if (u) vol245 = vol245 || normalizeSeriesNumber(u);
+        if (e && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
+          vol245 = vol245 || normalizeSeriesNumber(e);
         }
       }
     } else if (f.tag === '460' || f.tag === '461') {
       const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
       const sVol = normalizeSeriesNumber(getSf('v'));
       const sEnsId = getSf('3').replace(/\D/g, '');
-      if (sTitle && sVol && !seriesRaw) {
-        seriesRaw = sTitle;
-        volumeNumber = sVol;
-        if (sEnsId) bnfEnsembleId = sEnsId;
-      } else if (sTitle && !collectionRaw) {
-        collectionRaw = sTitle;
-        if (sEnsId && !bnfEnsembleId) bnfEnsembleId = sEnsId;
+      if (sTitle && sVol && !series460) {
+        series460 = sTitle;
+        vol460 = sVol;
+        if (sEnsId) ensId460 = sEnsId;
+      } else if (sTitle && !unnumberedEns) {
+        unnumberedEns = sTitle;
+        if (sEnsId) unnumberedEnsId = sEnsId;
       }
-    } else if (f.tag === '290' || f.tag === '410' || f.tag === '295') {
+    } else if (f.tag === '290') {
       const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
       const sVol = normalizeSeriesNumber(getSf('v'));
-      if (sTitle && sVol && !seriesRaw) {
-        seriesRaw = sTitle;
-        volumeNumber = sVol;
+      if (
+        sTitle &&
+        sVol &&
+        !series290 &&
+        !isEditorialPaperbackCollectionName(sTitle) &&
+        isPlausibleVolumeNumberStr(sVol)
+      ) {
+        series290 = sTitle;
+        vol290 = sVol;
+      } else if (sTitle && !collectionRaw) {
+        collectionRaw = sTitle;
+      }
+    } else if (f.tag === '410' || f.tag === '295') {
+      const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
+      const sVol = normalizeSeriesNumber(getSf('v'));
+      if (
+        sTitle &&
+        sVol &&
+        !series410 &&
+        !isEditorialPaperbackCollectionName(sTitle) &&
+        isPlausibleVolumeNumberStr(sVol)
+      ) {
+        series410 = sTitle;
+        vol410 = sVol;
       } else if (sTitle && !collectionRaw) {
         collectionRaw = sTitle;
       }
@@ -686,12 +749,46 @@ function extractMarcRecordMetadata(recXml: string, fallbackIsbn?: string): Siste
       publisher = publisher || cleanPublisher(getSf('c') || getSf('b'));
       publishDate = publishDate || cleanPublishDate(getSf('d'));
     } else if (f.tag === '280') {
-      const m = /(\d+)\s*p\b/i.exec(getSf('a'));
+      const raw280 = getSf('a');
+      if (/\d+\s*-\s*\d+\s*p\./i.test(raw280)) isDualPages = true;
+      const m = /(\d+)\s*p\b/i.exec(raw280);
       if (m) pageCount = Number(m[1]);
     }
   }
 
   if (!title) return null;
+
+  // Priorité stricte InterMarc : 460/461 > 245$p/$u > 290 (filtré) > 410/295 (filtré)
+  let seriesRaw = '';
+  let volumeNumber = '';
+  let bnfEnsembleId = ensId460 || unnumberedEnsId;
+
+  if (series460) {
+    seriesRaw = series460;
+    volumeNumber = vol460 || vol245;
+  } else if (series245) {
+    seriesRaw = series245;
+    volumeNumber = vol245;
+  } else if (series290) {
+    seriesRaw = series290;
+    volumeNumber = vol245 || vol290;
+  } else if (series410) {
+    seriesRaw = series410;
+    volumeNumber = vol245 || vol410;
+  } else if (vol245) {
+    volumeNumber = vol245;
+    if (unnumberedEns && !isEditorialPaperbackCollectionName(unnumberedEns)) {
+      seriesRaw = unnumberedEns;
+    }
+  } else if (unnumberedEns && !collectionRaw) {
+    collectionRaw = unnumberedEns;
+  }
+
+  const _isIntegral =
+    isDualPages ||
+    Boolean(secondTitleHint && /\b(tomes?|albums?|int[ée]grale)\b/i.test(secondTitleHint)) ||
+    isIntegralCandidateTitleOrPages(`${title} ${secondTitleHint}`, pageCount);
+
   return {
     source: 'bnf',
     isbn13: isbn13 || undefined,
@@ -704,7 +801,8 @@ function extractMarcRecordMetadata(recXml: string, fallbackIsbn?: string): Siste
     pageCount,
     coverUrl: coverUrl || undefined,
     bnfEnsembleId: bnfEnsembleId || undefined,
-    language: language || 'fre'
+    language: language || 'fre',
+    _isIntegral
   };
 }
 
@@ -716,16 +814,42 @@ export async function discoverMultiSourceLayer3(
   const isbn13 = isbnUtil.toIsbn13(isbnUtil.normalize(rawIsbn13)) || isbnUtil.normalize(rawIsbn13);
   if (!isbn13) return null;
 
-  const bnfAnchorUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn13)}%22&recordSchema=intermarcxchange&maximumRecords=2`;
+  const bnfQuery = `bib.anywhere all "${isbn13}"`;
+  const bnfAnchorUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(bnfQuery)}&recordSchema=intermarcxchange&maximumRecords=2`;
   const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}&maxResults=4`;
   const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn13)}&jscmd=data&format=json`;
   const invUrl = `https://inventaire.io/api/entities?action=by-uris&uris=isbn:${encodeURIComponent(isbn13)}&attributes=info|labels|descriptions|claims|image&relatives=wdt:P629|wdt:P179|wdt:P50`;
 
-  const [bnfRes, gbRes, olRes, invRes] = await Promise.allSettled([
-    fetch(bnfAnchorUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.text() : '')),
-    fetch(gbUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null)),
-    fetch(olUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null)),
-    fetch(invUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).then((r) => (r.ok ? r.json() : null))
+  const fetchTrackedText = async (url: string) => {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      const text = r.ok ? await r.text() : await r.text().catch(() => '');
+      return { ok: r.ok, status: r.status, ms: Date.now() - t0, data: r.ok ? text : '', err: r.ok ? undefined : text.slice(0, 180) };
+    } catch (e: unknown) {
+      return { ok: false, status: 0, ms: Date.now() - t0, data: '', err: e instanceof Error ? e.message : 'Network error' };
+    }
+  };
+  const fetchTrackedJson = async (url: string) => {
+    const t0 = Date.now();
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        return { ok: false, status: r.status, ms: Date.now() - t0, data: null as any, err: txt.slice(0, 180) };
+      }
+      const json = await r.json().catch(() => null);
+      return { ok: true, status: r.status, ms: Date.now() - t0, data: json, err: undefined };
+    } catch (e: unknown) {
+      return { ok: false, status: 0, ms: Date.now() - t0, data: null as any, err: e instanceof Error ? e.message : 'Network error' };
+    }
+  };
+
+  const [bnfRes, gbRes, olRes, invRes] = await Promise.all([
+    fetchTrackedText(bnfAnchorUrl),
+    fetchTrackedJson(gbUrl),
+    fetchTrackedJson(olUrl),
+    fetchTrackedJson(invUrl)
   ]);
 
   const sisterEditions: SisterEditionCandidate[] = [];
@@ -738,6 +862,8 @@ export async function discoverMultiSourceLayer3(
   const sourcesHit: string[] = [];
 
   let anchorTitle = '';
+  let anchorVolumeNumber = '';
+  let anchorIsIntegral = false;
   let publisher = '';
   let publishDate = '';
   let pageCount: number | undefined;
@@ -754,8 +880,10 @@ export async function discoverMultiSourceLayer3(
     extra?: { ensembleId?: string; wikidataQid?: string }
   ) => {
     if (!rawName?.trim()) return;
+    if (isEditorialPaperbackCollectionName(rawName)) return;
     const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(rawName));
     if (!coreKey || coreKey.length < 2) return;
+    if (isEditorialPaperbackCollectionName(cleanDisplay)) return;
     seriesCandidates.push({
       source,
       rawName: rawName.trim(),
@@ -768,8 +896,9 @@ export async function discoverMultiSourceLayer3(
   };
 
   // 1. Analyse BnF InterMarc
-  if (bnfRes.status === 'fulfilled' && bnfRes.value) {
-    const records = bnfRes.value.split('<srw:record>').slice(1);
+  const bnfExtractedSummary: any[] = [];
+  if (bnfRes.ok && bnfRes.data) {
+    const records = bnfRes.data.split('<srw:record>').slice(1);
     for (const recXml of records) {
       const cand = extractMarcRecordMetadata(recXml, isbn13);
       if (!cand) continue;
@@ -777,14 +906,24 @@ export async function discoverMultiSourceLayer3(
       if (!isStrictFrenchLanguage(cand.language)) continue;
       sisterEditions.push(cand);
       anchorTitle = anchorTitle || cand.title;
+      if (!anchorVolumeNumber && cand.volumeNumber) anchorVolumeNumber = cand.volumeNumber;
+      if (cand._isIntegral) anchorIsIntegral = true;
       rawTitles.push(cand.title);
       publisher = publisher || cand.publisher || '';
       publishDate = publishDate || cand.publishDate || '';
       pageCount = pageCount || cand.pageCount;
+      bnfExtractedSummary.push({
+        title: cand.title,
+        seriesRaw: cand.seriesRaw,
+        volumeNumber: cand.volumeNumber,
+        collectionRaw: cand.collectionRaw,
+        isIntegral: Boolean(cand._isIntegral),
+        lang: cand.language
+      });
 
       if (cand.seriesRaw) {
         registerSeriesVote('bnf_anchor', cand.seriesRaw, 3, { ensembleId: cand.bnfEnsembleId });
-      } else if (cand.collectionRaw && cand.volumeNumber) {
+      } else if (cand.collectionRaw && cand.volumeNumber && isPlausibleVolumeNumberStr(cand.volumeNumber)) {
         registerSeriesVote('bnf_collection_numbered', cand.collectionRaw, 2.2, { ensembleId: cand.bnfEnsembleId });
       }
 
@@ -814,10 +953,19 @@ export async function discoverMultiSourceLayer3(
       }
     }
   }
+  tracer?.record(
+    'C3',
+    'api_bnf',
+    bnfRes.ok ? (bnfExtractedSummary.length ? 'ok' : 'warn') : 'error',
+    `BnF SRU (${isbn13}) HTTP ${bnfRes.status} (${bnfRes.ms}ms) -> ${bnfExtractedSummary.length} notice(s)`,
+    { request: { url: bnfAnchorUrl, query: bnfQuery }, status: bnfRes.status, results: bnfExtractedSummary, error: bnfRes.err },
+    bnfRes.ms
+  );
 
   // 2. Inventaire.io (API Publique Lecture Seule sans auth) + Wikidata
-  if (invRes.status === 'fulfilled' && (invRes.value as any)?.entities) {
-    const ents = (invRes.value as any).entities as Record<string, any>;
+  let invSummary: Record<string, unknown> | null = null;
+  if (invRes.ok && invRes.data?.entities) {
+    const ents = invRes.data.entities as Record<string, any>;
     const edEnt = ents[`isbn:${isbn13}`] || Object.values(ents).find((e: any) => e?.type === 'edition');
     if (edEnt) {
       sourcesHit.push('inventaire');
@@ -845,7 +993,10 @@ export async function discoverMultiSourceLayer3(
         const wDesc = workEnt.descriptions?.fr || workEnt.descriptions?.en;
         if (typeof wDesc === 'string' && wDesc.length > description.length) description = wDesc;
         const ord = workEnt.claims?.['wdt:P1545']?.[0];
-        if (ord) invVol = normalizeSeriesNumber(String(ord));
+        if (ord) {
+          invVol = normalizeSeriesNumber(String(ord));
+          if (!anchorVolumeNumber && invVol) anchorVolumeNumber = invVol;
+        }
 
         const authorRefs = workEnt.claims?.['wdt:P50'];
         if (Array.isArray(authorRefs)) {
@@ -872,6 +1023,7 @@ export async function discoverMultiSourceLayer3(
         }
       }
 
+      invSummary = { edTitle, workUri, invVol, invSeries, wikidataSeriesQid };
       if (edTitle) {
         sisterEditions.push({
           source: 'inventaire',
@@ -887,10 +1039,19 @@ export async function discoverMultiSourceLayer3(
       }
     }
   }
+  tracer?.record(
+    'C3',
+    'api_inventaire',
+    invRes.ok ? (invSummary ? 'ok' : 'warn') : 'error',
+    `Inventaire.io (${isbn13}) HTTP ${invRes.status} (${invRes.ms}ms) -> ${invSummary ? 'HIT' : 'Aucun'}`,
+    { request: { url: invUrl }, status: invRes.status, result: invSummary, error: invRes.err },
+    invRes.ms
+  );
 
   // 3. Google Books (FR prioritaire + éditions sœurs éventuelles)
-  if (gbRes.status === 'fulfilled' && Array.isArray((gbRes.value as any)?.items)) {
-    const items = (gbRes.value as any).items as any[];
+  const gbSummary: any[] = [];
+  if (gbRes.ok && Array.isArray(gbRes.data?.items)) {
+    const items = gbRes.data.items as any[];
     if (items.length > 0) sourcesHit.push('google_books');
     for (const item of items) {
       const info = item?.volumeInfo;
@@ -921,25 +1082,40 @@ export async function discoverMultiSourceLayer3(
         ids.find((x: any) => x.type === 'ISBN_13')?.identifier ||
         isbnUtil.toIsbn13(ids.find((x: any) => x.type === 'ISBN_10')?.identifier || '') ||
         isbn13;
-      sisterEditions.push({
-        source: 'google_books',
-        isbn13: isbnUtil.isValidBookBarcode(gbIsbn13) ? gbIsbn13 : undefined,
-        title: parsedFromGbTitle.title || t,
-        seriesRaw: parsedFromGbTitle.series,
-        volumeNumber: parsedFromGbTitle.seriesNumber,
-        publisher: info.publisher ? cleanPublisher(info.publisher) : undefined,
-        publishDate: info.publishedDate ? cleanPublishDate(info.publishedDate) : undefined,
-        pageCount: info.pageCount,
-        coverUrl: gbCoverUrl,
-        language: info.language || 'fr'
-      });
+      const candIntegralGb = isIntegralCandidateTitleOrPages(t, info.pageCount);
+      gbSummary.push({ title: t, series: parsedFromGbTitle.series, vol: parsedFromGbTitle.seriesNumber, pages: info.pageCount });
+      if (!anchorVolumeNumber || !parsedFromGbTitle.seriesNumber || parsedFromGbTitle.seriesNumber === anchorVolumeNumber) {
+        if (candIntegralGb === anchorIsIntegral || !anchorTitle) {
+          sisterEditions.push({
+            source: 'google_books',
+            isbn13: isbnUtil.isValidBookBarcode(gbIsbn13) ? gbIsbn13 : undefined,
+            title: parsedFromGbTitle.title || t,
+            seriesRaw: parsedFromGbTitle.series,
+            volumeNumber: parsedFromGbTitle.seriesNumber,
+            publisher: info.publisher ? cleanPublisher(info.publisher) : undefined,
+            publishDate: info.publishedDate ? cleanPublishDate(info.publishedDate) : undefined,
+            pageCount: info.pageCount,
+            coverUrl: gbCoverUrl,
+            language: info.language || 'fr'
+          });
+        }
+      }
     }
   }
+  tracer?.record(
+    'C3',
+    'api_google_books',
+    gbRes.ok ? (gbSummary.length ? 'ok' : 'warn') : 'error',
+    `Google Books (${isbn13}) HTTP ${gbRes.status} (${gbRes.ms}ms) -> ${gbSummary.length} résultat(s)`,
+    { request: { url: gbUrl }, status: gbRes.status, results: gbSummary, error: gbRes.err },
+    gbRes.ms
+  );
 
   // 4. OpenLibrary
-  if (olRes.status === 'fulfilled' && olRes.value) {
-    const key = Object.keys(olRes.value as Record<string, unknown>)[0];
-    const olBook = key ? (olRes.value as Record<string, any>)[key] : null;
+  let olSummary: Record<string, unknown> | null = null;
+  if (olRes.ok && olRes.data) {
+    const key = Object.keys(olRes.data as Record<string, unknown>)[0];
+    const olBook = key ? (olRes.data as Record<string, any>)[key] : null;
     if (olBook?.title) {
       sourcesHit.push('openlibrary');
       const t = cleanTitle(olBook.title);
@@ -959,6 +1135,7 @@ export async function discoverMultiSourceLayer3(
       }
       const olCoverUrl = olBook.cover?.large || olBook.cover?.medium;
       const parsedFromOl = parseSeriesFromTitle(t);
+      olSummary = { title: t, publisher: olBook.publishers?.[0]?.name, pages: olBook.number_of_pages };
       sisterEditions.push({
         source: 'openlibrary',
         isbn13,
@@ -973,6 +1150,14 @@ export async function discoverMultiSourceLayer3(
       });
     }
   }
+  tracer?.record(
+    'C3',
+    'api_openlibrary',
+    olRes.ok ? (olSummary ? 'ok' : 'warn') : 'error',
+    `OpenLibrary (${isbn13}) HTTP ${olRes.status} (${olRes.ms}ms) -> ${olSummary ? 'HIT' : 'Aucun'}`,
+    { request: { url: olUrl }, status: olRes.status, result: olSummary, error: olRes.err },
+    olRes.ms
+  );
 
   if (!anchorTitle) {
     tracer?.record(
@@ -990,12 +1175,15 @@ export async function discoverMultiSourceLayer3(
   // Permet de récupérer le n° de tome manquant sur une réédition ou toutes les éditions d'une même œuvre !
   const parsedAnchor = parseSeriesFromTitle(anchorTitle);
   const searchTitleClean = (parsedAnchor.title || anchorTitle).replace(/["()]/g, ' ').trim();
+  const effectiveAnchorVol = normalizeSeriesNumber(anchorVolumeNumber || parsedAnchor.seriesNumber || '');
+  const effectiveAnchorIntegral = anchorIsIntegral || isIntegralCandidateTitleOrPages(anchorTitle, pageCount);
 
   const sisterLookups: Promise<void>[] = [];
 
   if (searchTitleClean.length >= 3) {
     sisterLookups.push(
       (async () => {
+        const s0 = Date.now();
         try {
           const firstAuthorLast = authors[0] ? authors[0].split(/[,\s]+/)[0].replace(/["()]/g, '') : '';
           const cql = firstAuthorLast
@@ -1003,28 +1191,78 @@ export async function discoverMultiSourceLayer3(
             : `(bib.title all "${searchTitleClean}")`;
           const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=12&startRecord=1`;
           const res = await fetch(sruUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
-          if (!res.ok) return;
+          if (!res.ok) {
+            tracer?.record(
+              'C3',
+              'api_bnf_sisters',
+              'warn',
+              `BnF Sœurs CQL HTTP ${res.status}`,
+              { request: { url: sruUrl, cql }, status: res.status },
+              Date.now() - s0
+            );
+            return;
+          }
           const xml = await res.text();
           const recs = xml.split('<srw:record>').slice(1);
           const normTarget = normalizeTextKey(parsedAnchor.title || anchorTitle);
+          let accepted = 0;
+          let rejectedDiffVol = 0;
+          let rejectedIntegralMismatch = 0;
 
           for (const rec of recs) {
             const cand = extractMarcRecordMetadata(rec);
             if (!cand || !isStrictFrenchLanguage(cand.language)) continue;
-            const normCandTitle = normalizeTextKey(parseSeriesFromTitle(cand.title).title || cand.title);
+            const candTitleClean = parseSeriesFromTitle(cand.title).title || cand.title;
+            const normCandTitle = normalizeTextKey(candTitleClean);
             const titleSimilar =
               normCandTitle === normTarget ||
               normCandTitle.includes(normTarget) ||
               normTarget.includes(normCandTitle) ||
               (normTarget.length >= 5 && getLevenshteinDistance(normCandTitle, normTarget) <= 2);
             if (!titleSimilar) continue;
+
+            // Garde critique anti-absorption entre tomes distincts (ex: Culottées T1 vs T2) ou Intégrale vs Tome
+            const candVol = normalizeSeriesNumber(cand.volumeNumber || parseSeriesFromTitle(cand.title).seriesNumber || '');
+            if (effectiveAnchorVol && candVol && candVol !== effectiveAnchorVol) {
+              rejectedDiffVol++;
+              continue;
+            }
+            if (Boolean(cand._isIntegral) !== effectiveAnchorIntegral) {
+              rejectedIntegralMismatch++;
+              continue;
+            }
+
             sisterEditions.push(cand);
+            accepted++;
             if (cand.seriesRaw) {
               registerSeriesVote('bnf_sister_edition', cand.seriesRaw, 2, { ensembleId: cand.bnfEnsembleId });
             }
           }
-        } catch {
-          // non-bloquant
+
+          tracer?.record(
+            'C3',
+            'api_bnf_sisters',
+            'ok',
+            `BnF Sœurs (${recs.length} reçue(s)) : ${accepted} retenue(s), ${rejectedDiffVol} écartée(s) autre tome, ${rejectedIntegralMismatch} autre format`,
+            {
+              request: { url: sruUrl, cql, anchorVol: effectiveAnchorVol, anchorIntegral: effectiveAnchorIntegral },
+              status: res.status,
+              totalRecords: recs.length,
+              accepted,
+              rejectedDiffVol,
+              rejectedIntegralMismatch
+            },
+            Date.now() - s0
+          );
+        } catch (err: unknown) {
+          tracer?.record(
+            'C3',
+            'api_bnf_sisters',
+            'error',
+            `Erreur BnF Sœurs : ${err instanceof Error ? err.message : String(err)}`,
+            { searchTitleClean },
+            Date.now() - s0
+          );
         }
       })()
     );
@@ -1033,6 +1271,7 @@ export async function discoverMultiSourceLayer3(
   if (wikidataWorkQid) {
     sisterLookups.push(
       (async () => {
+        const w0 = Date.now();
         try {
           const wdUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(wikidataWorkQid!)}&props=labels|descriptions|claims&languages=fr|en&format=json`;
           const res = await fetch(wdUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
@@ -1045,6 +1284,7 @@ export async function discoverMultiSourceLayer3(
           const p179Id = ent.claims?.P179?.[0]?.mainsnak?.datavalue?.value?.id;
           const p1545Ord = ent.claims?.P179?.[0]?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value;
           const wdVol = normalizeSeriesNumber(String(p1545Ord || p1545 || ''));
+          let wdSeriesLabel = '';
           if (p179Id && typeof p179Id === 'string') {
             wikidataSeriesQid = wikidataSeriesQid || p179Id;
             const wdSeriesRes = await fetch(
@@ -1057,7 +1297,8 @@ export async function discoverMultiSourceLayer3(
               const sLabel = sEnt?.labels?.fr?.value || sEnt?.labels?.en?.value;
               const sBnfId = sEnt?.claims?.P268?.[0]?.mainsnak?.datavalue?.value;
               if (sLabel) {
-                registerSeriesVote('wikidata_p179', String(sLabel), 3, {
+                wdSeriesLabel = String(sLabel);
+                registerSeriesVote('wikidata_p179', wdSeriesLabel, 3, {
                   wikidataQid: p179Id,
                   ensembleId: sBnfId ? String(sBnfId).replace(/\D/g, '') : undefined
                 });
@@ -1074,6 +1315,14 @@ export async function discoverMultiSourceLayer3(
               language: 'fr'
             });
           }
+          tracer?.record(
+            'C3',
+            'api_wikidata',
+            'ok',
+            `Wikidata (${wikidataWorkQid}) HTTP ${res.status} -> série « ${wdSeriesLabel || 'aucune'} », tome « ${wdVol || '-'} »`,
+            { request: { url: wdUrl, qid: wikidataWorkQid }, result: { wdSeriesLabel, wikidataSeriesQid, wdVol } },
+            Date.now() - w0
+          );
         } catch {
           // non-bloquant
         }
@@ -1272,14 +1521,43 @@ export async function consolidateBookLayer4(
     );
   }
 
-  // Upsert dans v4_series si série élue
+  // Upsert dans v4_series si série élue (matching par coreKey OU bnfEnsembleId OU wikidataQid)
   let seriesId: string | null = null;
   let seriesName: string | null = null;
   if (electedSeries) {
-    const existingSeries = await db
+    let existingSeries = await db
       .prepare('SELECT * FROM v4_series WHERE normalized_core_key = ? LIMIT 1')
       .bind(electedSeries.coreKey)
       .first<Record<string, any>>();
+
+    if (!existingSeries && electedSeries.wikidataQids[0]) {
+      existingSeries = await db
+        .prepare('SELECT * FROM v4_series WHERE wikidata_qid = ? LIMIT 1')
+        .bind(electedSeries.wikidataQids[0])
+        .first<Record<string, any>>();
+    }
+    if (!existingSeries && electedSeries.ensembleIds[0]) {
+      existingSeries = await db
+        .prepare('SELECT * FROM v4_series WHERE bnf_ensemble_ids_json LIKE ? LIMIT 1')
+        .bind(`%${electedSeries.ensembleIds[0]}%`)
+        .first<Record<string, any>>();
+    }
+
+    // Réutiliser un éventuel URI de série existant dans catalog_entities pour garantir l'unification V4 <-> V2
+    let existingCatalogSeriesUri: string | null = null;
+    if (!existingSeries) {
+      try {
+        const allCatSeries = await db
+          .prepare("SELECT uri, label FROM catalog_entities WHERE entity_type = 'serie'")
+          .all<{ uri: string; label: string }>();
+        const matchedCat = (allCatSeries.results || []).find(
+          (row) => stripEditorialCollectionSuffixes(row.label).coreKey === electedSeries.coreKey
+        );
+        if (matchedCat?.uri) existingCatalogSeriesUri = matchedCat.uri;
+      } catch {
+        // Ignore si catalog_entities absent
+      }
+    }
 
     if (existingSeries) {
       seriesId = String(existingSeries.id);
@@ -1310,7 +1588,9 @@ export async function consolidateBookLayer4(
         )
         .run();
     } else {
-      seriesId = `ser_${electedSeries.coreKey.replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
+      seriesId =
+        existingCatalogSeriesUri ||
+        `ser_${electedSeries.coreKey.replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
       seriesName = electedSeries.canonicalName;
       await db
         .prepare(
@@ -1565,8 +1845,9 @@ export async function consolidateBookLayer4(
         })
       );
     }
-    if (seriesName) {
+    if (seriesName && seriesId) {
       legacySeriesUri = await upsertCatalogEntity(db, {
+        uri: seriesId,
         entityType: 'serie',
         label: seriesName,
         mainCategory: classification.mainCategory,

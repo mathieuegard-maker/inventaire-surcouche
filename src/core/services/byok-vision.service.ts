@@ -113,22 +113,45 @@ export const byokVisionService = {
     const mimeMatch = /^data:([^;]+);base64,/.exec(dataUrl);
     const mimeType = mimeMatch?.[1] || 'image/jpeg';
 
-    onStatus?.('Analyse visuelle des livres par l’IA...');
-    const res = await fetch('/api/gateway?action=vision-analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        imageBase64: base64Data,
-        mimeType,
-        mode,
-        userUri: sessionStore.getUserUri() || ''
-      })
-    });
-    const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
-    if (!res.ok) {
-      throw new Error(data?.error || "Impossible d'analyser la photo pour le moment.");
+    const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const maxAttempts = 3;
+    let lastErrorMsg = "Impossible d'analyser la photo pour le moment.";
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      onStatus?.(
+        attempt === 1
+          ? 'Analyse visuelle des livres par l’IA...'
+          : `Serveur Gemini saturé — relance automatique (${attempt}/${maxAttempts})...`
+      );
+      const res = await fetch('/api/gateway?action=vision-analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64Data,
+          mimeType,
+          mode,
+          userUri: sessionStore.getUserUri() || ''
+        })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        text?: string;
+        error?: string;
+        retryable?: boolean;
+      };
+      if (res.ok) {
+        return parseCandidatesJson(data.text || '[]');
+      }
+      lastErrorMsg = data?.error || lastErrorMsg;
+      const shouldRetry =
+        attempt < maxAttempts &&
+        (res.status === 502 || res.status === 503 || res.status === 429 || Boolean(data?.retryable));
+      if (!shouldRetry) {
+        break;
+      }
+      await sleepMs(1100 * attempt);
     }
-    return parseCandidatesJson(data.text || '[]');
+
+    throw new Error(lastErrorMsg);
   }
 };
 

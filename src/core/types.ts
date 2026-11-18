@@ -160,6 +160,7 @@ export interface ExternalBookMetadata {
   series?: string;
   seriesNumber?: string;
   collection?: string;
+  isIntegral?: boolean;
   genres?: string[];
   rawSubjects?: string[];
   deweyCode?: string;

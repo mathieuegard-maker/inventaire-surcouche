@@ -416,7 +416,24 @@ function extractControlField(xml: string, tag: string): string {
   return match ? match[1] : '';
 }
 
-export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean; _bnfEnsembleId?: string }) | null {
+function isPaperbackCollectionLabel(raw?: string): boolean {
+  const norm = normalizeTextKey(raw || '');
+  return /^(?:(?:la )?collection )?(?:folio(?: bd| cadets| junior| sf| policier)?|livre de poche|le livre de poche|pocket(?: bd)?|j ai lu|10 18|points|babel|flammarion|gallimard|dupuis|dargaud|le lombard|glenat|delcourt|soleil|casterman|hachette|rombaldi|france loisirs|aire libre|long courrier|signe|reperages|troisieme vague|poisson pilote)$/.test(
+    norm
+  );
+}
+
+function isPlausibleFallbackSeriesNumber(rawVol?: string): boolean {
+  const norm = normalizeSeriesNumber(rawVol);
+  if (!norm) return false;
+  const num = Number(norm);
+  return Number.isFinite(num) ? num > 0 && num <= 150 : norm.length <= 6;
+}
+
+export function parseIntermarcRecord(
+  recordXml: string,
+  options?: { includeIntegrals?: boolean }
+): (ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean; _bnfEnsembleId?: string; _isIntegral?: boolean }) | null {
   const fields = parseMarcFields(recordXml);
   if (fields.length === 0) return null;
 
@@ -477,14 +494,18 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
 
   const f280 = fields.find(f => f.tag === '280');
   const paginationRaw = f280 ? getSubfield(f280, 'a') : undefined;
-  if (paginationRaw && /\d+\s*-\s*\d+\s*p\./.test(paginationRaw)) {
-    return null; // Édition double type "48-48 p."
-  }
-  if (secondTitleInSameVol && /\b(tomes?|albums?)\b/i.test(secondTitleInSameVol)) {
-    return null;
+  const isDoubleOrIntegral =
+    Boolean(paginationRaw && /\d+\s*-\s*\d+\s*p\./.test(paginationRaw)) ||
+    Boolean(secondTitleInSameVol && /\b(tomes?|albums?)\b/i.test(secondTitleInSameVol)) ||
+    /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+      `${rawA245} ${rawE245} ${secondTitleInSameVol || ''}`
+    );
+
+  if (isDoubleOrIntegral && !options?.includeIntegrals) {
+    return null; // Édition double/intégrale écartée en expansion de série standard
   }
 
-  // 3. Série & numéro de tome (460 -> 245$p -> 290/410 uniquement si sous-zone $v présente)
+  // 3. Série & numéro de tome (460 -> 245$p -> 290/410 uniquement si non-collection-poche et n° <= 150)
   let imSeries: string | undefined = inferredSeriesFrom245;
   let imSeriesNumber: string | undefined = partNumber245;
   let bnfEnsembleId: string | undefined;
@@ -499,16 +520,18 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
   if (!imSeries) {
     const f290 = fields.find(f => f.tag === '290');
     const v290 = f290 ? getSubfield(f290, 'v') : undefined;
-    if (f290 && v290) {
-      imSeries = getSubfield(f290, 'a') || getSubfield(f290, 't');
+    const cand290 = f290 ? getSubfield(f290, 'a') || getSubfield(f290, 't') : undefined;
+    if (f290 && cand290 && v290 && !isPaperbackCollectionLabel(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
+      imSeries = cand290;
       imSeriesNumber = v290;
     }
   }
   if (!imSeries) {
     const f410 = fields.find(f => f.tag === '410');
     const v410 = f410 ? getSubfield(f410, 'v') : undefined;
-    if (f410 && v410) {
-      imSeries = getSubfield(f410, 't') || getSubfield(f410, 'a');
+    const cand410 = f410 ? getSubfield(f410, 't') || getSubfield(f410, 'a') : undefined;
+    if (f410 && cand410 && v410 && !isPaperbackCollectionLabel(cand410) && isPlausibleFallbackSeriesNumber(v410)) {
+      imSeries = cand410;
       imSeriesNumber = v410;
     }
   }
@@ -583,7 +606,8 @@ export function parseIntermarcRecord(recordXml: string): (ExternalBookMetadata &
     ...(rawSubjects.length ? { rawSubjects } : {}),
     _lang: langCode || undefined,
     _hasPrimaryIsbn: hasPrimaryIsbn,
-    _bnfEnsembleId: bnfEnsembleId
+    _bnfEnsembleId: bnfEnsembleId,
+    ...(isDoubleOrIntegral ? { isIntegral: true, _isIntegral: true } : {})
   };
 }
 
@@ -665,22 +689,24 @@ export const bnfResolver = {
             imSeriesNumber = getSubfield(f460, 'v');
           }
 
-          // 4. Série (Tag 290 - Titre d'ensemble local avec numéro de tome $v)
+          // 4. Série (Tag 290 - Titre d'ensemble local, uniquement si non collection éditoriale et tome <= 150)
           if (!imSeries) {
             const f290 = imFields.find(f => f.tag === '290');
             const v290 = f290 ? getSubfield(f290, 'v') : undefined;
-            if (f290 && v290) {
-              imSeries = getSubfield(f290, 'a') || getSubfield(f290, 't');
+            const s290 = f290 ? getSubfield(f290, 'a') || getSubfield(f290, 't') : undefined;
+            if (f290 && s290 && v290 && !isPaperbackCollectionLabel(s290) && isPlausibleFallbackSeriesNumber(v290)) {
+              imSeries = s290;
               imSeriesNumber = v290;
             }
           }
 
-          // 5. Série (Tag 410 - Collection uniquement si numérotée avec $v)
+          // 5. Série (Tag 410 - Collection uniquement si numérotée <= 150 et hors collections génériques Folio/Pocket...)
           if (!imSeries) {
             const f410 = imFields.find(f => f.tag === '410');
             const v410 = f410 ? getSubfield(f410, 'v') : undefined;
-            if (f410 && v410) {
-              imSeries = getSubfield(f410, 't') || getSubfield(f410, 'a');
+            const s410 = f410 ? getSubfield(f410, 't') || getSubfield(f410, 'a') : undefined;
+            if (f410 && s410 && v410 && !isPaperbackCollectionLabel(s410) && isPlausibleFallbackSeriesNumber(v410)) {
+              imSeries = s410;
               imSeriesNumber = v410;
             }
           }
@@ -1075,7 +1101,7 @@ export const bnfResolver = {
 
         const rawRecords = await runSruQuery(plan);
         for (const recXml of rawRecords) {
-          const parsed = parseIntermarcRecord(recXml);
+          const parsed = parseIntermarcRecord(recXml, { includeIntegrals: true });
           if (!parsed) continue;
           if (parsed._lang && parsed._lang !== 'fre') continue;
 
@@ -1100,7 +1126,8 @@ export const bnfResolver = {
                 pageCount: parsed.pageCount,
                 coverUrl: parsed.coverUrl,
                 series: parsed.series,
-                seriesNumber: parsed.seriesNumber
+                seriesNumber: parsed.seriesNumber,
+                ...(parsed.isIntegral ? { isIntegral: true } : {})
               }
             });
           }

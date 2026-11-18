@@ -21,6 +21,7 @@ import {
 } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
+import { pushClientPipelineLogs } from './v4-client.service';
 
 export interface PhotoResolutionOption {
   isbn13: string;
@@ -33,6 +34,7 @@ export interface PhotoResolutionOption {
   coverFallbackUrls?: string[];
   series?: string;
   seriesNumber?: string;
+  isIntegral?: boolean;
   score: number;
   sourcesCount: number;
 }
@@ -56,6 +58,8 @@ export interface ResolvedPhotoItem {
   coverFallbackUrls?: string[];
   series?: string;
   seriesNumber?: string;
+  isIntegral?: boolean;
+  hasIntegralOption?: boolean;
   existingUri?: string;
   existingWorkUri?: string;
   failureReason?: string;
@@ -370,6 +374,7 @@ async function discoverConsensusByHints(
   isDoubt: boolean;
   alternatives: PhotoResolutionOption[];
 }> {
+  const c3Start = Date.now();
   onExternalLookup?.(3);
   const [bnfMatches, gbMatches, olMatches] = await Promise.all([
     bnfResolver.searchCandidatesByHints(hints, 12).catch(() => []),
@@ -452,17 +457,46 @@ async function discoverConsensusByHints(
 
   const top = ranked[0];
   if (!top || top.finalScore < DOUBT_MIN_SCORE_THRESHOLD) {
+    void pushClientPipelineLogs({
+      sourceChannel: 'canal_4_ai_photo',
+      steps: [
+        {
+          layer: 'C3',
+          stepName: 'client_hint_lookup',
+          status: 'warn',
+          summary: `Canal 3 échec sur « ${hints.title || hints.series || '?'} » (BnF:${bnfMatches.length}, GB:${gbMatches.length}, OL:${olMatches.length})`,
+          payload: {
+            hints,
+            bnfTop: bnfMatches.slice(0, 4).map((m) => ({ isbn: m.meta.isbn, title: m.meta.title, vol: m.meta.seriesNumber, score: m.score })),
+            gbTop: gbMatches.slice(0, 4).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber })),
+            olTop: olMatches.slice(0, 4).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber }))
+          },
+          durationMs: Date.now() - c3Start
+        }
+      ]
+    });
     return { sourcesCount: 0, isDoubt: false, alternatives: [] };
   }
 
-  // Construire jusqu'à 3 pistes distinctes pour arbitrage utilisateur si doute
-  const distinctWorkKeys = new Set<string>();
+  // Construire jusqu'à 5 options d'édition/format (ex: Tome unitaire vs Intégrale vs réédition)
+  const isMetaIntegral = (m: ExternalBookMetadata): boolean =>
+    Boolean(
+      m.isIntegral ||
+        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+          `${m.title || ''} ${m.collection || ''}`
+        ) ||
+        (m.pageCount && m.pageCount >= 180)
+    );
+
+  const seenEditionSlots = new Set<string>();
   const topAlternatives: PhotoResolutionOption[] = [];
   for (const entry of ranked) {
-    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 2) break;
+    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 4) break;
+    const isInt = isMetaIntegral(entry.bucket.bestMeta);
     const wk = entry.bucket.workKey || `isbn:${entry.bucket.isbn13}`;
-    if (distinctWorkKeys.has(wk)) continue;
-    distinctWorkKeys.add(wk);
+    const slotKey = `${wk}|${isInt ? 'INT' : 'UNIT'}|${normalizeTextKey(entry.bucket.bestMeta.publisher || '')}`;
+    if (seenEditionSlots.has(slotKey) && topAlternatives.length >= 2) continue;
+    seenEditionSlots.add(slotKey);
     topAlternatives.push({
       isbn13: entry.bucket.isbn13,
       title: entry.bucket.bestMeta.title || hints.title || 'Titre inconnu',
@@ -473,21 +507,44 @@ async function discoverConsensusByHints(
       coverUrl: entry.bucket.bestMeta.coverUrl,
       series: entry.bucket.bestMeta.series,
       seriesNumber: entry.bucket.bestMeta.seriesNumber,
+      isIntegral: isInt,
       score: entry.finalScore,
       sourcesCount: entry.effectiveSources
     });
-    if (topAlternatives.length >= 3) break;
+    if (topAlternatives.length >= 5) break;
   }
 
-  const secondDistinct = topAlternatives[1];
+  // Ne retenir le gap de concurrence que sur des œuvres distinctes (pas deux éditions d'une même œuvre)
+  const secondDistinctWork = topAlternatives.find((alt, idx) => idx > 0 && alt.isbn13 !== top.bucket.isbn13);
   const hasCompetingWork =
-    Boolean(secondDistinct) &&
+    Boolean(secondDistinctWork) &&
     top.effectiveSources < 2 &&
-    top.finalScore - secondDistinct.score <= DOUBT_COMPETITOR_GAP;
+    top.finalScore - (secondDistinctWork?.score || 0) <= DOUBT_COMPETITOR_GAP;
   const isBorderlineScore = top.finalScore < CONSENSUS_SCORE_THRESHOLD;
   const isLowConfidenceSingle = aiConfidence === 'low' && top.effectiveSources < 2;
 
   const isDoubt = isBorderlineScore || hasCompetingWork || isLowConfidenceSingle;
+
+  void pushClientPipelineLogs({
+    sourceChannel: 'canal_4_ai_photo',
+    steps: [
+      {
+        layer: 'C3',
+        stepName: 'client_hint_lookup',
+        status: isDoubt ? 'warn' : 'ok',
+        summary: `Canal 3 (${hints.title || hints.series || '?'}${hints.volumeNumber ? ` #${hints.volumeNumber}` : ''}) -> ${top.bucket.isbn13} (score ${Math.round(top.finalScore)}, BnF:${bnfMatches.length}/GB:${gbMatches.length}/OL:${olMatches.length})`,
+        payload: {
+          hints,
+          selected: { isbn13: top.bucket.isbn13, title: top.bucket.bestMeta.title, series: top.bucket.bestMeta.series, vol: top.bucket.bestMeta.seriesNumber, score: top.finalScore },
+          alternativesCount: topAlternatives.length,
+          bnfTop: bnfMatches.slice(0, 4).map((m) => ({ isbn: m.meta.isbn, title: m.meta.title, vol: m.meta.seriesNumber, integral: m.meta.isIntegral, score: m.score })),
+          gbTop: gbMatches.slice(0, 3).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber })),
+          olTop: olMatches.slice(0, 3).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber }))
+        },
+        durationMs: Date.now() - c3Start
+      }
+    ]
+  });
 
   const topWorkIsbns = top.bucket.workKey
     ? Array.from(
@@ -779,6 +836,13 @@ export const photoBookResolutionService = {
 
       const correctedFromAi = detectAiCorrection(cand, mergedTitle, mergedAuthors);
 
+      const hasIntegralOption = alternatives.some((a) => Boolean(a.isIntegral));
+      const isMainIntegral = Boolean(
+        hintMatchMeta?.isIntegral ||
+          /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b)/i.test(mergedTitle) ||
+          ((externalMeta?.pageCount || hintMatchMeta?.pageCount || 0) >= 180)
+      );
+
       return {
         id: uid,
         sourceKind: 'detected',
@@ -798,12 +862,17 @@ export const photoBookResolutionService = {
         coverFallbackUrls,
         series: mergedSeries,
         seriesNumber: mergedSeriesNum,
+        isIntegral: isMainIntegral,
+        hasIntegralOption,
         existingUri: ownership.existingUri || d1Entity?.uri,
         existingWorkUri: ownership.existingWorkUri || d1Entity?.workUri,
         correctedFromAi,
         sourcesCount,
-        ...(isDoubt && alternatives.length > 0
-          ? { alternatives, selectedAlternativeIsbn: alternatives[0].isbn13 }
+        ...(alternatives.length > 0
+          ? {
+              alternatives,
+              selectedAlternativeIsbn: isDoubt ? alternatives[0].isbn13 : isbn13
+            }
           : {})
       };
     } catch (err: unknown) {

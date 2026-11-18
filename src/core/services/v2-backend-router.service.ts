@@ -8,6 +8,7 @@
 import type { AppBackendEnv } from '../adapters/storage-db.interface';
 import type { SyncDeltaRequest, SyncDeltaResponse } from '../domain/v2.types';
 import { resolveAuthSession } from './d1-gateway.service';
+import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './pipeline-logger.service';
 import {
   runV4IngestionPipeline,
   searchLocalBooksForCanal3,
@@ -194,6 +195,55 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         traceId: typeof payload.traceId === 'string' ? payload.traceId : undefined
       });
       return jsonResponse(result);
+    }
+
+    // 7. Observabilité V4 : Enregistrement des logs détaillés d'appels API émis par Couche 1 / Canal 3 côté client
+    if (path === 'logs/client' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        traceId?: string;
+        sourceChannel?: string;
+        userUri?: string;
+        steps?: Array<{
+          layer?: PipelineLayer;
+          stepName?: string;
+          status?: PipelineStepStatus;
+          summary?: string;
+          payload?: unknown;
+          durationMs?: number;
+        }>;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) {
+        return jsonResponse({ error: 'Authentification requise' }, 401);
+      }
+      const steps = Array.isArray(payload.steps) ? payload.steps.slice(0, 40) : [];
+      if (steps.length > 0) {
+        const tracer = new PipelineTracer({
+          traceId: typeof payload.traceId === 'string' && payload.traceId ? payload.traceId : undefined,
+          userId: auth.userId,
+          sourceChannel: payload.sourceChannel || 'canal_3_text_search'
+        });
+        for (const s of steps) {
+          tracer.record(
+            s.layer || 'C3',
+            String(s.stepName || 'client_api').slice(0, 80),
+            s.status === 'error' || s.status === 'warn' ? s.status : 'ok',
+            String(s.summary || 'Requête API client'),
+            s.payload,
+            s.durationMs
+          );
+        }
+        await tracer.flush(env.DB);
+        return jsonResponse({ ok: true, traceId: tracer.traceId, recorded: steps.length });
+      }
+      return jsonResponse({ ok: true, recorded: 0 });
     }
 
     return jsonResponse({ error: `Route V2 inconnue: ${method} /api/v2/${path}` }, 404);

@@ -560,6 +560,7 @@ const saveChanges = async () => {
       :currentSeriesId="originalBook.seriesId"
       :currentSeriesTitle="seriesInput || originalBook.series"
       :initialVolumeLabel="seriesNumberInput || originalBook.seriesNumber"
+      :singleBook="true"
       @close="showSeriesMergeModal = false"
       @merged="handleSeriesMerged"
     />

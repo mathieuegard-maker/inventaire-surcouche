@@ -285,6 +285,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       :bookUris="selectedIds.length > 0 ? selectedIds : seriesTomes.map(t => t.uri)"
       :currentSeriesId="seriesId"
       :currentSeriesTitle="seriesName"
+      :singleBook="selectedIds.length === 1"
       @close="showMergeSeriesModal = false"
       @merged="(p) => router.push({ name: 'SeriesView', params: { id: p.seriesId } })"
     />

@@ -9,6 +9,8 @@ const EDITORIAL_COLLECTION_MARKERS = [
   'grande collection',
   'la collection',
   'collection',
+  'serie classique',
+  'série classique',
   'edition luxe',
   'edition collector',
   'collector',
@@ -37,10 +39,27 @@ const SERIES_LEADING_PREFIXES = [
   'album de ',
   'albums d ',
   'album d ',
+  'la collection ',
+  'collection ',
   'les archives ',
   'la saga ',
   'saga '
 ];
+
+const PAPERBACK_AND_PUBLISHER_COLLECTION_RE =
+  /^(?:(?:la\s+)?collection\s+|editions?\s+|éditions?\s+)?(?:folio(?:\s+bd|\s+cadets|\s+junior|\s+sf|\s+policier)?|livre\s+de\s+poche|le\s+livre\s+de\s+poche|pocket(?:\s+bd)?|j['’]?\s*ai\s+lu|10\/18|10\s*18|points|babel|flammarion|gallimard(?:\s+jeunesse)?|dupuis|dargaud|le\s+lombard|gl[ée]nat|delcourt|soleil|casterman|hachette|rombaldi|france\s+loisirs|aire\s+libre|long\s+courrier|sign[ée]|rep[ée]rages|troisi[èe]me\s+vague|poisson\s+pilote)$/i;
+
+/**
+ * Détecte les noms de collections éditoriales génériques (ex: "Folio", "Collection Folio", "Pocket")
+ * qui ne doivent jamais être élues en tant que Série narrative ni fournir leur n° de collection comme n° de tome.
+ */
+export function isEditorialPaperbackCollectionName(raw?: string): boolean {
+  const cleaned = (raw || '').replace(/\s+/g, ' ').trim();
+  if (!cleaned) return false;
+  if (PAPERBACK_AND_PUBLISHER_COLLECTION_RE.test(cleaned)) return true;
+  const norm = normalizeTextKey(cleaned);
+  return PAPERBACK_AND_PUBLISHER_COLLECTION_RE.test(norm);
+}
 
 const SERIES_STOP_WORDS = new Set([
   'et',
@@ -71,11 +90,19 @@ export function stripEditorialCollectionSuffixes(rawSeries: string): {
   let display = (rawSeries || '').replace(/\s+/g, ' ').trim();
   if (!display) return { cleanDisplay: '', coreKey: '', tokens: [] };
 
+  // Retirer un préfixe éditorial explicite ("Collection les Schtroumpfs", "La collection ...")
+  const strippedLeadingDisplay = display
+    .replace(/^(?:la\s+)?collection\s+(?=.{3,})/i, '')
+    .trim();
+  if (strippedLeadingDisplay.length >= 3) {
+    display = strippedLeadingDisplay;
+  }
+
   // Retirer les segments après "-", ":", "," ou "(...)" contenant un marqueur de collection éditoriale
   const normFull = normalizeWithAmpersand(display);
   for (const marker of EDITORIAL_COLLECTION_MARKERS) {
     if (normFull.includes(marker)) {
-      const splitDash = display.split(/\s+[-–—:]\s+|,\s+/);
+      const splitDash = display.split(/\s*[-–—:]\s+|,\s+/);
       if (splitDash.length > 1 && normalizeWithAmpersand(splitDash[splitDash.length - 1]).includes(marker)) {
         display = splitDash.slice(0, -1).join(' - ').trim();
       }
@@ -88,7 +115,7 @@ export function stripEditorialCollectionSuffixes(rawSeries: string): {
   normalized = normalized.replace(/^\d+\s+gags\s+(?:de|d)\s+/i, '').trim();
 
   for (const prefix of SERIES_LEADING_PREFIXES) {
-    if (normalized.startsWith(prefix)) {
+    if (normalized.startsWith(prefix) && normalized.slice(prefix.length).trim().length >= 3) {
       normalized = normalized.slice(prefix.length).trim();
       break;
     }

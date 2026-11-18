@@ -6,7 +6,7 @@ import { queueService } from './core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from './core/orchestrators/background-creation.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
-import ScannerOverlayModal from './ui/components/ScannerOverlayModal.vue';
+import CameraBarcodeModal from './ui/components/CameraBarcodeModal.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
 import { photoBatchQueueService } from './core/services/photo-batch-queue.service';
@@ -157,8 +157,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Scanner unifié (Simple / Rafale / Photo Étagère en arrière-fond) -->
-    <ScannerOverlayModal />
+    <!-- Modale Caméra dédiée uniquement à la lecture vidéo de codes-barres -->
+    <CameraBarcodeModal />
 
     <router-view></router-view>
   </div>

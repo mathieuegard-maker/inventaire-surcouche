@@ -10,6 +10,7 @@ const props = defineProps<{
   currentSeriesId?: string;
   currentSeriesTitle?: string;
   initialVolumeLabel?: string;
+  singleBook?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -75,6 +76,7 @@ async function handleConfirmMerge() {
       finalVolLabel = '';
     }
 
+    const allowVolEdit = props.singleBook === true || props.bookUris.length === 1;
     const res = await fetchWithTimeout('/api/gateway?action=series-merge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -86,9 +88,9 @@ async function handleConfirmMerge() {
             ? props.currentSeriesId
             : undefined,
         bookUris: props.bookUris,
-        volumeLabel: props.bookUris.length === 1 ? finalVolLabel : undefined,
+        volumeLabel: allowVolEdit ? finalVolLabel : undefined,
         sortOrder:
-          volumeType.value === 'hors_serie' || volumeType.value === 'unnumbered'
+          allowVolEdit && (volumeType.value === 'hors_serie' || volumeType.value === 'unnumbered')
             ? sortOrderInput.value
             : undefined
       })

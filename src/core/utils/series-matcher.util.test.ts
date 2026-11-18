@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   findBestMatchingSeries,
   findMatchingOwnedWork,
+  isEditorialPaperbackCollectionName,
   stripEditorialCollectionSuffixes
 } from './series-matcher.util';
 
@@ -32,6 +33,13 @@ describe('series-matcher.util', () => {
     expect(stripEditorialCollectionSuffixes('Astérix (Édition Luxe)').coreKey).toBe('asterix');
     expect(stripEditorialCollectionSuffixes('Album de Boule & Bill').coreKey).toBe('boule bill');
     expect(stripEditorialCollectionSuffixes('Le petit Spirou présente').coreKey).toBe('petit spirou');
+    expect(stripEditorialCollectionSuffixes('Collection les Schtroumpfs').coreKey).toBe('schtroumpfs');
+    expect(stripEditorialCollectionSuffixes('La collection les Schtroumpfs').coreKey).toBe('schtroumpfs');
+    expect(stripEditorialCollectionSuffixes('Les Schtroumpfs: série classique').coreKey).toBe('schtroumpfs');
+    expect(stripEditorialCollectionSuffixes('Les Schtroumpfs: série classique').cleanDisplay).toBe('Les Schtroumpfs');
+    expect(isEditorialPaperbackCollectionName('Collection Folio')).toBe(true);
+    expect(isEditorialPaperbackCollectionName('Folio')).toBe(true);
+    expect(isEditorialPaperbackCollectionName('Les Schtroumpfs')).toBe(false);
   });
 
   it("rattache 'Astérix - La Grande Collection' / Le Devin à 'Une aventure d'Astérix'", () => {

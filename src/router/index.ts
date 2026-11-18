@@ -77,6 +77,11 @@ export const router = createRouter({
       component: () => import('../ui/views/AdminView.vue')
     },
     {
+      path: '/scan',
+      name: 'ScanView',
+      component: () => import('../ui/views/ScanView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView

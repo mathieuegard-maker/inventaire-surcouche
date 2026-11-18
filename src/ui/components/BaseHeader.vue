@@ -66,9 +66,9 @@ const toggleScan = () => {
       <button
         class="wireframe-btn header-nav-btn btn-scan-global-trigger"
         @click="toggleScan"
-        :class="{ 'btn-scan-active': scannerState.isScanningActive.value }"
+        :class="{ 'btn-scan-active': $route.name === 'ScanView' }"
       >
-        {{ scannerState.isScanningActive.value ? 'FERMER' : 'SCANNER' }}
+        SCANNER
       </button>
     </div>
 
@@ -83,9 +83,9 @@ const toggleScan = () => {
         <button
           class="wireframe-btn mobile-scan-trigger-btn"
           @click="toggleScan"
-          :class="{ 'btn-scan-active': scannerState.isScanningActive.value }"
+          :class="{ 'btn-scan-active': $route.name === 'ScanView' }"
         >
-          {{ scannerState.isScanningActive.value ? 'FERMER' : 'SCANNER' }}
+          SCANNER
         </button>
       </div>
 

@@ -108,16 +108,23 @@ export const seriesOrchestrator = {
       const normNum = b.seriesNumber ? normalizeSeriesNumber(b.seriesNumber) : '';
       if (normNum) seenWorkKeys.set(`num:${normNum}`, target);
       const normTitle = b.title ? normalizeTextKey(b.title) : '';
-      if (normTitle.length >= 3) seenWorkKeys.set(`title:${normTitle}`, target);
+      // N'indexe par titre générique que s'il n'y a PAS de numéro de tome explicite ni de mélange Intégrale / Tome
+      if (normTitle.length >= 3 && !normNum && !b.isIntegral) {
+        seenWorkKeys.set(`title:${normTitle}`, target);
+      }
     };
 
     for (const tome of sortedForDedup) {
       const normNum = tome.seriesNumber ? normalizeSeriesNumber(tome.seriesNumber) : '';
       const normTitle = tome.title ? normalizeTextKey(tome.title) : '';
+      const titleMatch =
+        normTitle.length >= 3 && !normNum && !tome.isIntegral
+          ? seenWorkKeys.get(`title:${normTitle}`)
+          : undefined;
       const existing =
         (tome.workUri ? seenWorkKeys.get(`work:${tome.workUri}`) : undefined) ||
         (normNum ? seenWorkKeys.get(`num:${normNum}`) : undefined) ||
-        (normTitle.length >= 3 ? seenWorkKeys.get(`title:${normTitle}`) : undefined);
+        titleMatch;
 
       if (existing) {
         if (!existing.seriesNumber && tome.seriesNumber) existing.seriesNumber = tome.seriesNumber;
