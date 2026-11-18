@@ -472,4 +472,42 @@ describe('photoBookResolutionService', () => {
       seriesNumber: '2'
     });
   });
+
+  it('ne marque jamais Intégrale un one-shot épais (>= 180 pages) sans mention explicite', async () => {
+    vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockResolvedValue([
+      {
+        score: 120,
+        meta: {
+          isbn: '9782754829212',
+          title: 'Le droit du sol',
+          authors: ['Étienne Davodeau'],
+          publisher: 'Futuropolis',
+          publishDate: '2021',
+          pageCount: 216
+        }
+      }
+    ]);
+    vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockResolvedValue({
+      isbn: '9782754829212',
+      title: 'Le droit du sol',
+      authors: ['Étienne Davodeau'],
+      publisher: 'Futuropolis',
+      publishDate: '2021',
+      pageCount: 216,
+      genres: []
+    });
+
+    const result = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries([
+      {
+        rawSpineText: 'Étienne Davodeau LE DROIT DU SOL',
+        title: 'Le droit du sol',
+        author: 'Étienne Davodeau',
+        confidence: 'high'
+      }
+    ]);
+
+    expect(result.detectedItems).toHaveLength(1);
+    expect(result.detectedItems[0].isIntegral).toBe(false);
+    expect(result.detectedItems[0].hasIntegralOption).toBe(false);
+  });
 });

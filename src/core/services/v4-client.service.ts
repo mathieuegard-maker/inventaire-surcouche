@@ -12,6 +12,7 @@ import type {
   IngestSingleResult,
   Layer2Status,
   SourceChannel,
+  UserIngestHint,
   V4BookRecord
 } from './v4-pipeline.service';
 
@@ -20,12 +21,20 @@ export function v4BookRecordToHumanizedBook(
   ownershipStatus: 'owned' | 'wish' | 'none' = 'none'
 ): HumanizedBook {
   const primaryIsbn = rec.knownIsbns?.[0] || rec.editionsCatalog?.[0]?.isbn13;
-  const editionMeta = rec.editionsCatalog?.[0];
+  const editionMeta =
+    rec.editionsCatalog?.find((e) => e.isbn13 === primaryIsbn) || rec.editionsCatalog?.[0];
   const fallbackCovers = imageUtil.buildCoverCandidates(primaryIsbn, [
     rec.selectedCoverUrl || undefined,
+    editionMeta?.coverUrl,
     ...(rec.editionsCatalog || []).map((e) => e.coverUrl)
   ]);
   const uri = rec.legacyEntityUri || (primaryIsbn ? `isbn:${primaryIsbn}` : `book:${rec.id}`);
+
+  const seriesNumberDisplay = rec.isIntegral
+    ? rec.integralMetadata?.includedVolumeNumbers?.length >= 2
+      ? `Int. T.${rec.integralMetadata.includedVolumeNumbers[0]}-${rec.integralMetadata.includedVolumeNumbers[rec.integralMetadata.includedVolumeNumbers.length - 1]}`
+      : rec.volumeLabel || 'Intégrale'
+    : rec.volumeLabel || undefined;
 
   return {
     uri,
@@ -47,7 +56,7 @@ export function v4BookRecordToHumanizedBook(
     publishDate: editionMeta?.publicationYear,
     series: rec.seriesName || undefined,
     seriesId: rec.seriesId || undefined,
-    seriesNumber: rec.volumeLabel || undefined,
+    seriesNumber: seriesNumberDisplay,
     genres: [rec.mainCategory, ...(rec.subgenres || [])].filter((g) => g && g !== 'Autre'),
     coverUrl: rec.selectedCoverUrl || fallbackCovers[0],
     coverFallbackUrls: fallbackCovers,
@@ -177,6 +186,7 @@ export async function ingestIsbnsViaV4(params: {
   action?: 'owned' | 'wishlist' | 'preview';
   traceId?: string;
   chunkSize?: number;
+  hints?: Record<string, UserIngestHint>;
   onProgress?: (processed: number, total: number) => void;
 }): Promise<IngestBatchResult | null> {
   if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
@@ -194,6 +204,12 @@ export async function ingestIsbnsViaV4(params: {
   try {
     for (let i = 0; i < uniqueIsbns.length; i += step) {
       const slice = uniqueIsbns.slice(i, i + step);
+      const sliceHints: Record<string, UserIngestHint> = {};
+      if (params.hints) {
+        for (const k of slice) {
+          if (params.hints[k]) sliceHints[k] = params.hints[k];
+        }
+      }
       const res = await fetchWithTimeout('/api/v2/books/ingest', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -203,6 +219,7 @@ export async function ingestIsbnsViaV4(params: {
           source_channel: params.sourceChannel,
           action: params.action || 'preview',
           userUri: savedUri,
+          ...(Object.keys(sliceHints).length > 0 ? { hints: sliceHints } : {}),
           ...(effectiveTraceId ? { traceId: effectiveTraceId } : {})
         })
       });
@@ -221,7 +238,7 @@ export async function ingestIsbnsViaV4(params: {
       allResults.push(...data.results);
       params.onProgress?.(Math.min(uniqueIsbns.length, i + slice.length), uniqueIsbns.length);
 
-      // Synchroniser immédiatement chaque livre consolidé dans IndexedDB
+      // Synchroniser immédiatement chaque livre consolidé dans IndexedDB (cache_books + registres inventory/wishlist)
       for (const r of data.results) {
         if (!r.book) continue;
         const targetStatus: 'owned' | 'wish' | 'none' =
@@ -235,6 +252,14 @@ export async function ingestIsbnsViaV4(params: {
           await databaseService.saveBookToCache(humanized).catch(() => {});
         } else if (typeof databaseService.indexBookIsbns === 'function') {
           await databaseService.indexBookIsbns(humanized).catch(() => {});
+        }
+        if (typeof databaseService.addRegistryEntry === 'function') {
+          if (targetStatus === 'owned') {
+            await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
+            await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
+          } else if (targetStatus === 'wish') {
+            await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+          }
         }
       }
     }

@@ -49,7 +49,7 @@ export const barcodeIsbnProvider = {
     onResult: (response: SearchResponse | null, rawIsbn?: string) => void,
     onError: (errorMsg: string) => void,
     onScanningReady?: () => void,
-    options?: { continuous?: boolean }
+    options?: { continuous?: boolean; onBarcodeDetected?: (isbn: string) => void }
   ): Promise<void> {
     const continuous = Boolean(options?.continuous);
     try {
@@ -92,6 +92,7 @@ export const barcodeIsbnProvider = {
 
           if (!continuous) {
             await this.stopScanner();
+            options?.onBarcodeDetected?.(cleanIsbn);
           }
 
           try {

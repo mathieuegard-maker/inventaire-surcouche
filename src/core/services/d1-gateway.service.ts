@@ -366,15 +366,21 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
       } else if (f.tag === '245') {
         const a = cleanTitle(getSf('a'));
         const e = cleanTitle(getSf('e'));
+        const h = cleanTitle(getSf('h'));
         const u = getSf('u');
         const n = getSf('n');
         const p = cleanTitle(getSf('p'));
+        const hasIntegralInE = /\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\b/i.test(e);
         if (p && a) {
           seriesTitle = seriesTitle || cleanSeriesName(a);
           title = p;
           if (n || u) seriesNumber = seriesNumber || normalizeSeriesNumber(n || u);
         } else {
           title = title || a;
+          if (hasIntegralInE && title && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(title)) {
+            const ord = normalizeSeriesNumber(h || u || '');
+            title = ord ? `${title} — ${e} ${ord}` : `${title} — ${e}`;
+          }
           if (u) seriesNumber = seriesNumber || normalizeSeriesNumber(u);
           if (e && !seriesTitle && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
             seriesNumber = seriesNumber || normalizeSeriesNumber(e);
@@ -1208,14 +1214,14 @@ export async function upsertCatalogEntity(
         ? params.seriesUri && params.seriesNumber
           ? await db
               .prepare(
-                "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND (normalized_label = ? OR series_number = ?) LIMIT 1"
+                "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND series_number = ? LIMIT 1"
               )
-              .bind(params.seriesUri, normalizedLabel, params.seriesNumber)
+              .bind(params.seriesUri, params.seriesNumber)
               .first<{ uri: string; label?: string; entity_json: string | null }>()
           : params.seriesUri
             ? await db
                 .prepare(
-                  "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND normalized_label = ? LIMIT 1"
+                  "SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = 'work' AND series_uri = ? AND normalized_label = ? AND (series_number IS NULL OR series_number = '') LIMIT 1"
                 )
                 .bind(params.seriesUri, normalizedLabel)
                 .first<{ uri: string; label?: string; entity_json: string | null }>()

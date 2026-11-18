@@ -95,6 +95,10 @@ function createInMemoryV4Db(): {
           const res = Array.from(books.values()).filter((b) => b.series_id === args[0] && b.is_integral === 0);
           return { results: res as T[], success: true };
         }
+        if (cleanSql.startsWith('SELECT library_id, is_owned, is_wished')) {
+          const res = Array.from(libBooks.values()).filter((l) => l.book_id === String(args[0]));
+          return { results: res as T[], success: true };
+        }
         if (cleanSql.startsWith('SELECT id, volume_number FROM books WHERE series_id = ? AND is_integral = 0')) {
           const res = Array.from(books.values()).filter(
             (b) => b.series_id === args[0] && b.is_integral === 0 && b.is_hors_serie === 0
@@ -184,6 +188,20 @@ function createInMemoryV4Db(): {
           });
         } else if (cleanSql.startsWith('INSERT INTO pipeline_logs')) {
           logs.push(args);
+        } else if (cleanSql.startsWith('DELETE FROM v4_library_books WHERE book_id = ?')) {
+          for (const [k, v] of libBooks.entries()) {
+            if (v.book_id === String(args[0])) libBooks.delete(k);
+          }
+        } else if (cleanSql.startsWith('DELETE FROM books WHERE id = ?')) {
+          books.delete(String(args[0]));
+        } else if (cleanSql.startsWith('UPDATE book_isbn_index SET book_id = ?')) {
+          const [newBookId, isInt, oldBookId] = args;
+          for (const entry of isbnIndex.values()) {
+            if (entry.book_id === String(oldBookId)) {
+              entry.book_id = String(newBookId);
+              entry.is_integral = Number(isInt);
+            }
+          }
         }
         return { success: true };
       }
@@ -475,5 +493,108 @@ describe('v4-pipeline.service', () => {
     expect(elected?.coreKey).toBe('schtroumpfs');
     expect(elected?.canonicalName).toBe('Les Schtroumpfs');
     expect(elected?.confidenceRatio).toBe(1);
+  });
+
+  it('ne classe JAMAIS un one-shot épais (>=180 pages ou avec sous-titre) comme Intégrale', async () => {
+    const { db } = createInMemoryV4Db();
+    const payload: StagingPayload = {
+      anchorIsbn13: '9782754829212',
+      anchorTitle: "Le droit du sol / Journal d'un vertige",
+      language: 'fr',
+      sisterEditions: [
+        {
+          source: 'openlibrary',
+          isbn13: '9782754829212',
+          title: 'Le droit du sol',
+          pageCount: 216
+        }
+      ],
+      seriesCandidates: [],
+      authors: ['Étienne Davodeau'],
+      illustrators: [],
+      scriptwriters: [],
+      pageCount: 216,
+      rawSubjects: ['Bande dessinée'],
+      rawTitles: ["Le droit du sol / Journal d'un vertige"],
+      sourcesHit: ['bnf', 'openlibrary']
+    };
+    const intCheck = detectIntegralAndIncludedVolumes(payload);
+    expect(intCheck.isIntegral).toBe(false);
+    const saved = await consolidateBookLayer4(db, payload, {
+      sourceChannel: 'canal_4_ai_photo',
+      libraryId: 'lib_1',
+      action: 'owned'
+    });
+    expect(saved.isIntegral).toBe(false);
+  });
+
+  it('reconnaît BnF 245$e=intégrale + Inventaire multi-P629 (ex: Aya de Yopougon Intégrale 2), extrait les tomes 4-6 et migre un ancien squelette', async () => {
+    const { db, books, libBooks } = createInMemoryV4Db();
+    // Pré-semer un vieux squelette C5 erroné sur lequel l'utilisateur était lié
+    books.set('bk_old_skel', {
+      id: 'bk_old_skel',
+      work_canonical_id: 'series:aya yopougon:vol:2',
+      canonical_title: 'Aya de Yopougon',
+      is_integral: 0,
+      known_isbns_json: '["9782075079334"]'
+    });
+    libBooks.set('lib_1::bk_old_skel', { library_id: 'lib_1', book_id: 'bk_old_skel', is_owned: 1, is_wished: 0 });
+
+    const bnfXml = `<?xml version="1.0" encoding="UTF-8"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+<srw:record><mxc:record>
+  <mxc:datafield tag="020"><mxc:subfield code="a">9782075079334</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="245"><mxc:subfield code="a">Aya de Yopougon</mxc:subfield><mxc:subfield code="e">intégrale</mxc:subfield><mxc:subfield code="u">02</mxc:subfield><mxc:subfield code="h">2</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="460"><mxc:subfield code="3">45271432</mxc:subfield><mxc:subfield code="t">Aya de Yopougon</mxc:subfield><mxc:subfield code="v">2</mxc:subfield></mxc:datafield>
+  <mxc:datafield tag="950"><mxc:subfield code="a">777111</mxc:subfield></mxc:datafield>
+</mxc:record></srw:record>
+</srw:searchRetrieveResponse>`;
+
+    const invJson = {
+      entities: {
+        'isbn:9782075079334': {
+          type: 'edition',
+          claims: {
+            'wdt:P1476': ['Aya de Yopougon - Intégrale 2'],
+            'wdt:P629': ['wd:Q110482781', 'wd:Q110482783', 'wd:Q110482785']
+          }
+        },
+        'wd:Q110482781': { claims: { 'wdt:P1545': ['4'], 'wdt:P179': ['wd:Q2734031'] } },
+        'wd:Q110482783': { claims: { 'wdt:P1545': ['5'], 'wdt:P179': ['wd:Q2734031'] } },
+        'wd:Q110482785': { claims: { 'wdt:P1545': ['6'], 'wdt:P179': ['wd:Q2734031'] } },
+        'wd:Q2734031': { labels: { fr: 'Aya de Yopougon' } }
+      }
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('catalogue.bnf.fr')) return new Response(bnfXml, { status: 200 });
+        if (url.includes('inventaire.io')) return new Response(JSON.stringify(invJson), { status: 200 });
+        return new Response('', { status: 404 });
+      })
+    );
+
+    const staging = await discoverMultiSourceLayer3('9782075079334');
+    expect(staging).not.toBeNull();
+    expect(staging!.includedVolumeNumbersHint).toEqual(['4', '5', '6']);
+
+    const saved = await consolidateBookLayer4(db, staging!, {
+      sourceChannel: 'canal_4_ai_photo',
+      libraryId: 'lib_1',
+      action: 'owned',
+      replaceSkeletonBookId: 'bk_old_skel'
+    });
+    expect(saved.isIntegral).toBe(true);
+    expect(saved.canonicalTitle).toContain('Intégrale 2');
+    expect(saved.volumeNumber).toBeNull();
+    expect(saved.integralMetadata.includedVolumeNumbers).toEqual(['4', '5', '6']);
+    expect(saved.selectedCoverUrl).toContain('idImage=777111');
+    // Ancien squelette supprimé et possession migrée proprement sur le nouveau livre
+    expect(books.has('bk_old_skel')).toBe(false);
+    expect(libBooks.get(`lib_1::${saved.id}`)?.is_owned).toBe(1);
+
+    vi.unstubAllGlobals();
   });
 });

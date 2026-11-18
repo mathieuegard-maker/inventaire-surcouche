@@ -11,6 +11,8 @@ function getVolumeSortWeight(vol?: string): number {
   const trimmed = vol.trim();
   const numMatch = /^(\d+(?:\.\d+)?)/.exec(trimmed);
   if (numMatch) return parseFloat(numMatch[1]);
+  const intMatch = /^int(?:\.|[ée]grale)?\s*(?:t\.?\s*)?(\d+)/i.exec(trimmed);
+  if (intMatch) return parseFloat(intMatch[1]) - 0.1;
   const hsMatch = /hs\s*(\d+)?/i.exec(trimmed);
   if (hsMatch) return 5000 + (hsMatch[1] ? parseInt(hsMatch[1], 10) : 0);
   return 8000;

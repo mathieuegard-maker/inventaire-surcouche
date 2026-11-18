@@ -478,14 +478,18 @@ export function parseIntermarcRecord(
   const rawA245 = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
   const rawP245 = f245 ? cleanTitle(getSubfield(f245, 'p') || '') : '';
   const rawE245 = f245 ? cleanTitle(getSubfield(f245, 'e') || '') : '';
+  const rawH245 = f245 ? getSubfield(f245, 'h') : undefined;
   const partNumber245 = f245 ? getSubfield(f245, 'n') : undefined;
-  const imVolumeNumber = (f245 ? getSubfield(f245, 'u') : undefined) || partNumber245;
+  const imVolumeNumber = (f245 ? getSubfield(f245, 'u') : undefined) || partNumber245 || rawH245;
 
   let rawImTitle = rawA245;
   let inferredSeriesFrom245: string | undefined;
   if (rawP245 && rawA245) {
     inferredSeriesFrom245 = cleanSeriesName(rawA245);
     rawImTitle = rawP245;
+  } else if (rawE245 && /\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\b/i.test(rawE245) && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(rawA245)) {
+    const ord = normalizeSeriesNumber(rawH245 || imVolumeNumber || '');
+    rawImTitle = ord && /^\d+$/.test(ord) ? `${rawA245} — Intégrale ${ord}` : `${rawA245} — ${rawE245}`;
   } else if (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245)) {
     rawImTitle = rawA245;
   }

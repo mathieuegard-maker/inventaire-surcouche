@@ -22,6 +22,8 @@ export type ScannerMode = 'simple' | 'burst' | 'photo';
 const isCameraModalOpen = ref(false);
 const isScanningActive = isCameraModalOpen;
 const isSearching = ref(false);
+const isSimpleResolving = ref(false);
+const simpleResolvingIsbn = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 const activeMode = ref<ScannerMode>('photo');
 const burstBooks = ref<HumanizedBook[]>([]);
@@ -43,6 +45,8 @@ export const scannerState = {
   isCameraModalOpen,
   isScanningActive,
   isSearching,
+  isSimpleResolving,
+  simpleResolvingIsbn,
   errorMessage,
   activeMode,
   burstBooks,
@@ -96,15 +100,17 @@ export const scannerState = {
               return;
             }
 
-            // Mode 'simple' : dès que le livre est trouvé, on ferme la caméra et on ouvre sa fiche complète
+            // Mode 'simple' : fermer la caméra dès détection, afficher chargement puis ouvrir la fiche
             isSearching.value = false;
+            isSimpleResolving.value = false;
+            simpleResolvingIsbn.value = null;
             const cleanScanned = (response?.isbn || rawIsbn || '').trim();
             if (response?.isOfflineUnavailable || (!response && connectionState.isOffline.value)) {
               playScanBeep('success');
+              await this.stopScan();
               if (cleanScanned) {
                 pendingScansStore.addPendingScan(cleanScanned);
               }
-              await barcodeIsbnProvider.stopScanner();
               errorMessage.value = cleanScanned
                 ? `Pas de réseau actuellement : ce livre est absent de votre base locale. Le code-barres (${cleanScanned}) a été mémorisé pour consulter sa fiche dès le retour du réseau.`
                 : 'Pas de réseau actuellement : impossible de rechercher cet ouvrage pour le moment.';
@@ -131,16 +137,31 @@ export const scannerState = {
           },
           (errorMsg) => {
             isSearching.value = false;
+            isSimpleResolving.value = false;
+            simpleResolvingIsbn.value = null;
             errorMessage.value = errorMsg;
           },
           () => {
             isSearching.value = true;
           },
-          { continuous: isContinuous }
+          {
+            continuous: isContinuous,
+            onBarcodeDetected: (isbn) => {
+              if (!isContinuous) {
+                playScanBeep('success');
+                isCameraModalOpen.value = false;
+                isSearching.value = false;
+                isSimpleResolving.value = true;
+                simpleResolvingIsbn.value = isbn;
+              }
+            }
+          }
         );
       } catch (err: any) {
         isCameraModalOpen.value = false;
         isSearching.value = false;
+        isSimpleResolving.value = false;
+        simpleResolvingIsbn.value = null;
         errorMessage.value = err.message || 'Erreur de démarrage du scanner.';
       }
     }, 150);

@@ -479,13 +479,13 @@ async function discoverConsensusByHints(
   }
 
   // Construire jusqu'à 5 options d'édition/format (ex: Tome unitaire vs Intégrale vs réédition)
+  // Règle stricte : ne JAMAIS déduire une Intégrale du seul nombre de pages (>= 180p) pour éviter les faux positifs sur romans graphiques unitaires.
   const isMetaIntegral = (m: ExternalBookMetadata): boolean =>
     Boolean(
       m.isIntegral ||
-        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
           `${m.title || ''} ${m.collection || ''}`
-        ) ||
-        (m.pageCount && m.pageCount >= 180)
+        )
     );
 
   const seenEditionSlots = new Set<string>();
@@ -505,6 +505,10 @@ async function discoverConsensusByHints(
       publishDate: entry.bucket.bestMeta.publishDate,
       pageCount: entry.bucket.bestMeta.pageCount,
       coverUrl: entry.bucket.bestMeta.coverUrl,
+      coverFallbackUrls: imageUtil.buildCoverCandidates(entry.bucket.isbn13, [
+        entry.bucket.bestMeta.coverUrl,
+        ...(entry.bucket.bestMeta.coverFallbackUrls || [])
+      ]),
       series: entry.bucket.bestMeta.series,
       seriesNumber: entry.bucket.bestMeta.seriesNumber,
       isIntegral: isInt,
@@ -839,8 +843,9 @@ export const photoBookResolutionService = {
       const hasIntegralOption = alternatives.some((a) => Boolean(a.isIntegral));
       const isMainIntegral = Boolean(
         hintMatchMeta?.isIntegral ||
-          /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b)/i.test(mergedTitle) ||
-          ((externalMeta?.pageCount || hintMatchMeta?.pageCount || 0) >= 180)
+          /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+            mergedTitle
+          )
       );
 
       return {
@@ -908,8 +913,14 @@ export const photoBookResolutionService = {
     let completed = 0;
     onStatus?.(`Identification multi-sources & BnF (0/${candidates.length})...`);
 
+    const totalSpines = candidates.length;
     const resolvedRaw = await runWithConcurrency(candidates, 3, async (cand, idx) => {
-      const item = await this.resolveSingleCandidate(cand, `det-${idx}`, onExternalLookup);
+      const normalizedCand: RecognizedBookCandidate = {
+        ...cand,
+        spineIndex: typeof cand.spineIndex === 'number' ? cand.spineIndex : idx + 1,
+        totalSpines: typeof cand.totalSpines === 'number' ? cand.totalSpines : totalSpines
+      };
+      const item = await this.resolveSingleCandidate(normalizedCand, `det-${idx}`, onExternalLookup);
       completed++;
       onStatus?.(`Identification multi-sources & BnF (${completed}/${candidates.length})...`);
       return item;

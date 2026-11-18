@@ -11,12 +11,16 @@ const props = withDefaults(
     isMixed?: boolean;
     context?: 'owned' | 'lent' | 'wishlist' | 'unowned';
     inline?: boolean;
+    busy?: boolean;
+    busyLabel?: string;
   }>(),
   {
     selectedBooks: undefined,
     isMixed: false,
     context: 'owned',
-    inline: false
+    inline: false,
+    busy: false,
+    busyLabel: 'Enregistrement...'
   }
 );
 
@@ -60,7 +64,9 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
       <div class="batch-dock-card">
         <span class="batch-count-pill">{{ selectedCount }}</span>
 
-        <span v-if="isOffline" class="batch-hint-warn">Hors-ligne</span>
+        <span v-if="busy" class="batch-busy-pill">{{ busyLabel }}</span>
+
+        <span v-else-if="isOffline" class="batch-hint-warn">Hors-ligne</span>
 
         <template v-else-if="commonSummary.actions.length === 0">
           <span class="batch-hint-warn">Aucune action commune</span>
@@ -77,6 +83,7 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             v-if="hasAction('ADD_INVENTORY')"
             type="button"
             class="batch-chip-btn primary"
+            :disabled="busy"
             @click="emit('execute', 'ADD_INVENTORY')"
           >
             Ajouter
@@ -86,6 +93,7 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             v-if="hasAction('ADD_WISHLIST')"
             type="button"
             class="batch-chip-btn"
+            :disabled="busy"
             @click="emit('execute', 'ADD_WISHLIST')"
           >
             Wishlist
@@ -242,6 +250,14 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
   font-weight: 600;
   color: #b45309;
   padding-inline: 0.35rem;
+}
+
+.batch-busy-pill {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-primary, #4f46e5);
+  padding-inline: 0.5rem;
+  white-space: nowrap;
 }
 
 .batch-clear-x {

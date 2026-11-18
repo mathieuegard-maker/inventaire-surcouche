@@ -1600,6 +1600,16 @@ export async function handleD1GatewayAction(
           )
           .bind(libraryId, u, u)
           .run();
+        const rawIsbn = u.startsWith('isbn:') ? u.slice(5) : '';
+        await db
+          .prepare(
+            rawIsbn
+              ? 'UPDATE v4_library_books SET is_owned = 0, updated_at = ? WHERE library_id = ? AND book_id IN (SELECT id FROM books WHERE legacy_entity_uri = ? UNION SELECT book_id FROM book_isbn_index WHERE isbn13 = ?)'
+              : 'UPDATE v4_library_books SET is_owned = 0, updated_at = ? WHERE library_id = ? AND book_id IN (SELECT id FROM books WHERE legacy_entity_uri = ?)'
+          )
+          .bind(...(rawIsbn ? [now, libraryId, u, rawIsbn] : [now, libraryId, u]))
+          .run()
+          .catch(() => {});
       }
       return jsonResp({ ok: true });
     }

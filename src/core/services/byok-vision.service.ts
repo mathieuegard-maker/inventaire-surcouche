@@ -25,6 +25,7 @@ export interface ByokSettings {
 
 export interface RecognizedBookCandidate {
   spineIndex?: number;
+  totalSpines?: number;
   rawSpineText?: string;
   title: string;
   subtitle?: string;
@@ -168,9 +169,11 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
 
   const parsed = JSON.parse(jsonSlice);
   const list = Array.isArray(parsed) ? parsed : [parsed];
-  return list
-    .filter((item) => item && (item.titleHint || item.rawText || item.title || item.series || item.rawSpineText))
-    .map((item, idx) => {
+  const filtered = list.filter(
+    (item) => item && (item.titleHint || item.rawText || item.title || item.series || item.rawSpineText)
+  );
+  const totalSpines = filtered.length;
+  return filtered.map((item, idx) => {
       const conf =
         item.confidence === 'low' || item.confidence === 'medium' || item.confidence === 'high'
           ? item.confidence
@@ -191,6 +194,7 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
 
       return {
         spineIndex: typeof item.spineIndex === 'number' ? item.spineIndex : idx + 1,
+        totalSpines,
         rawSpineText: rawText,
         title: String(resolvedTitle || resolvedSeries || rawText || '').trim(),
         subtitle: item.subtitle ? String(item.subtitle).trim() : undefined,

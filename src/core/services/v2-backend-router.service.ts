@@ -12,7 +12,8 @@ import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './p
 import {
   runV4IngestionPipeline,
   searchLocalBooksForCanal3,
-  type SourceChannel
+  type SourceChannel,
+  type UserIngestHint
 } from './v4-pipeline.service';
 
 function jsonResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
@@ -155,6 +156,7 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         libraryId?: unknown;
         userUri?: unknown;
         traceId?: unknown;
+        hints?: Record<string, UserIngestHint>;
       };
 
       const auth = await resolveAuthSession(
@@ -192,7 +194,8 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         libraryId: auth?.libraryId || (typeof payload.libraryId === 'string' ? payload.libraryId : null),
         userId: auth?.userId || null,
         action,
-        traceId: typeof payload.traceId === 'string' ? payload.traceId : undefined
+        traceId: typeof payload.traceId === 'string' ? payload.traceId : undefined,
+        hints: payload.hints && typeof payload.hints === 'object' ? payload.hints : undefined
       });
       return jsonResponse(result);
     }

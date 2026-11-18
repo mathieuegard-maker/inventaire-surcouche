@@ -93,6 +93,14 @@ export interface SeriesVoteCandidate {
   wikidataQid?: string;
 }
 
+export interface UserIngestHint {
+  title?: string;
+  series?: string;
+  volumeNumber?: string;
+  isIntegral?: boolean;
+  coverUrl?: string;
+}
+
 export interface StagingPayload {
   anchorIsbn13: string;
   anchorTitle: string;
@@ -110,8 +118,12 @@ export interface StagingPayload {
   rawSubjects: string[];
   rawTitles: string[];
   wikidataWorkQid?: string;
+  wikidataWorkQids?: string[];
   wikidataSeriesQid?: string;
   inventaireWorkUri?: string;
+  includedVolumeNumbersHint?: string[];
+  integralOrdinalHint?: string;
+  anchorIsIntegralHint?: boolean;
   sourcesHit: string[];
 }
 
@@ -120,6 +132,7 @@ export interface Layer2CheckResult {
   book: V4BookRecord | null;
   ownedIntegralMatches: ParentIntegralRef[];
   includedOwnedWorkIds: string[];
+  staleSkeletonBookId?: string;
 }
 
 export interface IngestSingleResult {
@@ -433,7 +446,8 @@ export async function checkBookIndexLayer2(
   db: DatabaseBinding,
   isbn13: string,
   libraryId?: string | null,
-  tracer?: PipelineTracer
+  tracer?: PipelineTracer,
+  options?: { userHint?: UserIngestHint }
 ): Promise<Layer2CheckResult> {
   const start = Date.now();
 
@@ -479,6 +493,41 @@ export async function checkBookIndexLayer2(
   const book = mapBookRow(indexRow);
   const ownedIntegralMatches: ParentIntegralRef[] = [];
   const includedOwnedWorkIds: string[] = [];
+
+  // Si l'entrée n'est encore qu'un squelette C5 non enrichi OU si l'utilisateur a corrigé le format Intégrale,
+  // forcer le passage complet en Couches 3 -> 4 pour remplacer proprement le squelette.
+  let isUnenrichedSkeleton = false;
+  try {
+    const pendingSkel = await db
+      .prepare("SELECT status FROM enrichment_queue WHERE isbn13 = ? AND status != 'done' LIMIT 1")
+      .bind(isbn13)
+      .first<{ status: string }>();
+    if (pendingSkel) isUnenrichedSkeleton = true;
+  } catch {
+    // Table absente en mock unitaire isolé
+  }
+  const hasFormatConflict =
+    options?.userHint?.isIntegral !== undefined && options.userHint.isIntegral !== book.isIntegral;
+
+  if (isUnenrichedSkeleton || hasFormatConflict) {
+    tracer?.record(
+      'C2',
+      'index_lookup',
+      'warn',
+      isUnenrichedSkeleton
+        ? `Squelette C5 non enrichi pour ${isbn13} -> ré-enrichissement immédiat Couche 3`
+        : `Format corrigé par l'utilisateur pour ${isbn13} -> ré-indexation Couche 3/4`,
+      { isbn13, bookId: book.id, isUnenrichedSkeleton, hasFormatConflict },
+      Date.now() - start
+    );
+    return {
+      status: 'FULL_MISS',
+      book: null,
+      ownedIntegralMatches: [],
+      includedOwnedWorkIds: [],
+      staleSkeletonBookId: book.id
+    };
+  }
 
   if (!libraryId) {
     tracer?.record(
@@ -624,18 +673,23 @@ function isPlausibleVolumeNumberStr(vol?: string): boolean {
   return vol.length <= 6;
 }
 
-function isIntegralCandidateTitleOrPages(title: string, pageCount?: number): boolean {
+function isIntegralCandidateTitleOrPages(
+  title: string,
+  pageCount?: number,
+  hasSeriesContext = false
+): boolean {
   if (
-    /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+    /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\bdouble\s+album\b|\b2\s+en\s+1\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
       title || ''
     )
   ) {
     return true;
   }
+  if (!hasSeriesContext) return false;
   const slashParts = (title || '')
     .split(/\s+\/\s+|\s+;\s+/)
     .map((p) => cleanTitle(p))
-    .filter((p) => p.length >= 4);
+    .filter((p) => p.length >= 4 && !/^(?:journal|enqu[êe]te|voyage|histoires|souvenirs|carnet|roman|ed\.?)/i.test(p));
   return slashParts.length >= 2 && (!pageCount || pageCount >= 64);
 }
 
@@ -667,6 +721,8 @@ function extractMarcRecordMetadata(
   let language = '';
   let isDualPages = false;
   let secondTitleHint = '';
+  let explicitIntegralTag245 = false;
+  let integralOrd245 = '';
 
   for (const f of fields) {
     const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
@@ -688,16 +744,29 @@ function extractMarcRecordMetadata(
       const a = cleanTitle(getSf('a'));
       const b = cleanTitle(getSf('b'));
       const e = cleanTitle(getSf('e'));
+      const h = cleanTitle(getSf('h'));
+      const i = cleanTitle(getSf('i'));
       const p = cleanTitle(getSf('p'));
       const n = getSf('n');
       const u = getSf('u');
       if (b) secondTitleHint = b;
+      const integralSource245 = `${e} ${b} ${i}`.trim();
+      if (/\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus|compil)\b/i.test(integralSource245)) {
+        explicitIntegralTag245 = true;
+        integralOrd245 = normalizeSeriesNumber(h || u || n || '');
+      }
       if (p && a) {
         series245 = series245 || cleanSeriesName(a);
         title = p;
         if (n || u) vol245 = vol245 || normalizeSeriesNumber(n || u);
       } else {
         title = title || a;
+        if (explicitIntegralTag245 && title && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(title)) {
+          title =
+            integralOrd245 && /^\d+$/.test(integralOrd245)
+              ? `${title} — Intégrale ${integralOrd245}`
+              : `${title} — Intégrale`;
+        }
         if (u) vol245 = vol245 || normalizeSeriesNumber(u);
         if (e && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
           vol245 = vol245 || normalizeSeriesNumber(e);
@@ -785,9 +854,10 @@ function extractMarcRecordMetadata(
   }
 
   const _isIntegral =
+    explicitIntegralTag245 ||
     isDualPages ||
     Boolean(secondTitleHint && /\b(tomes?|albums?|int[ée]grale)\b/i.test(secondTitleHint)) ||
-    isIntegralCandidateTitleOrPages(`${title} ${secondTitleHint}`, pageCount);
+    isIntegralCandidateTitleOrPages(`${title} ${secondTitleHint}`, pageCount, Boolean(seriesRaw));
 
   return {
     source: 'bnf',
@@ -870,8 +940,10 @@ export async function discoverMultiSourceLayer3(
   let description = '';
   let deweyCode = '';
   let wikidataWorkQid: string | undefined;
+  const wikidataWorkQids: string[] = [];
   let wikidataSeriesQid: string | undefined;
   let inventaireWorkUri: string | undefined;
+  const includedVolumeNumbersHint = new Set<string>();
 
   const registerSeriesVote = (
     source: string,
@@ -972,7 +1044,9 @@ export async function discoverMultiSourceLayer3(
       const edTitle = cleanTitle(edEnt.claims?.['wdt:P1476']?.[0] || edEnt.labels?.fr || edEnt.labels?.en || '');
       if (edTitle) {
         rawTitles.push(edTitle);
-        anchorTitle = anchorTitle || edTitle;
+        if (!anchorTitle || (/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(edTitle) && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(anchorTitle))) {
+          anchorTitle = edTitle;
+        }
       }
       const rawImg = edEnt.image?.url || edEnt.claims?.['invp:P2']?.[0];
       const invCoverUrl =
@@ -980,25 +1054,45 @@ export async function discoverMultiSourceLayer3(
           ? `https://inventaire.io/img/entities/300x300/${rawImg.split('/').pop()}`
           : undefined;
 
-      const workUri = edEnt.claims?.['wdt:P629']?.[0];
-      const workEnt = workUri ? ents[workUri] : undefined;
+      const workUris: string[] = Array.isArray(edEnt.claims?.['wdt:P629'])
+        ? edEnt.claims['wdt:P629'].map(String).filter(Boolean)
+        : [];
+      const workUri = workUris[0];
       if (typeof workUri === 'string') {
         inventaireWorkUri = workUri;
         if (workUri.startsWith('wd:')) wikidataWorkQid = workUri.slice(3);
       }
+      for (const wUri of workUris) {
+        if (wUri.startsWith('wd:')) {
+          const q = wUri.slice(3);
+          if (!wikidataWorkQids.includes(q)) wikidataWorkQids.push(q);
+        }
+      }
+      if (workUris.length > 1 || (edTitle && isIntegralCandidateTitleOrPages(edTitle, undefined, true))) {
+        anchorIsIntegral = true;
+      }
 
+      const workEnt = workUri ? ents[workUri] : undefined;
       let invVol = '';
       let invSeries = '';
-      if (workEnt) {
-        const wDesc = workEnt.descriptions?.fr || workEnt.descriptions?.en;
+      for (const wUri of workUris) {
+        const wEnt = ents[wUri];
+        if (!wEnt) continue;
+        const wDesc = wEnt.descriptions?.fr || wEnt.descriptions?.en;
         if (typeof wDesc === 'string' && wDesc.length > description.length) description = wDesc;
-        const ord = workEnt.claims?.['wdt:P1545']?.[0];
+        const ord = wEnt.claims?.['wdt:P1545']?.[0];
         if (ord) {
-          invVol = normalizeSeriesNumber(String(ord));
-          if (!anchorVolumeNumber && invVol) anchorVolumeNumber = invVol;
+          const normOrd = normalizeSeriesNumber(String(ord));
+          if (normOrd && /^\d+$/.test(normOrd)) {
+            if (workUris.length > 1) {
+              includedVolumeNumbersHint.add(normOrd);
+            } else {
+              invVol = invVol || normOrd;
+              if (!anchorVolumeNumber) anchorVolumeNumber = normOrd;
+            }
+          }
         }
-
-        const authorRefs = workEnt.claims?.['wdt:P50'];
+        const authorRefs = wEnt.claims?.['wdt:P50'];
         if (Array.isArray(authorRefs)) {
           for (const aUri of authorRefs) {
             const aEnt = ents[String(aUri)];
@@ -1009,30 +1103,43 @@ export async function discoverMultiSourceLayer3(
             }
           }
         }
-
-        const serieUri = workEnt.claims?.['wdt:P179']?.[0];
+        const serieUri = wEnt.claims?.['wdt:P179']?.[0];
         if (typeof serieUri === 'string' && serieUri.startsWith('wd:')) {
-          wikidataSeriesQid = serieUri.slice(3);
+          wikidataSeriesQid = wikidataSeriesQid || serieUri.slice(3);
         }
         const serieEnt = serieUri ? ents[serieUri] : undefined;
         if (serieEnt) {
-          invSeries = cleanSeriesName(serieEnt.labels?.fr || serieEnt.labels?.en || serieEnt.label || '');
-          if (invSeries) {
-            registerSeriesVote('inventaire_p179', invSeries, 3, { wikidataQid: wikidataSeriesQid });
+          const sName = cleanSeriesName(serieEnt.labels?.fr || serieEnt.labels?.en || serieEnt.label || '');
+          if (sName) {
+            invSeries = invSeries || sName;
+            registerSeriesVote('inventaire_p179', sName, 3, { wikidataQid: wikidataSeriesQid });
           }
         }
       }
 
-      invSummary = { edTitle, workUri, invVol, invSeries, wikidataSeriesQid };
+      if (workEnt && !invSeries && !wikidataSeriesQid) {
+        const sFallback = workEnt.claims?.['wdt:P179']?.[0];
+        if (typeof sFallback === 'string' && sFallback.startsWith('wd:')) wikidataSeriesQid = sFallback.slice(3);
+      }
+
+      invSummary = {
+        edTitle,
+        workUri,
+        workUrisCount: workUris.length,
+        invVol,
+        includedVols: Array.from(includedVolumeNumbersHint),
+        invSeries,
+        wikidataSeriesQid
+      };
       if (edTitle) {
         sisterEditions.push({
           source: 'inventaire',
           isbn13,
           title: edTitle,
           seriesRaw: invSeries || undefined,
-          volumeNumber: invVol || undefined,
+          volumeNumber: workUris.length <= 1 ? (invVol || undefined) : undefined,
           coverUrl: invCoverUrl,
-          wikidataWorkQid,
+          wikidataWorkQid: workUris.length <= 1 ? wikidataWorkQid : undefined,
           wikidataSeriesQid,
           language: 'fr'
         });
@@ -1176,7 +1283,10 @@ export async function discoverMultiSourceLayer3(
   const parsedAnchor = parseSeriesFromTitle(anchorTitle);
   const searchTitleClean = (parsedAnchor.title || anchorTitle).replace(/["()]/g, ' ').trim();
   const effectiveAnchorVol = normalizeSeriesNumber(anchorVolumeNumber || parsedAnchor.seriesNumber || '');
-  const effectiveAnchorIntegral = anchorIsIntegral || isIntegralCandidateTitleOrPages(anchorTitle, pageCount);
+  const effectiveAnchorIntegral =
+    anchorIsIntegral ||
+    wikidataWorkQids.length > 1 ||
+    isIntegralCandidateTitleOrPages(anchorTitle, pageCount, seriesCandidates.length > 0);
 
   const sisterLookups: Promise<void>[] = [];
 
@@ -1268,22 +1378,38 @@ export async function discoverMultiSourceLayer3(
     );
   }
 
-  if (wikidataWorkQid) {
+  const wdBatchIds = Array.from(new Set([wikidataWorkQid, ...wikidataWorkQids].filter(Boolean) as string[])).slice(0, 12);
+  if (wdBatchIds.length > 0) {
     sisterLookups.push(
       (async () => {
         const w0 = Date.now();
         try {
-          const wdUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(wikidataWorkQid!)}&props=labels|descriptions|claims&languages=fr|en&format=json`;
+          const wdUrl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(wdBatchIds.join('|'))}&props=labels|descriptions|claims&languages=fr|en&format=json`;
           const res = await fetch(wdUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
           if (!res.ok) return;
           const json = (await res.json()) as any;
-          const ent = json?.entities?.[wikidataWorkQid!];
+          const ent = wikidataWorkQid ? json?.entities?.[wikidataWorkQid] : json?.entities?.[wdBatchIds[0]];
           if (!ent) return;
           sourcesHit.push('wikidata');
+
+          // Extraire tous les P1545 sur l'ensemble des œuvres liées (crucial pour Intégrales multi-P629 !)
+          const isMultiWorkIntegral = wdBatchIds.length > 1;
+          for (const qId of wdBatchIds) {
+            const wObj = json?.entities?.[qId];
+            if (!wObj) continue;
+            const qOrd =
+              wObj.claims?.P179?.[0]?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value ||
+              wObj.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
+            const normQOrd = qOrd ? normalizeSeriesNumber(String(qOrd)) : '';
+            if (isMultiWorkIntegral && normQOrd && /^\d+$/.test(normQOrd)) {
+              includedVolumeNumbersHint.add(normQOrd);
+            }
+          }
+
           const p1545 = ent.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
           const p179Id = ent.claims?.P179?.[0]?.mainsnak?.datavalue?.value?.id;
           const p1545Ord = ent.claims?.P179?.[0]?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value;
-          const wdVol = normalizeSeriesNumber(String(p1545Ord || p1545 || ''));
+          const wdVol = isMultiWorkIntegral ? '' : normalizeSeriesNumber(String(p1545Ord || p1545 || ''));
           let wdSeriesLabel = '';
           if (p179Id && typeof p179Id === 'string') {
             wikidataSeriesQid = wikidataSeriesQid || p179Id;
@@ -1319,8 +1445,11 @@ export async function discoverMultiSourceLayer3(
             'C3',
             'api_wikidata',
             'ok',
-            `Wikidata (${wikidataWorkQid}) HTTP ${res.status} -> série « ${wdSeriesLabel || 'aucune'} », tome « ${wdVol || '-'} »`,
-            { request: { url: wdUrl, qid: wikidataWorkQid }, result: { wdSeriesLabel, wikidataSeriesQid, wdVol } },
+            `Wikidata (${wdBatchIds.join(',')}) HTTP ${res.status} -> série « ${wdSeriesLabel || 'aucune'} », tomes « ${isMultiWorkIntegral ? Array.from(includedVolumeNumbersHint).join(',') : wdVol || '-'} »`,
+            {
+              request: { url: wdUrl, qids: wdBatchIds },
+              result: { wdSeriesLabel, wikidataSeriesQid, wdVol, includedVols: Array.from(includedVolumeNumbersHint) }
+            },
             Date.now() - w0
           );
         } catch {
@@ -1363,9 +1492,12 @@ export async function discoverMultiSourceLayer3(
     deweyCode: deweyCode || undefined,
     rawSubjects,
     rawTitles,
-    wikidataWorkQid,
+    wikidataWorkQid: wdBatchIds.length <= 1 ? wikidataWorkQid : undefined,
+    wikidataWorkQids,
     wikidataSeriesQid,
     inventaireWorkUri,
+    includedVolumeNumbersHint: Array.from(includedVolumeNumbersHint).sort((a, b) => Number(a) - Number(b)),
+    anchorIsIntegralHint: effectiveAnchorIntegral,
     sourcesHit: uniqueSources
   };
 }
@@ -1379,42 +1511,62 @@ export function detectIntegralAndIncludedVolumes(payload: StagingPayload): {
   isDoubleAlbum: boolean;
   doubleSubTitles: string[];
   includedVolumeNumbers: string[];
+  integralOrdinal?: string;
 } {
   const allTexts = [payload.anchorTitle, ...payload.rawTitles];
   const combined = allTexts.join(' | ');
+  const desc = payload.description || '';
 
   // 1. Détection explicite d'intégrale / coffret / omnibus / plage de tomes
-  const hasExplicitIntegralKeyword = /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+  const hasExplicitIntegralKeyword = /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\bdouble\s+album\b|\b2\s+en\s+1\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
     combined
   );
 
-  const nums = new Set<string>();
-  const rangeMatch = /\b(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(combined);
-  if (rangeMatch) {
-    const startN = parseInt(rangeMatch[1], 10);
-    const endN = parseInt(rangeMatch[2], 10);
-    if (startN > 0 && endN > startN && endN - startN <= 15) {
-      for (let i = startN; i <= endN; i++) nums.add(String(i));
+  const nums = new Set<string>(payload.includedVolumeNumbersHint || []);
+  for (const srcText of [combined, desc]) {
+    const rangeMatch = /(?:tomes?|volumes?|vol\.?|albums?)\s*[:.]?\s*(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(srcText)
+      || (srcText === combined ? /\b(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(srcText) : null);
+    if (rangeMatch) {
+      const startN = parseInt(rangeMatch[1], 10);
+      const endN = parseInt(rangeMatch[2], 10);
+      if (startN > 0 && endN > startN && endN - startN <= 15) {
+        for (let i = startN; i <= endN; i++) nums.add(String(i));
+      }
+    }
+    const pairMatch = /\b(?:tomes?|volumes?|vol\.?|albums?)\s*(\d{1,2})\s*(?:et|&|\/|\+|,)\s*(\d{1,2})(?:\s*(?:et|&|,)\s*(\d{1,2}))?\b/i.exec(srcText);
+    if (pairMatch) {
+      for (const grp of [pairMatch[1], pairMatch[2], pairMatch[3]]) {
+        if (grp) nums.add(String(parseInt(grp, 10)));
+      }
     }
   }
-  const pairMatch = /\b(?:tomes?|vol\.?)\s*(\d{1,2})\s*(?:et|&|\/|\+)\s*(\d{1,2})\b/i.exec(combined);
-  if (pairMatch) {
-    nums.add(String(parseInt(pairMatch[1], 10)));
-    nums.add(String(parseInt(pairMatch[2], 10)));
-  }
+
+  // Numéro d'intégrale (ex: "Intégrale 1", "Intégrale 02", "Coffret 2")
+  const ordMatch = /(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\s*(?:n°\s*)?0*(\d{1,2})\b/i.exec(combined);
+  const integralOrdinal = ordMatch ? String(parseInt(ordMatch[1], 10)) : payload.integralOrdinalHint;
 
   // 2. Détection Album Double (ex: "Astérix le Gaulois / La serpe d'or" ou "Titre A ; Titre B")
+  // Ne jamais déclencher sur un simple sous-titre de one-shot ("Journal", "Enquête", "Roman", etc.) !
   let isDoubleAlbum = false;
   let doubleSubTitles: string[] = [];
   const primaryTitle = payload.anchorTitle || payload.rawTitles[0] || '';
   const slashParts = primaryTitle
     .split(/\s+\/\s+|\s+;\s+/)
     .map((p) => cleanTitle(p))
-    .filter((p) => p.length >= 4 && !/^(?:ed\.?|edition|tome|vol)/i.test(p));
-
-  if (
+    .filter(
+      (p) =>
+        p.length >= 4 &&
+        !/^(?:ed\.?|edition|tome|vol|journal|enqu[êe]te|voyage|histoires|souvenirs|carnet|roman|essai|biographie|m[ée]moires|une?\s)/i.test(p)
+    );
+  const looksLikeTwoDistinctTitles =
     slashParts.length >= 2 &&
     slashParts.length <= 4 &&
+    (payload.seriesCandidates.length > 0 ||
+      /\b(?:tomes?|albums?|double|2\s+en\s+1)\b/i.test(primaryTitle) ||
+      slashParts.every((p) => /^[A-ZÀ-ÖØ-Þ"«]/.test(p) && p.split(/\s+/).length >= 2));
+
+  if (
+    looksLikeTwoDistinctTitles &&
     normalizeTextKey(slashParts[0]) !== normalizeTextKey(slashParts[1]) &&
     (!payload.pageCount || payload.pageCount >= 64)
   ) {
@@ -1422,12 +1574,15 @@ export function detectIntegralAndIncludedVolumes(payload: StagingPayload): {
     doubleSubTitles = slashParts;
   }
 
-  const isIntegral = hasExplicitIntegralKeyword || isDoubleAlbum || nums.size >= 2;
+  const isIntegral = Boolean(
+    payload.anchorIsIntegralHint || hasExplicitIntegralKeyword || isDoubleAlbum || nums.size >= 2
+  );
   return {
     isIntegral,
     isDoubleAlbum,
     doubleSubTitles,
-    includedVolumeNumbers: Array.from(nums).sort((a, b) => Number(a) - Number(b))
+    includedVolumeNumbers: Array.from(nums).sort((a, b) => Number(a) - Number(b)),
+    integralOrdinal
   };
 }
 
@@ -1500,17 +1655,41 @@ export async function consolidateBookLayer4(
     libraryId?: string | null;
     action?: 'owned' | 'wishlist' | 'preview';
     tracer?: PipelineTracer;
+    userHint?: UserIngestHint;
+    replaceSkeletonBookId?: string;
   }
 ): Promise<V4BookRecord> {
   const start = Date.now();
   const now = new Date().toISOString();
   const tracer = options.tracer;
+  const userHint = options.userHint;
 
-  // 1. Détection Intégrale & Album Double AVANT indexation
+  // 1. Détection Intégrale & Album Double AVANT indexation (avec éventuel arbitrage explicite utilisateur)
   const integralCheck = detectIntegralAndIncludedVolumes(payload);
+  if (userHint?.isIntegral === true) {
+    integralCheck.isIntegral = true;
+  } else if (userHint?.isIntegral === false) {
+    integralCheck.isIntegral = false;
+    integralCheck.isDoubleAlbum = false;
+  }
+
+  // Si l'utilisateur a spécifié ou corrigé le nom de série, l'injecter avec un poids fort
+  const seriesVotePool = [...payload.seriesCandidates];
+  if (userHint?.series?.trim()) {
+    const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(userHint.series));
+    if (coreKey.length >= 2) {
+      seriesVotePool.push({
+        source: 'user_hint',
+        rawName: userHint.series.trim(),
+        coreKey,
+        cleanDisplay: cleanDisplay || cleanSeriesName(userHint.series),
+        weight: 5
+      });
+    }
+  }
 
   // 2. Vote majoritaire par cluster sur la Série Canonique
-  const electedSeries = electCanonicalSeriesFromVotes(payload.seriesCandidates);
+  const electedSeries = electCanonicalSeriesFromVotes(seriesVotePool);
   if (electedSeries && electedSeries.confidenceRatio < 0.6) {
     tracer?.record(
       'C4',
@@ -1614,13 +1793,15 @@ export async function consolidateBookLayer4(
   }
 
   // 3. Règle CRITIQUE d'Héritage de Volume sur TOUTES les éditions sœurs FR AVANT classification Hors-Série !
-  let inheritedVolStr = '';
-  for (const s of payload.sisterEditions) {
-    if (s.volumeNumber) {
-      const n = normalizeSeriesNumber(s.volumeNumber);
-      if (n && /^\d+$/.test(n) && Number(n) > 0) {
-        inheritedVolStr = n;
-        break;
+  let inheritedVolStr = userHint?.volumeNumber ? normalizeSeriesNumber(userHint.volumeNumber) : '';
+  if (!inheritedVolStr) {
+    for (const s of payload.sisterEditions) {
+      if (s.volumeNumber) {
+        const n = normalizeSeriesNumber(s.volumeNumber);
+        if (n && /^\d+$/.test(n) && Number(n) > 0) {
+          inheritedVolStr = n;
+          break;
+        }
       }
     }
   }
@@ -1634,13 +1815,36 @@ export async function consolidateBookLayer4(
     }
   }
 
-  const parsedAnchor = parseSeriesFromTitle(payload.anchorTitle);
-  let canonicalTitle = cleanTitle(parsedAnchor.title || payload.anchorTitle);
+  const preferredRawTitle =
+    (userHint?.title?.trim() ? userHint.title.trim() : '') ||
+    (integralCheck.isIntegral
+      ? [payload.anchorTitle, ...payload.rawTitles].find((t) =>
+          /\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\b/i.test(t)
+        ) || payload.anchorTitle
+      : payload.anchorTitle);
+  const parsedAnchor = parseSeriesFromTitle(preferredRawTitle);
+  let canonicalTitle = cleanTitle(
+    integralCheck.isIntegral && /\b(?:int[ée]grale|coffret|omnibus)\b/i.test(preferredRawTitle)
+      ? preferredRawTitle
+      : parsedAnchor.title || preferredRawTitle
+  );
   if (canonicalTitle && seriesName) {
-    // Retirer un éventuel préfixe "Astérix - " si déjà égal à la série
     const escapedSeries = seriesName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const stripped = canonicalTitle.replace(new RegExp(`^${escapedSeries}\\s*[-:–]\\s*`, 'i'), '').trim();
-    if (stripped.length >= 3) canonicalTitle = stripped;
+    if (integralCheck.isIntegral) {
+      // Conserver un libellé complet et distinctif pour les Intégrales (ex: "Aya de Yopougon — Intégrale 1")
+      if (stripped.length >= 3 && /\b(?:int[ée]grale|coffret|omnibus|tomes?\s+\d+)/i.test(stripped)) {
+        const cap = stripped.charAt(0).toUpperCase() + stripped.slice(1);
+        canonicalTitle = cap.toLowerCase().includes(seriesName.toLowerCase()) ? cap : `${seriesName} — ${cap}`;
+      } else if (!/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(canonicalTitle)) {
+        canonicalTitle = integralCheck.integralOrdinal
+          ? `${seriesName} — Intégrale ${integralCheck.integralOrdinal}`
+          : `${seriesName} — Intégrale`;
+      }
+    } else if (stripped.length >= 3) {
+      // Retirer un éventuel préfixe "Astérix - " si déjà égal à la série sur tome unitaire
+      canonicalTitle = stripped;
+    }
   }
 
   const isExplicitHs = /\b(hors[- ]s[ée]rie|sp[ée]cial|hs\b|coulisses|making[- ]of|tome\s*0\b)/i.test(
@@ -1651,7 +1855,18 @@ export async function consolidateBookLayer4(
   if (volumeNumber !== null && (!Number.isFinite(volumeNumber) || volumeNumber <= 0)) {
     volumeNumber = null;
   }
-  const volumeLabel = volumeNumber !== null ? String(volumeNumber) : null;
+
+  let volumeLabel: string | null = volumeNumber !== null ? String(volumeNumber) : null;
+  if (integralCheck.isIntegral) {
+    const inc = integralCheck.includedVolumeNumbers;
+    if (inc.length >= 2) {
+      volumeLabel = `Int. T.${inc[0]}-${inc[inc.length - 1]}`;
+    } else if (integralCheck.integralOrdinal) {
+      volumeLabel = `Int. ${integralCheck.integralOrdinal}`;
+    } else {
+      volumeLabel = 'Intégrale';
+    }
+  }
 
   // Règle Hors-Série appliquée STRICTEMENT en fin de pipeline :
   // Si appartient à une série, non-intégrale, et qu'AUCUNE édition sœur FR / Wikidata n'a fourni de numéro de tome
@@ -1670,9 +1885,13 @@ export async function consolidateBookLayer4(
     description: payload.description
   });
 
-  // 5. Agrégation de tous les ISBN FR sœurs + éditionsCatalog + couverture anti-1x1
+  // 5. Agrégation de tous les ISBN FR sœurs + éditionsCatalog + couverture exacte de l'édition choisie en priorité
   const knownIsbnsSet = new Set<string>([payload.anchorIsbn13]);
   const editionsCatalogMap = new Map<string, EditionCatalogEntry>();
+  let exactBnfCover: string | undefined;
+  let exactGbCover: string | undefined;
+  let exactOlCover: string | undefined;
+  let exactInvCover: string | undefined;
   let bnfCoverCandidate: string | undefined;
   let gbCoverCandidate: string | undefined;
   let olCoverCandidate: string | undefined;
@@ -1690,16 +1909,34 @@ export async function consolidateBookLayer4(
         });
       }
     }
-    if (s.source === 'bnf' && s.coverUrl && !bnfCoverCandidate) bnfCoverCandidate = s.coverUrl;
-    if (s.source === 'google_books' && s.coverUrl && !gbCoverCandidate) gbCoverCandidate = s.coverUrl;
-    if (s.source === 'openlibrary' && s.coverUrl && !olCoverCandidate) olCoverCandidate = s.coverUrl;
-    if (s.source === 'inventaire' && s.coverUrl && !invCoverCandidate) invCoverCandidate = s.coverUrl;
+    const isExactAnchor = s.isbn13 === payload.anchorIsbn13;
+    if (s.source === 'bnf' && s.coverUrl) {
+      if (isExactAnchor && !exactBnfCover) exactBnfCover = s.coverUrl;
+      if (!bnfCoverCandidate) bnfCoverCandidate = s.coverUrl;
+    }
+    if (s.source === 'google_books' && s.coverUrl) {
+      if (isExactAnchor && !exactGbCover) exactGbCover = s.coverUrl;
+      if (!gbCoverCandidate) gbCoverCandidate = s.coverUrl;
+    }
+    if (s.source === 'openlibrary' && s.coverUrl) {
+      if (isExactAnchor && !exactOlCover) exactOlCover = s.coverUrl;
+      if (!olCoverCandidate) olCoverCandidate = s.coverUrl;
+    }
+    if (s.source === 'inventaire' && s.coverUrl) {
+      if (isExactAnchor && !exactInvCover) exactInvCover = s.coverUrl;
+      if (!invCoverCandidate) invCoverCandidate = s.coverUrl;
+    }
   }
+  bnfCoverCandidate = exactBnfCover || bnfCoverCandidate;
+  gbCoverCandidate = exactGbCover || gbCoverCandidate;
+  invCoverCandidate = exactInvCover || invCoverCandidate;
+  olCoverCandidate = exactOlCover || olCoverCandidate;
   if (!editionsCatalogMap.has(payload.anchorIsbn13)) {
     editionsCatalogMap.set(payload.anchorIsbn13, {
       isbn13: payload.anchorIsbn13,
       publisher: payload.publisher,
-      publicationYear: payload.publishDate
+      publicationYear: payload.publishDate,
+      coverUrl: bnfCoverCandidate || invCoverCandidate || userHint?.coverUrl
     });
   }
 
@@ -1713,16 +1950,17 @@ export async function consolidateBookLayer4(
       author: payload.authors[0]
     })) ||
     bnfCoverCandidate ||
-    gbCoverCandidate ||
     invCoverCandidate ||
+    gbCoverCandidate ||
     olCoverCandidate ||
+    userHint?.coverUrl ||
     null;
 
   // 6. Clé canonique FRBR & Idempotence (anti-doublon à l'échelle de l'Œuvre)
   const normTitle = normalizeTextKey(canonicalTitle);
   const seriesCoreKey = electedSeries?.coreKey || '';
   const workCanonicalId = integralCheck.isIntegral
-    ? `integral:${seriesCoreKey || normTitle}:${integralCheck.includedVolumeNumbers.join('-') || payload.anchorIsbn13}`
+    ? `integral:${seriesCoreKey || normTitle}:${integralCheck.includedVolumeNumbers.join('-') || (integralCheck.integralOrdinal ? `int${integralCheck.integralOrdinal}` : payload.anchorIsbn13)}`
     : seriesId && volumeNumber !== null && !isHorsSerie
       ? `series:${seriesCoreKey}:vol:${volumeNumber}`
       : payload.wikidataWorkQid
@@ -1860,11 +2098,12 @@ export async function consolidateBookLayer4(
         }
       });
     }
+    const legacyWorkSeriesNumber = integralCheck.isIntegral ? undefined : volumeLabel || undefined;
     const legacyWorkUri = await upsertCatalogEntity(db, {
       entityType: 'work',
       label: canonicalTitle,
       seriesUri: legacySeriesUri,
-      seriesNumber: volumeLabel || undefined,
+      seriesNumber: legacyWorkSeriesNumber,
       authorUris: legacyAuthorUris,
       mainCategory: classification.mainCategory,
       subgenres: classification.subgenres,
@@ -1873,7 +2112,7 @@ export async function consolidateBookLayer4(
       claims: {
         'wdt:P31': ['wd:Q47461344'],
         ...(legacySeriesUri ? { 'wdt:P179': [legacySeriesUri] } : {}),
-        ...(volumeLabel ? { 'wdt:P1545': [volumeLabel] } : {})
+        ...(legacyWorkSeriesNumber ? { 'wdt:P1545': [legacyWorkSeriesNumber] } : {})
       }
     });
     await upsertCatalogEntity(db, {
@@ -1986,6 +2225,52 @@ export async function consolidateBookLayer4(
       .bind(kIsbn, bookId, integralCheck.isIntegral ? 1 : 0, now)
   );
   if (idxStmts.length > 0) await db.batch(idxStmts);
+
+  // Si ce livre remplace un squelette C5 périmé ou changé de format, migrer les liaisons bibliothèque pour ne jamais perdre l'utilisateur
+  if (options.replaceSkeletonBookId && options.replaceSkeletonBookId !== bookId) {
+    try {
+      const oldLinks = await db
+        .prepare('SELECT library_id, is_owned, is_wished, source_channel, added_at FROM v4_library_books WHERE book_id = ?')
+        .bind(options.replaceSkeletonBookId)
+        .all<{ library_id: string; is_owned: number; is_wished: number; source_channel: string | null; added_at: string }>();
+      for (const oldLink of oldLinks.results || []) {
+        await db
+          .prepare(
+            `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, added_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(library_id, book_id) DO UPDATE SET
+               is_owned = MAX(v4_library_books.is_owned, excluded.is_owned),
+               is_wished = MAX(v4_library_books.is_wished, excluded.is_wished),
+               selected_cover_url = COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url),
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            oldLink.library_id,
+            bookId,
+            oldLink.is_owned,
+            oldLink.is_wished,
+            oldLink.source_channel || options.sourceChannel,
+            effectiveCover,
+            oldLink.added_at || now,
+            now
+          )
+          .run();
+      }
+      await db.prepare('DELETE FROM v4_library_books WHERE book_id = ?').bind(options.replaceSkeletonBookId).run();
+      await db.prepare('UPDATE book_isbn_index SET book_id = ?, is_integral = ? WHERE book_id = ?').bind(bookId, integralCheck.isIntegral ? 1 : 0, options.replaceSkeletonBookId).run();
+      await db.prepare('DELETE FROM books WHERE id = ?').bind(options.replaceSkeletonBookId).run();
+    } catch {
+      // Non-bloquant en environnement mock minimal
+    }
+  }
+  try {
+    await db
+      .prepare("UPDATE enrichment_queue SET book_id = ?, status = 'done', last_error = NULL, updated_at = ? WHERE isbn13 = ?")
+      .bind(bookId, now, payload.anchorIsbn13)
+      .run();
+  } catch {
+    // Non-bloquant
+  }
 
   // Mise à jour v4_library_books + library_items si libraryId + action != preview
   if (options.libraryId && options.action && options.action !== 'preview') {
@@ -2143,7 +2428,13 @@ export async function enqueueOrExpandSeriesLayer5(
   if (!sRow || Number(sRow.is_complete_expanded) === 1) return 0;
 
   const ensembleIds = safeJsonParse<string[]>(sRow.bnf_ensemble_ids_json, []);
-  const discoveredSkeleton: Array<{ title: string; volumeNumber?: number; isbn13?: string; coverUrl?: string }> = [];
+  const discoveredSkeleton: Array<{
+    title: string;
+    volumeNumber?: number;
+    isbn13?: string;
+    coverUrl?: string;
+    isIntegral?: boolean;
+  }> = [];
 
   // Phase 5A : 1 seule requête ciblée BnF `bib.ens2bib` (très économe en sous-requêtes Cloudflare !)
   const targetEnsId = ensembleIds[0];
@@ -2156,12 +2447,16 @@ export async function enqueueOrExpandSeriesLayer5(
         for (const rec of xml.split('<srw:record>').slice(1)) {
           const cand = extractMarcRecordMetadata(rec);
           if (!cand || !cand.isbn13 || !isStrictFrenchLanguage(cand.language)) continue;
-          const vNum = cand.volumeNumber && /^\d+$/.test(cand.volumeNumber) ? parseInt(cand.volumeNumber, 10) : undefined;
+          const isIntSkel = Boolean(cand._isIntegral);
+          const vNum = !isIntSkel && cand.volumeNumber && /^\d+$/.test(cand.volumeNumber)
+            ? parseInt(cand.volumeNumber, 10)
+            : undefined;
           discoveredSkeleton.push({
-            title: cleanTitle(parseSeriesFromTitle(cand.title).title || cand.title),
+            title: cleanTitle(isIntSkel ? cand.title : parseSeriesFromTitle(cand.title).title || cand.title),
             volumeNumber: vNum,
             isbn13: cand.isbn13,
-            coverUrl: cand.coverUrl
+            coverUrl: cand.coverUrl,
+            isIntegral: isIntSkel
           });
         }
       }
@@ -2180,10 +2475,13 @@ export async function enqueueOrExpandSeriesLayer5(
     if (already) continue;
 
     // Squelette léger immédiat dans books + book_isbn_index puis enrichissement complet mis en queue pour le CRON
-    const skelCanonId = skel.volumeNumber
-      ? `series:${sRow.normalized_core_key}:vol:${skel.volumeNumber}`
-      : `work:${normalizeTextKey(skel.title)}:${skel.isbn13}`;
+    const skelCanonId = skel.isIntegral
+      ? `integral:${sRow.normalized_core_key}:${skel.isbn13}`
+      : skel.volumeNumber
+        ? `series:${sRow.normalized_core_key}:vol:${skel.volumeNumber}`
+        : `work:${normalizeTextKey(skel.title)}:${skel.isbn13}`;
     const skelBookId = `bk_${generateTraceId('').replace(/^_/, '')}_${Math.random().toString(36).slice(2, 6)}`;
+    const skelVolLabel = skel.isIntegral ? 'Intégrale' : skel.volumeNumber ? String(skel.volumeNumber) : null;
 
     await db
       .prepare(
@@ -2191,7 +2489,7 @@ export async function enqueueOrExpandSeriesLayer5(
           (id, work_canonical_id, canonical_title, normalized_title, series_id, series_name,
            volume_number, volume_label, is_hors_serie, is_integral, authors_json, language,
            known_isbns_json, editions_catalog_json, selected_cover_url, main_category, subgenres_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'fr', ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fr', ?, ?, ?, ?, ?, ?, ?)`
       )
       .bind(
         skelBookId,
@@ -2200,9 +2498,10 @@ export async function enqueueOrExpandSeriesLayer5(
         normalizeTextKey(skel.title),
         book.seriesId,
         book.seriesName,
-        skel.volumeNumber ?? null,
-        skel.volumeNumber ? String(skel.volumeNumber) : null,
-        skel.volumeNumber ? 0 : 1,
+        skel.isIntegral ? null : skel.volumeNumber ?? null,
+        skelVolLabel,
+        skel.isIntegral || skel.volumeNumber ? 0 : 1,
+        skel.isIntegral ? 1 : 0,
         JSON.stringify(book.authors),
         JSON.stringify([skel.isbn13]),
         JSON.stringify([{ isbn13: skel.isbn13, coverUrl: skel.coverUrl }]),
@@ -2221,8 +2520,8 @@ export async function enqueueOrExpandSeriesLayer5(
 
     if (insertedOrExisting?.id) {
       await db
-        .prepare('INSERT OR IGNORE INTO book_isbn_index (isbn13, book_id, is_integral, created_at) VALUES (?, ?, 0, ?)')
-        .bind(skel.isbn13, insertedOrExisting.id, now)
+        .prepare('INSERT OR IGNORE INTO book_isbn_index (isbn13, book_id, is_integral, created_at) VALUES (?, ?, ?, ?)')
+        .bind(skel.isbn13, insertedOrExisting.id, skel.isIntegral ? 1 : 0, now)
         .run();
 
       await db
@@ -2305,7 +2604,8 @@ export async function drainEnrichmentQueueBatch(
         await consolidateBookLayer4(db, staging, {
           sourceChannel: 'canal_1_barcode',
           action: 'preview',
-          tracer
+          tracer,
+          replaceSkeletonBookId: row.book_id || undefined
         });
         await db
           .prepare("UPDATE enrichment_queue SET status = 'done', last_error = NULL, updated_at = ? WHERE id = ?")
@@ -2418,6 +2718,7 @@ export async function runV4IngestionPipeline(
     userId?: string | null;
     action?: 'owned' | 'wishlist' | 'preview';
     traceId?: string;
+    hints?: Record<string, UserIngestHint>;
   }
 ): Promise<IngestBatchResult> {
   const tracer = new PipelineTracer({
@@ -2454,8 +2755,12 @@ export async function runV4IngestionPipeline(
     // 1. Tester les candidats en Couche 2 (index O(1))
     let resolvedL2: Layer2CheckResult | null = null;
     let activeIsbn13 = norm.isbn13Candidates[0];
+    let staleSkeletonBookId: string | undefined;
+    const rawUserHint = params.hints?.[rawInput] || params.hints?.[activeIsbn13];
     for (const cand of norm.isbn13Candidates) {
-      const l2 = await checkBookIndexLayer2(db, cand, params.libraryId, tracer);
+      const candHint = params.hints?.[cand] || rawUserHint;
+      const l2 = await checkBookIndexLayer2(db, cand, params.libraryId, tracer, { userHint: candHint });
+      if (l2.staleSkeletonBookId) staleSkeletonBookId = l2.staleSkeletonBookId;
       if (l2.status !== 'FULL_MISS') {
         resolvedL2 = l2;
         activeIsbn13 = cand;
@@ -2547,7 +2852,9 @@ export async function runV4IngestionPipeline(
       sourceChannel: params.sourceChannel,
       libraryId: params.libraryId,
       action: params.action,
-      tracer
+      tracer,
+      userHint: params.hints?.[activeIsbn13] || rawUserHint,
+      replaceSkeletonBookId: staleSkeletonBookId
     });
 
     // Couche 5 : Squelette rapide + file d'attente (seulement si une seule requête/peu d'ISBN pour garder de la marge)

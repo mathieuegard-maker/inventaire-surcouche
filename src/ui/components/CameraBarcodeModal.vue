@@ -39,8 +39,8 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
         <p class="camera-hint">
           {{
             activeMode === 'burst'
-              ? 'Visez les codes-barres à la suite. Cliquez sur Terminer pour trier et enregistrer vos livres.'
-              : 'Placez le code-barres EAN-13 du livre dans le cadre.'
+              ? 'Visez les codes-barres à la suite. Cliquez sur Fermer quand vous avez terminé pour afficher la liste des livres scannés sur la page.'
+              : 'Placez le code-barres EAN-13 du livre dans le cadre. Dès la lecture réussie, la fenêtre se ferme et la fiche du livre s’ouvre automatiquement.'
           }}
         </p>
 
@@ -63,7 +63,7 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
 
         <div class="camera-modal-footer">
           <button type="button" class="wireframe-btn primary" @click="scannerState.stopScan()">
-            {{ activeMode === 'burst' ? `Terminer (${burstCount})` : 'Fermer la caméra' }}
+            {{ activeMode === 'burst' ? `Fermer${burstCount > 0 ? ` (${burstCount})` : ''}` : 'Fermer' }}
           </button>
         </div>
       </div>
