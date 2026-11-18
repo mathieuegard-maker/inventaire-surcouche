@@ -10,6 +10,7 @@ import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-is
 import { externalMetadataService } from '../core/services/external-metadata.service';
 import { databaseService } from '../core/database/database.service';
 import { findMatchingOwnedWork } from '../core/utils/series-matcher.util';
+import { ingestIsbnsViaV4, v4BookRecordToHumanizedBook } from '../core/services/v4-client.service';
 import { imageUtil } from '../core/utils/image.util';
 import { saveBookNavigationOrder } from './bookNavigation';
 import { connectionState } from './connection';
@@ -172,7 +173,7 @@ export const scannerState = {
       return;
     }
 
-    // Cas 2 : ISBN absent de D1 -> résolution métadonnées externes pour l'afficher dans la liste à cocher (sans création auto)
+    // Cas 2 : ISBN absent de D1 -> Pipeline V4 (/api/v2/books/ingest en aperçu) puis repli externalMetadataService
     playScanBeep('success');
     triggerBurstFeedback('success');
     const placeholderUri = `isbn:${scannedIsbn}`;
@@ -180,7 +181,7 @@ export const scannerState = {
       uri: placeholderUri,
       type: 'edition',
       isbn13: scannedIsbn,
-      title: `Recherche BnF (${scannedIsbn})...`,
+      title: `Recherche V4 / BnF (${scannedIsbn})...`,
       authors: [],
       illustrators: [],
       scriptwriters: [],
@@ -190,51 +191,68 @@ export const scannerState = {
     burstBooks.value.unshift(placeholderBook);
     latestBurstBook.value = placeholderBook;
 
-    externalMetadataService
-      .fetchFromExternalSources(scannedIsbn)
-      .then(async (meta) => {
-        const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
-        if (idx === -1) return;
-        const coverFallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn, [
-          meta?.coverUrl,
-          ...(meta?.coverFallbackUrls || [])
-        ]);
-        const localBooks =
-          typeof databaseService.getAllBooksFromCache === 'function'
-            ? await databaseService.getAllBooksFromCache().catch(() => [])
-            : [];
-        const ownedMatch = findMatchingOwnedWork({
-          candidateIsbns: [scannedIsbn],
-          candidateTitle: meta?.title,
-          candidateAuthors: meta?.authors,
-          candidateSeries: meta?.series,
-          candidateSeriesNumber: meta?.seriesNumber,
-          existingBooks: localBooks,
-          targetStatuses: ['owned', 'wish']
+    ingestIsbnsViaV4({ isbns: [scannedIsbn], sourceChannel: 'canal_1_barcode', action: 'preview' })
+      .then(async (v4Batch) => {
+        const v4Item = v4Batch?.results?.[0];
+        if (v4Item?.book) {
+          const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+          if (idx === -1) return;
+          const isDup =
+            v4Item.layer2Status === 'ALREADY_OWNED' ||
+            v4Item.layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+            v4Item.layer2Status === 'FULL_INTEGRAL_OWNED';
+          if (isDup) playScanBeep('duplicate');
+          const resolvedBook = v4BookRecordToHumanizedBook(v4Item.book, isDup ? 'owned' : 'none');
+          burstBooks.value[idx] = resolvedBook;
+          if (latestBurstBook.value?.uri === placeholderUri) {
+            latestBurstBook.value = resolvedBook;
+          }
+          return;
+        }
+        return externalMetadataService.fetchFromExternalSources(scannedIsbn).then(async (meta) => {
+          const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+          if (idx === -1) return;
+          const coverFallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn, [
+            meta?.coverUrl,
+            ...(meta?.coverFallbackUrls || [])
+          ]);
+          const localBooks =
+            typeof databaseService.getAllBooksFromCache === 'function'
+              ? await databaseService.getAllBooksFromCache().catch(() => [])
+              : [];
+          const ownedMatch = findMatchingOwnedWork({
+            candidateIsbns: [scannedIsbn],
+            candidateTitle: meta?.title,
+            candidateAuthors: meta?.authors,
+            candidateSeries: meta?.series,
+            candidateSeriesNumber: meta?.seriesNumber,
+            existingBooks: localBooks,
+            targetStatuses: ['owned', 'wish']
+          });
+          if (ownedMatch?.book.ownershipStatus === 'owned') {
+            playScanBeep('duplicate');
+          }
+          burstBooks.value[idx] = {
+            ...burstBooks.value[idx],
+            uri: ownedMatch?.book.uri || burstBooks.value[idx].uri,
+            workUri: ownedMatch?.book.workUri,
+            title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
+            authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
+            publisher: meta?.publisher || '',
+            publishDate: meta?.publishDate,
+            pageCount: meta?.pageCount,
+            coverUrl: meta?.coverUrl || coverFallbackUrls[0],
+            ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
+            series: ownedMatch?.book.series || meta?.series,
+            seriesId: ownedMatch?.book.seriesId,
+            seriesNumber: meta?.seriesNumber,
+            genres: meta?.genres || [],
+            ownershipStatus: ownedMatch?.book.ownershipStatus || 'none'
+          };
+          if (latestBurstBook.value?.uri === placeholderUri || latestBurstBook.value?.uri === burstBooks.value[idx].uri) {
+            latestBurstBook.value = burstBooks.value[idx];
+          }
         });
-        if (ownedMatch?.book.ownershipStatus === 'owned') {
-          playScanBeep('duplicate');
-        }
-        burstBooks.value[idx] = {
-          ...burstBooks.value[idx],
-          uri: ownedMatch?.book.uri || burstBooks.value[idx].uri,
-          workUri: ownedMatch?.book.workUri,
-          title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
-          authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
-          publisher: meta?.publisher || '',
-          publishDate: meta?.publishDate,
-          pageCount: meta?.pageCount,
-          coverUrl: meta?.coverUrl || coverFallbackUrls[0],
-          ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
-          series: ownedMatch?.book.series || meta?.series,
-          seriesId: ownedMatch?.book.seriesId,
-          seriesNumber: meta?.seriesNumber,
-          genres: meta?.genres || [],
-          ownershipStatus: ownedMatch?.book.ownershipStatus || 'none'
-        };
-        if (latestBurstBook.value?.uri === placeholderUri || latestBurstBook.value?.uri === burstBooks.value[idx].uri) {
-          latestBurstBook.value = burstBooks.value[idx];
-        }
       })
       .catch((e: unknown) => {
         console.warn('[BURST SCAN] Échec enrichissement aperçu :', e);

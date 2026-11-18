@@ -1,5 +1,5 @@
 // src/core/utils/vision-prompt.util.ts
-// Prompt et liste de modèles Gemini Flash partagés entre le client BYOK et la passerelle serveur.
+// Prompt et schéma JSON compact (6 champs OCR strict, 1 seule passe IA) partagés entre le client et la passerelle serveur.
 
 export const GLOBAL_MONTHLY_AI_BUDGET = 15000;
 export const MAX_MONTHLY_AI_QUOTA_PER_USER = 100;
@@ -24,85 +24,60 @@ export const PREFERRED_GEMINI_MODELS = [
   'gemini-3.0-flash'
 ];
 
-export const PREFERRED_SEMANTIC_GEMINI_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-3-flash',
-  'gemini-2.0-flash',
-  'gemini-2.5-flash-lite'
-];
-
-export interface SemanticWorkNormalizationItem {
-  spineIndex: number;
-  known: boolean;
-  canonicalSeries: string;
-  canonicalVolumeNumber: string;
-  canonicalWorkTitle: string;
-  bnfSearchTitle: string;
-  bnfSearchAuthor: string;
-  confidence: 'high' | 'medium' | 'low';
-}
-
-export const SEMANTIC_NORMALIZATION_RESPONSE_SCHEMA = {
+/**
+ * Schéma JSON OpenAPI compact (6 champs max par livre/tranche) pour contraindre
+ * la réponse Gemini en mode OCR strict et éviter toute erreur de classification éditoriale.
+ */
+export const VISION_OCR_RESPONSE_SCHEMA = {
   type: 'ARRAY',
   items: {
     type: 'OBJECT',
     properties: {
       spineIndex: { type: 'INTEGER' },
-      known: { type: 'BOOLEAN' },
-      canonicalSeries: { type: 'STRING' },
-      canonicalVolumeNumber: { type: 'STRING' },
-      canonicalWorkTitle: { type: 'STRING' },
-      bnfSearchTitle: { type: 'STRING' },
-      bnfSearchAuthor: { type: 'STRING' },
-      confidence: { type: 'STRING', enum: ['high', 'medium', 'low'] }
+      rawText: { type: 'STRING' },
+      titleHint: { type: 'STRING' },
+      volumeNumber: { type: 'STRING' },
+      authorHint: { type: 'STRING' },
+      isbn: { type: 'STRING' }
     },
-    required: [
-      'spineIndex',
-      'known',
-      'canonicalSeries',
-      'canonicalVolumeNumber',
-      'canonicalWorkTitle',
-      'bnfSearchTitle',
-      'bnfSearchAuthor',
-      'confidence'
-    ]
+    required: ['spineIndex', 'rawText', 'titleHint', 'volumeNumber', 'authorHint', 'isbn']
   }
 };
 
-export function buildSemanticWorkNormalizationPrompt(
-  ocrItems: Array<Record<string, unknown>>,
-  existingSeriesNames: string[]
-): string {
-  const compactOcr = ocrItems.map((it, idx) => ({
-    spineIndex: typeof it.spineIndex === 'number' ? it.spineIndex : idx + 1,
-    rawSpineText: String(it.rawSpineText || ''),
-    title: String(it.title || ''),
-    series: String(it.series || ''),
-    volumeNumber: String(it.volumeNumber || ''),
-    author: String(it.author || ''),
-    publisher: String(it.publisher || ''),
-    collection: String(it.collection || '')
-  }));
+export function buildVisionPrompt(mode: 'cover' | 'shelf'): string {
+  if (mode === 'cover') {
+    return `Tu es un moteur de lecture optique (OCR) spécialisé dans les livres et bandes dessinées.
+Tu vas observer la photographie d'une couverture ou d'une 4e de couverture isolée d'un livre.
+Ton rôle est d'extraire STRICTEMENT le texte visible sans rien inventer ni corriger de mémoire.
 
-  return `Tu es un bibliothécaire expert en bandes dessinées et livres francophones (modèle FRBR Œuvre vs Édition).
-On te fournit un tableau JSON issu d'une lecture OCR brute d'étagère/couverture (Couche 1).
-Ta mission (Couche 2) est d'identifier l'ŒUVRE canonique indépendamment de l'édition imprimée, SANS JAMAIS INVENTER en cas de doute.
+Consignes de remplissage du tableau JSON (1 seul objet) :
+- spineIndex : 1
+- rawText : tout le texte exact visible sur l'image (titre, série, auteur, éditeur, mentions)
+- titleHint : le titre principal et/ou nom de série mis en avant sur cette couverture
+- volumeNumber : le numéro de tome imprimé en chiffres (ex: "28", "7", "2"), jamais une année ni un prix, sinon ""
+- authorHint : le ou les noms d'auteurs / mentions "par X d'après Y" visibles, sinon ""
+- isbn : l'ISBN-13 ou ISBN-10 ou code-barres EAN-13 lisible s'il figure sur la photo, sinon ""
 
-Séries canoniques déjà présentes dans la bibliothèque de l'utilisateur (réutilise EXACTEMENT ce libellé si l'œuvre y appartient) :
-${JSON.stringify(existingSeriesNames.slice(0, 80))}
+RÈGLE STRICTE : si un élément n'est pas lisible sur la photo, mets "". N'invente jamais un titre, un auteur ou un numéro.`;
+  }
 
-RÈGLES STRICTES ANTI-HALLUCINATION :
-1. Retourne exactement un objet par spineIndex reçu, dans le tableau JSON.
-2. Si l'œuvre t'est inconnue, trop récente (après ta date de connaissance), ou s'il existe la moindre ambiguïté : mets "known": false, "confidence": "low", et laisse "", "", "", "", "" dans les champs canoniques (sauf bnfSearchTitle/bnfSearchAuthor s'ils sont déjà clairement lisibles dans l'OCR).
-3. Quand "known": true avec certitude :
-   - canonicalSeries : nom canonique de la série sans mention de collection éditoriale ni préfixe superflu (ex: "Astérix" et non "Astérix - La Grande Collection", "Boule & Bill" et non "60 gags de Boule et Bill", "Les Aventures de Tintin" -> ou l'intitulé exact figurant dans la liste ci-dessus). "" pour un one-shot.
-   - canonicalVolumeNumber : numéro de tome officiel de l'œuvre dans la série en chiffres uniquement (ex: "2" pour La Serpe d'or, "24" pour Astérix chez les Belges, "7" pour L'Île Noire, "3" si l'OCR lit explicitement "60 gags de Boule et Bill N°3"). Ne change jamais un numéro déjà lu sur "60 gags de ... N°X". Laisse "" en cas de moindre doute sur le numéro.
-   - canonicalWorkTitle : titre exact de l'album/œuvre sans nom d'auteur ni collection (ex: "La Serpe d'or", "Le Cadeau de César").
-   - bnfSearchTitle : titre court et propre optimisé pour une requête SRU sur catalogue.bnf.fr.
-   - bnfSearchAuthor : nom de famille de l'auteur/scénariste principal (ex: "Goscinny", "Hergé", "Roba").
+  return `Tu es un moteur de lecture optique (OCR) spécialisé dans les bibliothèques de livres et bandes dessinées.
+Tu vas observer une photographie prenant des couvertures et tranches (dos) de livres ou BD rangées côte à côte dans une bibliothèque (ou empilées à l'horizontale), dont le texte est souvent orienté verticalement à 90° (de bas en haut ou de haut en bas), parfois usé ou partiellement masqué.
 
-Entrée OCR brute :
-${JSON.stringify(compactOcr)}`;
+Ton rôle est d'analyser cette photo STRICTEMENT TRANCHE PAR TRANCHE, dans l'ordre visuel (de gauche à droite, ou de haut en bas pour une pile) :
+1. Délimite visuellement chaque livre individuellement grâce à ses bords gauche/droite (ou haut/bas), sa couleur de fond et son ombre.
+2. Tout le texte lu sur une même tranche doit rester regroupé ensemble dans le même objet JSON.
+3. INTERDICTION ABSOLUE de mélanger un logo d'éditeur, un auteur ou un numéro d'une tranche adjacente.
+
+Consignes pour chaque objet du tableau JSON :
+- spineIndex : numéro d'ordre visuel (1, 2, 3...)
+- rawText : l'intégralité du texte lisible sur CETTE tranche uniquement (titre, série, auteur, éditeur, mentions)
+- titleHint : le titre et/ou nom de série principal visuellement mis en avant sur CETTE tranche
+- volumeNumber : le chiffre isolé désignant visuellement un numéro de tome sur CETTE tranche (ex: "28", "3", "41", jamais une année ni un prix), sinon ""
+- authorHint : le ou les noms d'auteurs (y compris "par X d'après Y") lisibles sur CETTE tranche, sinon ""
+- isbn : ISBN/code-barres si lisible, sinon ""
+
+RÈGLE STRICTE ANTI-HALLUCINATION : ne devine JAMAIS de mémoire un champ absent ou illisible sur la tranche ; laisse "" si tu n'es pas sûr.`;
 }
 
 export function parseJsonArraySafe<T = Record<string, unknown>>(rawText: string): T[] {
@@ -121,49 +96,4 @@ export function parseJsonArraySafe<T = Record<string, unknown>>(rawText: string)
   } catch {
     return [];
   }
-}
-
-export function mergeOcrAndSemanticLayers(
-  ocrItems: Array<Record<string, unknown>>,
-  semanticItems: SemanticWorkNormalizationItem[]
-): Array<Record<string, unknown>> {
-  const bySpine = new Map<number, SemanticWorkNormalizationItem>();
-  for (const s of semanticItems) {
-    if (s && typeof s.spineIndex === 'number') {
-      bySpine.set(s.spineIndex, s);
-    }
-  }
-
-  return ocrItems.map((ocr, idx) => {
-    const spineIndex = typeof ocr.spineIndex === 'number' ? ocr.spineIndex : idx + 1;
-    const sem = bySpine.get(spineIndex);
-    if (!sem || !sem.known || sem.confidence === 'low') {
-      return {
-        ...ocr,
-        spineIndex,
-        semanticKnown: false
-      };
-    }
-    return {
-      ...ocr,
-      spineIndex,
-      semanticKnown: true,
-      semanticConfidence: sem.confidence,
-      canonicalSeries: (sem.canonicalSeries || '').trim() || undefined,
-      canonicalVolumeNumber: (sem.canonicalVolumeNumber || '').trim() || undefined,
-      canonicalWorkTitle: (sem.canonicalWorkTitle || '').trim() || undefined,
-      bnfSearchTitle: (sem.bnfSearchTitle || '').trim() || undefined,
-      bnfSearchAuthor: (sem.bnfSearchAuthor || '').trim() || undefined,
-      // Si l'OCR manquait un numéro ou une série canonique, enrichir prudemment sans écraser rawSpineText
-      series: (sem.canonicalSeries || '').trim() || ocr.series,
-      volumeNumber: String(ocr.volumeNumber || '').trim() || (sem.canonicalVolumeNumber || '').trim(),
-      author: String(ocr.author || '').trim() || (sem.bnfSearchAuthor || '').trim()
-    };
-  });
-}
-
-export function buildVisionPrompt(mode: 'cover' | 'shelf'): string {
-  return mode === 'cover'
-    ? `Analyse cette couverture (ou 4e de couverture) de livre ou bande dessinée. Extrais TOUS les éléments textuels visibles sans rien inventer de mémoire. Réponds UNIQUEMENT avec un tableau JSON valide d'un seul objet au format : [{"spineIndex":1,"rawSpineText":"Tout le texte exact visible sur la couverture/tranche","title":"Titre exact de l'album ou du livre","subtitle":"Sous-titre éventuel ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres si visible ou vide","author":"Auteur ou scénariste visible ou vide","illustrator":"Dessinateur si distinct et visible ou vide","publisher":"Éditeur ou logo visible (Dupuis, Dargaud, Glénat, Lombard, Delcourt, Soleil, Casterman, Gallimard...) ou vide","collection":"Nom de collection éditoriale si distinct de la série (ex: Aire Libre, Repérages) ou vide","isbn":"ISBN-13 ou ISBN-10 si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : si un champ n'est pas lisible sur l'image, laisse "" ; n'invente jamais un auteur.`
-    : `Analyse cette photo d'étagère/pile de livres/BD (STRICTEMENT TRANCHE PAR TRANCHE de gauche à droite ou de haut en bas, sans jamais mélanger deux tranches voisines) OU cette couverture/4e de couverture isolée s'il n'y a qu'un seul livre visible. Pour CHAQUE livre/tranche, extrais d'abord TOUT le texte lisible (y compris logos d'éditeur, numéros, sous-titres, auteurs/dessinateurs) dans rawSpineText, puis remplis les champs structurés. Réponds UNIQUEMENT avec un tableau JSON valide : [{"spineIndex":1,"rawSpineText":"Texte intégral lu sur cette tranche/couverture uniquement","title":"Titre du tome ou livre","subtitle":"Sous-titre si présent ou vide","series":"Nom de la série si BD/manga/saga ou vide","volumeNumber":"Numéro de tome en chiffres ou vide","author":"Auteur/scénariste lisible sur CETTE tranche ou vide","illustrator":"Dessinateur si lisible ou vide","publisher":"Éditeur ou logo visible sur CETTE tranche ou vide","collection":"Collection éditoriale si visible ou vide","isbn":"ISBN si visible ou vide","confidence":"high|medium|low"}]. RÈGLE STRICTE : n'invente et ne devine JAMAIS un auteur ou un titre absent/illisible ; laisse "" si tu n'es pas sûr.`;
 }

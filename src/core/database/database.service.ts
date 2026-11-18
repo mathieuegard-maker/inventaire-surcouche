@@ -54,6 +54,13 @@ export interface PendingCreation {
   createdAt: number;
 }
 
+export interface LocalIsbnIndexEntry {
+  isbn13: string;
+  bookUri: string;
+  bookId?: string;
+  isIntegral: boolean;
+}
+
 export interface PhotoScanJobRecord {
   id?: number;
   mode: 'cover' | 'shelf';
@@ -75,6 +82,7 @@ export class AppDatabase extends Dexie {
   pending_actions!: Table<PendingAction, number>; // NOUVELLE TABLE : File d'attente
   pending_creations!: Table<PendingCreation, number>; // File de créations distantes en tâche de fond
   photo_scan_jobs!: Table<PhotoScanJobRecord, number>; // File persistante d'analyse photo en arrière-plan
+  book_isbn_index!: Table<LocalIsbnIndexEntry, string>; // Index relationnel O(1) isbn13 -> livre local
 
   constructor() {
     super('InventaireLocalDBV2');
@@ -116,6 +124,18 @@ export class AppDatabase extends Dexie {
       pending_creations: '++id, status, createdAt',
       photo_scan_jobs: '++id, status, createdAt'
     });
+
+    // Version 7 (Architecture V4) : Index relationnel O(1) book_isbn_index (isbn13 PK)
+    this.version(7).stores({
+      inventory: 'uri',
+      wishlist: 'uri',
+      cache_books: 'uri, workUri, seriesId, isbn13, isbn10, ownershipStatus',
+      loans: 'uri, friendName',
+      pending_actions: '++id, action, uri, status, createdAt',
+      pending_creations: '++id, status, createdAt',
+      photo_scan_jobs: '++id, status, createdAt',
+      book_isbn_index: 'isbn13, bookUri, bookId, isIntegral'
+    });
   }
 }
 
@@ -124,7 +144,43 @@ export const db = new AppDatabase();
 export const databaseService = {
   // --- RECHERCHES LOCAL-FIRST (Double Check) ---
 
+  async lookupIsbnIndexLocal(isbn13: string): Promise<{ entry: LocalIsbnIndexEntry; book?: HumanizedBook } | undefined> {
+    const clean = (isbn13 || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+    if (!clean) return undefined;
+    const entry = await db.book_isbn_index.get(clean);
+    if (!entry) return undefined;
+    const book = await db.cache_books.get(entry.bookUri);
+    return { entry, book };
+  },
+
+  async indexBookIsbns(book: HumanizedBook): Promise<void> {
+    const isbns = new Set<string>();
+    const addClean = (raw?: string) => {
+      const c = (raw || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+      if (c.length === 13) isbns.add(c);
+    };
+    addClean(book.isbn13);
+    for (const k of book.knownIsbns || []) addClean(k);
+    if (isbns.size === 0) return;
+
+    const entries: LocalIsbnIndexEntry[] = Array.from(isbns).map((code) => ({
+      isbn13: code,
+      bookUri: book.uri,
+      bookId: book.bookId,
+      isIntegral: Boolean(book.isIntegral)
+    }));
+    await db.book_isbn_index.bulkPut(entries).catch(() => {});
+  },
+
   async getBookByIsbn(isbn: string): Promise<HumanizedBook | undefined> {
+    const clean = (isbn || '').replace(/[^0-9Xx]/g, '').toUpperCase();
+    if (clean.length === 13) {
+      const indexed = await db.book_isbn_index.get(clean).catch(() => undefined);
+      if (indexed?.bookUri) {
+        const hit = await db.cache_books.get(indexed.bookUri);
+        if (hit) return hit;
+      }
+    }
     return await db.cache_books
       .where('isbn13').equals(isbn)
       .or('isbn10').equals(isbn)
@@ -163,6 +219,7 @@ export const databaseService = {
     const plainBook = toPlainCloneable(book);
     plainBook.updatedAt = Date.now(); // AJOUT : Marquage temporel automatique (TTL)
     await db.cache_books.put(plainBook);
+    await this.indexBookIsbns(plainBook);
   },
 
   async getBookFromCache(uri: string): Promise<HumanizedBook | undefined> {
@@ -425,7 +482,8 @@ export const databaseService = {
         db.loans,
         db.pending_actions,
         db.pending_creations,
-        db.photo_scan_jobs
+        db.photo_scan_jobs,
+        db.book_isbn_index
       ],
       async () => {
         await Promise.all([
@@ -435,7 +493,8 @@ export const databaseService = {
           db.loans.clear(),
           db.pending_actions.clear(),
           db.pending_creations.clear(),
-          db.photo_scan_jobs.clear()
+          db.photo_scan_jobs.clear(),
+          db.book_isbn_index.clear()
         ]);
       }
     );

@@ -6,7 +6,7 @@ import WireframePagination from '../components/WireframePagination.vue';
 import { userService } from '../../core/services/user.service';
 import { imageUtil } from '../../core/utils/image.util';
 
-const activeTab = ref<'stats' | 'catalog' | 'users'>('stats');
+const activeTab = ref<'stats' | 'catalog' | 'users' | 'logs'>('stats');
 const loading = ref(true);
 const errorMsg = ref('');
 const actionFeedback = ref('');
@@ -28,6 +28,14 @@ const usersList = ref<any[]>([]);
 const usersLoading = ref(false);
 const maintBusy = ref(false);
 const rehydrateOffset = ref(0);
+
+// Logs & diagnostic pipeline V4
+const logsTraces = ref<any[]>([]);
+const logsLoading = ref(false);
+const logsStatusFilter = ref<'all' | 'ok' | 'warn' | 'error'>('all');
+const logsLayerFilter = ref<'all' | 'C1' | 'C2' | 'C3' | 'C4' | 'C5' | 'CRON'>('all');
+const logsQuery = ref('');
+const expandedTraceIds = ref<Record<string, boolean>>({});
 
 const catalogTotalPages = computed(() =>
   Math.max(1, Math.ceil(catalogTotal.value / catalogPageSize))
@@ -81,14 +89,78 @@ const loadUsers = async () => {
   }
 };
 
-const switchTab = async (tab: 'stats' | 'catalog' | 'users') => {
+const loadLogs = async () => {
+  logsLoading.value = true;
+  errorMsg.value = '';
+  try {
+    const res = await userService.fetchAdminPipelineLogs({
+      status: logsStatusFilter.value,
+      layer: logsLayerFilter.value,
+      q: logsQuery.value.trim(),
+      limit: 160
+    });
+    logsTraces.value = res.traces || [];
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Erreur chargement logs pipeline.';
+  } finally {
+    logsLoading.value = false;
+  }
+};
+
+const toggleTraceExpanded = (traceId: string) => {
+  expandedTraceIds.value = {
+    ...expandedTraceIds.value,
+    [traceId]: !expandedTraceIds.value[traceId]
+  };
+};
+
+const formatLogPayload = (raw: string | null): string => {
+  if (!raw) return '';
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
+};
+
+const exportLogsJson = () => {
+  const blob = new Blob([JSON.stringify(logsTraces.value, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `pipeline-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const handlePurgeLogs = async () => {
+  maintBusy.value = true;
+  actionFeedback.value = '';
+  try {
+    await userService.purgeAdminPipelineLogs();
+    actionFeedback.value = 'Purge TTL appliquée (ok > 7j, warn/error > 30j).';
+    await loadLogs();
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Erreur purge des logs.';
+  } finally {
+    maintBusy.value = false;
+  }
+};
+
+const switchTab = async (tab: 'stats' | 'catalog' | 'users' | 'logs') => {
   activeTab.value = tab;
   if (tab === 'catalog' && catalogItems.value.length === 0) {
     await loadCatalog();
   } else if (tab === 'users' && usersList.value.length === 0) {
     await loadUsers();
+  } else if (tab === 'logs' && logsTraces.value.length === 0) {
+    await loadLogs();
   }
 };
+
+watch([logsStatusFilter, logsLayerFilter], () => {
+  if (activeTab.value === 'logs') loadLogs();
+});
 
 const searchCatalog = () => {
   catalogPage.value = 1;
@@ -185,6 +257,14 @@ onMounted(() => {
           @click="switchTab('users')"
         >
           Comptes ({{ overview.users.total }}) &amp; Maintenance
+        </button>
+        <button
+          type="button"
+          class="wireframe-btn"
+          :class="{ primary: activeTab === 'logs' }"
+          @click="switchTab('logs')"
+        >
+          Logs &amp; Diagnostic
         </button>
       </div>
 
@@ -358,6 +438,99 @@ onMounted(() => {
                 </tr>
               </tbody>
             </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4 : LOGS & DIAGNOSTIC PIPELINE V4 -->
+      <div v-if="activeTab === 'logs'" class="admin-card">
+        <div class="logs-toolbar">
+          <select v-model="logsLayerFilter" class="logs-input" aria-label="Filtrer par couche">
+            <option value="all">Toutes couches</option>
+            <option value="C1">C1 (Front / OCR)</option>
+            <option value="C2">C2 (Index O(1))</option>
+            <option value="C3">C3 (APIs Externes)</option>
+            <option value="C4">C4 (Consolidation)</option>
+            <option value="C5">C5 (Série / Queue)</option>
+            <option value="CRON">CRON (Arrière-plan)</option>
+          </select>
+
+          <select v-model="logsStatusFilter" class="logs-input" aria-label="Filtrer par statut">
+            <option value="all">Tous statuts</option>
+            <option value="ok">OK uniquement</option>
+            <option value="warn">Avertissements (warn)</option>
+            <option value="error">Erreurs (error)</option>
+          </select>
+
+          <input
+            v-model="logsQuery"
+            type="search"
+            class="logs-input logs-search"
+            placeholder="Rechercher ISBN, titre, trace_id..."
+            @keyup.enter="loadLogs"
+          />
+
+          <button type="button" class="wireframe-btn small-btn" :disabled="logsLoading" @click="loadLogs">
+            {{ logsLoading ? 'Chargement...' : 'Rafraîchir' }}
+          </button>
+          <button
+            type="button"
+            class="wireframe-btn small-btn"
+            :disabled="logsTraces.length === 0"
+            @click="exportLogsJson"
+          >
+            Exporter JSON
+          </button>
+          <button
+            type="button"
+            class="wireframe-btn small-btn"
+            :disabled="maintBusy"
+            @click="handlePurgeLogs"
+          >
+            Purger TTL
+          </button>
+        </div>
+
+        <div v-if="logsLoading && logsTraces.length === 0" class="logs-empty">
+          Chargement des traces pipeline...
+        </div>
+        <div v-else-if="logsTraces.length === 0" class="logs-empty">
+          Aucune trace enregistrée pour ces filtres.
+        </div>
+
+        <div v-else class="traces-list">
+          <div v-for="trace in logsTraces" :key="trace.traceId" class="trace-card">
+            <button
+              type="button"
+              class="trace-header"
+              @click="toggleTraceExpanded(trace.traceId)"
+            >
+              <span class="trace-status-dot" :class="`status-${trace.maxStatus}`">{{ trace.maxStatus.toUpperCase() }}</span>
+              <code class="trace-id">{{ trace.traceId }}</code>
+              <span v-if="trace.sourceChannel" class="trace-channel">{{ trace.sourceChannel }}</span>
+              <span class="trace-meta">
+                {{ trace.steps.length }} étape(s) · {{ trace.totalDurationMs }} ms ·
+                {{ new Date(trace.startedAt).toLocaleString('fr-FR') }}
+              </span>
+              <span class="trace-chevron">{{ expandedTraceIds[trace.traceId] ? '▼' : '▶' }}</span>
+            </button>
+
+            <div class="trace-summary-preview">
+              {{ trace.steps[trace.steps.length - 1]?.summary || trace.steps[0]?.summary }}
+            </div>
+
+            <div v-if="expandedTraceIds[trace.traceId]" class="trace-steps">
+              <div v-for="step in trace.steps" :key="step.id" class="trace-step-row">
+                <div class="step-top">
+                  <span class="step-layer">{{ step.layer }}</span>
+                  <span class="trace-status-dot" :class="`status-${step.status}`">{{ step.status }}</span>
+                  <strong>{{ step.step_name }}</strong>
+                  <span v-if="step.duration_ms !== null" class="step-duration">{{ step.duration_ms }} ms</span>
+                </div>
+                <div class="step-summary">{{ step.summary }}</div>
+                <pre v-if="step.payload_json" class="step-payload">{{ formatLogPayload(step.payload_json) }}</pre>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -553,5 +726,166 @@ onMounted(() => {
   padding: 0.7rem 0.9rem;
   margin-bottom: 1rem;
   font-weight: 600;
+}
+
+.logs-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.logs-input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: #fff;
+}
+
+.logs-search {
+  flex: 1 1 200px;
+}
+
+.logs-empty {
+  padding: 1.5rem;
+  text-align: center;
+  color: #64748b;
+}
+
+.traces-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.trace-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f8fafc;
+}
+
+.trace-header {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border: none;
+  background: #f1f5f9;
+  cursor: pointer;
+  text-align: left;
+}
+
+.trace-status-dot {
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.trace-status-dot.status-ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.trace-status-dot.status-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.trace-status-dot.status-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.trace-id {
+  font-size: 0.8rem;
+  color: #0f172a;
+}
+
+.trace-channel {
+  background: #e0e7ff;
+  color: #3730a3;
+  padding: 0.1rem 0.45rem;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.trace-meta {
+  font-size: 0.78rem;
+  color: #475569;
+  margin-left: auto;
+}
+
+.trace-chevron {
+  font-size: 0.78rem;
+  color: #475569;
+}
+
+.trace-summary-preview {
+  padding: 0.45rem 0.85rem;
+  font-size: 0.84rem;
+  color: #334155;
+  background: #fff;
+  border-top: 1px solid #e2e8f0;
+}
+
+.trace-steps {
+  padding: 0.65rem 0.85rem;
+  background: #fff;
+  border-top: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.trace-step-row {
+  border-left: 3px solid #cbd5e1;
+  padding-left: 0.65rem;
+}
+
+.step-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+}
+
+.step-layer {
+  background: #0f172a;
+  color: #fff;
+  padding: 0.08rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.step-duration {
+  margin-left: auto;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.step-summary {
+  margin-top: 0.2rem;
+  font-size: 0.83rem;
+  color: #1e293b;
+}
+
+.step-payload {
+  margin: 0.35rem 0 0;
+  padding: 0.5rem;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  max-height: 220px;
+  overflow: auto;
 }
 </style>

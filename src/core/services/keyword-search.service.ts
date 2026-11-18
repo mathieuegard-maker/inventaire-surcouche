@@ -162,12 +162,39 @@ export const keywordSearchService = {
 
     const localBooks = await databaseService.searchBooksLocally(cleanQ).catch(() => []);
 
+    // Passe 1B (V4) : Vérifier d'abord le catalogue D1 serveur (/api/v2/books/search-local) avant d'interroger les APIs externes
+    let serverLocalHits: Array<{
+      bookId: string;
+      isbn13: string;
+      title: string;
+      seriesName?: string;
+      volumeNumber?: number | null;
+      authors: string[];
+      coverUrl?: string;
+      score: number;
+    }> = [];
+    if (!isOffline && typeof fetch === 'function') {
+      try {
+        const sRes = await fetch(`/api/v2/books/search-local?q=${encodeURIComponent(cleanQ)}&limit=20`).catch(() => null);
+        if (sRes?.ok) {
+          const sJson = (await sRes.json().catch(() => null)) as { hits?: typeof serverLocalHits } | null;
+          if (Array.isArray(sJson?.hits)) serverLocalHits = sJson.hits;
+        }
+      } catch {
+        // Non-bloquant : repli immédiat sur la triade externe
+      }
+    }
+
+    const strongLocalCoverage =
+      localBooks.length + serverLocalHits.length >= 6 &&
+      serverLocalHits.filter((h) => h.score >= 60).length >= 5;
+
     let d1Items: SearchResultItem[] = [];
     let bnfCandidates: Array<ExternalBookMetadata & { _bnfEnsembleId?: string }> = [];
     let gbCandidates: ExternalBookMetadata[] = [];
     let olCandidates: ExternalBookMetadata[] = [];
 
-    if (!isOffline) {
+    if (!isOffline && !strongLocalCoverage) {
       const [d1Res, bnfRes, gbRes, olRes] = await Promise.allSettled([
         inventaireSearchProvider.searchByKeywords(cleanQ),
         bnfResolver.searchKeywordVolumes(cleanQ, 50),
@@ -222,8 +249,12 @@ export const keywordSearchService = {
     for (const ol of olCandidates) {
       if (ol.series) registerSeriesSeed(ol.series, 3, ol.authors[0]);
     }
+
     for (const lb of localBooks) {
       if (lb.series) registerSeriesSeed(lb.series, 6, lb.authors[0]);
+    }
+    for (const sh of serverLocalHits) {
+      if (sh.seriesName) registerSeriesSeed(sh.seriesName, 7, sh.authors?.[0]);
     }
 
     const normQ = normalizeTextKey(cleanQ);
@@ -236,7 +267,7 @@ export const keywordSearchService = {
     }
 
     // Passe 2 : Expansion complète de toutes les séries pertinentes (max 4) sur TOUTE la triade (BnF + Google Books + Open Library)
-    if (!isOffline && seriesSeedMap.size > 0) {
+    if (!isOffline && !strongLocalCoverage && seriesSeedMap.size > 0) {
       const topSeriesSeeds = Array.from(seriesSeedMap.entries())
         .map(([canon, seed]) => {
           const relevance =
@@ -376,6 +407,18 @@ export const keywordSearchService = {
       existing.category = reCls.category;
       existing.genres = reCls.genres;
     };
+
+    for (const sh of serverLocalHits) {
+      upsertBook('Catalogue D1 V4', {
+        uri: sh.isbn13 ? `isbn:${sh.isbn13}` : undefined,
+        isbn: sh.isbn13,
+        title: sh.title,
+        authors: sh.authors,
+        series: sh.seriesName,
+        seriesNumber: sh.volumeNumber !== null && sh.volumeNumber !== undefined ? String(sh.volumeNumber) : undefined,
+        coverUrl: sh.coverUrl
+      });
+    }
 
     for (const lb of localBooks) {
       upsertBook('Ma Biblio', {

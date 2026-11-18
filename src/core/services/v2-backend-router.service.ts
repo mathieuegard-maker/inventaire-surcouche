@@ -7,6 +7,12 @@
 
 import type { AppBackendEnv } from '../adapters/storage-db.interface';
 import type { SyncDeltaRequest, SyncDeltaResponse } from '../domain/v2.types';
+import { resolveAuthSession } from './d1-gateway.service';
+import {
+  runV4IngestionPipeline,
+  searchLocalBooksForCanal3,
+  type SourceChannel
+} from './v4-pipeline.service';
 
 function jsonResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
@@ -117,6 +123,77 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
       };
 
       return jsonResponse(response);
+    }
+
+    // 5. Canal 3 (V4) : Recherche textuelle sur le catalogue serveur D1 AVANT appels API externes
+    if (path === 'books/search-local' && method === 'GET') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const hits = await searchLocalBooksForCanal3(env.DB, {
+        q: url.searchParams.get('q') || undefined,
+        title: url.searchParams.get('title') || undefined,
+        author: url.searchParams.get('author') || undefined,
+        series: url.searchParams.get('series') || undefined,
+        volumeNumber: url.searchParams.get('volumeNumber') || undefined,
+        limit: Number(url.searchParams.get('limit') || 10)
+      });
+      return jsonResponse({ hits });
+    }
+
+    // 6. Contrat Pivot V4 (Couches 1 -> 5) : Ingestion d'ISBNs vers Index O(1), Découverte C3, Consolidation C4 et Série C5
+    if (path === 'books/ingest' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        isbns?: unknown;
+        isbn?: unknown;
+        source_channel?: unknown;
+        action?: unknown;
+        libraryId?: unknown;
+        userUri?: unknown;
+        traceId?: unknown;
+      };
+
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      const rawIsbns = Array.isArray(payload.isbns)
+        ? payload.isbns.map(String)
+        : payload.isbn
+          ? [String(payload.isbn)]
+          : [];
+      if (rawIsbns.length === 0) {
+        return jsonResponse({ error: 'Paramètre isbns requis' }, 400);
+      }
+
+      const validChannels: SourceChannel[] = [
+        'canal_1_barcode',
+        'canal_2_manual_isbn',
+        'canal_3_text_search',
+        'canal_4_ai_photo'
+      ];
+      const sourceChannel: SourceChannel = validChannels.includes(payload.source_channel as SourceChannel)
+        ? (payload.source_channel as SourceChannel)
+        : 'canal_2_manual_isbn';
+
+      const action =
+        payload.action === 'owned' || payload.action === 'wishlist' || payload.action === 'preview'
+          ? payload.action
+          : 'preview';
+
+      const result = await runV4IngestionPipeline(env.DB, {
+        isbns: rawIsbns,
+        sourceChannel,
+        libraryId: auth?.libraryId || (typeof payload.libraryId === 'string' ? payload.libraryId : null),
+        userId: auth?.userId || null,
+        action,
+        traceId: typeof payload.traceId === 'string' ? payload.traceId : undefined
+      });
+      return jsonResponse(result);
     }
 
     return jsonResponse({ error: `Route V2 inconnue: ${method} /api/v2/${path}` }, 404);

@@ -18,6 +18,11 @@ import {
 import { photoBatchQueueService } from '../../core/services/photo-batch-queue.service';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 import { imageUtil } from '../../core/utils/image.util';
+import {
+  formatV4StatusNotice,
+  ingestIsbnsViaV4,
+  v4BookRecordToHumanizedBook
+} from '../../core/services/v4-client.service';
 import BookMiniCard from './BookMiniCard.vue';
 import WireframeTable from './WireframeTable.vue';
 import BatchActionBar from './BatchActionBar.vue';
@@ -493,11 +498,54 @@ const dispatchPhotoBatchAction = async (
 
     const target: 'owned' | 'wish' = action === 'ADD_WISHLIST' ? 'wish' : 'owned';
     const processedKeys = new Set<string>();
-    let savedCount = 0;
+    const itemsDeduped: ResolvedPhotoItem[] = [];
     for (const item of itemsToSave) {
       const key = item.isbn13 || item.existingUri || item.id;
       if (processedKeys.has(key)) continue;
       processedKeys.add(key);
+      itemsDeduped.push(item);
+    }
+
+    // Pipeline V4 (Contrat Pivot Canal 4) pour tous les éléments possédant un ISBN-13
+    const isbnsToIngest = itemsDeduped
+      .map((i) => i.isbn13)
+      .filter((x): x is string => Boolean(x && !x.startsWith('work:')));
+    const v4Batch = isbnsToIngest.length
+      ? await ingestIsbnsViaV4({
+          isbns: isbnsToIngest,
+          sourceChannel: 'canal_4_ai_photo',
+          action: target === 'owned' ? 'owned' : 'wishlist'
+        })
+      : null;
+
+    const v4ByIsbn = new Map<string, any>();
+    const integralAlerts: string[] = [];
+    for (const r of v4Batch?.results || []) {
+      if (r.book && r.normalizedIsbn13) {
+        v4ByIsbn.set(r.normalizedIsbn13, r);
+      }
+      if (
+        r.layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+        r.layer2Status === 'PARTIAL_INTEGRAL_OWNED' ||
+        r.layer2Status === 'FULL_INTEGRAL_OWNED'
+      ) {
+        const msg = formatV4StatusNotice(r);
+        if (msg) integralAlerts.push(msg);
+      }
+    }
+
+    let savedCount = 0;
+    for (const item of itemsDeduped) {
+      const v4Hit = item.isbn13 ? v4ByIsbn.get(item.isbn13) : undefined;
+      if (v4Hit?.book) {
+        const bookToCache = v4BookRecordToHumanizedBook(v4Hit.book, target);
+        await databaseService.saveBookToCache(bookToCache);
+        if (target === 'owned') {
+          await databaseService.markUriOwnedInRegistry?.(bookToCache.uri).catch(() => {});
+        }
+        savedCount++;
+        continue;
+      }
       await enqueueResolvedItem(item, target);
       savedCount++;
     }
@@ -516,10 +564,11 @@ const dispatchPhotoBatchAction = async (
       await photoBatchQueueService.clearCompletedJobs();
     }
     scannerState.notifyCatalogChanged();
-    photoSavingFeedback.value = `${savedCount} livre(s) ajouté(s) à ${target === 'owned' ? 'ma Collection' : 'ma Wishlist'} ✓`;
+    const alertSuffix = integralAlerts.length ? ` — ${integralAlerts.join(' ')}` : '';
+    photoSavingFeedback.value = `${savedCount} livre(s) ajouté(s) à ${target === 'owned' ? 'ma Collection' : 'ma Wishlist'} ✓${alertSuffix}`;
     setTimeout(() => {
       photoSavingFeedback.value = '';
-    }, 4000);
+    }, 6000);
   } catch (err: unknown) {
     photoError.value =
       err instanceof Error ? err.message : "Erreur lors de l'ajout des livres sélectionnés.";
@@ -578,21 +627,50 @@ async function confirmAndSaveCandidates() {
   if (!detectedToSave.length && !extrasToSave.length) return;
 
   const processedIsbns = new Set<string>();
+  const batchIngestIsbns: string[] = [];
+  const collectIngest = (list: ResolvedPhotoItem[]) => {
+    for (const item of list) {
+      if (item.isbn13 && !item.isbn13.startsWith('work:')) batchIngestIsbns.push(item.isbn13);
+    }
+  };
+  collectIngest(detectedToSave);
+  collectIngest(extrasToSave);
+
+  const v4Batch = batchIngestIsbns.length
+    ? await ingestIsbnsViaV4({
+        isbns: Array.from(new Set(batchIngestIsbns)),
+        sourceChannel: 'canal_4_ai_photo',
+        action: photoTargetStatus.value === 'owned' ? 'owned' : photoTargetStatus.value === 'wish' ? 'wishlist' : 'preview'
+      })
+    : null;
+  const v4IsbnMap = new Map<string, any>();
+  const integralAlerts: string[] = [];
+  for (const r of v4Batch?.results || []) {
+    if (r.book && r.normalizedIsbn13) v4IsbnMap.set(r.normalizedIsbn13, r);
+    const notice = formatV4StatusNotice(r);
+    if (notice && (r.layer2Status === 'INCLUDED_IN_INTEGRAL' || r.layer2Status === 'PARTIAL_INTEGRAL_OWNED' || r.layer2Status === 'FULL_INTEGRAL_OWNED')) {
+      integralAlerts.push(notice);
+    }
+  }
+
   for (const item of detectedToSave) {
     if (!item.isbn13 || processedIsbns.has(item.isbn13)) continue;
     processedIsbns.add(item.isbn13);
+    if (v4IsbnMap.has(item.isbn13)) continue;
     await enqueueResolvedItem(item, photoTargetStatus.value);
   }
 
   for (const extra of extrasToSave) {
     if (!extra.isbn13 || processedIsbns.has(extra.isbn13)) continue;
     processedIsbns.add(extra.isbn13);
+    if (v4IsbnMap.has(extra.isbn13)) continue;
     await enqueueResolvedItem(extra, seriesExtraTarget.value);
   }
 
   await photoBatchQueueService.clearCompletedJobs();
   scannerState.notifyCatalogChanged();
-  photoSavingFeedback.value = `${detectedToSave.length} livre(s) + ${extrasToSave.length} tome(s) de série validé(s) et envoyé(s) dans le flux catalogue ✓`;
+  const alertText = integralAlerts.length ? ` — ${integralAlerts.join(' ')}` : '';
+  photoSavingFeedback.value = `${detectedToSave.length} livre(s) + ${extrasToSave.length} tome(s) de série validé(s) et envoyé(s) dans le flux catalogue ✓${alertText}`;
   resolvedDetectedItems.value = [];
   doubtItems.value = [];
   unresolvedItems.value = [];

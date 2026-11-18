@@ -7,16 +7,13 @@ import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolv
 import { classifyBookMetadata } from '../utils/category-classifier.util';
 import { isbnUtil } from '../utils/isbn.util';
 import {
-  buildSemanticWorkNormalizationPrompt,
   buildVisionPrompt,
   computeMonthlyAiQuota,
-  mergeOcrAndSemanticLayers,
   parseJsonArraySafe,
   PREFERRED_GEMINI_MODELS,
-  PREFERRED_SEMANTIC_GEMINI_MODELS,
-  SEMANTIC_NORMALIZATION_RESPONSE_SCHEMA,
-  type SemanticWorkNormalizationItem
+  VISION_OCR_RESPONSE_SCHEMA
 } from '../utils/vision-prompt.util';
+import { PipelineTracer, purgeOldPipelineLogs, queryPipelineLogs } from './pipeline-logger.service';
 import {
   expandSeriesVolumesInD1,
   rehydrateAllCatalogEntitiesInD1,
@@ -812,8 +809,15 @@ export async function handleD1GatewayAction(
         );
       }
 
+      // Couche 1 (Canal 4) : 1 seule passe IA Gemini Vision en OCR strict (JSON 6 champs contraint)
+      const tracer = new PipelineTracer({
+        userId: auth.userId,
+        sourceChannel: 'canal_4_ai_photo'
+      });
+      const visionStart = Date.now();
       const prompt = buildVisionPrompt(mode);
       let rawText: string | null = null;
+      let usedModelId: string | null = null;
       let lastStatus = 0;
       let lastBody = '';
 
@@ -834,7 +838,8 @@ export async function handleD1GatewayAction(
               ],
               generationConfig: {
                 temperature: 0.1,
-                responseMimeType: 'application/json'
+                responseMimeType: 'application/json',
+                responseSchema: VISION_OCR_RESPONSE_SCHEMA
               }
             })
           }
@@ -843,6 +848,7 @@ export async function handleD1GatewayAction(
         if (res.ok) {
           const json = (await res.json()) as any;
           rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '[]';
+          usedModelId = modelId;
           break;
         }
         lastStatus = res.status;
@@ -853,62 +859,42 @@ export async function handleD1GatewayAction(
       }
 
       if (rawText === null) {
+        tracer.record(
+          'C1',
+          'vision_ocr',
+          'error',
+          `Échec OCR Gemini Vision (HTTP ${lastStatus})`,
+          { mode, httpStatus: lastStatus, errorPreview: lastBody.slice(0, 200) },
+          Date.now() - visionStart
+        );
+        await tracer.flush(db);
         return jsonResp(
           {
             error:
               lastStatus === 429
                 ? 'Serveur IA temporairement saturé (quota gratuit). Réessayez dans un instant ou utilisez votre clé personnelle.'
-                : `Erreur API Gemini serveur (${lastStatus}): ${lastBody.slice(0, 140)}`
+                : `Erreur API Gemini serveur (${lastStatus}): ${lastBody.slice(0, 140)}`,
+            traceId: tracer.traceId
           },
           lastStatus === 429 ? 429 : 502
         );
       }
 
-      // Couche 2 (Texte pur JSON strict) : identification sémantique de l'Œuvre canonique
-      // indépendamment de l'édition imprimée, sans jamais inventer si inconnu/récent.
-      let finalText = rawText;
-      const ocrItems = parseJsonArraySafe<Record<string, unknown>>(rawText);
-      if (ocrItems.length > 0) {
-        try {
-          const existingSeriesRows = await db
-            .prepare("SELECT DISTINCT label FROM catalog_entities WHERE entity_type = 'serie' ORDER BY label ASC LIMIT 80")
-            .all<{ label: string }>();
-          const existingSeriesNames = (existingSeriesRows.results || []).map((r) => r.label).filter(Boolean);
-          const semanticPrompt = buildSemanticWorkNormalizationPrompt(ocrItems, existingSeriesNames);
-
-          for (const semModelId of PREFERRED_SEMANTIC_GEMINI_MODELS) {
-            const semRes = await fetch(
-              `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(semModelId)}:generateContent?key=${encodeURIComponent(geminiKey)}`,
-              {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{ parts: [{ text: semanticPrompt }] }],
-                  generationConfig: {
-                    temperature: 0,
-                    responseMimeType: 'application/json',
-                    responseSchema: SEMANTIC_NORMALIZATION_RESPONSE_SCHEMA
-                  }
-                })
-              }
-            ).catch(() => null);
-
-            if (semRes && semRes.ok) {
-              const semJson = (await semRes.json().catch(() => null)) as any;
-              const semRaw = semJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (semRaw) {
-                const semanticItems = parseJsonArraySafe<SemanticWorkNormalizationItem>(semRaw);
-                if (semanticItems.length > 0) {
-                  finalText = JSON.stringify(mergeOcrAndSemanticLayers(ocrItems, semanticItems));
-                }
-              }
-              break;
-            }
-          }
-        } catch (semErr) {
-          console.warn('[VISION LAYER 2] Repli sur OCR brut :', semErr);
-        }
-      }
+      const parsedCandidates = parseJsonArraySafe<Record<string, unknown>>(rawText);
+      tracer.record(
+        'C1',
+        'vision_ocr',
+        parsedCandidates.length > 0 ? 'ok' : 'warn',
+        `OCR strict (${mode}, ${usedModelId || 'gemini'}) : ${parsedCandidates.length} tranche(s)/couverture(s) détectée(s)`,
+        {
+          mode,
+          modelUsed: usedModelId,
+          candidatesCount: parsedCandidates.length,
+          candidates: parsedCandidates
+        },
+        Date.now() - visionStart
+      );
+      await tracer.flush(db);
 
       const nextTotal = totalUsed + 1;
       const nextMonthUsed = monthUsed + 1;
@@ -927,7 +913,7 @@ export async function handleD1GatewayAction(
 
       const remainingQuota = Math.max(0, monthlyQuota - nextMonthUsed);
 
-      return jsonResp({ text: finalText, monthlyQuota, remainingQuota });
+      return jsonResp({ text: rawText, monthlyQuota, remainingQuota, traceId: tracer.traceId });
     }
 
     case 'admin-overview': {
@@ -1211,6 +1197,28 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
       const res = await runCentralizedSeriesReleaseSweep(db, { limit: 6, staleDays: 3 });
+      return jsonResp({ ok: true, ...res });
+    }
+
+    case 'admin-pipeline-logs': {
+      const admin = await requireAdmin(db, request);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const status = (url.searchParams.get('status') || 'all').trim();
+      const layer = (url.searchParams.get('layer') || 'all').trim();
+      const q = (url.searchParams.get('q') || '').trim();
+      const limit = Math.min(200, Math.max(20, Math.trunc(Number(url.searchParams.get('limit') || 120))));
+      const traces = await queryPipelineLogs(db, { status, layer, q, limit });
+      return jsonResp({ traces });
+    }
+
+    case 'admin-pipeline-logs-purge': {
+      const admin = await requireAdmin(db, request);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const res = await purgeOldPipelineLogs(db);
       return jsonResp({ ok: true, ...res });
     }
 

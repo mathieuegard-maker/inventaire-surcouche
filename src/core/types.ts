@@ -6,13 +6,39 @@ export interface RegistryEntry {
   itemId?: string;
 }
 
+export interface ParentIntegralRef {
+  integralBookId: string;
+  title: string;
+  isbn13: string;
+}
+
+export interface IntegralMetadata {
+  includedVolumeNumbers: string[];
+  includedWorkIds: string[];
+  includedIsbns: string[];
+}
+
+export interface EditionCatalogEntry {
+  isbn13: string;
+  publisher?: string;
+  publicationYear?: string;
+  coverUrl?: string;
+}
+
 export interface BaseBook {
   uri: string;
+  bookId?: string;
   workUri?: string;
   isbn13?: string;
   isbn10?: string;
   knownIsbns?: string[];
+  editionsCatalog?: EditionCatalogEntry[];
   type: 'edition' | 'work' | 'unknown';
+  isHorsSerie?: boolean;
+  horsSerieLabel?: string;
+  isIntegral?: boolean;
+  integralMetadata?: IntegralMetadata;
+  parentIntegrals?: ParentIntegralRef[];
   title: string;
   subtitle?: string;
   originalTitle?: string;
@@ -79,6 +105,10 @@ export interface OwnershipAnalysis {
   isWorkOwned: boolean;
   isWished: boolean;
   duplicateEdition?: HumanizedBook;
+  layer2Status?: string;
+  ownedIntegralMatches?: ParentIntegralRef[];
+  includedOwnedWorkIds?: string[];
+  v4Notice?: string;
 }
 
 export interface SeriesContext {

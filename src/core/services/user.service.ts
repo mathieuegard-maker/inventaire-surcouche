@@ -399,5 +399,36 @@ export const userService = {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || 'Échec vérification nouveautés.');
     return data;
+  },
+
+  async fetchAdminPipelineLogs(params: {
+    status?: string;
+    layer?: string;
+    q?: string;
+    limit?: number;
+  } = {}): Promise<{ traces: any[] }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = new URLSearchParams({
+      ...(savedUri ? { uri: savedUri } : {}),
+      ...(params.status && params.status !== 'all' ? { status: params.status } : {}),
+      ...(params.layer && params.layer !== 'all' ? { layer: params.layer } : {}),
+      ...(params.q ? { q: params.q } : {}),
+      limit: String(params.limit || 120)
+    });
+    const res = await fetchWithTimeout(`/api/gateway?action=admin-pipeline-logs&${qs.toString()}`);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Impossible de charger les logs pipeline.');
+    return { traces: Array.isArray(data?.traces) ? data.traces : [] };
+  },
+
+  async purgeAdminPipelineLogs(): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-pipeline-logs-purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Échec purge des logs.');
   }
 };

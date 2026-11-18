@@ -1,8 +1,13 @@
 import type { AppBackendEnv } from '../../../src/core/adapters/storage-db.interface';
+import { PipelineTracer, purgeOldPipelineLogs } from '../../../src/core/services/pipeline-logger.service';
 import {
   runCentralizedSeriesReleaseSweep,
   runHourlyDigestDispatch
 } from '../../../src/core/services/series-digest.service';
+import {
+  drainEnrichmentQueueBatch,
+  runSilentEditionDiscoveryPass
+} from '../../../src/core/services/v4-pipeline.service';
 import { sendWebPushNotification } from '../../../src/core/services/web-push.service';
 
 interface CronEnv extends AppBackendEnv {
@@ -11,12 +16,36 @@ interface CronEnv extends AppBackendEnv {
 
 export default {
   async scheduled(_event: unknown, env: CronEnv): Promise<void> {
+    const start = Date.now();
+    const tracer = new PipelineTracer({ sourceChannel: 'cron_scheduled' });
+
+    const queueRes = await drainEnrichmentQueueBatch(env.DB, 3).catch((err) => ({
+      processed: 0,
+      succeeded: 0,
+      failed: 1,
+      error: err instanceof Error ? err.message : String(err)
+    }));
     const sweepRes = await runCentralizedSeriesReleaseSweep(env.DB, {
-      limit: 6,
+      limit: 5,
       staleDays: 3
     });
+    const silentRes = await runSilentEditionDiscoveryPass(env.DB, 2).catch(() => ({
+      checkedBooks: 0,
+      newIsbnsIndexed: 0
+    }));
     const digestRes = await runHourlyDigestDispatch(env.DB, env);
-    console.log('[BIBLIO CRON]', JSON.stringify({ sweepRes, digestRes }));
+    const purgeRes = await purgeOldPipelineLogs(env.DB);
+
+    tracer.record(
+      'CRON',
+      'hourly_cron_sweep',
+      'ok',
+      `Queue C5: ${queueRes.succeeded}/${queueRes.processed} · Nouveautés: ${sweepRes.alertsCreated} · Éditions sœurs: +${silentRes.newIsbnsIndexed} ISBN`,
+      { queueRes, sweepRes, silentRes, digestRes, purgeRes },
+      Date.now() - start
+    );
+    await tracer.flush(env.DB);
+    console.log('[BIBLIO CRON]', JSON.stringify({ queueRes, sweepRes, silentRes, digestRes, purgeRes }));
   },
 
   async fetch(request: Request, env: CronEnv): Promise<Response> {

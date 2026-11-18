@@ -425,24 +425,31 @@ describe('photoBookResolutionService', () => {
     expect(result.seriesExtraItems).toHaveLength(0);
   });
 
-  it('exploite la Couche 2 (sémantique) pour combler un numéro absent sur une vieille notice BnF', async () => {
-    const bnfSpy = vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockResolvedValue([
+  it('résout d’abord depuis la base locale/D1 (Canal 3 Passe 1) sans appeler BnF/Google/OL si l’œuvre y existe déjà', async () => {
+    vi.spyOn(databaseService, 'getAllBooksFromCache').mockResolvedValue([
       {
-        score: 32,
-        meta: {
-          isbn: '9782014001266',
-          title: "La serpe d'or",
-          authors: ['René Goscinny', 'Albert Uderzo'],
-          series: 'Astérix',
-          genres: []
-        }
+        uri: 'isbn:9782012100022',
+        type: 'edition',
+        isbn13: '9782012100022',
+        knownIsbns: ['9782012100022', '9782014001266'],
+        title: "La Serpe d'or",
+        authors: ['René Goscinny', 'Albert Uderzo'],
+        illustrators: [],
+        scriptwriters: [],
+        series: "Une aventure d'Astérix",
+        seriesNumber: '2',
+        genres: ['BD'],
+        coverUrl: 'https://example.com/serpe.jpg',
+        ownershipStatus: 'none'
       }
     ]);
+    const bnfSpy = vi.spyOn(bnfResolver, 'searchCandidatesByHints');
     vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockResolvedValue({
-      isbn: '9782014001266',
-      title: "La serpe d'or",
+      isbn: '9782012100022',
+      title: "La Serpe d'or",
       authors: ['René Goscinny', 'Albert Uderzo'],
-      series: 'Astérix',
+      series: "Une aventure d'Astérix",
+      seriesNumber: '2',
       coverUrl: 'https://example.com/serpe.jpg',
       genres: []
     });
@@ -453,31 +460,15 @@ describe('photoBookResolutionService', () => {
         rawSpineText: "LA SERPE D'OR Texte de GOSCINNY",
         title: "La Serpe d'or",
         author: 'Goscinny',
-        confidence: 'high',
-        semanticKnown: true,
-        semanticConfidence: 'high',
-        canonicalSeries: "Une aventure d'Astérix",
-        canonicalVolumeNumber: '2',
-        canonicalWorkTitle: "La Serpe d'or",
-        bnfSearchTitle: "La serpe d'or",
-        bnfSearchAuthor: 'Goscinny'
+        confidence: 'high'
       }
     ]);
 
-    expect(bnfSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "La serpe d'or",
-        series: "Une aventure d'Astérix",
-        volumeNumber: '2',
-        author: 'Goscinny'
-      }),
-      12
-    );
+    expect(bnfSpy).not.toHaveBeenCalled();
     expect(result.detectedItems).toHaveLength(1);
     expect(result.detectedItems[0]).toMatchObject({
       status: 'resolved',
-      isbn13: '9782014001266',
-      series: "Une aventure d'Astérix",
+      isbn13: '9782012100022',
       seriesNumber: '2'
     });
   });

@@ -35,6 +35,7 @@ const book = ref<HumanizedBook | null>(null);
 const isLoading = ref(true);
 const errorMsg = ref('');
 const successMessage = ref('');
+const integralNotice = ref('');
 const showLendModal = ref(false);
 const showDeleteModal = ref(false);
 const collectionOrderedUris = ref<string[]>([]);
@@ -280,6 +281,7 @@ const loadBookDetails = async (rawUriParam: string) => {
   isLoading.value = true;
   errorMsg.value = '';
   successMessage.value = '';
+  integralNotice.value = '';
   try {
     const normalized = isbnUtil.normalize(uriParam);
     if (isbnUtil.isValidFormat(normalized)) {
@@ -297,6 +299,9 @@ const loadBookDetails = async (rawUriParam: string) => {
           pendingScansStore.removePendingScan(normalized);
           router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
           return;
+        }
+        if (response.ownership?.v4Notice) {
+          integralNotice.value = response.ownership.v4Notice;
         }
         const mainBook = sanitizeBook(response.mainBook);
         if (response.loan?.details) {
@@ -515,6 +520,12 @@ const confirmDelete = async () => {
 
     <div v-else-if="book" class="result-card success">
       <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
+      <div
+        v-if="integralNotice"
+        style="background:#fef3c7;color:#92400e;border:1px solid #f59e0b;border-radius:8px;padding:0.75rem 0.95rem;margin-bottom:0.85rem;font-weight:600;"
+      >
+        {{ integralNotice }}
+      </div>
 
       <!-- Bandeau de Statut de Possession Explicite -->
       <div class="book-status-banner" :class="isLent ? 'lent' : (book.ownershipStatus === 'owned' ? 'owned' : (book.ownershipStatus === 'wish' ? 'wish' : 'none'))">

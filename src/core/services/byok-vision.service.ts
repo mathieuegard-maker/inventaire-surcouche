@@ -36,13 +36,6 @@ export interface RecognizedBookCandidate {
   collection?: string;
   isbn?: string;
   confidence?: 'high' | 'medium' | 'low';
-  semanticKnown?: boolean;
-  semanticConfidence?: 'high' | 'medium' | 'low';
-  canonicalSeries?: string;
-  canonicalVolumeNumber?: string;
-  canonicalWorkTitle?: string;
-  bnfSearchTitle?: string;
-  bnfSearchAuthor?: string;
   selected?: boolean;
 }
 
@@ -153,38 +146,39 @@ function parseCandidatesJson(rawText: string): RecognizedBookCandidate[] {
   const parsed = JSON.parse(jsonSlice);
   const list = Array.isArray(parsed) ? parsed : [parsed];
   return list
-    .filter((item) => item && (item.title || item.series || item.rawSpineText))
+    .filter((item) => item && (item.titleHint || item.rawText || item.title || item.series || item.rawSpineText))
     .map((item, idx) => {
-      const conf = item.confidence === 'low' || item.confidence === 'medium' || item.confidence === 'high'
-        ? item.confidence
-        : undefined;
+      const conf =
+        item.confidence === 'low' || item.confidence === 'medium' || item.confidence === 'high'
+          ? item.confidence
+          : undefined;
+      const rawText = String(item.rawText || item.rawSpineText || '').trim() || undefined;
+      const hint = String(item.titleHint || item.title || '').trim();
+      let resolvedTitle = hint;
+      let resolvedSeries = item.series ? String(item.series).trim() : undefined;
+
+      // Si titleHint est au format "Série - Titre" (ou "Série : Titre"), pré-extraire série + titre
+      if (!resolvedSeries && hint) {
+        const splitMatch = /^(.{2,}?)\s+[-–—:]\s+(.{2,})$/.exec(hint);
+        if (splitMatch) {
+          resolvedSeries = splitMatch[1].trim();
+          resolvedTitle = splitMatch[2].trim();
+        }
+      }
+
       return {
         spineIndex: typeof item.spineIndex === 'number' ? item.spineIndex : idx + 1,
-        rawSpineText: item.rawSpineText ? String(item.rawSpineText).trim() : undefined,
-        title: String(item.title || item.series || item.rawSpineText || '').trim(),
+        rawSpineText: rawText,
+        title: String(resolvedTitle || resolvedSeries || rawText || '').trim(),
         subtitle: item.subtitle ? String(item.subtitle).trim() : undefined,
-        series: item.series ? String(item.series).trim() : undefined,
+        series: resolvedSeries,
         volumeNumber: item.volumeNumber ? String(item.volumeNumber).trim() : undefined,
-        author: item.author ? String(item.author).trim() : undefined,
+        author: (item.authorHint || item.author) ? String(item.authorHint || item.author).trim() : undefined,
         illustrator: item.illustrator ? String(item.illustrator).trim() : undefined,
         publisher: item.publisher ? String(item.publisher).trim() : undefined,
         collection: item.collection ? String(item.collection).trim() : undefined,
         isbn: item.isbn ? String(item.isbn).replace(/[^0-9Xx]/g, '').trim() : undefined,
         confidence: conf,
-        semanticKnown: Boolean(item.semanticKnown),
-        semanticConfidence:
-          item.semanticConfidence === 'high' ||
-          item.semanticConfidence === 'medium' ||
-          item.semanticConfidence === 'low'
-            ? item.semanticConfidence
-            : undefined,
-        canonicalSeries: item.canonicalSeries ? String(item.canonicalSeries).trim() : undefined,
-        canonicalVolumeNumber: item.canonicalVolumeNumber
-          ? String(item.canonicalVolumeNumber).trim()
-          : undefined,
-        canonicalWorkTitle: item.canonicalWorkTitle ? String(item.canonicalWorkTitle).trim() : undefined,
-        bnfSearchTitle: item.bnfSearchTitle ? String(item.bnfSearchTitle).trim() : undefined,
-        bnfSearchAuthor: item.bnfSearchAuthor ? String(item.bnfSearchAuthor).trim() : undefined,
         selected: true
       };
     });

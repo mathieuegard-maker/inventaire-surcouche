@@ -128,43 +128,33 @@ Exécutée côté Front-End, la Couche 1 unifie quatre canaux d'acquisition hét
 * **Canal 2 — Saisie manuelle d'ISBN** : Nettoyage par regex des tirets/espaces, validation du checksum et conversion mathématique automatique ISBN-10 → ISBN-13 (`978` + recalcul de clé).
 * **Canal 3 — Recherche en texte libre (et passerelle texte → ISBN pour le Canal 4)** :
   * Ce moteur partagé prend en charge aussi bien la requête tapée par l'utilisateur que les fiches OCR extraites par le Canal 4.
-  * **Pipeline de résolution texte → ISBN-13** :
-    1. *Si un ISBN imprimé valide est déjà présent* → court-circuit vers cet ISBN-13.
-    2. *Extraction structurée / heuristique* : détection d'indices numériques de tome (`T.28`, `Tome 28`, `N°3`, `#7`, nombre en fin de chaîne hors années) et séparation série / titre / auteur.
-    3. *Requêtes hiérarchiques en parallèle multi-source (`lang = 'fr'`)* :
+  * **Approche en 2 passes (Base Locale + Serveur D1 d'abord, puis APIs externes)** :
+    1. *Passe 1 immédiate (< 100 ms, 0 appel API externe)* : interrogation de **IndexedDB** (`books`, `book_isbn_index`, `series.aliases`) puis de la **DB Serveur D1** (`/api/v2/books/search-local` sur titre normalisé, série canonique, alias et auteur). Si un livre correspond directement (cas typique d'un album classique déjà présent en catalogue pour le Canal 4) ou si la série en D1 est déjà complète, **on récupère son `isbn13` sans aucun appel externe**.
+    2. *Passe 2 conditionnelle (si 0 match acceptable ou série incomplète, ou sur action utilisateur « Élargir »)* : requêtes hiérarchiques en parallèle multi-source (`lang = 'fr'`) vers `BnF SRU`, `Google Books`, `OpenLibrary`, `Wikidata` et `inventaire.io` (lecture publique) :
        - Requête précise `(titre + auteur [+ tome])` ;
        - Requête série + tome `(série_normalisée + volume_number [+ auteur])` (indispensable lorsque la tranche n'affiche que `"Boule & Bill N°3"` ou `"Le Petit Spirou 7"`) ;
-       - Requête de repli `(titre seul)` ou `(titre + série)` si 0 résultat sur l'auteur (auteurs multiples, reprise d'après un créateur, faute d'OCR).
-    4. *Scoring déterministe pondéré & Regroupement par Œuvre (`workKey`)* :
-       - Points positifs pour correspondance floue/exacte du titre, recouvrement auteur/dessinateur, correspondance série (après normalisation `&` ↔ `et` et suppression des préfixes éditoriaux) + numéro de tome exact, et consensus multi-sources (`BnF` + `Google Books` + `OpenLibrary` + `D1`/`inventaire.io`).
-       - Pénalité si auteur contradictoire ou numéro de tome explicitement différent ; priorité aux ISBN français (`9782...` / `97910...`).
-       - Fusion des candidats appartenant à la **même œuvre** avant arbitrage (pour ne jamais demander à l'utilisateur de choisir entre deux éditions d'un même album).
-    5. *Sortie* : envoi de l'ISBN-13 gagnant (ou choix rapide UI en cas d'ambiguïté entre œuvres réellement distinctes ou unitaire vs intégrale) au contrat Front → Back.
-* **Canal 4 — Reconnaissance photo par IA (Architecture 1 couche IA OCR strict + Couplage Canal 3 / Couche 3)** :
-  * **Choix architectural retenu (1 seule couche IA)** : Afin de minimiser la latence, le coût API, la consommation de quota et d'éliminer tout risque d'hallucination sur les sorties récentes ou les renumérotations éditoriales, **l'IA n'effectue qu'une passe unique de Vision OCR strict** (jamais appelée sur les canaux 1, 2 et 3). La résolution sémantique et le rattachement d'œuvre sont délégués aux sources bibliographiques structurées (Canal 3 → Couches 2 à 4).
-  * **Exigence d'isolation visuelle par tranche (étagère multi-tranches)** :
-    - Le prompt ordonne au modèle Vision multimodal de segmenter la photo **tranche par tranche** (de gauche à droite ou de haut en bas), en délimitant chaque dos de livre par ses frontières physiques (bords, couleur de fond, ombre), avec **interdiction de mélanger** un logo d'éditeur, un auteur ou un numéro d'une tranche voisine.
-    - L'IA retourne un tableau JSON strict contraint par **`responseSchema` OpenAPI** (`temperature: 0.1`), où **chaque objet encapsule intégralement l'OCR d'une seule tranche** :
+       - Repli large `(titre seul)` ou `(série + tome)` si 0 résultat strict sur l'auteur.
+    3. *Scoring déterministe pondéré & Regroupement par Œuvre (`workKey`)* : fusion des éditions d'une même œuvre avant arbitrage ; envoi de l'ISBN-13 gagnant au contrat Front → Back.
+* **Canal 4 — Reconnaissance photo par IA (1 seule couche IA OCR compacte à 6 champs + Couplage Canal 3 / Couche 3)** :
+  * **Choix architectural retenu (1 seule couche IA)** : Afin de minimiser la latence, le coût API, la consommation de quota et d'éliminer tout risque d'hallucination, **l'IA n'effectue qu'une passe unique de Vision OCR strict** (jamais appelée sur les canaux 1, 2 et 3). Toute la classification éditoriale (distinction série/titre/collection, scénariste/dessinateur) est déléguée au Canal 3 et aux Couches 3–4.
+  * **Cadrage de scène dès le début du prompt & Isolation par tranche** :
+    - Le prompt explique d'abord au modèle la nature de la scène (*« Tu observes une photo soit d'une couverture/4e de couverture isolée, soit de tranches (dos) de livres ou BD alignées côte à côte dans une bibliothèque ou empilées, avec du texte souvent orienté verticalement à 90°. »*).
+    - Règle stricte d'isolation : chaque tranche est délimitée par ses bords gauche/droite (ou haut/bas), sa couleur de fond et ses ombres ; interdiction de mélanger un logo ou nom d'auteur venant d'une tranche adjacente.
+  * **JSON compact centré sur les données brutes + ancres visuelles (6 champs max par tranche, contraint par `responseSchema`)** :
+    - Volontairement allégé (6 champs au lieu de 13) pour réduire de moitié les tokens générés, éviter les troncatures sur des étagères de 25–30 livres et empêcher l'IA de deviner des classifications éditoriales :
       ```json
       [
         {
           "spineIndex": 1,
-          "rawSpineText": "Tout le texte brut lu uniquement sur cette tranche",
-          "series": "Nom de série imprimé ou ''",
-          "title": "Titre de l'album imprimé ou ''",
-          "subtitle": "Sous-titre éventuel ou ''",
-          "volumeNumber": "Numéro de tome en chiffres lu sur ce dos (hors année/prix) ou ''",
-          "author": "Auteur / mention 'par X d'après Y' lisible sur ce dos ou ''",
-          "illustrator": "Dessinateur lisible sur ce dos ou ''",
-          "publisher": "Éditeur ou logo lisible sur ce dos ou ''",
-          "collection": "Collection éditoriale ou ''",
-          "isbn": "ISBN si lisible ou ''",
-          "detectedType": "bd | manga | roman | integrale | unknown",
-          "confidence": "high | medium | low"
+          "rawText": "28 Boule & Bill ROBA LES QUATRE SAISONS",
+          "titleHint": "Boule & Bill - Les Quatre Saisons",
+          "volumeNumber": "28",
+          "authorHint": "Roba",
+          "isbn": ""
         }
       ]
       ```
-  * **Passerelle Canal 4 → Canal 3 → Back-End** : Pour chaque tranche détectée, le Canal 3 résout l'objet OCR isolé en ISBN-13 français (extrapolation automatique si livre ancien sans ISBN imprimé), les résultats valides sont affichés dans la modale de validation par lot, et la validation utilisateur envoie `{ isbns: [...], source_channel: "PHOTO_SHELF_BATCH" | "PHOTO_SINGLE" }` au Back-End.
+  * **Passerelle Canal 4 → Canal 3 → Back-End** : Pour chaque tranche détectée, le Canal 3 résout l'objet OCR compact via Passe 1 (Local + D1 d'abord) puis Passe 2 (multi-source si absent) en ISBN-13 français (extrapolation automatique si livre ancien sans ISBN imprimé), puis la validation utilisateur envoie `{ isbns: [...], source_channel: "PHOTO_SHELF_BATCH" | "PHOTO_SINGLE" }` au Back-End.
 
 ### 3.2 Couche 2 (Back-End & Miroir Local) : Vérification Double Niveau & Intégrales Bidirectionnelles
 

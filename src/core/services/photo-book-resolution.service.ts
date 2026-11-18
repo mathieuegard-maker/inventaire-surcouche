@@ -173,18 +173,125 @@ const MULTI_SOURCE_WORK_BONUS = 14;
 const BNF_AUTHORITY_TIEBREAK = 6;
 
 function buildHintQuery(cand: RecognizedBookCandidate): BnfHintQuery {
-  const useSemantic = Boolean(cand.semanticKnown && cand.semanticConfidence !== 'low');
   return {
-    title: (useSemantic && (cand.bnfSearchTitle || cand.canonicalWorkTitle)) || cand.title,
+    title: cand.title,
     subtitle: cand.subtitle,
-    series: (useSemantic && cand.canonicalSeries) || cand.series,
-    volumeNumber: cand.volumeNumber || (useSemantic ? cand.canonicalVolumeNumber : undefined),
-    author: (useSemantic && cand.bnfSearchAuthor) || cand.author,
+    series: cand.series,
+    volumeNumber: cand.volumeNumber,
+    author: cand.author,
     illustrator: cand.illustrator,
     publisher: cand.publisher,
     collection: cand.collection,
     rawSpineText: cand.rawSpineText
   };
+}
+
+async function tryResolveFromLocalOrServerCatalog(cand: RecognizedBookCandidate): Promise<{
+  isbn13: string;
+  knownIsbns?: string[];
+  meta: ExternalBookMetadata;
+} | null> {
+  const normCandTitle = cand.title ? normalizeTextKey(cand.title) : '';
+  const candSeriesCore = cand.series ? stripEditorialCollectionSuffixes(cand.series).coreKey : '';
+  const candVol = cand.volumeNumber ? normalizeSeriesNumber(cand.volumeNumber) : '';
+  const candAuthorNorm = cand.author ? normalizeTextKey(cand.author) : '';
+
+  if (!normCandTitle && !(candSeriesCore && candVol)) return null;
+
+  const matchesBook = (b: {
+    title?: string;
+    series?: string;
+    seriesNumber?: string;
+    authors?: string[];
+    isbn13?: string;
+  }): boolean => {
+    if (!b.isbn13 || !/^(978|979)\d{10}$/.test(b.isbn13)) return false;
+    const bTitleNorm = b.title ? normalizeTextKey(b.title) : '';
+    const bSeriesCore = b.series ? stripEditorialCollectionSuffixes(b.series).coreKey : '';
+    const bVol = b.seriesNumber ? normalizeSeriesNumber(b.seriesNumber) : '';
+    const authorOk =
+      !candAuthorNorm ||
+      !b.authors?.length ||
+      b.authors.some((a) => hasTextTokenOverlap(candAuthorNorm, a));
+
+    if (candSeriesCore && candVol && bSeriesCore === candSeriesCore && bVol === candVol && authorOk) {
+      return true;
+    }
+    if (normCandTitle.length >= 4 && bTitleNorm === normCandTitle && authorOk) {
+      if (candVol && bVol && candVol !== bVol) return false;
+      return true;
+    }
+    return false;
+  };
+
+  // Passe 1A : Cache local IndexedDB (0 ms)
+  if (typeof databaseService.getAllBooksFromCache === 'function') {
+    const localBooks = await databaseService.getAllBooksFromCache().catch(() => []);
+    const localHit = localBooks.find(matchesBook);
+    if (localHit?.isbn13) {
+      return {
+        isbn13: localHit.isbn13,
+        knownIsbns: localHit.knownIsbns,
+        meta: {
+          isbn: localHit.isbn13,
+          title: localHit.title,
+          authors: localHit.authors || [],
+          publisher: localHit.publisher,
+          publishDate: localHit.publishDate,
+          pageCount: localHit.pageCount,
+          coverUrl: localHit.localCover || localHit.coverUrl,
+          series: localHit.series,
+          seriesNumber: localHit.seriesNumber,
+          genres: localHit.genres || []
+        }
+      };
+    }
+  }
+
+  // Passe 1B : Base Serveur D1 (/api/v2/books/search-local) avant tout appel API externe
+  if (typeof fetch === 'function') {
+    try {
+      const qs = new URLSearchParams();
+      if (cand.title) qs.set('title', cand.title);
+      if (cand.series) qs.set('series', cand.series);
+      if (cand.volumeNumber) qs.set('vol', cand.volumeNumber);
+      if (cand.author) qs.set('author', cand.author);
+      const res = await fetch(`/api/v2/books/search-local?${qs.toString()}`).catch(() => null);
+      if (res && res.ok) {
+        const data = (await res.json().catch(() => null)) as {
+          match?: {
+            isbn13?: string;
+            knownIsbns?: string[];
+            title?: string;
+            authors?: string[];
+            series?: string;
+            seriesNumber?: string;
+            coverUrl?: string;
+            genres?: string[];
+          };
+        } | null;
+        if (data?.match?.isbn13 && matchesBook(data.match)) {
+          return {
+            isbn13: data.match.isbn13,
+            knownIsbns: data.match.knownIsbns,
+            meta: {
+              isbn: data.match.isbn13,
+              title: data.match.title || cand.title,
+              authors: data.match.authors || [],
+              coverUrl: data.match.coverUrl,
+              series: data.match.series,
+              seriesNumber: data.match.seriesNumber,
+              genres: data.match.genres || []
+            }
+          };
+        }
+      }
+    } catch {
+      // Repli vers APIs externes
+    }
+  }
+
+  return null;
 }
 
 function extractVolumeFromTitle(title?: string): string {
@@ -458,17 +565,26 @@ export const photoBookResolutionService = {
       let alternatives: PhotoResolutionOption[] = [];
 
       if (!isbn13) {
-        const consensus = await discoverConsensusByHints(
-          buildHintQuery(cand),
-          cand.confidence,
-          onExternalLookup
-        );
-        isbn13 = consensus.isbn13;
-        knownIsbns = consensus.knownIsbns;
-        hintMatchMeta = consensus.meta;
-        sourcesCount = consensus.sourcesCount;
-        isDoubt = consensus.isDoubt;
-        alternatives = consensus.alternatives;
+        // Canal 3 Passe 1 : vérifier d'abord IndexedDB + DB Serveur D1 pour éviter les appels externes inutiles
+        const localOrD1 = await tryResolveFromLocalOrServerCatalog(cand);
+        if (localOrD1) {
+          isbn13 = localOrD1.isbn13;
+          knownIsbns = localOrD1.knownIsbns;
+          hintMatchMeta = localOrD1.meta;
+          sourcesCount = 1;
+        } else {
+          const consensus = await discoverConsensusByHints(
+            buildHintQuery(cand),
+            cand.confidence,
+            onExternalLookup
+          );
+          isbn13 = consensus.isbn13;
+          knownIsbns = consensus.knownIsbns;
+          hintMatchMeta = consensus.meta;
+          sourcesCount = consensus.sourcesCount;
+          isDoubt = consensus.isDoubt;
+          alternatives = consensus.alternatives;
+        }
       }
 
       if (!isbn13) {
@@ -650,9 +766,7 @@ export const photoBookResolutionService = {
         workEditionCoverUrls[0] ||
         coverFallbackUrls[0];
 
-      const useSemantic = Boolean(cand.semanticKnown && cand.semanticConfidence !== 'low');
       const mergedSeries =
-        (useSemantic ? cand.canonicalSeries : undefined) ||
         externalMeta?.series ||
         d1Entity?.series ||
         hintMatchMeta?.series ||
@@ -661,8 +775,7 @@ export const photoBookResolutionService = {
         externalMeta?.seriesNumber ||
         d1Entity?.seriesNumber ||
         hintMatchMeta?.seriesNumber ||
-        cand.volumeNumber ||
-        (useSemantic ? cand.canonicalVolumeNumber : undefined);
+        cand.volumeNumber;
 
       const correctedFromAi = detectAiCorrection(cand, mergedTitle, mergedAuthors);
 
