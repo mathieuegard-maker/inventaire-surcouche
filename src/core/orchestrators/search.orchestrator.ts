@@ -51,7 +51,12 @@ export const searchService = {
         });
         v4IngestResult = v4Batch?.results?.[0] || null;
         if (v4IngestResult?.book) {
-          const initialOwned = v4IngestResult.layer2Status === 'ALREADY_OWNED' ? 'owned' : 'none';
+          const initialOwned =
+            v4IngestResult.layer2Status === 'ALREADY_OWNED' ||
+            v4IngestResult.layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+            v4IngestResult.layer2Status === 'FULL_INTEGRAL_OWNED'
+              ? 'owned'
+              : 'none';
           book = v4BookRecordToHumanizedBook(v4IngestResult.book, initialOwned);
           source = 'network';
           await bookCacheService.saveAndProcessImage(book);
@@ -131,7 +136,11 @@ export const searchService = {
           duplicateEdition = allCached.find((b) => b.uri === workMatch.book.uri);
         }
       }
-      if (!layer2Status) {
+      const hasResolvedIntegralStatus =
+        layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+        layer2Status === 'FULL_INTEGRAL_OWNED' ||
+        layer2Status === 'PARTIAL_INTEGRAL_OWNED';
+      if (!hasResolvedIntegralStatus) {
         const localInt = checkLocalIntegralConflict(book, allCached);
         if (localInt.status) {
           layer2Status = localInt.status;
@@ -148,6 +157,9 @@ export const searchService = {
     }
 
     book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
+    if (isWorkOwned && typeof databaseService.saveBookToCache === 'function') {
+      await databaseService.saveBookToCache({ ...book, ownershipStatus: 'owned' }).catch(() => {});
+    }
 
     // 3. PHASE ANALYSE DES PRÊTS
     const loanDetails = await databaseService.getLoan(book.uri);

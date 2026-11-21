@@ -20,6 +20,7 @@ import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { inventoryService } from '../../core/services/inventory.service';
 import { wishlistService } from '../../core/services/wishlist.service';
+import { checkLocalIntegralConflict } from '../../core/services/v4-client.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
 import { pendingScansStore } from '../../state/pendingScans';
@@ -362,6 +363,16 @@ const loadBookDetails = async (rawUriParam: string) => {
     if (loadToken !== activeLoadToken) return;
     isLoading.value = false;
     if (book.value?.uri) {
+      if (!integralNotice.value && typeof databaseService.getAllBooksFromCache === 'function') {
+        const allCached = await databaseService.getAllBooksFromCache().catch(() => []);
+        const localInt = checkLocalIntegralConflict(book.value, allCached);
+        if (localInt.notice) {
+          integralNotice.value = localInt.notice;
+        }
+        if (localInt.status === 'INCLUDED_IN_INTEGRAL' || localInt.status === 'FULL_INTEGRAL_OWNED') {
+          book.value.ownershipStatus = 'owned';
+        }
+      }
       loadLocalReadingMeta(book.value.uri);
       collectionOrderedUris.value = await resolveCollectionOrderedUrisForBook(book.value.uri);
     } else {

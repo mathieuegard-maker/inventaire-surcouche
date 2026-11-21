@@ -3170,3 +3170,200 @@ export async function getV4SeriesBooks(
     books: items
   };
 }
+
+/**
+ * Met à jour les métadonnées éditées par l'utilisateur (`BookEdit.vue`) directement dans les tables V4
+ * (`books`, `v4_library_books`, `v4_series`) afin que toute modification (couverture, titre, série,
+ * tome, auteurs, éditeur, genres) soit persistante et reflétée dans toute l'application.
+ */
+export async function updateV4BookMetadata(
+  db: DatabaseBinding,
+  params: {
+    bookId?: string | null;
+    uri?: string | null;
+    isbn13?: string | null;
+    libraryId?: string | null;
+    title?: string;
+    authors?: string[];
+    series?: string;
+    seriesId?: string | null;
+    seriesNumber?: string;
+    publisher?: string;
+    publishDate?: string;
+    coverUrl?: string;
+    genres?: string[];
+  }
+): Promise<V4BookRecord | null> {
+  const now = new Date().toISOString();
+  let existingRow: Record<string, any> | null = null;
+
+  if (params.bookId) {
+    existingRow = await db.prepare('SELECT * FROM books WHERE id = ? LIMIT 1').bind(params.bookId).first();
+  }
+  if (!existingRow && params.uri) {
+    existingRow = await db
+      .prepare('SELECT * FROM books WHERE legacy_entity_uri = ? LIMIT 1')
+      .bind(params.uri)
+      .first();
+  }
+  if (!existingRow && params.isbn13) {
+    const cleanIsbn = isbnUtil.normalize(params.isbn13);
+    if (cleanIsbn) {
+      existingRow = await db
+        .prepare(
+          `SELECT b.*
+           FROM book_isbn_index bi
+           JOIN books b ON b.id = bi.book_id
+           WHERE bi.isbn13 = ?
+           LIMIT 1`
+        )
+        .bind(cleanIsbn)
+        .first();
+    }
+  }
+  if (!existingRow && params.uri?.startsWith('isbn:')) {
+    const cleanIsbn = isbnUtil.normalize(params.uri.slice(5));
+    if (cleanIsbn) {
+      existingRow = await db
+        .prepare(
+          `SELECT b.*
+           FROM book_isbn_index bi
+           JOIN books b ON b.id = bi.book_id
+           WHERE bi.isbn13 = ?
+           LIMIT 1`
+        )
+        .bind(cleanIsbn)
+        .first();
+    }
+  }
+
+  if (!existingRow) return null;
+
+  const bookId = String(existingRow.id);
+  const nextTitle = params.title?.trim() || String(existingRow.canonical_title);
+  const nextNormTitle = normalizeTextKey(nextTitle);
+  const nextAuthors = Array.isArray(params.authors) && params.authors.length > 0
+    ? params.authors.map((a) => a.trim()).filter(Boolean)
+    : safeJsonParse<string[]>(existingRow.authors_json, []);
+
+  // Gestion série : mise à jour ou détachement (one-shot)
+  let nextSeriesId: string | null = existingRow.series_id ?? null;
+  let nextSeriesName: string | null = existingRow.series_name ?? null;
+  if (params.series !== undefined) {
+    const cleanSeries = params.series.trim();
+    if (!cleanSeries) {
+      nextSeriesId = null;
+      nextSeriesName = null;
+    } else {
+      const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(cleanSeries));
+      const targetName = cleanDisplay || cleanSeries;
+      let sRow = params.seriesId
+        ? await db.prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? LIMIT 1').bind(params.seriesId).first<Record<string, any>>()
+        : null;
+      if (!sRow && coreKey) {
+        sRow = await db.prepare('SELECT id, canonical_name FROM v4_series WHERE normalized_core_key = ? LIMIT 1').bind(coreKey).first<Record<string, any>>();
+      }
+      if (sRow) {
+        nextSeriesId = String(sRow.id);
+        nextSeriesName = String(sRow.canonical_name);
+      } else {
+        nextSeriesId = params.seriesId || `ser_${(coreKey || nextNormTitle).replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
+        nextSeriesName = targetName;
+        await db
+          .prepare(
+            `INSERT OR IGNORE INTO v4_series
+              (id, canonical_name, normalized_core_key, aliases_json, primary_authors_json, bnf_ensemble_ids_json, is_complete_expanded, known_volumes_count, created_at, updated_at)
+             VALUES (?, ?, ?, '[]', ?, '[]', 0, 1, ?, ?)`
+          )
+          .bind(nextSeriesId, nextSeriesName, coreKey || normalizeTextKey(targetName), JSON.stringify(nextAuthors), now, now)
+          .run();
+      }
+    }
+  }
+
+  // Gestion numéro de tome
+  let nextVolNum: number | null = typeof existingRow.volume_number === 'number' ? existingRow.volume_number : existingRow.volume_number ? Number(existingRow.volume_number) : null;
+  let nextVolLabel: string | null = existingRow.volume_label ?? null;
+  let nextIsHs = Number(existingRow.is_hors_serie) === 1 ? 1 : 0;
+  if (params.seriesNumber !== undefined) {
+    const cleanNum = params.seriesNumber.trim();
+    if (!nextSeriesId || !cleanNum) {
+      nextVolNum = null;
+      nextVolLabel = Number(existingRow.is_integral) === 1 ? existingRow.volume_label : null;
+      nextIsHs = nextSeriesId && Number(existingRow.is_integral) !== 1 ? 1 : 0;
+    } else {
+      const normNum = normalizeSeriesNumber(cleanNum);
+      if (normNum && /^\d+$/.test(normNum)) {
+        nextVolNum = parseInt(normNum, 10);
+        nextVolLabel = String(nextVolNum);
+        nextIsHs = 0;
+      } else {
+        nextVolNum = null;
+        nextVolLabel = cleanNum;
+        nextIsHs = 1;
+      }
+    }
+  }
+
+  // Couverture & catalogue d'éditions
+  const nextCoverUrl = params.coverUrl !== undefined ? (params.coverUrl.trim() || null) : (existingRow.selected_cover_url ?? null);
+  const editionsCatalog = safeJsonParse<EditionCatalogEntry[]>(existingRow.editions_catalog_json, []);
+  if (editionsCatalog.length > 0 && (params.publisher !== undefined || params.publishDate !== undefined || params.coverUrl !== undefined)) {
+    editionsCatalog[0] = {
+      ...editionsCatalog[0],
+      ...(params.publisher !== undefined ? { publisher: params.publisher.trim() || undefined } : {}),
+      ...(params.publishDate !== undefined ? { publicationYear: params.publishDate.trim() || undefined } : {}),
+      ...(params.coverUrl !== undefined ? { coverUrl: nextCoverUrl || undefined } : {})
+    };
+  }
+
+  // Genres
+  let nextMainCategory = String(existingRow.main_category || 'Autre');
+  let nextSubgenres = safeJsonParse<string[]>(existingRow.subgenres_json, []);
+  if (Array.isArray(params.genres) && params.genres.length > 0) {
+    nextMainCategory = params.genres[0];
+    nextSubgenres = params.genres.slice(1);
+  }
+
+  await db
+    .prepare(
+      `UPDATE books SET
+        canonical_title = ?, normalized_title = ?, series_id = ?, series_name = ?,
+        volume_number = ?, volume_label = ?, is_hors_serie = ?,
+        authors_json = ?, editions_catalog_json = ?, selected_cover_url = ?,
+        main_category = ?, subgenres_json = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .bind(
+      nextTitle,
+      nextNormTitle,
+      nextSeriesId,
+      nextSeriesName,
+      nextVolNum,
+      nextVolLabel,
+      nextIsHs,
+      JSON.stringify(nextAuthors),
+      JSON.stringify(editionsCatalog),
+      nextCoverUrl,
+      nextMainCategory,
+      JSON.stringify(nextSubgenres),
+      now,
+      bookId
+    )
+    .run();
+
+  if (params.libraryId) {
+    await db
+      .prepare(
+        `UPDATE v4_library_books
+         SET selected_cover_url = ?, updated_at = ?
+         WHERE library_id = ? AND book_id = ?`
+      )
+      .bind(nextCoverUrl, now, params.libraryId, bookId)
+      .run()
+      .catch(() => {});
+  }
+
+  const refreshed = await db.prepare('SELECT * FROM books WHERE id = ? LIMIT 1').bind(bookId).first<Record<string, any>>();
+  return refreshed ? mapBookRow(refreshed) : null;
+}

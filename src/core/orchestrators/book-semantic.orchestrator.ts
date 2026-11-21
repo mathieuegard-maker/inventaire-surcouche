@@ -3,6 +3,8 @@ import { inventaireSyncService } from '../services/inventaire-sync.service';
 import { inventoryService } from '../services/inventory.service';
 import { bookCacheService } from '../services/book-cache.service';
 import { databaseService } from '../database/database.service';
+import { patchV4BookMetadata } from '../services/v4-client.service';
+import { scannerState } from '../../state/scanner';
 import type { HumanizedBook } from '../types';
 
 export interface MatchItem {
@@ -121,13 +123,29 @@ export const bookSemanticOrchestrator = {
   ): Promise<HumanizedBook> {
     console.log(`[BOOK SEMANTIC ORCHESTRATOR] Démarrage du patch de modification sémantique pour : ${originalBook.title}`);
 
-    // 1. Synchronisation distante des claims sur inventaire.io
-    const res = await inventaireSyncService.patchBookOnInventaire(
-      originalBook,
-      updatedData,
-      resolvedSeriesUri,
-      resolvedAuthorUris
-    );
+    // 1. Synchronisation distante V2 (catalog_entities) + V4 (books & v4_library_books)
+    const [res, v4Updated] = await Promise.all([
+      inventaireSyncService.patchBookOnInventaire(
+        originalBook,
+        updatedData,
+        resolvedSeriesUri,
+        resolvedAuthorUris
+      ),
+      patchV4BookMetadata({
+        bookId: originalBook.bookId,
+        uri: originalBook.uri,
+        isbn13: originalBook.isbn13,
+        title: updatedData.title,
+        authors: updatedData.authors,
+        series: updatedData.series,
+        seriesId: resolvedSeriesUri ?? (updatedData.series ? originalBook.seriesId : null),
+        seriesNumber: updatedData.seriesNumber,
+        publisher: updatedData.publisher,
+        publishDate: updatedData.publishDate,
+        coverUrl: updatedData.coverUrl,
+        genres: updatedData.genres
+      }).catch(() => null)
+    ]);
 
     const newCoverUrl = updatedData.coverUrl || undefined;
     const isDataCover = Boolean(newCoverUrl && newCoverUrl.startsWith('data:image/'));
@@ -136,10 +154,11 @@ export const bookSemanticOrchestrator = {
     // 2. Construction de l'entité finale fusionnée
     const updatedBook: HumanizedBook = {
       ...originalBook,
+      bookId: v4Updated?.id || originalBook.bookId,
       title: updatedData.title,
       authors: updatedData.authors,
       series: updatedData.series || undefined,
-      seriesId: res.seriesUri || undefined,
+      seriesId: v4Updated?.seriesId || res.seriesUri || (updatedData.series ? originalBook.seriesId : undefined),
       seriesNumber: updatedData.seriesNumber || undefined,
       publisher: updatedData.publisher || undefined,
       publishDate: updatedData.publishDate || undefined,
@@ -196,6 +215,7 @@ export const bookSemanticOrchestrator = {
       }
     }
 
+    scannerState.notifyCatalogChanged();
     return updatedBook;
   }
 };

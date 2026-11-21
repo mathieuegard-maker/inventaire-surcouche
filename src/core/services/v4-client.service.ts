@@ -7,6 +7,7 @@ import { databaseService } from '../database/database.service';
 import { sessionStore } from '../../state/session';
 import type { HumanizedBook, ParentIntegralRef } from '../types';
 import { imageUtil } from '../utils/image.util';
+import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import type {
   IngestBatchResult,
   IngestSingleResult,
@@ -63,6 +64,7 @@ export function v4BookRecordToHumanizedBook(
     seriesNumber: seriesNumberDisplay,
     genres: [rec.mainCategory, ...(rec.subgenres || [])].filter((g) => g && g !== 'Autre'),
     coverUrl: rec.selectedCoverUrl || fallbackCovers[0],
+    ...(rec.selectedCoverUrl?.startsWith('data:image/') ? { localCover: rec.selectedCoverUrl } : {}),
     coverFallbackUrls: fallbackCovers,
     ownershipStatus,
     updatedAt: Date.now()
@@ -103,13 +105,48 @@ export function checkLocalIntegralConflict(
   const ownedIntegralMatches: ParentIntegralRef[] = [];
   const includedOwnedWorkIds: string[] = [];
 
-  if (!book.isIntegral && Array.isArray(book.parentIntegrals) && book.parentIntegrals.length > 0) {
-    for (const ref of book.parentIntegrals) {
-      const hasOwnedIntegral = ownedBooks.some(
-        (ob) => ob.bookId === ref.integralBookId || (ref.isbn13 && ob.knownIsbns?.includes(ref.isbn13))
-      );
-      if (hasOwnedIntegral) ownedIntegralMatches.push(ref);
+  if (!book.isIntegral) {
+    // 1. Lien explicite `parentIntegrals` renseigné par le serveur V4
+    if (Array.isArray(book.parentIntegrals) && book.parentIntegrals.length > 0) {
+      for (const ref of book.parentIntegrals) {
+        const hasOwnedIntegral = ownedBooks.some(
+          (ob) => ob.bookId === ref.integralBookId || (ref.isbn13 && (ob.isbn13 === ref.isbn13 || ob.knownIsbns?.includes(ref.isbn13)))
+        );
+        if (hasOwnedIntegral && !ownedIntegralMatches.some((m) => m.integralBookId === ref.integralBookId)) {
+          ownedIntegralMatches.push(ref);
+        }
+      }
     }
+
+    // 2. Recoupement direct via les intégrales possédées de la même série (par numéro de tome inclus, bookId ou ISBN)
+    const normBookVol = book.seriesNumber ? normalizeSeriesNumber(book.seriesNumber) : '';
+    const normBookSeries = book.series ? normalizeTextKey(book.series) : '';
+    const bookIsbns = new Set([book.isbn13, ...(book.knownIsbns || [])].filter(Boolean) as string[]);
+
+    for (const ob of ownedBooks) {
+      if (!ob.isIntegral || !ob.integralMetadata) continue;
+      const meta = ob.integralMetadata;
+      const sameSeries =
+        (book.seriesId && ob.seriesId && book.seriesId === ob.seriesId) ||
+        (normBookSeries && ob.series && normalizeTextKey(ob.series) === normBookSeries);
+      const volCovered =
+        Boolean(sameSeries && normBookVol) &&
+        (meta.includedVolumeNumbers || []).some((v) => normalizeSeriesNumber(String(v)) === normBookVol);
+      const idCovered = Boolean(book.bookId && (meta.includedWorkIds || []).includes(book.bookId));
+      const isbnCovered = (meta.includedIsbns || []).some((i) => bookIsbns.has(i));
+
+      if (volCovered || idCovered || isbnCovered) {
+        const intId = ob.bookId || ob.uri;
+        if (!ownedIntegralMatches.some((m) => m.integralBookId === intId)) {
+          ownedIntegralMatches.push({
+            integralBookId: intId,
+            title: ob.title,
+            isbn13: ob.isbn13 || ''
+          });
+        }
+      }
+    }
+
     if (ownedIntegralMatches.length > 0) {
       return {
         status: 'INCLUDED_IN_INTEGRAL',
@@ -245,8 +282,10 @@ export async function ingestIsbnsViaV4(params: {
       // Synchroniser immédiatement chaque livre consolidé dans IndexedDB (cache_books + registres inventory/wishlist)
       for (const r of data.results) {
         if (!r.book) continue;
+        const isIndirectlyOwned =
+          r.layer2Status === 'INCLUDED_IN_INTEGRAL' || r.layer2Status === 'FULL_INTEGRAL_OWNED';
         const targetStatus: 'owned' | 'wish' | 'none' =
-          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED'
+          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED' || isIndirectlyOwned
             ? 'owned'
             : params.action === 'wishlist'
               ? 'wish'
@@ -258,7 +297,7 @@ export async function ingestIsbnsViaV4(params: {
           await databaseService.indexBookIsbns(humanized).catch(() => {});
         }
         if (typeof databaseService.addRegistryEntry === 'function') {
-          if (targetStatus === 'owned') {
+          if (targetStatus === 'owned' && !isIndirectlyOwned) {
             await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
             await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
           } else if (targetStatus === 'wish') {
@@ -394,6 +433,44 @@ export async function fetchV4SeriesBooksToIndexedDb(seriesId: string): Promise<{
       }
     }
     return { count: data.books.length };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Persiste une édition manuelle (`BookEdit.vue`) directement dans les tables V4 (`books` + `v4_library_books`)
+ * afin qu'elle ne soit jamais écrasée par les synchronisations V4 suivantes.
+ */
+export async function patchV4BookMetadata(params: {
+  bookId?: string;
+  uri?: string;
+  isbn13?: string;
+  title?: string;
+  authors?: string[];
+  series?: string;
+  seriesId?: string | null;
+  seriesNumber?: string;
+  publisher?: string;
+  publishDate?: string;
+  coverUrl?: string;
+  genres?: string[];
+}): Promise<V4BookRecord | null> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    const res = await fetchWithTimeout('/api/v2/books/update', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 12000,
+      body: JSON.stringify({
+        ...params,
+        userUri: savedUri
+      })
+    });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; book?: V4BookRecord | null };
+    return data?.book || null;
   } catch {
     return null;
   }

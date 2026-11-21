@@ -14,6 +14,7 @@ import {
   runV4IngestionPipeline,
   searchLocalBooksForCanal3,
   syncV4LibraryBooks,
+  updateV4BookMetadata,
   type SourceChannel,
   type UserIngestHint
 } from './v4-pipeline.service';
@@ -276,6 +277,52 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         libraryId: auth?.libraryId || null
       });
       return jsonResponse(seriesData);
+    }
+
+    // 6E. Mise à jour manuelle d'une fiche livre V4 (BookEdit.vue -> tables books & v4_library_books)
+    if (path === 'books/update' && (method === 'PATCH' || method === 'POST')) {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        bookId?: string;
+        uri?: string;
+        isbn13?: string;
+        userUri?: string;
+        title?: string;
+        authors?: string[];
+        series?: string;
+        seriesId?: string | null;
+        seriesNumber?: string;
+        publisher?: string;
+        publishDate?: string;
+        coverUrl?: string;
+        genres?: string[];
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) {
+        return jsonResponse({ error: 'Authentification requise' }, 401);
+      }
+      const updated = await updateV4BookMetadata(env.DB, {
+        bookId: payload.bookId,
+        uri: payload.uri,
+        isbn13: payload.isbn13,
+        libraryId: auth.libraryId,
+        title: payload.title,
+        authors: payload.authors,
+        series: payload.series,
+        seriesId: payload.seriesId,
+        seriesNumber: payload.seriesNumber,
+        publisher: payload.publisher,
+        publishDate: payload.publishDate,
+        coverUrl: payload.coverUrl,
+        genres: payload.genres
+      });
+      return jsonResponse({ ok: Boolean(updated), book: updated });
     }
 
     // 7. Observabilité V4 : Enregistrement des logs détaillés d'appels API émis par Couche 1 / Canal 3 côté client
