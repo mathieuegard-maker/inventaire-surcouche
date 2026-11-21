@@ -6,25 +6,32 @@ import { queueService } from './core/orchestrators/queue.orchestrator';
 import { backgroundCreationOrchestrator } from './core/orchestrators/background-creation.orchestrator';
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
+import CameraBarcodeModal from './ui/components/CameraBarcodeModal.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
+import { photoBatchQueueService } from './core/services/photo-batch-queue.service';
+import { seriesReleaseService } from './core/services/series-release.service';
 
 const isOffline = computed(() => connectionState.isOffline.value);
 const bgStatus = backgroundCreationOrchestrator.status;
+const photoStats = photoBatchQueueService.stats;
+const photoProcessing = photoBatchQueueService.isProcessing;
+const photoMsg = photoBatchQueueService.currentStatusMessage;
 const isInitializing = ref(true);
-const router = useRouter(); 
-const route = useRoute(); // Permet de lire l'URL actuelle demandée
+const router = useRouter();
+const route = useRoute();
 
 // Surveillance réactive du retour réseau
 watch(isOffline, async (newOfflineVal) => {
-  if (!newOfflineVal) {
-    console.log("[App] Le réseau est de retour. Vérification de la validité de la session...");
+  if (!newOfflineVal && !route.path.startsWith('/shared/')) {
     const hasValidSession = await connectionService.checkSessionOnReconnection();
     if (!hasValidSession) {
       router.push('/login');
     } else {
       queueService.processQueue();
       backgroundCreationOrchestrator.resumePendingJobs();
+      photoBatchQueueService.initAndResume();
+      void seriesReleaseService.checkNewReleasesOnOpen();
       if (route.path === '/login') {
         router.push('/dashboard');
       }
@@ -33,25 +40,33 @@ watch(isOffline, async (newOfflineVal) => {
 });
 
 // Arrêt automatique du scanner lors d'un changement de page
-watch(() => route.path, () => {
-  if (scannerState.isScanningActive.value) {
-    scannerState.stopScan();
+watch(
+  () => route.path,
+  () => {
+    if (scannerState.isScanningActive.value) {
+      scannerState.stopScan();
+    }
   }
-});
+);
 
 onMounted(async () => {
   try {
+    if (window.location.pathname.startsWith('/shared/')) {
+      isInitializing.value = false;
+      return;
+    }
+
     const isConnected = await connectionService.initializeApp();
-    
+
     if (isConnected) {
       backgroundCreationOrchestrator.resumePendingJobs();
-      // On ne force le retour à l'accueil que si l'utilisateur arrive de la racine ou du login
+      photoBatchQueueService.initAndResume();
+      void seriesReleaseService.checkNewReleasesOnOpen();
       if (route.path === '/login' || route.path === '/') {
         router.push('/dashboard');
       }
-      // Sinon, on le laisse tranquille sur sa page (ex: /debug, /series/...)
     } else {
-      router.push('/login');
+      router.push({ path: '/login', query: route.query });
     }
   } catch (error) {
     console.error("[VUE] Erreur lors de l'initialisation :", error);
@@ -70,21 +85,25 @@ onMounted(async () => {
 
   <div v-else class="app-main-layout">
     <div v-if="isOffline" class="offline-global-banner">
-      ⚠️ {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (CONSULTATION UNIQUEMENT)' }}
+      {{ TEXTS.app?.offlineGlobalBanner || 'MODE HORS-LIGNE ACTIF (SYNCHRO DIFFÉRÉE)' }}
     </div>
 
     <div
       v-if="bgStatus.isActive || bgStatus.lastError"
       style="margin: 8px 16px 0; padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px;"
-      :style="bgStatus.lastError && !bgStatus.isActive ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;' : 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'"
+      :style="
+        bgStatus.lastError && !bgStatus.isActive
+          ? 'background:#fef2f2;color:#991b1b;border:1px solid #fecaca;'
+          : 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;'
+      "
     >
       <span>
         <template v-if="bgStatus.isActive">
-          ⏳ {{ bgStatus.stepLabel || 'Création en cours sur inventaire.io...' }}
+          {{ bgStatus.stepLabel || 'Enrichissement en cours...' }}
           <strong v-if="bgStatus.pendingCount > 1">({{ bgStatus.pendingCount }} en file)</strong>
         </template>
         <template v-else-if="bgStatus.lastError">
-          ⚠️ {{ bgStatus.lastError }}
+          {{ bgStatus.lastError }}
         </template>
       </span>
       <button
@@ -97,21 +116,52 @@ onMounted(async () => {
       </button>
     </div>
 
-    <!-- Volet de Scan Global -->
-    <div v-show="scannerState.isScanningActive.value" class="global-scanner-box">
-      <div class="scanner-viewport-wrapper">
-        <div id="global-barcode-scanner-viewport" class="scanner-viewport"></div>
-        <div v-if="!scannerState.isSearching.value" class="scanner-placeholder">
-          <p>{{ TEXTS.scanner?.searching || 'En attente d\'un code-barres...' }}</p>
+    <div
+      v-if="photoStats.totalPhotos > 0"
+      style="margin: 8px 16px 0; padding: 10px 14px; border: 1px solid #fde68a; border-radius: 12px; background: #fffbeb; color: #1e293b; font-size: 13px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);"
+    >
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
+        <div>
+          <strong>
+            {{ photoProcessing ? 'Traitement photo en arrière-fond' : 'Lot photo prêt à valider' }}
+            — {{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }} photo(s) lue(s) par l'IA
+          </strong>
+          <div style="font-size: 12px; color: #475569; margin-top: 2px;">
+            {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • {{ photoStats.totalExternalLookups }} recherche(s) croisée(s) •
+            {{ photoStats.sureCount }} sûr(s) • {{ photoStats.doubtCount }} doute(s) • {{ photoStats.unresolvedCount }} non trouvé(s)
+          </div>
+          <div v-if="photoProcessing" style="font-size: 11px; color: #92400e; margin-top: 2px;">
+            {{ photoMsg || 'Analyse en cours...' }} — Gardez l'application allumée pendant le traitement.
+          </div>
         </div>
-      </div>
-      <div v-if="scannerState.errorMessage.value" class="error-banner">
-        {{ scannerState.errorMessage.value }}
+        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+          <button
+            v-if="photoStats.donePhotos > 0"
+            type="button"
+            class="wireframe-btn"
+            style="width: auto; padding: 5px 10px; background: #16a34a; color: #fff; font-weight: 800; font-size: 12px;"
+            @click="scannerState.startScan(router, 'photo')"
+          >
+            Valider ({{ photoStats.donePhotos }})
+          </button>
+          <button
+            v-if="photoStats.errorPhotos > 0"
+            type="button"
+            class="wireframe-btn"
+            style="width: auto; padding: 5px 10px; background: #fef2f2; color: #991b1b; font-weight: 700; font-size: 12px;"
+            @click="photoBatchQueueService.retryFailedJobs()"
+          >
+            Relancer ({{ photoStats.errorPhotos }})
+          </button>
+        </div>
       </div>
     </div>
 
+    <!-- Modale Caméra dédiée uniquement à la lecture vidéo de codes-barres -->
+    <CameraBarcodeModal />
+
     <router-view></router-view>
   </div>
-  
+
   <PwaReloadPrompt />
 </template>

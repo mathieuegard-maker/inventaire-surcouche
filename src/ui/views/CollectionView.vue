@@ -6,7 +6,7 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { inventoryService } from '../../core/services/inventory.service';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
-import BaseTitle from '../components/BaseTitle.vue';
+import CollectionSubNav from '../components/CollectionSubNav.vue';
 import CollectionControls from '../components/CollectionControls.vue';
 import SeriesMiniCard from '../components/SeriesMiniCard.vue';
 import WireframeTable from '../components/WireframeTable.vue';
@@ -19,6 +19,10 @@ import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
 import { imageUtil } from '../../core/utils/image.util';
+import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
+import { scannerState } from '../../state/scanner';
+import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
+import { saveBookNavigationOrder, sortBooksByCollectionMode, sortSeriesTomes } from '../../state/bookNavigation';
 
 const router = useRouter();
 const route = useRoute();
@@ -36,14 +40,14 @@ const pageState = getOrCreateViewState(stateKey, {
   searchQuery: '',
   filters: {
     mode: 'books',
-    genre: 'all',
+    genre: '',
     sort: 'date'
   }
 });
 
 // COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante ou l'état sauvegardé
 const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || pageState.filters.mode || 'books');
-const selectedGenre = ref(pageState.filters.genre || 'all');
+const filterText = ref(pageState.filters.genre === 'all' ? '' : (pageState.filters.genre || ''));
 const currentSort = ref(pageState.filters.sort || 'date');
 
 const currentPage = ref(pageState.currentPage);
@@ -51,11 +55,14 @@ const pageSize = ref(pageState.pageSize);
 const searchQuery = ref(pageState.searchQuery);
 
 const displayedBooks = ref<HumanizedBook[]>([]);
+const filteredCollectionBooks = ref<HumanizedBook[]>([]);
 const displayedSeries = ref<any[]>([]);
 
 const isAllSelected = computed(() => {
-  const targets = currentSortBooks.value;
-  return targets.length > 0 && selectedIds.value.length === targets.length;
+  const targets = filteredCollectionBooks.value.length > 0 || searchQuery.value.trim()
+    ? filteredCollectionBooks.value
+    : currentSortBooks.value;
+  return targets.length > 0 && targets.every((b) => selectedIds.value.includes(b.uri));
 });
 
 // COHÉRENCE ROUTAGE : Met à jour l'URL de manière transparente dès que l'utilisateur change d'onglet
@@ -63,8 +70,8 @@ watch(currentMode, (newMode) => {
   router.replace({ query: { ...route.query, mode: newMode } });
   pageState.filters.mode = newMode;
 });
-watch(selectedGenre, (newGenre) => {
-  pageState.filters.genre = newGenre;
+watch(filterText, (newFilter) => {
+  pageState.filters.genre = newFilter;
 });
 watch(currentSort, (newSort) => {
   pageState.filters.sort = newSort;
@@ -94,11 +101,24 @@ onMounted(async () => {
   }
 });
 
+watch(
+  () => scannerState.lastUpdatedTick.value,
+  () => {
+    fetchCatalogue();
+  }
+);
+
 const fetchCatalogue = async () => {
   isLoading.value = true;
   try {
-    const cached = await databaseService.getAllBooksFromCache();
-    const owned = cached.filter(b => b.ownershipStatus === 'owned');
+    let cached = await databaseService.getAllBooksFromCache();
+    let owned = cached.filter(b => b.ownershipStatus === 'owned');
+    const registryUris = await databaseService.getAllRegistryUris('inventory');
+    if (registryUris.length !== owned.length) {
+      await syncOrchestrator.hydrateCacheInBackground();
+      cached = await databaseService.getAllBooksFromCache();
+      owned = cached.filter(b => b.ownershipStatus === 'owned');
+    }
     
     for (const livre of owned) {
       const activeLoan = await databaseService.getLoan(livre.uri);
@@ -127,21 +147,43 @@ const navigateToSeries = (seriesId: string) => {
   }
 };
 
-const dynamicGenres = computed(() => {
-  const genresSet = new Set<string>();
-  allOwnedBooks.value.forEach(book => {
-    if (book.genres && Array.isArray(book.genres)) {
-      book.genres.forEach(g => genresSet.add(g));
+const dynamicFilterSuggestions = computed(() => {
+  const set = new Set<string>();
+  for (const book of allOwnedBooks.value) {
+    if (Array.isArray(book.genres)) {
+      for (const g of book.genres) {
+        if (g?.trim()) set.add(g.trim());
+      }
     }
-  });
-  return Array.from(genresSet).sort();
+    if (book.series?.trim()) set.add(book.series.trim());
+    if (Array.isArray(book.authors)) {
+      for (const a of book.authors) {
+        if (a?.trim()) set.add(a.trim());
+      }
+    }
+    if (book.publisher?.trim()) set.add(book.publisher.trim());
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b));
 });
+
+const matchesFreeFilter = (book: HumanizedBook, rawFilter: string): boolean => {
+  const needle = normalizeTextKey(rawFilter);
+  if (!needle) return true;
+  const fields: string[] = [
+    book.title || '',
+    book.series || '',
+    book.publisher || '',
+    ...(book.genres || []),
+    ...(book.authors || [])
+  ];
+  return fields.some((f) => normalizeTextKey(f).includes(needle));
+};
 
 const processedBooks = computed(() => {
   let list = [...allOwnedBooks.value];
 
-  if (selectedGenre.value !== 'all') {
-    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  if (filterText.value.trim()) {
+    list = list.filter((b) => matchesFreeFilter(b, filterText.value));
   }
 
   if (currentMode.value === 'oneshots') {
@@ -153,31 +195,54 @@ const processedBooks = computed(() => {
 const seriesGondolas = computed(() => {
   let list = allOwnedBooks.value.filter(b => b.seriesId || b.series);
 
-  if (selectedGenre.value !== 'all') {
-    list = list.filter(b => b.genres && b.genres.includes(selectedGenre.value));
+  if (filterText.value.trim()) {
+    list = list.filter((b) => matchesFreeFilter(b, filterText.value));
   }
 
   const groups: Record<string, { id: string; name: string; tomes: HumanizedBook[] }> = {};
+  const idByNormName = new Map<string, string>();
 
-  list.forEach(book => {
-    const key = book.seriesId || book.series || 'unknown';
+  // Passe 1 : regrouper d'abord les livres ayant un seriesId explicite
+  for (const book of list) {
+    if (!book.seriesId) continue;
+    const key = book.seriesId;
     if (!groups[key]) {
       groups[key] = {
-        id: book.seriesId || book.series || '',
-        name: book.series || book.seriesId || '',
+        id: book.seriesId,
+        name: book.series || book.seriesId,
+        tomes: []
+      };
+    }
+    if (book.series && !idByNormName.has(normalizeTextKey(book.series))) {
+      idByNormName.set(normalizeTextKey(book.series), key);
+    }
+    groups[key].tomes.push(book);
+  }
+
+  // Passe 2 : rattacher les livres locaux sans seriesId au groupe existant de même nom si présent
+  for (const book of list) {
+    if (book.seriesId) continue;
+    const nameKey = book.series ? normalizeTextKey(book.series) : '';
+    const existingIdKey = nameKey ? idByNormName.get(nameKey) : undefined;
+    const key = existingIdKey || book.series || 'unknown';
+    if (!groups[key]) {
+      groups[key] = {
+        id: book.series || '',
+        name: book.series || '',
         tomes: []
       };
     }
     groups[key].tomes.push(book);
-  });
+  }
 
   const gondolas = Object.values(groups).map(g => {
-    g.tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
+    const sortedTomes = sortSeriesTomes(g.tomes);
+    const coverBook = sortedTomes.find(t => t.localCover || t.coverUrl) || sortedTomes[0];
     return {
       id: g.id,
       name: g.name,
-      ownedCount: g.tomes.length,
-      coverUrl: imageUtil.resolveCoverUrl(g.tomes[0])
+      ownedCount: sortedTomes.length,
+      coverUrl: imageUtil.resolveCoverUrl(coverBook)
     };
   });
 
@@ -189,24 +254,7 @@ const seriesGondolas = computed(() => {
 });
 
 const currentSortBooks = computed(() => {
-  const list = [...processedBooks.value];
-
-  if (currentSort.value === 'title') {
-    return list.sort((a, b) => {
-      const cleanA = a.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      const cleanB = b.title.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      return cleanA.localeCompare(cleanB);
-    });
-  } else if (currentSort.value === 'author') {
-    return list.sort((a, b) => {
-      const authA = a.authors && a.authors[0] ? a.authors[0] : '';
-      const authB = b.authors && b.authors[0] ? b.authors[0] : '';
-      return authA.localeCompare(authB);
-    });
-  } else if (currentSort.value === 'date') {
-    return list.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  }
-  return list;
+  return sortBooksByCollectionMode(processedBooks.value, currentSort.value);
 });
 
 const selectedBooks = computed(() => {
@@ -222,12 +270,15 @@ const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = currentSortBooks.value.map(b => b.uri);
+    const targets = filteredCollectionBooks.value.length > 0 || searchQuery.value.trim()
+      ? filteredCollectionBooks.value
+      : currentSortBooks.value;
+    selectedIds.value = targets.map(b => b.uri);
   }
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+  if (selectedIds.value.length === 0) return;
 
   if (action === 'LEND') {
     showLendModal.value = true;
@@ -284,27 +335,19 @@ const resetSelection = () => {
 <template>
   <div class="view-container">
     <BaseHeader />
-    <BaseTitle :text="TEXTS.collectionView?.title" level="h2" />
-
-    <div class="collection-modes-tabs">
-      <button :class="['tab-button', { active: currentMode === 'books' }]" @click="currentMode = 'books'; resetSelection()">
-        {{ TEXTS.collectionView?.modeBooks }}
-      </button>
-      <button :class="['tab-button', { active: currentMode === 'series' }]" @click="currentMode = 'series'; resetSelection()">
-        {{ TEXTS.collectionView?.modeSeries }}
-      </button>
-      <button :class="['tab-button', { active: currentMode === 'oneshots' }]" @click="currentMode = 'oneshots'; resetSelection()">
-        {{ TEXTS.collectionView?.modeOneShots }}
-      </button>
-    </div>
+    <CollectionSubNav
+      inline
+      :active-mode="currentMode"
+      @select-mode="(mode) => { currentMode = mode; resetSelection(); }"
+    />
 
     <CollectionControls
       v-if="!isLoading"
-      :genres="dynamicGenres"
+      :filterSuggestions="dynamicFilterSuggestions"
       :currentMode="currentMode"
-      :genreValue="selectedGenre"
+      :filterValue="filterText"
       :sortValue="currentSort"
-      @update:genreValue="(val) => { selectedGenre = val; resetSelection(); }"
+      @update:filterValue="(val) => { filterText = val; resetSelection(); }"
       @update:sortValue="(val) => currentSort = val"
     />
 
@@ -348,6 +391,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => { filteredCollectionBooks = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'collection'); }"
         @update:processedItems="(val) => displayedBooks = val"
       >
         <div v-if="displayedBooks.length === 0">
@@ -373,9 +417,10 @@ const resetSelection = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="isSelectionMixed"
+          :selected-books="selectedBooks"
           :context="batchContext"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>
@@ -388,29 +433,31 @@ const resetSelection = () => {
     />
 
     <!-- Modal de confirmation de suppression en lot -->
-    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
-      <div class="modal-box">
-        <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
-        <p class="modal-text">
-          {{ selectedIds.length > 1 
-            ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
-            : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
-          }}
-        </p>
-        
-        <div class="modal-actions">
-          <button 
-            @click="confirmGroupDelete" 
-            class="btn-danger"
-          >
-            {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
-          </button>
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+        <div class="modal-box">
+          <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+          <p class="modal-text">
+            {{ selectedIds.length > 1 
+              ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
+              : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
+            }}
+          </p>
           
-          <button @click="showDeleteModal = false" class="btn-close">
-            {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
-          </button>
+          <div class="modal-actions">
+            <button 
+              @click="confirmGroupDelete" 
+              class="btn-danger"
+            >
+              {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
+            </button>
+            
+            <button @click="showDeleteModal = false" class="btn-close">
+              {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>

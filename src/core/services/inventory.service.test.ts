@@ -44,7 +44,7 @@ describe('Inventory & Wishlist Deletion Services', () => {
         expect.stringContaining('/api/gateway?action=inventory-delete'),
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ ids: [itemId] })
+          body: JSON.stringify({ ids: [itemId], uris: [uri] })
         })
       );
       expect(databaseService.removeRegistryEntry).toHaveBeenCalledWith('inventory', uri);
@@ -53,17 +53,27 @@ describe('Inventory & Wishlist Deletion Services', () => {
       );
     });
 
-    it('doit supprimer localement même si aucun itemId n\'existe (pas d\'appel serveur)', async () => {
+    it('doit supprimer sur le serveur par URI et localement même si aucun itemId n\'existe (modèle V4)', async () => {
       const uri = 'inv:edition1';
       const cachedBook = { uri, title: 'Test Book', ownershipStatus: 'owned' };
 
       vi.mocked(databaseService.getRegistryEntry).mockResolvedValue(undefined);
       vi.mocked(databaseService.getBookFromCache).mockResolvedValue(cachedBook as any);
+      vi.mocked(globalThis.fetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true })
+      } as any);
 
       const result = await inventoryService.removeFromLibrary(uri);
 
       expect(result).toBe(true);
-      expect(globalThis.fetch).not.toHaveBeenCalled();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/gateway?action=inventory-delete'),
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ uris: [uri] })
+        })
+      );
       expect(databaseService.removeRegistryEntry).toHaveBeenCalledWith('inventory', uri);
       expect(databaseService.saveBookToCache).toHaveBeenCalledWith(
         expect.objectContaining({ uri, ownershipStatus: 'none' })

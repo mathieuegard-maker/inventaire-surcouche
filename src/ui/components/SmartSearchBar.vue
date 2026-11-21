@@ -21,8 +21,8 @@ const submitSearch = () => {
   const query = props.modelValue.trim();
   if (query) {
     // Nettoyage syntaxique des espaces et tirets pour l'analyse d'aiguillage
-    const cleaned = query.replace(/[\s-]/g, '');
-    const isIsbn = /^\d{10,13}$/.test(cleaned);
+    const cleaned = query.replace(/[\s-]/g, '').toUpperCase();
+    const isIsbn = /^(?:\d{9}[\dX]|\d{13})$/.test(cleaned);
     
     if (isIsbn) {
       // Détection ISBN ──► Tunnel physique direct

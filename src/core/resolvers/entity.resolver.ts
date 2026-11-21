@@ -58,7 +58,11 @@ export const entityResolver = {
       });
       const data = await res.json();
       
-      const entityId = Object.keys(data.entities || {}).find(k => k === searchUri || !k.startsWith('wd:')) || Object.keys(data.entities || {})[0];
+      const entityId =
+        Object.keys(data.entities || {}).find(k => k === searchUri) ||
+        Object.keys(data.entities || {}).find(k => data.entities?.[k]?.type === 'edition') ||
+        Object.keys(data.entities || {}).find(k => !k.startsWith('wd:')) ||
+        Object.keys(data.entities || {})[0];
       const entityData = data.entities?.[entityId];
 
       if (!entityData) {
@@ -107,7 +111,9 @@ export const entityResolver = {
       // On doit donc récupérer la vraie clé de l'entité retournée.
       const resolvedEntityId = data.entities?.[physicalUri]
         ? physicalUri
-        : (Object.keys(data.entities || {}).find(k => !k.startsWith('wd:')) || Object.keys(data.entities || {})[0]);
+        : (Object.keys(data.entities || {}).find(k => data.entities?.[k]?.type === 'edition') ||
+          Object.keys(data.entities || {}).find(k => !k.startsWith('wd:')) ||
+          Object.keys(data.entities || {})[0]);
       const entityData = data.entities?.[resolvedEntityId];
 
       if (!entityData) {

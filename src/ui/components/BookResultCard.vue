@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import BaseButton from './BaseButton.vue';
 import BookActionButtons from './BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
@@ -22,6 +22,24 @@ const isOwned = computed(() => props.searchResult.ownership.isWorkOwned);
 const book = computed(() => props.searchResult.mainBook);
 const series = computed(() => props.searchResult.series);
 const isLent = computed(() => props.searchResult.loan.isLent);
+const coverExhausted = ref(false);
+
+watch(
+  () => `${book.value.uri}|${book.value.localCover || ''}|${book.value.coverUrl || ''}`,
+  () => {
+    coverExhausted.value = false;
+  }
+);
+
+const onCoverError = (event: Event) => {
+  imageUtil.handleImageError(event, {
+    isbn: book.value.isbn13 || book.value.isbn10,
+    fallbackUrls: book.value.coverFallbackUrls,
+    onExhausted: () => {
+      coverExhausted.value = true;
+    }
+  });
+};
 
 const seriesIdentifier = computed(() => {
   return series.value?.id || book.value.seriesId || series.value?.name || book.value.series;
@@ -34,11 +52,12 @@ const hasSeries = computed(() => !!seriesIdentifier.value);
     <div class="result-title">{{ TEXTS.scanner?.successDetected }}</div>
     
     <div class="book-card-layout">
-      <img 
-        v-if="book.localCover || book.coverUrl" 
-        :src="imageUtil.resolveCoverUrl(book)" 
-        :alt="book.title" 
-        class="book-cover-image" 
+      <img
+        v-if="!coverExhausted && (book.localCover || book.coverUrl || book.isbn13 || book.isbn10)"
+        :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
+        :alt="book.title"
+        class="book-cover-image"
+        @error="onCoverError"
       />
       <div v-else class="book-cover-placeholder">
         Pas de<br>couverture

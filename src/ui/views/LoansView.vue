@@ -14,6 +14,7 @@ import BatchActionBar from '../components/BatchActionBar.vue';
 import { TEXTS } from '../locales/fr';
 import type { LoanRecord, HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 
 interface HydratedLoan {
   loan: LoanRecord;
@@ -43,10 +44,13 @@ const searchQuery = ref(pageState.searchQuery);
 
 // Liste segmentée et filtrée en temps réel par le paginateur
 const displayedLoans = ref<any[]>([]);
+const filteredLoansList = ref<any[]>([]);
 
 const isAllSelected = computed(() => {
-  const targets = filteredLoansSource.value;
-  return targets.length > 0 && selectedIds.value.length === targets.length;
+  const targets = filteredLoansList.value.length > 0 || searchQuery.value.trim()
+    ? filteredLoansList.value
+    : filteredLoansSource.value;
+  return targets.length > 0 && targets.every((item: any) => selectedIds.value.includes(item.loan.uri));
 });
 
 watch(currentMode, (newMode) => {
@@ -86,7 +90,7 @@ const fetchLoansRecords = async () => {
     for (const loan of localLoans) {
       const bookCached = await databaseService.getBookFromCache(loan.uri);
       if (bookCached) {
-        temp.push({ loan, book: bookCached });
+        temp.push({ loan, book: { ...bookCached, loan } });
       }
     }
     hydratedLoans.value = temp;
@@ -107,6 +111,14 @@ const fetchLoansRecords = async () => {
   }
 };
 
+const translateFriendName = (name?: string): string => {
+  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
+  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
+  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
+  return name;
+};
+
 /**
  * SOURCE DES PRÊTS TRIÉE : Alimentation brute du paginateur selon le mode
  */
@@ -115,7 +127,10 @@ const filteredLoansSource = computed(() => {
   if (currentMode.value === 'chrono') {
     return list.sort((a, b) => (b.loan.loanDate || 0) - (a.loan.loanDate || 0));
   }
-  return list.sort((a, b) => (a.loan.friendName || '').localeCompare(b.loan.friendName || ''));
+  return list.sort((a, b) => {
+    const cmp = translateFriendName(a.loan.friendName).localeCompare(translateFriendName(b.loan.friendName));
+    return cmp !== 0 ? cmp : (b.loan.loanDate || 0) - (a.loan.loanDate || 0);
+  });
 });
 
 const enrichLoansForPagination = computed(() => {
@@ -127,14 +142,6 @@ const enrichLoansForPagination = computed(() => {
     searchAuthors: item.book.authors || []
   }));
 });
-
-const translateFriendName = (name?: string): string => {
-  if (!name) return TEXTS.loansView?.unknownFriend || 'Inconnu';
-  if (name === 'Inconnu') return TEXTS.loansView?.unknownFriend || 'Inconnu';
-  if (name === 'Inconnu (Ajout web)') return TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)';
-  if (name === 'Inconnu (Restauration)') return TEXTS.loansView?.unknownFriendRestored || 'Inconnu (Restauration)';
-  return name;
-};
 
 /**
  * RE-GROUPEMENT POST-PAGINATION (Mode Emprunteur)
@@ -159,15 +166,22 @@ const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = filteredLoansSource.value.map(item => item.loan.uri);
+    const targets = filteredLoansList.value.length > 0 || searchQuery.value.trim()
+      ? filteredLoansList.value
+      : filteredLoansSource.value;
+    selectedIds.value = targets.map((item: any) => item.loan.uri);
   }
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
   if (selectedIds.value.length === 0) return;
   try {
     for (const uri of selectedIds.value) {
-      await queueService.enqueueAction(action, uri);
+      if (action === 'DELETE') {
+        await queueService.enqueueAction('REMOVE_INVENTORY', uri);
+      } else {
+        await queueService.enqueueAction(action, uri);
+      }
     }
     await fetchLoansRecords();
   } catch (e) {
@@ -220,6 +234,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => { filteredLoansList = val; saveBookNavigationOrder(val.map((i: any) => i.book.uri), 'loans'); }"
         @update:processedItems="(val) => displayedLoans = val"
       >
         <div class="main-content-wrapper">
@@ -285,9 +300,10 @@ const resetSelection = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="false"
+          :selected-books="hydratedLoans.filter(i => selectedIds.includes(i.loan.uri)).map(i => ({ ...i.book, loan: i.loan }))"
           context="lent"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>

@@ -4,17 +4,20 @@ import { useRoute, useRouter } from 'vue-router';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
+import CollectionSubNav from '../components/CollectionSubNav.vue';
 import WireframeTable from '../components/WireframeTable.vue';
 import WireframePagination from '../components/WireframePagination.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { fetchWithTimeout } from '../../state/connection';
+import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
 const route = useRoute();
@@ -27,12 +30,16 @@ const seriesTomes = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
+const showMergeSeriesModal = ref(false);
+const isExcluding = ref(false);
+const excludeFeedback = ref('');
 const displayedTomes = ref<HumanizedBook[]>([]);
+const filteredTomes = ref<HumanizedBook[]>([]);
 
 // Stockage du titre résolu (pour éviter wd:Q...)
 const resolvedSeriesTitle = ref<string | null>(null);
 
-const progressState = seriesOrchestrator.getProgress(seriesId.value);
+const progressState = computed(() => seriesOrchestrator.getProgress(seriesId.value).value);
 const progressPercentage = computed(() => {
   if (!progressState.value.total) return 0;
   return Math.round((progressState.value.current / progressState.value.total) * 100);
@@ -59,12 +66,23 @@ const fetchSeriesMetadata = async () => {
 };
 
 const loadLocalData = async () => {
-  const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+  let context = await seriesOrchestrator.getCompleteSeriesForUI(
+    seriesId.value,
+    resolvedSeriesTitle.value || undefined
+  );
+  if (!resolvedSeriesTitle.value && (!context || context.tomes.length === 0)) {
+    await fetchSeriesMetadata();
+    if (resolvedSeriesTitle.value) {
+      context = await seriesOrchestrator.getCompleteSeriesForUI(
+        seriesId.value,
+        resolvedSeriesTitle.value
+      );
+    }
+  }
   if (context && context.tomes.length > 0) {
-    seriesTomes.value = context.tomes;
-  } else {
-    // CACHE VIDE : On déclenche l'hydratation et on récupère le titre manuellement
-    seriesOrchestrator.startBackgroundHydration(seriesId.value);
+    seriesTomes.value = sortSeriesTomes(context.tomes);
+    saveBookNavigationOrder(seriesTomes.value.map((t) => t.uri), 'series');
+  } else if (!resolvedSeriesTitle.value) {
     await fetchSeriesMetadata();
   }
 };
@@ -73,12 +91,28 @@ onMounted(async () => {
   isLoading.value = true;
   try {
     await loadLocalData();
+    // Toujours lancer l'hydratation en arrière-plan pour récupérer tous les tomes manquants de la série via BnF (460$3 / bib.ens2bib)
+    seriesOrchestrator.startBackgroundHydration(seriesId.value);
   } catch (e) {
     console.error("Erreur lors du chargement :", e);
   } finally {
     isLoading.value = false;
   }
 });
+
+watch(
+  () => seriesId.value,
+  async (newId) => {
+    if (!newId) return;
+    resolvedSeriesTitle.value = null;
+    selectedIds.value = [];
+    seriesTomes.value = [];
+    displayedTomes.value = [];
+    filteredTomes.value = [];
+    await loadLocalData();
+    seriesOrchestrator.startBackgroundHydration(newId);
+  }
+);
 
 watch(
   () => [progressState.value.current, progressState.value.isActive],
@@ -97,7 +131,10 @@ watch(
 // ... (Garder les méthodes existantes: handleToggleAll, dispatchBatchAction, confirmGroupLend, handleBackToCollection, isAllSelected, etc.)
 // Note : J'ai omis le code répétitif pour la concision, mais tu conserves tes méthodes existantes ici.
 
-const isAllSelected = computed(() => seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length);
+const isAllSelected = computed(() => {
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  return targets.length > 0 && targets.every((tome) => selectedIds.value.includes(tome.uri));
+});
 const selectedBooks = computed(() => seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri)));
 const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
 const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
@@ -116,17 +153,27 @@ const batchContext = computed(() => {
 });
 
 const handleToggleAll = (checked: boolean) => {
-  selectedIds.value = checked ? seriesTomes.value.map(item => item.uri) : [];
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  selectedIds.value = checked ? targets.map(item => item.uri) : [];
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
+  if (selectedIds.value.length === 0) return;
   if (action === 'LEND') { showLendModal.value = true; return; }
   try {
-    for (const uri of selectedIds.value) await queueService.enqueueAction(action, uri);
+    for (const uri of selectedIds.value) {
+      if (action === 'DELETE') {
+        const book = seriesTomes.value.find(b => b.uri === uri);
+        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, uri);
+      } else {
+        await queueService.enqueueAction(action, uri);
+      }
+    }
     seriesTomes.value = seriesTomes.value.map(tome => {
       if (selectedIds.value.includes(tome.uri)) {
         if (action === 'RETURN') { const { loan, ...rest } = tome; return rest; }
+        if (action === 'DELETE') { const { loan, ...rest } = tome; return { ...rest, ownershipStatus: 'none' }; }
         return { ...tome, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
       }
       return tome;
@@ -163,14 +210,35 @@ const completeMissingSeries = async () => {
   }
 };
 
+const excludeSelectedFromSeries = async () => {
+  if (selectedIds.value.length === 0 || isExcluding.value) return;
+  const targets = selectedBooks.value.slice();
+  if (targets.length === 0) return;
+  isExcluding.value = true;
+  excludeFeedback.value = '';
+  try {
+    await seriesOrchestrator.excludeTomesFromSeries(seriesId.value, targets);
+    const removedSet = new Set(targets.map((t) => t.uri));
+    seriesTomes.value = seriesTomes.value.filter((t) => !removedSet.has(t.uri));
+    selectedIds.value = [];
+    excludeFeedback.value = `${targets.length} tome(s) retiré(s) de cette série pour votre foyer.`;
+  } catch (error) {
+    console.error('[SeriesView] Erreur retrait série :', error);
+    excludeFeedback.value = 'Erreur lors du retrait des tomes de la série.';
+  } finally {
+    isExcluding.value = false;
+  }
+};
+
 const handleBackToCollection = () => router.push({ name: 'CollectionView', query: { mode: fromMode.value } });
 </script>
 
 <template>
   <div class="view-container">
     <BaseHeader @back="handleBackToCollection" />
-    
-    <BaseTitle :text="seriesName" level="h2" />
+    <CollectionSubNav active-mode="series" />
+
+    <BaseTitle :text="seriesName" level="h3" />
 
     <div v-if="progressState.isActive" class="progress-container">
       <div class="progress-text-summary">
@@ -190,11 +258,40 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       </div>
 
       <template v-else>
-        <div v-if="missingTomes.length > 0 && seriesTomes.length > 0" style="margin-bottom: var(--spacing-md);">
-          <button class="wireframe-btn btn-primary" style="width: 100%;" @click="completeMissingSeries">
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: var(--spacing-md);">
+          <button
+            v-if="missingTomes.length > 0 && seriesTomes.length > 0"
+            class="wireframe-btn btn-primary"
+            style="flex: 2; min-width: 220px;"
+            @click="completeMissingSeries"
+          >
             Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
           </button>
+          <button
+            type="button"
+            class="wireframe-btn"
+            style="flex: 1; min-width: 180px; background: #eef2ff; font-weight: 700;"
+            @click="showMergeSeriesModal = true"
+          >
+            {{ selectedIds.length > 0 ? `Rattacher / Fusionner (${selectedIds.length})` : 'Fusionner / Regrouper la série' }}
+          </button>
+          <button
+            v-if="selectedIds.length > 0"
+            type="button"
+            class="wireframe-btn"
+            :disabled="isExcluding"
+            style="flex: 1; min-width: 200px; background: #fef2f2; color: #b91c1c; border-color: #fca5a5; font-weight: 700;"
+            @click="excludeSelectedFromSeries"
+          >
+            {{ isExcluding ? 'Retrait en cours...' : `Ne fait pas partie de cette série (${selectedIds.length})` }}
+          </button>
         </div>
+
+        <BaseBanner
+          v-if="excludeFeedback"
+          :type="excludeFeedback.startsWith('Erreur') ? 'error' : 'info'"
+          :message="excludeFeedback"
+        />
 
         <WireframePagination
           :items="seriesTomes"
@@ -203,6 +300,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
           :selectAllValue="isAllSelected"
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
+          @update:filteredItems="(val) => { filteredTomes = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'series'); }"
           @update:processedItems="(val) => displayedTomes = val"
         >
           <div v-if="displayedTomes.length === 0">
@@ -228,9 +326,10 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
 
           <BatchActionBar 
             :selected-count="selectedIds.length"
-            :is-mixed="isSelectionMixed"
+            :selected-books="selectedBooks"
             :context="batchContext"
             @execute="dispatchBatchAction"
+            @clear="selectedIds = []"
           />
         </WireframePagination>
       </template>
@@ -241,6 +340,16 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       :bookCount="selectedIds.length"
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
+    />
+
+    <SeriesMergeModal
+      :show="showMergeSeriesModal"
+      :bookUris="selectedIds.length > 0 ? selectedIds : seriesTomes.map(t => t.uri)"
+      :currentSeriesId="seriesId"
+      :currentSeriesTitle="seriesName"
+      :singleBook="selectedIds.length === 1"
+      @close="showMergeSeriesModal = false"
+      @merged="(p) => router.push({ name: 'SeriesView', params: { id: p.seriesId } })"
     />
   </div>
 </template>

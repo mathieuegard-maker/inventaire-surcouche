@@ -45,15 +45,23 @@ export const queueService = {
         break;
       case 'REMOVE_INVENTORY':
         await databaseService.removeRegistryEntry('inventory', uri);
+        await databaseService.deleteLoan(uri).catch(() => {});
         if (cachedBook) {
-          cachedBook.ownershipStatus = 'none';
+          const isWished =
+            (await databaseService.isUriInRegistry('wishlist', cachedBook.uri)) ||
+            (cachedBook.workUri ? await databaseService.isUriInRegistry('wishlist', cachedBook.workUri) : false);
+          cachedBook.ownershipStatus = isWished ? 'wish' : 'none';
+          cachedBook.loan = undefined;
           await databaseService.saveBookToCache(cachedBook);
         }
         break;
       case 'REMOVE_WISHLIST':
         await databaseService.removeRegistryEntry('wishlist', uri);
         if (cachedBook) {
-          cachedBook.ownershipStatus = 'none';
+          const isOwned =
+            (await databaseService.isUriInRegistry('inventory', cachedBook.uri)) ||
+            (cachedBook.workUri ? await databaseService.isUriInRegistry('inventory', cachedBook.workUri) : false);
+          cachedBook.ownershipStatus = isOwned ? 'owned' : 'none';
           await databaseService.saveBookToCache(cachedBook);
         }
         break;
@@ -90,6 +98,11 @@ export const queueService = {
       const existingEntry = await databaseService.getRegistryEntry('inventory', uri);
       if (existingEntry?.itemId) {
         effectivePayload = { itemId: existingEntry.itemId };
+      }
+    } else if (actionType === 'RETURN' && !effectivePayload) {
+      const existingLoan = await databaseService.getLoan(uri).catch(() => undefined);
+      if (existingLoan?.friendName) {
+        effectivePayload = { friendName: existingLoan.friendName };
       }
     }
     

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
@@ -9,7 +9,12 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
+import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
+import { imageUtil } from '../../core/utils/image.util';
+import { deduplicateCoverUrls } from '../../core/utils/cover-dedup.util';
+import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
 import { useSemanticResolution } from '../composables/useSemanticResolution';
 import { connectionState } from '../../state/connection';
 import type { HumanizedBook } from '../../core/types';
@@ -17,7 +22,7 @@ import type { HumanizedBook } from '../../core/types';
 const route = useRoute();
 const router = useRouter();
 
-const uri = decodeURIComponent(route.params.uri as string);
+const uri = computed(() => decodeURIComponent(route.params.uri as string));
 
 const isLoading = ref(true);
 const loadingStatus = ref("Chargement du livre...");
@@ -27,7 +32,7 @@ const successMsg = ref<string | null>(null);
 // Données du livre d'origine
 const originalBook = ref<HumanizedBook | null>(null);
 
-// Formulaire modifiable (gauche)
+// Formulaire modifiable
 const titleInput = ref('');
 const authorsInput = ref('');
 const seriesInput = ref('');
@@ -36,11 +41,95 @@ const publisherInput = ref('');
 const publishDateInput = ref('');
 const pageCountInput = ref<number | undefined>(undefined);
 const coverUrlInput = ref('');
+const genresInput = ref<string[]>([]);
+const customGenreInput = ref('');
 const noSeries = ref(false);
+const showSeriesMergeModal = ref(false);
+const brokenCandidateUrls = ref<Record<string, boolean>>({});
 
-// Suggestions de la BNF/OL (droite)
-const suggestions = ref<any>(null);
-const isSuggestionsLoading = ref(false);
+// Métadonnées externes pour pré-remplissage des champs vides & galerie de couvertures dédupliquée visuellement
+const extMetadata = ref<any>(null);
+const editionExtraCovers = ref<string[]>([]);
+const deduplicatedCovers = ref<string[]>([]);
+const isLoadingExtCovers = ref(false);
+
+const rawCandidateUrls = computed(() => {
+  const isbn = originalBook.value?.isbn13 || originalBook.value?.isbn10;
+  return imageUtil.buildCoverCandidates(isbn, [
+    originalBook.value?.coverUrl,
+    extMetadata.value?.coverUrl,
+    ...editionExtraCovers.value,
+    ...(extMetadata.value?.coverFallbackUrls || []),
+    ...(originalBook.value?.coverFallbackUrls || [])
+  ]);
+});
+
+const suggestedCoverCandidates = computed(() => {
+  const sourceList = deduplicatedCovers.value.length > 0 ? deduplicatedCovers.value : rawCandidateUrls.value;
+  return sourceList.filter((u) => !brokenCandidateUrls.value[u]);
+});
+
+const markCoverCandidateBroken = (url: string) => {
+  brokenCandidateUrls.value = { ...brokenCandidateUrls.value, [url]: true };
+};
+
+const selectCandidateCover = (url: string) => {
+  coverUrlInput.value = url;
+};
+
+async function handleCustomCoverUpload(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file || !originalBook.value) return;
+  try {
+    const webpDataUrl = await compressImageToWebpDataUrl(file, {
+      maxWidth: 420,
+      maxHeight: 600,
+      quality: 0.8,
+      cropRatio: 0.7
+    });
+    coverUrlInput.value = webpDataUrl;
+    originalBook.value.localCover = webpDataUrl;
+    originalBook.value.coverUrl = webpDataUrl;
+    originalBook.value.isLocallyEdited = true;
+    await databaseService.saveBookToCache(originalBook.value);
+  } catch (e: any) {
+    errorMsg.value = e.message || 'Impossible de compresser la couverture.';
+  } finally {
+    input.value = '';
+  }
+}
+
+function handleSeriesMerged(payload: { seriesId: string; seriesTitle: string }) {
+  seriesInput.value = payload.seriesTitle;
+  resolvedSeriesUri.value = payload.seriesId;
+  noSeries.value = false;
+  if (originalBook.value) {
+    originalBook.value.seriesId = payload.seriesId;
+    originalBook.value.series = payload.seriesTitle;
+  }
+}
+
+const toggleGenreTag = (tag: string) => {
+  const idx = genresInput.value.findIndex((g) => g.toLowerCase() === tag.toLowerCase());
+  if (idx >= 0) {
+    genresInput.value = genresInput.value.filter((_, i) => i !== idx);
+  } else {
+    genresInput.value = [...genresInput.value, tag];
+  }
+};
+
+const addCustomGenreTag = () => {
+  const clean = customGenreInput.value.trim();
+  if (!clean) return;
+  if (!genresInput.value.some((g) => g.toLowerCase() === clean.toLowerCase())) {
+    genresInput.value = [...genresInput.value, clean];
+  }
+  customGenreInput.value = '';
+};
+
+const isGenreSelected = (tag: string) =>
+  genresInput.value.some((g) => g.toLowerCase() === tag.toLowerCase());
 
 watch(noSeries, (val) => {
   if (val) {
@@ -55,12 +144,99 @@ watch(seriesInput, (val) => {
   }
 });
 
-onMounted(async () => {
+const refreshAlternativeCovers = async (forceRefresh = true) => {
+  const currentBook = originalBook.value;
+  if (!currentBook) return;
+  const isbn = currentBook.isbn13 || currentBook.isbn10;
+  if (!isbn && !currentBook.workUri && !currentBook.title) return;
+
+  isLoadingExtCovers.value = true;
   try {
-    loadingStatus.value = "Chargement des données actuelles depuis inventaire.io...";
-    let currentBook = await databaseService.getBookFromCache(uri);
+    const coverParams = new URLSearchParams({
+      isbn: isbn || '',
+      bookId: currentBook.bookId || '',
+      workUri: currentBook.workUri || '',
+      title: currentBook.title || '',
+      author: currentBook.authors?.[0] || '',
+      ...(forceRefresh ? { forceRefresh: '1' } : {})
+    });
+    const [extData, edCoversData] = await Promise.all([
+      isbn && (forceRefresh || !currentBook.coverUrl)
+        ? externalMetadataService.fetchFromExternalSources(isbn).catch(() => null)
+        : Promise.resolve(null),
+      fetch(`/api/gateway?action=work-edition-covers&${coverParams.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    ]);
+
+    if (Array.isArray(edCoversData?.coverUrls)) {
+      editionExtraCovers.value = edCoversData.coverUrls;
+    }
+
+    if (extData) {
+      extMetadata.value = extData;
+      if (!titleInput.value.trim() && extData.title) titleInput.value = extData.title;
+      if (!authorsInput.value.trim() && Array.isArray(extData.authors) && extData.authors.length > 0) {
+        authorsInput.value = extData.authors.join(', ');
+      }
+      if (!seriesInput.value.trim() && extData.series) {
+        seriesInput.value = extData.series;
+        noSeries.value = false;
+      }
+      if (!noSeries.value && !seriesNumberInput.value.trim() && extData.seriesNumber) {
+        seriesNumberInput.value = extData.seriesNumber;
+      }
+      if (!publisherInput.value.trim() && extData.publisher) publisherInput.value = extData.publisher;
+      if (!publishDateInput.value.trim() && extData.publishDate) publishDateInput.value = extData.publishDate;
+      if (!pageCountInput.value && extData.pageCount) pageCountInput.value = extData.pageCount;
+      if (!coverUrlInput.value.trim() && extData.coverUrl) coverUrlInput.value = extData.coverUrl;
+      if (genresInput.value.length === 0 && Array.isArray(extData.genres) && extData.genres.length > 0) {
+        genresInput.value = [...extData.genres];
+      }
+    }
+
+    // Mémoriser les URLs découvertes dans le cache local IndexedDB pour affichage instantané la prochaine fois
+    const mergedFallbacks = Array.from(
+      new Set([
+        ...(currentBook.coverFallbackUrls || []),
+        ...editionExtraCovers.value,
+        ...(extData?.coverFallbackUrls || [])
+      ])
+    ).slice(0, 36);
+    if (mergedFallbacks.length > (currentBook.coverFallbackUrls?.length || 0)) {
+      currentBook.coverFallbackUrls = mergedFallbacks;
+      await databaseService.saveBookToCache(JSON.parse(JSON.stringify(currentBook))).catch(() => {});
+    }
+
+    isLoadingExtCovers.value = false;
+    void deduplicateCoverUrls(rawCandidateUrls.value, {
+      maxCandidates: 36
+    }).then((deduped) => {
+      if (deduped.length > 0) deduplicatedCovers.value = deduped;
+    });
+  } catch (err: any) {
+    console.warn('[BOOK EDIT] Recherche sources externes non critique :', err.message);
+  } finally {
+    isLoadingExtCovers.value = false;
+  }
+};
+
+const normStr = (v: unknown) => String(v ?? '').trim();
+
+const loadBookForEdit = async () => {
+  isLoading.value = true;
+  errorMsg.value = null;
+  successMsg.value = null;
+  originalBook.value = null;
+  extMetadata.value = null;
+  editionExtraCovers.value = [];
+  deduplicatedCovers.value = [];
+  brokenCandidateUrls.value = {};
+  try {
+    loadingStatus.value = "Chargement des données actuelles...";
+    let currentBook = await databaseService.getBookFromCache(uri.value);
     if (!currentBook) {
-      currentBook = await entityResolver.resolvePhysicalEntity(uri);
+      currentBook = await entityResolver.resolvePhysicalEntity(uri.value);
     }
 
     if (!currentBook) {
@@ -70,79 +246,48 @@ onMounted(async () => {
     }
 
     originalBook.value = currentBook;
-    
-    // Pré-remplissage du formulaire
+    const hadInitialSeries = Boolean(currentBook.series?.trim());
+
+    // Pré-remplissage du formulaire avec les données actuelles
     titleInput.value = currentBook.title || '';
     authorsInput.value = currentBook.authors ? currentBook.authors.join(', ') : '';
     seriesInput.value = currentBook.series || '';
     seriesNumberInput.value = currentBook.seriesNumber || '';
-    noSeries.value = !currentBook.series;
+    noSeries.value = !hadInitialSeries;
     publisherInput.value = currentBook.publisher || '';
     publishDateInput.value = currentBook.publishDate || '';
     pageCountInput.value = currentBook.pageCount;
     coverUrlInput.value = currentBook.coverUrl || '';
+    genresInput.value = Array.isArray(currentBook.genres)
+      ? currentBook.genres.filter((g) => !g.startsWith('wd:') && !g.startsWith('inv:'))
+      : [];
 
     isLoading.value = false;
 
-    // Lancement de la recherche de suggestions en arrière-plan
+    // Recherche des couvertures alternatives :
+    // 1) Si le cache local/serveur contient déjà >= 2 URLs, affichage immédiat sans appel externe !
+    // 2) Sinon, recherche en arrière-plan sur nos sources + D1 et sauvegarde des URLs découvertes en IndexedDB.
     const isbn = currentBook.isbn13 || currentBook.isbn10;
-    if (isbn) {
-      isSuggestionsLoading.value = true;
-      console.log(`[BOOK EDIT] Recherche de suggestions BNF/OL pour l'ISBN : ${isbn}`);
-      try {
-        const extData = await externalMetadataService.fetchFromExternalSources(isbn);
-        if (extData) {
-          suggestions.value = extData;
-          console.log(`[BOOK EDIT] Suggestions récupérées avec succès :`, extData);
-        }
-      } catch (err: any) {
-        console.warn(`[BOOK EDIT] Échec de la recherche de suggestions :`, err.message);
-      } finally {
-        isSuggestionsLoading.value = false;
-      }
+    if (rawCandidateUrls.value.length >= 2) {
+      void deduplicateCoverUrls(rawCandidateUrls.value, {
+        maxCandidates: 36
+      }).then((deduped) => {
+        if (deduped.length > 0) deduplicatedCovers.value = deduped;
+      });
+    } else if (isbn || currentBook.workUri || currentBook.title) {
+      void refreshAlternativeCovers(false);
     }
   } catch (err: any) {
     console.error("[BOOK EDIT] Erreur d'initialisation :", err);
     errorMsg.value = "Une erreur est survenue lors de la récupération des données : " + err.message;
     isLoading.value = false;
   }
+};
+
+onMounted(loadBookForEdit);
+watch(() => route.params.uri, () => {
+  void loadBookForEdit();
 });
-
-// Méthodes utilitaires pour appliquer les suggestions
-const applySuggestion = (field: string) => {
-  if (!suggestions.value) return;
-  
-  if (field === 'title') {
-    titleInput.value = suggestions.value.title || '';
-  } else if (field === 'authors') {
-    authorsInput.value = suggestions.value.authors ? suggestions.value.authors.join(', ') : '';
-  } else if (field === 'series') {
-    seriesInput.value = suggestions.value.series || '';
-    noSeries.value = !suggestions.value.series;
-  } else if (field === 'seriesNumber') {
-    seriesNumberInput.value = suggestions.value.seriesNumber || '';
-  } else if (field === 'publisher') {
-    publisherInput.value = suggestions.value.publisher || '';
-  } else if (field === 'publishDate') {
-    publishDateInput.value = suggestions.value.publishDate || '';
-  } else if (field === 'pageCount') {
-    pageCountInput.value = suggestions.value.pageCount;
-  } else if (field === 'coverUrl') {
-    coverUrlInput.value = suggestions.value.coverUrl || '';
-  }
-};
-
-const applyAllSuggestions = () => {
-  if (!suggestions.value) return;
-  applySuggestion('title');
-  applySuggestion('authors');
-  applySuggestion('series');
-  applySuggestion('seriesNumber');
-  applySuggestion('publisher');
-  applySuggestion('publishDate');
-  applySuggestion('pageCount');
-  applySuggestion('coverUrl');
-};
 
 const {
   currentStep,
@@ -172,7 +317,7 @@ const handleSave = async () => {
   }
 
   isLoading.value = true;
-  loadingStatus.value = "Analyse sémantique des données...";
+  loadingStatus.value = "Analyse des données...";
 
   try {
     const steps = await bookSemanticOrchestrator.analyzeDuplicates(
@@ -203,7 +348,7 @@ const confirmResolutionStep = async () => {
 const saveChanges = async () => {
   if (!originalBook.value) return;
   isLoading.value = true;
-  loadingStatus.value = "Enregistrement des modifications sur inventaire.io...";
+  loadingStatus.value = "Enregistrement des modifications...";
   errorMsg.value = null;
 
   try {
@@ -220,7 +365,8 @@ const saveChanges = async () => {
       publisher: publisherInput.value.trim(),
       publishDate: publishDateInput.value.trim(),
       pageCount: pageCountInput.value,
-      coverUrl: coverUrlInput.value.trim()
+      coverUrl: coverUrlInput.value.trim(),
+      genres: genresInput.value
     };
 
     await bookSemanticOrchestrator.saveEditedBook(
@@ -234,8 +380,8 @@ const saveChanges = async () => {
     isLoading.value = false;
 
     setTimeout(() => {
-      router.push(`/book/${encodeURIComponent(uri)}`);
-    }, 1500);
+      router.push(`/book/${encodeURIComponent(uri.value)}`);
+    }, 900);
   } catch (err: any) {
     console.error("[BOOK EDIT] Échec de la sauvegarde :", err);
     isLoading.value = false;
@@ -247,268 +393,206 @@ const saveChanges = async () => {
 
 <template>
   <div class="view-container">
-    <BaseHeader title="Édition Sémantique" showBack />
+    <BaseHeader title="Modifier la fiche" showBack />
 
-    <div v-if="isLoading" style="display: flex; flex-direction: column; align-items: center; gap: var(--spacing-md); margin-top: var(--spacing-xl);">
+    <div v-if="isLoading" class="edit-loading-box">
       <BaseLoading />
-      <p style="font-family: var(--font-main); font-size: 13px; color: var(--color-text-muted); font-weight: bold; text-align: center; text-transform: uppercase;">
-        {{ loadingStatus }}
-      </p>
+      <p class="edit-loading-label">{{ loadingStatus }}</p>
     </div>
 
     <div v-else class="edit-unknown-container">
       <BaseBanner v-if="errorMsg" type="error" :message="errorMsg" />
       <BaseBanner v-if="successMsg" type="success" :message="successMsg" />
 
-      <div v-if="!errorMsg && !successMsg" class="edit-box">
-        <div class="info-alert-banner" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--spacing-sm);">
-          <p style="margin: 0; flex: 1; min-width: 250px;">
-            <strong>Mode Correction Sémantique :</strong> Modifiez les données à gauche ou copiez les suggestions de la BNF/OL à droite.
-          </p>
-          <BaseButton 
-            v-if="suggestions" 
-            @click="applyAllSuggestions" 
-            style="padding: 6px 12px; font-size: 11px; font-weight: bold;"
-          >
-            [ TOUT APPLIQUER ]
-          </BaseButton>
-        </div>
-
-        <div class="edit-split-layout">
+      <div v-if="originalBook && !successMsg" class="edit-box">
+        <div class="edit-form-grid">
           <!-- Titre -->
-          <div class="comparison-row">
-            <div class="form-group">
-              <label class="form-label">Titre (Modifiable)</label>
-              <input type="text" v-model="titleInput" class="wireframe-input" />
-            </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Titre suggéré (BNF/OL)</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.title">{{ suggestions.title || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.title && suggestions.title !== titleInput" 
-                  @click="applySuggestion('title')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
-            </div>
+          <div class="form-group">
+            <label class="form-label">Titre</label>
+            <input type="text" v-model="titleInput" class="wireframe-input" />
           </div>
 
           <!-- Auteurs -->
-          <div class="comparison-row">
-            <div class="form-group">
-              <label class="form-label">Auteurs (Séparés par des virgules)</label>
-              <input type="text" v-model="authorsInput" class="wireframe-input" />
-            </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Auteurs suggérés</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.authors?.join(', ')">{{ suggestions.authors && suggestions.authors.length > 0 ? suggestions.authors.join(', ') : 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.authors && suggestions.authors.join(', ') !== authorsInput" 
-                  @click="applySuggestion('authors')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
-            </div>
+          <div class="form-group">
+            <label class="form-label">Auteurs (séparés par des virgules)</label>
+            <input type="text" v-model="authorsInput" class="wireframe-input" />
           </div>
 
-          <!-- Série -->
-          <div class="comparison-row">
+          <!-- Série & Tome -->
+          <div class="edit-two-cols">
             <div class="form-group">
               <label class="form-label">Série</label>
-              <input 
-                type="text" 
-                v-model="seriesInput" 
-                placeholder="Nom de la série" 
-                :disabled="noSeries" 
-                class="wireframe-input" 
+              <input
+                type="text"
+                v-model="seriesInput"
+                placeholder="Nom de la série"
+                :disabled="noSeries"
+                class="wireframe-input"
                 :class="{ 'disabled-input': noSeries }"
               />
               <div class="checkbox-container">
                 <input type="checkbox" id="noSeriesCheckbox" v-model="noSeries" class="wireframe-checkbox" />
                 <label for="noSeriesCheckbox" class="checkbox-label">Ce livre ne fait pas partie d'une série</label>
               </div>
-            </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Série suggérée</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.series">{{ suggestions.series || 'Aucune' }}</span>
-                <BaseButton 
-                  v-if="suggestions.series !== seriesInput" 
-                  @click="applySuggestion('series')" 
-                  class="apply-btn-inline"
+              <div v-if="originalBook" style="margin-top: 6px;">
+                <button
+                  type="button"
+                  class="wireframe-btn apply-btn-inline"
+                  style="width: auto;"
+                  @click="showSeriesMergeModal = true"
                 >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+                  {{ originalBook.series ? 'Changer / fusionner la série' : 'Rattacher à une série' }}
+                </button>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
             </div>
-          </div>
 
-          <!-- Tome -->
-          <div class="comparison-row">
             <div class="form-group">
               <label class="form-label">Numéro de tome</label>
-              <input 
-                type="text" 
-                v-model="seriesNumberInput" 
-                placeholder="Ex: 39" 
-                :disabled="noSeries" 
-                class="wireframe-input" 
+              <input
+                type="text"
+                v-model="seriesNumberInput"
+                placeholder="Ex: 39"
+                :disabled="noSeries"
+                class="wireframe-input"
                 :class="{ 'disabled-input': noSeries }"
               />
             </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Tome suggéré</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.seriesNumber || 'Aucun' }}</span>
-                <BaseButton 
-                  v-if="suggestions.seriesNumber !== seriesNumberInput" 
-                  @click="applySuggestion('seriesNumber')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
-            </div>
           </div>
 
-          <!-- Éditeur -->
-          <div class="comparison-row">
+          <!-- Éditeur / Année / Pages -->
+          <div class="edit-three-cols">
             <div class="form-group">
               <label class="form-label">Éditeur</label>
               <input type="text" v-model="publisherInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Éditeur suggéré</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text" :title="suggestions.publisher">{{ suggestions.publisher || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.publisher && suggestions.publisher !== publisherInput" 
-                  @click="applySuggestion('publisher')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
-            </div>
-          </div>
 
-          <!-- Année de publication -->
-          <div class="comparison-row">
             <div class="form-group">
               <label class="form-label">Année de publication</label>
               <input type="text" v-model="publishDateInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Année suggérée</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.publishDate || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.publishDate && suggestions.publishDate !== publishDateInput" 
-                  @click="applySuggestion('publishDate')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
-            </div>
-          </div>
 
-          <!-- Nombre de pages -->
-          <div class="comparison-row">
             <div class="form-group">
               <label class="form-label">Nombre de pages</label>
               <input type="number" v-model="pageCountInput" class="wireframe-input" />
             </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Pages suggérées</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <span class="suggestion-value-text">{{ suggestions.pageCount || 'Non spécifié' }}</span>
-                <BaseButton 
-                  v-if="suggestions.pageCount && suggestions.pageCount !== pageCountInput" 
-                  @click="applySuggestion('pageCount')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
+          </div>
+
+          <!-- Couverture + sélecteur multi-sources -->
+          <div class="form-group">
+            <label class="form-label">Couverture</label>
+            <div class="cover-url-preview-row">
+              <img
+                v-if="coverUrlInput"
+                :src="imageUtil.resolveCoverUrl(coverUrlInput, originalBook?.isbn13 || originalBook?.isbn10)"
+                :data-cover-isbn="originalBook?.isbn13 || originalBook?.isbn10"
+                alt="Couverture actuelle"
+                class="current-cover-thumb"
+                @error="imageUtil.handleImageError"
+              />
+              <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;">
+                <input type="text" v-model="coverUrlInput" placeholder="URL ou image WebP..." class="wireframe-input" />
+                <div>
+                  <label class="wireframe-btn apply-btn-inline" style="cursor: pointer; width: auto; display: inline-flex; align-items: center;">
+                    <input type="file" accept="image/*" capture="environment" hidden @change="handleCustomCoverUpload" />
+                    Prendre / importer une photo (WebP)
+                  </label>
+                </div>
               </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
+            </div>
+
+            <div v-if="suggestedCoverCandidates.length > 0" class="cover-candidates-block">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                <span class="cover-candidates-title">Couvertures disponibles (cliquez pour choisir) :</span>
+                <button
+                  type="button"
+                  class="wireframe-btn apply-btn-inline"
+                  style="width: auto; font-size: 0.78rem; padding: 0.25rem 0.6rem;"
+                  :disabled="isLoadingExtCovers"
+                  @click="refreshAlternativeCovers(true)"
+                >
+                  {{ isLoadingExtCovers ? 'Recherche...' : 'Rechercher d’autres couvertures' }}
+                </button>
+              </div>
+              <div class="cover-candidates-gallery">
+                <button
+                  v-for="(candUrl, idx) in suggestedCoverCandidates"
+                  :key="candUrl"
+                  type="button"
+                  :class="['cover-candidate-thumb-btn', { selected: normStr(coverUrlInput) === normStr(candUrl) }]"
+                  :title="`Choisir couverture #${idx + 1}`"
+                  @click="selectCandidateCover(candUrl)"
+                >
+                  <img
+                    :src="imageUtil.resolveExternalUrl(candUrl)"
+                    :alt="`Couverture #${idx + 1}`"
+                    class="cover-candidate-img"
+                    @error="markCoverCandidateBroken(candUrl)"
+                  />
+                </button>
+              </div>
+            </div>
+            <div v-else-if="isLoadingExtCovers" class="covers-hint-line">
+              Recherche de couvertures alternatives en cours...
             </div>
           </div>
 
-          <!-- Couverture -->
-          <div class="comparison-row">
-            <div class="form-group">
-              <label class="form-label">URL de la couverture</label>
-              <input type="text" v-model="coverUrlInput" class="wireframe-input" />
+          <!-- Genres personnels (appliqués à toute la série en cas de modification) -->
+          <div class="form-group">
+            <label class="form-label">
+              Genre(s)
+              <span v-if="!noSeries && (seriesInput || originalBook?.series)" class="series-genre-hint">
+                (appliqués automatiquement à toute la série)
+              </span>
+            </label>
+            <div v-if="genresInput.length > 0" class="selected-genres-row">
+              <span v-for="g in genresInput" :key="g" class="genre-active-chip">
+                {{ g }}
+                <button type="button" class="chip-remove-btn" @click="toggleGenreTag(g)" title="Retirer">×</button>
+              </span>
             </div>
-            
-            <div class="suggestion-group">
-              <label class="form-label">Couverture suggérée</label>
-              <div v-if="isSuggestionsLoading" class="suggestion-loading-inline">Recherche...</div>
-              <div v-else-if="suggestions" class="suggestion-content-inline">
-                <div style="display: flex; gap: var(--spacing-sm); align-items: center; min-width: 0; flex: 1;">
-                  <img v-if="suggestions.coverUrl" :src="suggestions.coverUrl" style="width: 30px; height: 42px; border: var(--border-width) solid var(--color-border); object-fit: cover; flex-shrink: 0;" />
-                  <span class="suggestion-value-text" style="font-size: 11px;">{{ suggestions.coverUrl ? 'Image disponible' : 'Aucune' }}</span>
-                </div>
-                <BaseButton 
-                  v-if="suggestions.coverUrl && suggestions.coverUrl !== coverUrlInput" 
-                  @click="applySuggestion('coverUrl')" 
-                  class="apply-btn-inline"
-                >
-                  [ ➔ COPIER ]
-                </BaseButton>
-                <span v-else class="suggestion-match-inline">✅ Conforme</span>
-              </div>
-              <div v-else class="suggestion-none-inline">Aucune suggestion</div>
+            <div class="genres-picker-grid">
+              <button
+                v-for="chip in SUGGESTED_GENRE_CHIPS"
+                :key="chip"
+                type="button"
+                class="genre-toggle-chip"
+                :class="{ active: isGenreSelected(chip) }"
+                @click="toggleGenreTag(chip)"
+              >
+                {{ isGenreSelected(chip) ? '✓ ' : '+ ' }}{{ chip }}
+              </button>
+            </div>
+            <div class="custom-genre-add-row">
+              <input
+                type="text"
+                v-model="customGenreInput"
+                placeholder="Ajouter un genre personnalisé..."
+                class="wireframe-input custom-genre-input"
+                @keydown.enter.prevent="addCustomGenreTag"
+              />
+              <button
+                type="button"
+                class="wireframe-btn custom-genre-add-btn"
+                @click="addCustomGenreTag"
+              >
+                + Ajouter
+              </button>
             </div>
           </div>
         </div>
 
         <div class="form-actions-row">
           <BaseButton @click="router.back()" style="flex: 1;" class="btn-cancel">
-            [ ANNULER ]
+            Annuler
           </BaseButton>
           <BaseButton type="primary" @click="handleSave" style="flex: 2;" class="btn-save">
-            [ ENREGISTRER LES MODIFICATIONS ]
+            Enregistrer les modifications
           </BaseButton>
         </div>
       </div>
     </div>
 
-    <!-- Modale de Déduplication Sémantique (Séries / Auteurs) -->
+    <!-- Modale de Déduplication (Séries / Auteurs) -->
     <DedupModal
       :show="showResolutionModal"
       :step="currentStep"
@@ -516,169 +600,292 @@ const saveChanges = async () => {
       @confirm="confirmResolutionStep"
       @cancel="cancelResolution"
     />
+
+    <!-- Modale de rattachement / fusion de série -->
+    <SeriesMergeModal
+      v-if="originalBook"
+      :show="showSeriesMergeModal"
+      :bookUris="[originalBook.uri, ...(originalBook.workUri ? [originalBook.workUri] : [])]"
+      :currentSeriesId="originalBook.seriesId"
+      :currentSeriesTitle="seriesInput || originalBook.series"
+      :initialVolumeLabel="seriesNumberInput || originalBook.seriesNumber"
+      :singleBook="true"
+      @close="showSeriesMergeModal = false"
+      @merged="handleSeriesMerged"
+    />
   </div>
 </template>
 
 <style scoped>
+.edit-loading-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-xl);
+}
+
+.edit-loading-label {
+  font-family: var(--font-main);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  font-weight: 600;
+  text-align: center;
+}
+
 .edit-unknown-container {
-  width: 100% !important;
-  margin-bottom: var(--spacing-lg) !important;
+  width: 100%;
+  margin-bottom: var(--spacing-lg);
 }
 
 .edit-box {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: var(--spacing-md) !important;
-  border: var(--border-width) solid var(--color-border) !important;
-  background-color: var(--color-bg-main) !important;
-  padding: var(--spacing-md) !important;
-  margin-top: var(--spacing-sm) !important;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg, 14px);
+  background-color: var(--color-bg-main);
+  box-shadow: var(--shadow-card);
+  padding: var(--spacing-lg, 1.25rem);
+  margin-top: var(--spacing-sm);
 }
 
-.info-alert-banner {
-  border: var(--border-width) solid var(--color-border) !important;
-  background-color: var(--color-bg-alt) !important;
-  padding: var(--spacing-sm) var(--spacing-md) !important;
-  font-family: var(--font-main) !important;
-  font-size: 12px !important;
-  line-height: 1.5 !important;
-  color: var(--color-text-main) !important;
+.edit-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 100%;
 }
 
-.edit-split-layout {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: var(--spacing-md) !important;
-  width: 100% !important;
+.edit-two-cols {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 0.85rem;
+  align-items: start;
 }
 
-.comparison-row {
-  display: grid !important;
-  grid-template-columns: 1fr 1fr !important;
-  gap: var(--spacing-lg) !important;
-  align-items: center !important;
-  border-bottom: 1px dashed var(--color-border) !important;
-  padding-bottom: var(--spacing-md) !important;
-  width: 100% !important;
-}
-
-.comparison-row:last-child {
-  border-bottom: none !important;
-  padding-bottom: 0 !important;
+.edit-three-cols {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 0.85rem;
 }
 
 .form-group {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 4px !important;
-  min-width: 0 !important;
-}
-
-.suggestion-group {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 4px !important;
-  min-width: 0 !important;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
 }
 
 .form-label {
-  font-family: var(--font-main) !important;
-  font-size: 11px !important;
-  font-weight: bold !important;
-  text-transform: uppercase !important;
-  color: var(--color-text-main) !important;
+  font-family: var(--font-main);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text-main);
+}
+
+.series-genre-hint {
+  font-weight: 500;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
 }
 
 .disabled-input {
-  background-color: var(--color-bg-alt) !important;
-  color: var(--color-text-muted) !important;
-  cursor: not-allowed !important;
+  background-color: var(--color-bg-alt);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
 }
 
 .checkbox-container {
-  display: flex !important;
-  align-items: center !important;
-  gap: 8px !important;
-  margin-top: 4px !important;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.25rem;
 }
 
 .checkbox-label {
-  font-family: var(--font-main) !important;
-  font-size: 12px !important;
-  color: var(--color-text-main) !important;
-  cursor: pointer !important;
-  user-select: none !important;
-}
-
-.suggestion-content-inline {
-  display: flex !important;
-  align-items: center !important;
-  justify-content: space-between !important;
-  gap: var(--spacing-sm) !important;
-  background-color: var(--color-bg-alt) !important;
-  border: var(--border-width) solid var(--color-border) !important;
-  padding: 8px var(--spacing-sm) !important;
-  min-height: 40px !important;
-  width: 100% !important;
-  box-sizing: border-box !important;
-}
-
-.suggestion-value-text {
-  font-family: var(--font-main) !important;
-  font-size: 12px !important;
-  font-weight: bold !important;
-  color: var(--color-text-main) !important;
-  white-space: nowrap !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-  flex: 1 !important;
-  min-width: 0 !important;
+  font-family: var(--font-main);
+  font-size: 0.82rem;
+  color: var(--color-text-main);
+  cursor: pointer;
+  user-select: none;
 }
 
 .apply-btn-inline {
-  font-size: 11px !important;
-  padding: 0 8px !important;
-  flex-shrink: 0 !important;
-  margin: 0 !important;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-sm, 8px);
+  flex-shrink: 0;
+  min-height: 32px;
+}
+
+.cover-url-preview-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.current-cover-thumb {
+  width: 52px;
+  height: 74px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--color-border);
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.covers-hint-line {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  margin-top: 0.25rem;
+}
+
+.cover-candidates-block {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.cover-candidates-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.cover-candidates-gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-bg-alt, #f8fafc);
+}
+
+.cover-candidate-thumb-btn {
+  padding: 2px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s ease, transform 0.12s ease;
+}
+
+.cover-candidate-thumb-btn:hover {
+  border-color: #94a3b8;
+  transform: translateY(-1px);
+}
+
+.cover-candidate-thumb-btn.selected {
+  border-color: var(--color-primary, #4f46e5);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.2);
+}
+
+.cover-candidate-img {
+  width: 46px;
+  height: 66px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+}
+
+.selected-genres-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+
+.genre-active-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: var(--color-primary, #4f46e5);
+  color: #ffffff;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.chip-remove-btn {
+  background: none;
+  border: none;
+  color: #e0e7ff;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.genres-picker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-height: 155px;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-bg-alt);
+}
+
+.genre-toggle-chip {
+  background: #ffffff;
+  color: var(--color-text-main);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.genre-toggle-chip.active {
+  background: #dcfce7;
+  color: #166534;
+  border-color: #86efac;
+}
+
+.custom-genre-add-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.3rem;
+}
+
+.custom-genre-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+}
+
+.custom-genre-add-btn {
+  flex: 0 0 auto;
   width: auto !important;
-  height: 26px !important;
-  line-height: 26px !important;
-}
-
-.suggestion-match-inline {
-  font-size: 11px !important;
-  color: #2e7d32 !important;
-  font-weight: bold !important;
-  flex-shrink: 0 !important;
-}
-
-.suggestion-loading-inline, .suggestion-none-inline {
-  display: flex !important;
-  align-items: center !important;
-  background-color: var(--color-bg-alt) !important;
-  border: var(--border-width) solid var(--color-border) !important;
-  padding: 8px var(--spacing-sm) !important;
-  min-height: 40px !important;
-  font-size: 11px !important;
-  color: var(--color-text-muted) !important;
-  text-transform: uppercase !important;
-  width: 100% !important;
-  box-sizing: border-box !important;
+  white-space: nowrap;
+  padding: 0 0.95rem;
+  font-size: 0.82rem;
 }
 
 .form-actions-row {
-  display: flex !important;
-  gap: var(--spacing-md) !important;
-  margin-top: var(--spacing-sm) !important;
-  border-top: var(--border-width) dashed var(--color-border) !important;
-  padding-top: var(--spacing-md) !important;
+  display: flex;
+  gap: 0.75rem;
+  margin-top: var(--spacing-sm);
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--spacing-md);
 }
 
-@media (max-width: 768px) {
-  .comparison-row {
-    grid-template-columns: 1fr !important;
-    gap: var(--spacing-sm) !important;
-    padding-bottom: var(--spacing-sm) !important;
+@media (max-width: 680px) {
+  .edit-two-cols,
+  .edit-three-cols {
+    grid-template-columns: 1fr;
   }
 }
 </style>

@@ -3,10 +3,14 @@ import { ref } from 'vue';
 import { databaseService, type PendingCreation } from '../database/database.service';
 import { inventaireSyncService } from '../services/inventaire-sync.service';
 import { inventoryService } from '../services/inventory.service';
+import { wishlistService } from '../services/wishlist.service';
 import { bookCacheService } from '../services/book-cache.service';
 import { bnfResolver, normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { imageUtil } from '../utils/image.util';
+import { findBestMatchingSeries, findMatchingOwnedWork } from '../utils/series-matcher.util';
+import { workEditionHarvesterService } from '../services/work-edition-harvester.service';
 import { connectionState, fetchWithTimeout } from '../../state/connection';
 import type { ExternalBookMetadata, HumanizedBook } from '../types';
 
@@ -73,37 +77,142 @@ export const backgroundCreationOrchestrator = {
     resolvedSeriesUri?: string;
     resolvedAuthorUris?: Record<string, string>;
     expandSeries?: boolean;
+    ownershipTarget?: 'owned' | 'wish' | 'none';
   }): Promise<HumanizedBook> {
     const {
       tempBook,
       resolvedSeriesUri,
       resolvedAuthorUris = {},
-      expandSeries = true
+      expandSeries = true,
+      ownershipTarget = 'owned'
     } = params;
 
-    // 1. Pré-attachement local si la série existe déjà en cache IndexedDB
+    // 1. Pré-attachement orienté Œuvre : vérifier si l'œuvre ou la série existe déjà en cache local
     let effectiveSeriesUri = resolvedSeriesUri;
-    if (!effectiveSeriesUri && tempBook.series?.trim()) {
-      const localMatches = await databaseService.findLocalSeriesMatches(tempBook.series);
-      const existingSeriesId = localMatches.find(b => b.seriesId && !b.seriesId.startsWith('local:'))?.seriesId;
-      if (existingSeriesId) {
-        effectiveSeriesUri = existingSeriesId;
+    let effectiveSeriesTitle = tempBook.series;
+    let effectiveExpandSeries = expandSeries;
+    const localBooks =
+      typeof databaseService.getAllBooksFromCache === 'function'
+        ? await databaseService.getAllBooksFromCache().catch(() => [])
+        : [];
+
+    // 1A. Si cette œuvre est déjà possédée sous une autre édition, fusionner simplement son ISBN dans knownIsbns
+    if (ownershipTarget === 'owned' && localBooks.length > 0) {
+      const existingOwned = findMatchingOwnedWork({
+        candidateIsbns: [tempBook.isbn13, tempBook.isbn10, ...(tempBook.knownIsbns || [])].filter(
+          (x): x is string => Boolean(x)
+        ),
+        candidateWorkUri: tempBook.workUri,
+        candidateTitle: tempBook.title,
+        candidateAuthors: tempBook.authors,
+        candidateSeries: tempBook.series,
+        candidateSeriesNumber: tempBook.seriesNumber,
+        existingBooks: localBooks,
+        targetStatuses: ['owned']
+      });
+      if (existingOwned) {
+        const existingFull = localBooks.find((b) => b.uri === existingOwned.book.uri);
+        if (existingFull) {
+          const mergedIsbns = new Set<string>([
+            ...(existingFull.knownIsbns || []),
+            ...(existingFull.isbn13 ? [existingFull.isbn13] : []),
+            ...(tempBook.isbn13 ? [tempBook.isbn13] : []),
+            ...(tempBook.isbn10 ? [tempBook.isbn10] : []),
+            ...(tempBook.knownIsbns || [])
+          ]);
+          const updatedExisting = {
+            ...existingFull,
+            knownIsbns: Array.from(mergedIsbns)
+          };
+          await databaseService.saveBookToCache(updatedExisting);
+          return updatedExisting;
+        }
+      }
+    }
+
+    if (!effectiveSeriesUri && (tempBook.series?.trim() || tempBook.title?.trim())) {
+      const matched = findBestMatchingSeries({
+        candidateSeries: tempBook.series,
+        candidateTitle: tempBook.title,
+        candidateAuthors: tempBook.authors,
+        candidateWorkUri: tempBook.workUri,
+        existingBooks: localBooks
+      });
+      if (matched) {
+        if (matched.seriesId && !matched.seriesId.startsWith('local:')) {
+          effectiveSeriesUri = matched.seriesId;
+        }
+        effectiveSeriesTitle = matched.series;
+        // Si la série est déjà hydratée avec >= 2 tomes en local, inutile de retélécharger toute la série sur la BnF
+        if (matched.volumeCount >= 2) {
+          effectiveExpandSeries = false;
+        }
+      } else if (tempBook.series?.trim()) {
+        const localMatches = await databaseService.findLocalSeriesMatches(tempBook.series);
+        const existingSeriesId = localMatches.find(b => b.seriesId && !b.seriesId.startsWith('local:'))?.seriesId;
+        if (existingSeriesId) {
+          effectiveSeriesUri = existingSeriesId;
+        }
       }
     }
 
     const optimisticBook: HumanizedBook = {
       ...tempBook,
+      series: effectiveSeriesTitle,
       seriesId: effectiveSeriesUri || tempBook.seriesId,
-      ownershipStatus: 'owned'
+      ownershipStatus: ownershipTarget
     };
 
-    // 2. Persistance immédiate dans IndexedDB + registre d'inventaire
+    // 2. Persistance immédiate dans IndexedDB + registre approprié
     await databaseService.saveBookToCache(optimisticBook);
-    await databaseService.addRegistryEntry('inventory', optimisticBook.uri);
+    if (ownershipTarget === 'owned') {
+      await databaseService.addRegistryEntry('inventory', optimisticBook.uri);
+    } else if (ownershipTarget === 'wish') {
+      await databaseService.addRegistryEntry('wishlist', optimisticBook.uri);
+    }
 
     // Mise en cache image en non-bloquant
-    if (optimisticBook.coverUrl) {
-      bookCacheService.saveAndProcessImage(optimisticBook, 'owned').catch(() => {});
+    if (optimisticBook.coverUrl || optimisticBook.isbn13 || optimisticBook.isbn10) {
+      bookCacheService.saveAndProcessImage(optimisticBook, ownershipTarget).catch(() => {});
+    }
+
+    // Moissonnage multi-ISBN en arrière-plan (BnF + OpenLibrary) pour enrichir knownIsbns de l'Œuvre
+    if (optimisticBook.title) {
+      workEditionHarvesterService
+        .harvestKnownIsbnsForWork({
+          title: optimisticBook.title,
+          authors: optimisticBook.authors,
+          series: optimisticBook.series,
+          seriesNumber: optimisticBook.seriesNumber,
+          seedIsbns: [optimisticBook.isbn13, optimisticBook.isbn10, ...(optimisticBook.knownIsbns || [])]
+        })
+        .then(async (harvest) => {
+          if (harvest.knownIsbns.length === 0 && !harvest.fallbackCoverUrl) return;
+          const current = await databaseService.getBookFromCache(optimisticBook.uri).catch(() => null);
+          if (!current) return;
+          const merged = Array.from(new Set([...(current.knownIsbns || []), ...harvest.knownIsbns]));
+          const nextCoverUrl = current.coverUrl || harvest.fallbackCoverUrl;
+          const updatedBook = {
+            ...current,
+            knownIsbns: merged,
+            ...(nextCoverUrl ? { coverUrl: nextCoverUrl } : {})
+          };
+          await databaseService.saveBookToCache(updatedBook);
+          if (!current.localCover && nextCoverUrl) {
+            bookCacheService
+              .saveAndProcessImage(
+                updatedBook,
+                current.ownershipStatus === 'wish' ? 'wish' : 'owned'
+              )
+              .catch(() => {});
+          }
+          if (current.workUri && current.workUri.startsWith('inv:') && merged.length > 0) {
+            inventaireSyncService
+              .updateClaim(current.workUri, 'invp:knownIsbns', undefined, merged)
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
 
     // 3. Ajout dans la file persistante de création distante
@@ -111,7 +220,8 @@ export const backgroundCreationOrchestrator = {
       tempBook: optimisticBook,
       resolvedSeriesUri: effectiveSeriesUri,
       resolvedAuthorUris,
-      expandSeries,
+      expandSeries: effectiveExpandSeries,
+      ownershipTarget,
       status: 'pending',
       createdAt: Date.now()
     });
@@ -166,7 +276,7 @@ export const backgroundCreationOrchestrator = {
           ...status.value,
           isActive: true,
           pendingCount: remainingRunnable,
-          stepLabel: `Création sur inventaire.io : « ${nextJob.tempBook.title} »`,
+          stepLabel: `Enregistrement : « ${nextJob.tempBook.title} »`,
           current: 0,
           total: 1,
           lastError: null
@@ -183,7 +293,7 @@ export const backgroundCreationOrchestrator = {
             ...status.value,
             pendingCount: remaining.filter(j => j.status === 'pending' || j.status === 'processing').length,
             lastCompletedAt: Date.now(),
-            lastSuccessMsg: `« ${nextJob.tempBook.title} » synchronisé sur inventaire.io`
+            lastSuccessMsg: `« ${nextJob.tempBook.title} » synchronisé dans le catalogue`
           };
         } catch (err: any) {
           if (connectionState.isOffline.value) {
@@ -223,29 +333,42 @@ export const backgroundCreationOrchestrator = {
 
   async processSingleJob(job: PendingCreation): Promise<void> {
     const tempBook = job.tempBook;
+    const ownershipTarget = job.ownershipTarget || 'owned';
 
-    // 1. Création / liaison de l'ouvrage principal sur inventaire.io
+    // 1. Création / liaison de l'ouvrage principal sur inventaire.io / D1
     const syncResult = await inventaireSyncService.syncBookToInventaire(
       tempBook,
       job.resolvedSeriesUri,
       job.resolvedAuthorUris
     );
 
-    // 2. Ajout à l'inventaire personnel
-    await inventoryService.addToLibrary(syncResult.editionUri);
-
     const finalBook: HumanizedBook = {
       ...tempBook,
       uri: syncResult.editionUri,
       workUri: syncResult.workUri,
       seriesId: syncResult.seriesUri || tempBook.seriesId,
-      ownershipStatus: 'owned'
+      ownershipStatus: ownershipTarget
     };
 
-    // 3. Remplacement atomique isbn:... -> inv:... en base locale
+    // 2. Remplacement atomique isbn:... -> inv:... en base locale
     const savedBook = await databaseService.replaceBookUri(tempBook.uri, finalBook);
-    if (savedBook.coverUrl && !savedBook.localCover) {
-      bookCacheService.saveAndProcessImage(savedBook, 'owned').catch(() => {});
+
+    // 2B. Synchroniser knownIsbns sur l'entité Work distante dans D1
+    if (syncResult.workUri?.startsWith('inv:') && savedBook.knownIsbns?.length) {
+      inventaireSyncService
+        .updateClaim(syncResult.workUri, 'invp:knownIsbns', undefined, savedBook.knownIsbns)
+        .catch(() => {});
+    }
+
+    // 3. Rattachement au registre distant (Inventaire ou Wishlist)
+    if (ownershipTarget === 'owned') {
+      await inventoryService.addToLibrary(syncResult.editionUri);
+    } else if (ownershipTarget === 'wish') {
+      await wishlistService.addToWishlist(syncResult.editionUri);
+    }
+
+    if ((savedBook.coverUrl || savedBook.isbn13 || savedBook.isbn10) && !savedBook.localCover) {
+      bookCacheService.saveAndProcessImage(savedBook, ownershipTarget).catch(() => {});
     }
 
     status.value = {
@@ -452,8 +575,7 @@ export const backgroundCreationOrchestrator = {
 
       const normNum = vol.seriesNumber ? normalizeSeriesNumber(vol.seriesNumber) : '';
       if (normNum && knownVolumeNums.has(normNum)) continue;
-      if (!normNum && isTitleAlreadyKnown(vol.title)) continue;
-      if (normNum && isTitleAlreadyKnown(vol.title) && knownNormalizedTitles.length > 0 && !knownVolumeNums.size) continue;
+      if (isTitleAlreadyKnown(vol.title)) continue;
 
       missingCandidates.push(vol);
       if (missingCandidates.length >= MAX_SERIES_VOLUMES_TO_CREATE) break;
@@ -492,7 +614,7 @@ export const backgroundCreationOrchestrator = {
 
     status.value = {
       ...status.value,
-      stepLabel: `Création de la série « ${seriesName} » sur inventaire.io`,
+      stepLabel: `Enrichissement de la série « ${seriesName} »`,
       current: 0,
       total: missingCandidates.length
     };
@@ -532,6 +654,8 @@ export const backgroundCreationOrchestrator = {
           }
 
           const existingLocal = await databaseService.getBookFromCache(existingRemote.editionUri);
+          const volIsbn13 = vol.isbn.length === 13 ? vol.isbn : isbnUtil.toIsbn13(vol.isbn);
+          const volFallbacks = imageUtil.buildCoverCandidates(volIsbn13, [existingLocal?.coverUrl, vol.coverUrl]);
           await databaseService.saveBookToCache({
             ...(existingLocal || {}),
             uri: existingRemote.editionUri,
@@ -546,7 +670,8 @@ export const backgroundCreationOrchestrator = {
             publisher: vol.publisher || existingLocal?.publisher,
             publishDate: vol.publishDate || existingLocal?.publishDate,
             pageCount: vol.pageCount || existingLocal?.pageCount,
-            coverUrl: existingLocal?.coverUrl || vol.coverUrl,
+            coverUrl: existingLocal?.coverUrl || vol.coverUrl || volFallbacks[0],
+            ...(volFallbacks.length ? { coverFallbackUrls: volFallbacks } : {}),
             genres: existingLocal?.genres || [],
             series: seriesName,
             seriesId: seriesUri,
@@ -606,6 +731,7 @@ export const backgroundCreationOrchestrator = {
           }
 
           const isbn13 = vol.isbn.length === 13 ? vol.isbn : isbnUtil.toIsbn13(vol.isbn);
+          const volFallbacks = imageUtil.buildCoverCandidates(isbn13, [vol.coverUrl]);
           const editionClaims: Record<string, any> = {
             'wdt:P31': ['wd:Q3331189'],
             'wdt:P629': [volumeWorkUri],
@@ -616,8 +742,17 @@ export const backgroundCreationOrchestrator = {
           if (vol.publishDate) {
             editionClaims['wdt:P577'] = [vol.publishDate];
           }
+          if (vol.pageCount && Number.isFinite(vol.pageCount)) {
+            editionClaims['wdt:P1104'] = [vol.pageCount];
+          }
+          if (vol.coverUrl) {
+            editionClaims['invp:P2'] = [vol.coverUrl];
+          }
 
-          const editionUri = await inventaireSyncService.createEntity('edition', vol.title, editionClaims);
+          const editionUri = await inventaireSyncService.createEntity('edition', vol.title, editionClaims, {
+            publisher: vol.publisher,
+            genres: seedBook.genres
+          });
 
           await databaseService.saveBookToCache({
             uri: editionUri,
@@ -631,7 +766,8 @@ export const backgroundCreationOrchestrator = {
             publisher: vol.publisher,
             publishDate: vol.publishDate,
             pageCount: vol.pageCount,
-            coverUrl: vol.coverUrl,
+            coverUrl: vol.coverUrl || volFallbacks[0],
+            ...(volFallbacks.length ? { coverFallbackUrls: volFallbacks } : {}),
             genres: [],
             series: seriesName,
             seriesId: seriesUri,

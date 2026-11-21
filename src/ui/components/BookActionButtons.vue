@@ -86,7 +86,7 @@ const isOffline = computed(() => connectionState.isOffline.value);
       v-if="isOffline" 
       class="offline-action-warning"
     >
-      ⚠️ {{ TEXTS.bookCard?.offlineActionsBlocked || 'Actions de modification désactivées hors-ligne.' }}
+      {{ TEXTS.bookCard?.offlineActionsBlocked || 'Actions de modification désactivées hors-ligne.' }}
     </div>
   </div>
 </template>

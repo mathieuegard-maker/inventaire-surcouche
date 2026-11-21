@@ -7,7 +7,7 @@ defineProps<{
 
 <template>
   <div :class="['result-card', type]">
-    <p v-if="type === 'success'">✅ {{ message }}</p>
-    <p v-else>⚠️ {{ message }}</p>
+    <p v-if="type === 'success'">{{ message }}</p>
+    <p v-else>{{ message }}</p>
   </div>
 </template>

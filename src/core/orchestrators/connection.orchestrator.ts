@@ -4,12 +4,10 @@ import { inventoryService } from '../services/inventory.service';
 import { wishlistService } from '../services/wishlist.service';
 import { sessionStore } from '../../state/session';
 import { connectionState } from '../../state/connection';
-//import { databaseService } from '../database/database.service';
-//import { entityResolver } from '../resolvers/entity.resolver';
-//import { entityHumanizer } from '../resolvers/humanizer';
+import { databaseService } from '../database/database.service';
 import { loanService } from '../services/loan.service';
-//import { entityMapper } from '../resolvers/mapper'; // AJOUT pour le batching
 import { syncOrchestrator } from './sync.orchestrator';
+import { scannerState } from '../../state/scanner';
 
 export const connectionService = {
   isInitialized: false,
@@ -62,6 +60,22 @@ export const connectionService = {
       this.userUri = profile.uri;
       console.log(`Session activée : ${profile.username} (${this.userUri})`);
 
+      // Si changement de compte/bibliothèque sur cet appareil, purger le cache local de l'ancien compte
+      if (typeof localStorage !== 'undefined') {
+        const lastUserUri = localStorage.getItem('biblio_last_user_uri');
+        if (lastUserUri && lastUserUri !== profile.uri && typeof databaseService?.clearAllBookData === 'function') {
+          console.log('[CONNECTION SERVICE] Changement de compte détecté : purge du cache local précédent...');
+          await databaseService.clearAllBookData().catch(() => {});
+          localStorage.removeItem('biblio_v4_last_sync_at');
+          localStorage.removeItem('biblio_scan_photo_draft_v1');
+          localStorage.removeItem('biblio_catalog_sync_version');
+          loanService.invalidateInventoryCache();
+          loanService.shelfId = null;
+          wishlistService.wishlistId = null;
+        }
+        localStorage.setItem('biblio_last_user_uri', profile.uri);
+      }
+
       // Si l'application démarre hors-ligne, on court-circuite la synchronisation réseau
       if (connectionState.isOffline.value) {
         console.log("Application prête en mode hors-ligne restreint (consultation seule) !");
@@ -106,11 +120,17 @@ export const connectionService = {
   /**
    * Séquence d'authentification et d'amorçage de session
    */
-  async login(username: string, password: string): Promise<boolean> {
+  async login(
+    username: string,
+    password: string,
+    inviteCode?: string,
+    friendToken?: string,
+    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string }
+  ): Promise<boolean> {
     console.group("[CONNECTION SERVICE] Tentative de connexion de l'utilisateur");
     try {
       // On relaie la requête brute au service utilisateur dédié
-      const success = await userService.login(username, password);
+      const success = await userService.login(username, password, inviteCode, friendToken, options);
       
       if (!success) {
         console.warn("Identifiants refusés par le service utilisateur.");
@@ -148,5 +168,24 @@ export const connectionService = {
       sessionStore.clearSession();
       return false;
     }
+  },
+
+  async logout(): Promise<void> {
+    await userService.logout();
+    if (typeof databaseService?.clearAllBookData === 'function') {
+      await databaseService.clearAllBookData().catch(() => {});
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('biblio_last_user_uri');
+      localStorage.removeItem('biblio_v4_last_sync_at');
+      localStorage.removeItem('biblio_scan_photo_draft_v1');
+      localStorage.removeItem('biblio_catalog_sync_version');
+    }
+    loanService.invalidateInventoryCache();
+    loanService.shelfId = null;
+    wishlistService.wishlistId = null;
+    this.isInitialized = false;
+    this.userUri = null;
+    scannerState.notifyCatalogChanged();
   }
 };

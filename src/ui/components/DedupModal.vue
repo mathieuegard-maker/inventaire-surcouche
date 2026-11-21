@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { TEXTS } from '../locales/fr';
 import BaseButton from './BaseButton.vue';
+import { useModalScrollable } from '../composables/useModalScrollable';
 
 interface MatchItem {
   name: string;
@@ -27,6 +28,9 @@ const emit = defineEmits<{
   (e: 'cancel'): void;
 }>();
 
+const modalCardRef = ref<HTMLElement | null>(null);
+const { isScrollable } = useModalScrollable(modalCardRef, () => [props.show, props.step?.matches?.length]);
+
 const modalTitle = computed(() => {
   if (!props.step) return '';
   return props.step.type === 'series'
@@ -48,14 +52,18 @@ const handleSelect = (uri: string) => {
 </script>
 
 <template>
-  <div v-if="show && step" class="modal-overlay" @click.self="emit('cancel')">
-    <div class="modal-box dedup-modal-box">
-      <h3 class="dedup-title">
-        [ {{ modalTitle }} ]
-      </h3>
-      <p class="dedup-desc">
-        {{ modalDescription }}
-      </p>
+  <Teleport to="body">
+    <div v-if="show && step" class="modal-overlay" @click.self="emit('cancel')">
+      <div ref="modalCardRef" class="modal-box dedup-modal-box" role="dialog" aria-modal="true" :aria-label="modalTitle">
+        <div class="modal-header-row">
+          <h3 class="dedup-title">
+            {{ modalTitle }}
+          </h3>
+          <button type="button" class="modal-close-icon" aria-label="Fermer" @click="emit('cancel')">✕</button>
+        </div>
+        <p class="modal-text dedup-desc">
+          {{ modalDescription }}
+        </p>
 
       <div class="dedup-options-list">
         <!-- Options existantes -->
@@ -99,14 +107,18 @@ const handleSelect = (uri: string) => {
         </div>
       </div>
 
-      <div class="modal-actions dedup-actions">
-        <BaseButton @click="emit('cancel')" class="btn-cancel">
-          [ {{ TEXTS.dedupModal.btnCancel }} ]
-        </BaseButton>
-        <BaseButton type="primary" @click="emit('confirm')" class="btn-save">
-          [ {{ TEXTS.dedupModal.btnConfirm }} ]
-        </BaseButton>
+        <div class="modal-actions dedup-actions">
+          <BaseButton @click="emit('cancel')" class="btn-cancel">
+            {{ TEXTS.dedupModal.btnCancel }}
+          </BaseButton>
+          <BaseButton type="primary" @click="emit('confirm')" class="btn-save">
+            {{ TEXTS.dedupModal.btnConfirm }}
+          </BaseButton>
+        </div>
+        <div v-if="isScrollable" class="modal-bottom-close-bar">
+          <button type="button" class="modal-close-icon" aria-label="Fermer" @click="emit('cancel')">✕</button>
+        </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>

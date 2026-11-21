@@ -9,6 +9,9 @@ export const inventoryService = {
     try {
       const res = await fetchWithTimeout(`/api/gateway?action=inventory-list&uri=${encodeURIComponent(uri)}`);
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Erreur HTTP ${res.status} lors du chargement de l'inventaire`);
+      }
 
       const items = data.items || [];
       const itemList = Array.isArray(items) ? items : Object.values(items);
@@ -60,23 +63,31 @@ export const inventoryService = {
       itemId = (await loanService.getInventoryItemId(uri)) || undefined;
     }
 
-    if (itemId) {
-      const res = await fetchWithTimeout('/api/gateway?action=inventory-delete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: [itemId] })
-      });
-      if (!res.ok) {
-        throw new Error("Erreur lors de la suppression de l'exemplaire sur inventaire.io");
-      }
+    const res = await fetchWithTimeout('/api/gateway?action=inventory-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(itemId ? { ids: [itemId] } : {}),
+        uris: [uri]
+      })
+    });
+    if (!res.ok) {
+      throw new Error("Erreur lors de la suppression de l'exemplaire sur le serveur");
     }
 
     await databaseService.removeRegistryEntry('inventory', uri);
+    await databaseService.deleteLoan?.(uri)?.catch(() => {});
     loanService.invalidateInventoryCache();
 
     const cachedBook = await databaseService.getBookFromCache(uri);
     if (cachedBook) {
-      cachedBook.ownershipStatus = 'none';
+      const hasIsUriInRegistry = typeof databaseService.isUriInRegistry === 'function';
+      const isWished = hasIsUriInRegistry
+        ? (await databaseService.isUriInRegistry('wishlist', cachedBook.uri)) ||
+          (cachedBook.workUri ? await databaseService.isUriInRegistry('wishlist', cachedBook.workUri) : false)
+        : false;
+      cachedBook.ownershipStatus = isWished ? 'wish' : 'none';
+      cachedBook.loan = undefined;
       await databaseService.saveBookToCache(cachedBook);
     }
     return true;

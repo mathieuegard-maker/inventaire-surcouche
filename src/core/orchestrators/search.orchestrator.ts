@@ -4,6 +4,13 @@ import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { bookCacheService } from '../services/book-cache.service';
 import { isbnUtil } from '../utils/isbn.util';
+import { findMatchingOwnedWork } from '../utils/series-matcher.util';
+import {
+  checkLocalIntegralConflict,
+  formatV4StatusNotice,
+  ingestIsbnsViaV4,
+  v4BookRecordToHumanizedBook
+} from '../services/v4-client.service';
 import { seriesOrchestrator } from './series.orchestrator';
 import { syncOrchestrator } from './sync.orchestrator';
 import { connectionState } from '../../state/connection';
@@ -24,27 +31,61 @@ export const searchService = {
 
     console.group(`[SEARCH SERVICE] Orchestration pour ISBN: ${isbn}`);
     
-    // 1. PHASE IDENTIFICATION : Local-First
+    // 1. PHASE IDENTIFICATION : Local-First O(1) via book_isbn_index -> Backend V4 -> Repli legacy
     let book: HumanizedBook | null | undefined = await databaseService.getBookByIsbn(isbn);
     let source: 'cache' | 'network' = 'cache';
+    let v4IngestResult: any = null;
 
     if (!book) {
       if (connectionState.isOffline.value) {
         console.warn(`[SEARCH] Absent du cache local et pas de réseau disponible pour l'ISBN ${isbn}`);
         console.groupEnd();
-        return null;
+        return { isOfflineUnavailable: true, isbn } as any;
       }
-      console.log("[SEARCH] Absent du cache, interrogation réseau...");
-      book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
-      
+      console.log("[SEARCH] Absent du cache, interrogation Pipeline V4...");
+      try {
+        const v4Batch = await ingestIsbnsViaV4({
+          isbns: [isbn],
+          sourceChannel: /^(330|378|977)\d{10}$/.test(isbn) ? 'canal_1_barcode' : 'canal_2_manual_isbn',
+          action: 'preview'
+        });
+        v4IngestResult = v4Batch?.results?.[0] || null;
+        if (v4IngestResult?.book) {
+          const initialOwned =
+            v4IngestResult.layer2Status === 'ALREADY_OWNED' ||
+            v4IngestResult.layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+            v4IngestResult.layer2Status === 'FULL_INTEGRAL_OWNED'
+              ? 'owned'
+              : 'none';
+          book = v4BookRecordToHumanizedBook(v4IngestResult.book, initialOwned);
+          source = 'network';
+          await bookCacheService.saveAndProcessImage(book);
+        } else {
+          book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
+          if (book) {
+            source = 'network';
+            await bookCacheService.saveAndProcessImage(book);
+          }
+        }
+      } catch (networkErr: any) {
+        if (connectionState.isOffline.value || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+          console.warn(`[SEARCH] Coupure réseau pendant la résolution pour ${isbn}`, networkErr);
+          console.groupEnd();
+          return { isOfflineUnavailable: true, isbn } as any;
+        }
+        throw networkErr;
+      }
+
       if (!book) {
+        if (connectionState.isOffline.value) {
+          console.warn(`[SEARCH] Bascule hors-ligne pendant la recherche pour ${isbn}`);
+          console.groupEnd();
+          return { isOfflineUnavailable: true, isbn } as any;
+        }
         console.warn(`[SEARCH] Échec de la résolution réseau pour : ${isbn}. Bascule vers l'agrégation de création.`);
         console.groupEnd();
         return { isUnknown: true, isbn } as any;
       }
-      
-      source = 'network';
-      await bookCacheService.saveAndProcessImage(book);
     } else {
       console.log("[SEARCH] Trouvé en cache local.");
       
@@ -56,7 +97,7 @@ export const searchService = {
       }
     }
 
-    // 2. PHASE ANALYSE D'APPARTENANCE
+    // 2. PHASE ANALYSE D'APPARTENANCE & INTÉGRALES BIDIRECTIONNELLES V4
     const isEditionOwned = await databaseService.isUriInRegistry('inventory', book.uri);
     let isWorkOwned = isEditionOwned;
     const isWished = await wishlistService.isUriWished(book.uri, book.workUri);
@@ -70,7 +111,55 @@ export const searchService = {
       }
     }
 
+    let integralMatches = v4IngestResult?.ownedIntegralMatches || [];
+    let includedOwnedWorkIds = v4IngestResult?.includedOwnedWorkIds || [];
+    let layer2Status = v4IngestResult?.layer2Status;
+    let v4Notice = v4IngestResult ? formatV4StatusNotice(v4IngestResult) : undefined;
+
+    if (typeof databaseService.getAllBooksFromCache === 'function') {
+      const allCached = await databaseService.getAllBooksFromCache().catch(() => []);
+      if (!isWorkOwned) {
+        const workMatch = findMatchingOwnedWork({
+          candidateIsbns: [isbn, book.isbn13, book.isbn10, ...(book.knownIsbns || [])].filter(
+            (x): x is string => Boolean(x)
+          ),
+          candidateWorkUri: book.workUri,
+          candidateTitle: book.title,
+          candidateAuthors: book.authors,
+          candidateSeries: book.series,
+          candidateSeriesNumber: book.seriesNumber,
+          existingBooks: allCached,
+          targetStatuses: ['owned']
+        });
+        if (workMatch) {
+          isWorkOwned = true;
+          duplicateEdition = allCached.find((b) => b.uri === workMatch.book.uri);
+        }
+      }
+      const hasResolvedIntegralStatus =
+        layer2Status === 'INCLUDED_IN_INTEGRAL' ||
+        layer2Status === 'FULL_INTEGRAL_OWNED' ||
+        layer2Status === 'PARTIAL_INTEGRAL_OWNED';
+      if (!hasResolvedIntegralStatus) {
+        const localInt = checkLocalIntegralConflict(book, allCached);
+        if (localInt.status) {
+          layer2Status = localInt.status;
+          integralMatches = localInt.ownedIntegralMatches;
+          includedOwnedWorkIds = localInt.includedOwnedWorkIds;
+          v4Notice = localInt.notice;
+          if (localInt.status === 'INCLUDED_IN_INTEGRAL' || localInt.status === 'FULL_INTEGRAL_OWNED') {
+            isWorkOwned = true;
+          }
+        }
+      } else if (layer2Status === 'INCLUDED_IN_INTEGRAL' || layer2Status === 'FULL_INTEGRAL_OWNED') {
+        isWorkOwned = true;
+      }
+    }
+
     book.ownershipStatus = isWorkOwned ? 'owned' : (isWished ? 'wish' : 'none');
+    if (isWorkOwned && typeof databaseService.saveBookToCache === 'function') {
+      await databaseService.saveBookToCache({ ...book, ownershipStatus: 'owned' }).catch(() => {});
+    }
 
     // 3. PHASE ANALYSE DES PRÊTS
     const loanDetails = await databaseService.getLoan(book.uri);
@@ -99,7 +188,11 @@ export const searchService = {
         isEditionOwned,
         isWorkOwned,
         isWished,
-        duplicateEdition
+        duplicateEdition,
+        ...(layer2Status ? { layer2Status } : {}),
+        ...(integralMatches.length ? { ownedIntegralMatches: integralMatches } : {}),
+        ...(includedOwnedWorkIds.length ? { includedOwnedWorkIds } : {}),
+        ...(v4Notice ? { v4Notice } : {})
       },
       series: seriesContext,
       loan: {

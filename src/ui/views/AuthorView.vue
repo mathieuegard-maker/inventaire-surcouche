@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
@@ -19,6 +19,7 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
 import { fetchWithTimeout } from '../../state/connection';
+import { saveBookNavigationOrder } from '../../state/bookNavigation';
 
 const route = useRoute();
 const router = useRouter();
@@ -29,6 +30,7 @@ const authorName = ref('');
 const authorBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const displayedTomes = ref<HumanizedBook[]>([]);
+const filteredAuthorBooks = ref<HumanizedBook[]>([]);
 const showLendModal = ref(false);
 
 const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
@@ -54,8 +56,13 @@ const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
   }
 };
 
-onMounted(async () => {
-  const authorId = route.params.id as string;
+const loadAuthorProfile = async (authorId: string) => {
+  isLoading.value = true;
+  errorMessage.value = '';
+  authorBooks.value = [];
+  selectedIds.value = [];
+  displayedTomes.value = [];
+  filteredAuthorBooks.value = [];
   if (!authorId) {
     errorMessage.value = TEXTS.authorView.errorFetch;
     isLoading.value = false;
@@ -135,10 +142,24 @@ onMounted(async () => {
   } finally {
     isLoading.value = false;
   }
+};
+
+onMounted(() => {
+  void loadAuthorProfile(route.params.id as string);
 });
 
+watch(
+  () => route.params.id,
+  (newId) => {
+    if (newId) void loadAuthorProfile(newId as string);
+  }
+);
+
 // Méthodes d'interaction
-const isAllSelected = computed(() => authorBooks.value.length > 0 && selectedIds.value.length === authorBooks.value.length);
+const isAllSelected = computed(() => {
+  const targets = filteredAuthorBooks.value.length > 0 ? filteredAuthorBooks.value : authorBooks.value;
+  return targets.length > 0 && targets.every((book) => selectedIds.value.includes(book.uri));
+});
 const selectedBooks = computed(() => authorBooks.value.filter(book => selectedIds.value.includes(book.uri)));
 const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
 const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
@@ -159,23 +180,35 @@ const batchContext = computed(() => {
 });
 
 const handleToggleAll = (checked: boolean) => {
-  selectedIds.value = checked ? authorBooks.value.map(item => item.uri) : [];
+  const targets = filteredAuthorBooks.value.length > 0 ? filteredAuthorBooks.value : authorBooks.value;
+  selectedIds.value = checked ? targets.map(item => item.uri) : [];
 };
 
-const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN') => {
-  if (selectedIds.value.length === 0 || isSelectionMixed.value) return;
+const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
+  if (selectedIds.value.length === 0) return;
   if (action === 'LEND') {
     showLendModal.value = true;
     return;
   }
   try {
     for (const uri of selectedIds.value) {
-      await queueService.enqueueAction(action, uri);
+      if (action === 'DELETE') {
+        const book = authorBooks.value.find(b => b.uri === uri);
+        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, uri);
+      } else {
+        await queueService.enqueueAction(action, uri);
+      }
     }
     authorBooks.value = authorBooks.value.map(book => {
       if (selectedIds.value.includes(book.uri)) {
         if (action === 'RETURN') {
           const copy = { ...book };
+          delete copy.loan;
+          return copy;
+        }
+        if (action === 'DELETE') {
+          const copy = { ...book, ownershipStatus: 'none' as const };
           delete copy.loan;
           return copy;
         }
@@ -235,6 +268,7 @@ const confirmGroupLend = async (friendName: string) => {
           :selectAllValue="isAllSelected"
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
+          @update:filteredItems="(val) => { filteredAuthorBooks = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'author'); }"
           @update:processedItems="(val) => displayedTomes = val"
         >
           <div v-if="displayedTomes.length === 0">
@@ -260,9 +294,10 @@ const confirmGroupLend = async (friendName: string) => {
 
           <BatchActionBar 
             :selected-count="selectedIds.length"
-            :is-mixed="isSelectionMixed"
+            :selected-books="selectedBooks"
             :context="batchContext"
             @execute="dispatchBatchAction"
+            @clear="selectedIds = []"
           />
         </WireframePagination>
       </div>

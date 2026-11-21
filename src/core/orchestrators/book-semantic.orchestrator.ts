@@ -3,6 +3,8 @@ import { inventaireSyncService } from '../services/inventaire-sync.service';
 import { inventoryService } from '../services/inventory.service';
 import { bookCacheService } from '../services/book-cache.service';
 import { databaseService } from '../database/database.service';
+import { patchV4BookMetadata } from '../services/v4-client.service';
+import { scannerState } from '../../state/scanner';
 import type { HumanizedBook } from '../types';
 
 export interface MatchItem {
@@ -114,36 +116,68 @@ export const bookSemanticOrchestrator = {
       publishDate: string;
       pageCount?: number;
       coverUrl: string;
+      genres?: string[];
     },
     resolvedSeriesUri: string | undefined,
     resolvedAuthorUris: Record<string, string>
   ): Promise<HumanizedBook> {
     console.log(`[BOOK SEMANTIC ORCHESTRATOR] Démarrage du patch de modification sémantique pour : ${originalBook.title}`);
 
-    // 1. Synchronisation distante des claims sur inventaire.io
-    const res = await inventaireSyncService.patchBookOnInventaire(
-      originalBook,
-      updatedData,
-      resolvedSeriesUri,
-      resolvedAuthorUris
-    );
+    const hasSeriesNameChanged =
+      (updatedData.series || '').trim().toLowerCase() !== (originalBook.series || '').trim().toLowerCase();
+    const effectiveSeriesId =
+      resolvedSeriesUri ?? (updatedData.series ? (!hasSeriesNameChanged ? originalBook.seriesId : undefined) : null);
+
+    // 1. Option B : Pour un livre V4, enregistrer uniquement les surcharges privées du foyer dans `v4_library_books`
+    //    afin de ne jamais écraser le catalogue commun ni les choix des autres utilisateurs.
+    const v4Updated = await patchV4BookMetadata({
+      bookId: originalBook.bookId,
+      uri: originalBook.uri,
+      isbn13: originalBook.isbn13,
+      title: updatedData.title,
+      authors: updatedData.authors,
+      series: updatedData.series,
+      seriesId: effectiveSeriesId,
+      seriesNumber: updatedData.seriesNumber,
+      publisher: updatedData.publisher,
+      publishDate: updatedData.publishDate,
+      coverUrl: updatedData.coverUrl,
+      genres: updatedData.genres
+    }).catch(() => null);
+
+    const res =
+      !v4Updated && !originalBook.bookId
+        ? await inventaireSyncService.patchBookOnInventaire(
+            originalBook,
+            updatedData,
+            resolvedSeriesUri,
+            resolvedAuthorUris
+          )
+        : { seriesUri: effectiveSeriesId || undefined, workUri: originalBook.workUri };
 
     const newCoverUrl = updatedData.coverUrl || undefined;
+    const isDataCover = Boolean(newCoverUrl && newCoverUrl.startsWith('data:image/'));
     const coverChanged = newCoverUrl !== originalBook.coverUrl;
 
     // 2. Construction de l'entité finale fusionnée
     const updatedBook: HumanizedBook = {
       ...originalBook,
+      bookId: v4Updated?.id || originalBook.bookId,
       title: updatedData.title,
       authors: updatedData.authors,
       series: updatedData.series || undefined,
-      seriesId: res.seriesUri || undefined,
+      seriesId: v4Updated?.seriesId || res.seriesUri || (updatedData.series ? originalBook.seriesId : undefined),
       seriesNumber: updatedData.seriesNumber || undefined,
       publisher: updatedData.publisher || undefined,
       publishDate: updatedData.publishDate || undefined,
       pageCount: updatedData.pageCount,
       coverUrl: newCoverUrl,
-      localCover: coverChanged ? undefined : originalBook.localCover,
+      localCover: isDataCover
+        ? newCoverUrl
+        : coverChanged
+          ? undefined
+          : originalBook.localCover,
+      genres: Array.isArray(updatedData.genres) ? updatedData.genres : originalBook.genres,
       workUri: res.workUri,
       isLocallyEdited: true
     };
@@ -152,12 +186,44 @@ export const bookSemanticOrchestrator = {
     
     // 3. Sauvegarde dans IndexedDB (Dexie) et retraitement de couverture si nécessaire
     const plainBook: HumanizedBook = JSON.parse(JSON.stringify(updatedBook));
-    if (coverChanged && plainBook.coverUrl) {
+    if ((coverChanged && plainBook.coverUrl) || (plainBook.localCover && plainBook.localCover.startsWith('data:image/'))) {
       await bookCacheService.saveAndProcessImage(plainBook, undefined, { forceOverwrite: true });
     } else {
       await databaseService.saveBookToCache(plainBook);
     }
 
+    // 4. Si le genre a été modifié et que le livre appartient à une série, appliquer à tous les tomes de cette série
+    const oldGenresKey = (originalBook.genres || []).map((g) => g.trim().toLowerCase()).join('|');
+    const newGenresList = Array.isArray(updatedData.genres) ? updatedData.genres : [];
+    const newGenresKey = newGenresList.map((g) => g.trim().toLowerCase()).join('|');
+    const targetSeriesId = plainBook.seriesId;
+    const normSeriesName = (plainBook.series || '').trim().toLowerCase();
+
+    if (
+      Array.isArray(updatedData.genres) &&
+      oldGenresKey !== newGenresKey &&
+      (targetSeriesId || normSeriesName) &&
+      typeof databaseService.getAllBooksFromCache === 'function'
+    ) {
+      const allCached = await databaseService.getAllBooksFromCache();
+      for (const sibling of allCached) {
+        if (!sibling || sibling.uri === plainBook.uri) continue;
+        const matchesSeriesId = Boolean(targetSeriesId && sibling.seriesId === targetSeriesId);
+        const matchesSeriesName = Boolean(
+          normSeriesName && (sibling.series || '').trim().toLowerCase() === normSeriesName
+        );
+        if (matchesSeriesId || matchesSeriesName) {
+          const updatedSibling: HumanizedBook = {
+            ...sibling,
+            genres: [...newGenresList],
+            isLocallyEdited: true
+          };
+          await databaseService.saveBookToCache(JSON.parse(JSON.stringify(updatedSibling)));
+        }
+      }
+    }
+
+    scannerState.notifyCatalogChanged();
     return updatedBook;
   }
 };

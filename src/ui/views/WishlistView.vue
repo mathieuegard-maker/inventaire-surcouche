@@ -15,6 +15,8 @@ import WireframePagination from '../components/WireframePagination.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
+import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
+import { scannerState } from '../../state/scanner';
 
 const allWishBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
@@ -40,10 +42,13 @@ const pageSize = ref(pageState.pageSize);
 const searchQuery = ref(pageState.searchQuery);
 
 const displayedWishBooks = ref<HumanizedBook[]>([]);
+const filteredWishList = ref<HumanizedBook[]>([]);
 
 const isAllSelected = computed(() => {
-  const targets = filteredBooks.value;
-  return targets.length > 0 && selectedIds.value.length === targets.length;
+  const targets = filteredWishList.value.length > 0 || searchQuery.value.trim()
+    ? filteredWishList.value
+    : filteredBooks.value;
+  return targets.length > 0 && targets.every((b) => selectedIds.value.includes(b.uri));
 });
 
 watch(selectedGenre, (newGenre) => {
@@ -77,11 +82,36 @@ onMounted(async () => {
   }
 });
 
+watch(
+  () => scannerState.lastUpdatedTick.value,
+  () => {
+    fetchWishlist();
+  }
+);
+
 const fetchWishlist = async () => {
   isLoading.value = true;
   try {
     const cached = await databaseService.getAllBooksFromCache();
-    allWishBooks.value = cached.filter(b => b.ownershipStatus === 'wish');
+    const rawWished = cached.filter((b) => b.ownershipStatus === 'wish');
+
+    // Déduplication canonique (évite d'afficher 2 fois le même livre s'il existait sous workUri + editionUri)
+    const dedupMap = new Map<string, HumanizedBook>();
+    const scoreBook = (b: HumanizedBook) =>
+      (b.type === 'edition' ? 4 : 0) +
+      (b.isbn13 ? 3 : 0) +
+      (b.localCover ? 2 : 0) +
+      (!b.uri.startsWith('isbn:') ? 1 : 0);
+
+    for (const book of rawWished) {
+      const key = book.workUri || book.isbn13 || book.uri;
+      const existing = dedupMap.get(key);
+      if (!existing || scoreBook(book) > scoreBook(existing)) {
+        dedupMap.set(key, book);
+      }
+    }
+
+    allWishBooks.value = Array.from(dedupMap.values());
     selectedIds.value = [];
   } catch (e) {
     console.error("[WISHLIST VIEW] Échec de lecture du cache :", e);
@@ -124,44 +154,51 @@ const filteredBooks = computed(() => {
   return list;
 });
 
-const sortedSeriesGroups = computed(() => {
-  const list = displayedWishBooks.value;
+const groupSeriesAndIndependentBooks = (list: HumanizedBook[]) => {
   const seriesGroups: Record<string, HumanizedBook[]> = {};
+  const independent: HumanizedBook[] = [];
 
-  list.forEach(book => {
+  list.forEach((book) => {
     if (book.series || book.seriesId) {
       const key = book.series || book.seriesId || 'unknown';
       if (!seriesGroups[key]) {
         seriesGroups[key] = [];
       }
       seriesGroups[key].push(book);
+    } else {
+      independent.push(book);
     }
   });
 
-  for (const key in seriesGroups) {
-    seriesGroups[key].sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
-  }
+  const cleanSortKey = (name: string) =>
+    name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
 
-  return Object.keys(seriesGroups)
-    .map(name => ({ name, tomes: seriesGroups[name] }))
-    .sort((a, b) => {
-      const cleanA = a.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      const cleanB = b.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-      return cleanA.localeCompare(cleanB);
-    });
+  const sortedGroups = Object.keys(seriesGroups)
+    .map((name) => ({ name, tomes: sortSeriesTomes(seriesGroups[name]) }))
+    .sort((a, b) => cleanSortKey(a.name).localeCompare(cleanSortKey(b.name)));
+
+  const sortedIndependent = [...independent].sort((a, b) => a.title.localeCompare(b.title));
+
+  return { sortedGroups, sortedIndependent };
+};
+
+const orderedFilteredWishBooks = computed(() => {
+  const { sortedGroups, sortedIndependent } = groupSeriesAndIndependentBooks(filteredBooks.value);
+  return [...sortedGroups.flatMap((g) => g.tomes), ...sortedIndependent];
 });
 
-const independentBooksSorted = computed(() => {
-  return displayedWishBooks.value
-    .filter(b => !b.series && !b.seriesId)
-    .sort((a, b) => a.title.localeCompare(b.title));
-});
+const sortedSeriesGroups = computed(() => groupSeriesAndIndependentBooks(displayedWishBooks.value).sortedGroups);
+
+const independentBooksSorted = computed(() => groupSeriesAndIndependentBooks(displayedWishBooks.value).sortedIndependent);
 
 const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = filteredBooks.value.map(b => b.uri);
+    const targets = filteredWishList.value.length > 0 || searchQuery.value.trim()
+      ? filteredWishList.value
+      : filteredBooks.value;
+    selectedIds.value = targets.map(b => b.uri);
   }
 };
 
@@ -227,7 +264,7 @@ const resetFilters = () => {
 
     <template v-else>
       <WireframePagination
-        :items="filteredBooks"
+        :items="orderedFilteredWishBooks"
         :searchKeys="['title', 'series', 'authors']"
         :hasSelectAll="true"
         :selectAllValue="isAllSelected"
@@ -236,6 +273,7 @@ const resetFilters = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
+        @update:filteredItems="(val) => { filteredWishList = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'wishlist'); }"
         @update:processedItems="(val) => displayedWishBooks = val"
       >
         <div class="main-content-wrapper">
@@ -290,37 +328,40 @@ const resetFilters = () => {
 
         <BatchActionBar 
           :selected-count="selectedIds.length"
-          :is-mixed="false"
+          :selected-books="allWishBooks.filter(b => selectedIds.includes(b.uri))"
           context="wishlist"
           @execute="dispatchBatchAction"
+          @clear="selectedIds = []"
         />
       </WireframePagination>
     </template>
 
     <!-- Modal de confirmation de suppression en lot pour la wishlist -->
-    <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
-      <div class="modal-box">
-        <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
-        <p class="modal-text">
-          {{ selectedIds.length > 1 
-            ? (TEXTS.batchActionBar?.deleteConfirmWishMsgPlural || 'Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d\'envies ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
-            : (TEXTS.batchActionBar?.deleteConfirmWishMsgSingular || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
-          }}
-        </p>
-        
-        <div class="modal-actions">
-          <button 
-            @click="confirmGroupDelete" 
-            class="btn-danger"
-          >
-            {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
-          </button>
+    <Teleport to="body">
+      <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
+        <div class="modal-box">
+          <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
+          <p class="modal-text">
+            {{ selectedIds.length > 1 
+              ? (TEXTS.batchActionBar?.deleteConfirmWishMsgPlural || 'Voulez-vous vraiment retirer ces {count} ouvrages de votre liste d\'envies ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
+              : (TEXTS.batchActionBar?.deleteConfirmWishMsgSingular || 'Voulez-vous vraiment retirer cet ouvrage de votre liste d\'envies ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
+            }}
+          </p>
           
-          <button @click="showDeleteModal = false" class="btn-close">
-            {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
-          </button>
+          <div class="modal-actions">
+            <button 
+              @click="confirmGroupDelete" 
+              class="btn-danger"
+            >
+              {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
+            </button>
+            
+            <button @click="showDeleteModal = false" class="btn-close">
+              {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </div>
 </template>

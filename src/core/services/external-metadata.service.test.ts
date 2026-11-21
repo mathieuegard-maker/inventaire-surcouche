@@ -51,6 +51,13 @@ describe('External Metadata Service (Aggregation & Fusion)', () => {
       coverUrl: "https://covers.openlibrary.org/b/id/111-L.jpg"
     });
 
+    vi.mocked(googleBooksResolver.resolve).mockResolvedValue({
+      isbn: mockIsbn,
+      title: "Celle qui brûle (GB)",
+      authors: ["Paula Hawkins (GB)"],
+      rawSubjects: ["Fiction / Thrillers / Psychological"]
+    });
+
     const result = await externalMetadataService.fetchFromExternalSources(mockIsbn);
     
     expect(result).not.toBeNull();
@@ -59,9 +66,9 @@ describe('External Metadata Service (Aggregation & Fusion)', () => {
     expect(result?.publisher).toBe("Sonatine (BNF)"); // BNF prioritaire
     expect(result?.coverUrl).toBe("https://covers.openlibrary.org/b/id/111-L.jpg"); // Image d'Open Library
     
-    // Le livre est complet maintenant (il a la couverture d'OL et la série de la BNF).
-    // Donc Google Books n'a pas dû être appelé !
-    expect(googleBooksResolver.resolve).not.toHaveBeenCalled();
+    // OL et Google Books sont interrogés en parallèle pour croiser les genres/sujets
+    expect(googleBooksResolver.resolve).toHaveBeenCalledWith(mockIsbn);
+    expect(result?.genres).toContain('Polar / Thriller');
   });
 
   it('doit declencher l\'arret precoce des la premiere etape si la notice BNF est 100% complete', async () => {
@@ -75,7 +82,8 @@ describe('External Metadata Service (Aggregation & Fusion)', () => {
       publishDate: "2021",
       pageCount: 346,
       coverUrl: "https://covers.openlibrary.org/b/id/111-L.jpg",
-      series: "Série BNF" // Tous les champs sont là, donc complet !
+      series: "Série BNF",
+      rawSubjects: ["Roman policier"] // Tous les champs + sujets sont là, donc complet !
     });
 
     const result = await externalMetadataService.fetchFromExternalSources(mockIsbn);
@@ -125,5 +133,21 @@ describe('External Metadata Service (Aggregation & Fusion)', () => {
     const result = await externalMetadataService.fetchFromExternalSources(mockIsbn);
     
     expect(result).toBeNull();
+  });
+
+  it('doit pre-remplir coverUrl depuis coverFallbackUrls[0] si BNF/OL/GB n\'ont aucune couverture explicite', async () => {
+    const mockIsbn = '9782203001107';
+    vi.mocked(bnfResolver.resolve).mockResolvedValue({
+      isbn: mockIsbn,
+      title: 'Tintin au Congo',
+      authors: ['Hergé']
+    });
+    vi.mocked(openLibraryResolver.resolve).mockResolvedValue(null);
+    vi.mocked(googleBooksResolver.resolve).mockResolvedValue(null);
+
+    const result = await externalMetadataService.fetchFromExternalSources(mockIsbn);
+    expect(result).not.toBeNull();
+    expect(result?.coverFallbackUrls?.length).toBeGreaterThan(0);
+    expect(result?.coverUrl).toBe(result?.coverFallbackUrls?.[0]);
   });
 });

@@ -47,6 +47,41 @@ export const router = createRouter({
       component: LoansView
     },
     {
+      path: '/releases',
+      name: 'ReleasesView',
+      component: () => import('../ui/views/ReleasesView.vue')
+    },
+    {
+      path: '/stats',
+      name: 'StatsView',
+      component: () => import('../ui/views/StatsView.vue')
+    },
+    {
+      path: '/friends',
+      name: 'FriendsView',
+      component: () => import('../ui/views/FriendsView.vue')
+    },
+    {
+      path: '/family',
+      name: 'FamilyShareView',
+      component: () => import('../ui/views/FamilyShareView.vue')
+    },
+    {
+      path: '/profile',
+      name: 'ProfileView',
+      component: () => import('../ui/views/ProfileView.vue')
+    },
+    {
+      path: '/admin',
+      name: 'AdminView',
+      component: () => import('../ui/views/AdminView.vue')
+    },
+    {
+      path: '/scan',
+      name: 'ScanView',
+      component: () => import('../ui/views/ScanView.vue')
+    },
+    {
       path: '/search-results',
       name: 'SearchResultView',
       component: SearchResultView
@@ -77,6 +112,11 @@ export const router = createRouter({
       component: DebugDbView
     },
     {
+      path: '/shared/:token',
+      name: 'PublicShareView',
+      component: () => import('../ui/views/PublicShareView.vue')
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/login'
     }
@@ -84,6 +124,9 @@ export const router = createRouter({
 });
 
 router.beforeEach((to, from) => {
+  if (to.path.startsWith('/shared/')) {
+    return true;
+  }
   const isAuthenticated = Boolean(sessionStore.getUserUri());
 
   if (to.path === '/login') {

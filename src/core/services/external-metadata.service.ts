@@ -2,6 +2,12 @@
 import { bnfResolver } from '../resolvers/bnf.resolver';
 import { openLibraryResolver } from '../resolvers/openlibrary.resolver';
 import { googleBooksResolver } from '../resolvers/googlebooks.resolver';
+import { classifyBookMetadata, buildCombinedGenres } from '../utils/category-classifier.util';
+import {
+  isEditorialPaperbackCollectionName,
+  isPlausibleFallbackSeriesNumber
+} from '../utils/editorial-collection.util';
+import { imageUtil } from '../utils/image.util';
 import type { ExternalBookMetadata } from '../types';
 
 function isMetadataComplete(meta: ExternalBookMetadata): boolean {
@@ -12,24 +18,77 @@ function isMetadataComplete(meta: ExternalBookMetadata): boolean {
     meta.publishDate?.trim() &&
     meta.pageCount &&
     meta.coverUrl?.trim() &&
-    meta.series?.trim()
+    meta.series?.trim() &&
+    meta.rawSubjects && meta.rawSubjects.length > 0
   );
+}
+
+function mergeSubjects(existing?: string[], incoming?: string[]): string[] | undefined {
+  const combined = [...(existing || []), ...(incoming || [])]
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (combined.length === 0) return undefined;
+  const seen = new Set<string>();
+  return combined.filter((s) => {
+    const key = s.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function finalizeMetadataGenres(
+  metadata: ExternalBookMetadata,
+  extraCoverCandidates: Array<string | undefined> = []
+): ExternalBookMetadata {
+  let cleanSeries = metadata.series?.trim() || undefined;
+  let cleanSeriesNumber = metadata.seriesNumber?.trim() || undefined;
+  if (cleanSeries && isEditorialPaperbackCollectionName(cleanSeries)) {
+    cleanSeries = undefined;
+    cleanSeriesNumber = undefined;
+  } else if (!cleanSeries && cleanSeriesNumber && !isPlausibleFallbackSeriesNumber(cleanSeriesNumber)) {
+    cleanSeriesNumber = undefined;
+  } else if (cleanSeriesNumber && /^\d+$/.test(cleanSeriesNumber) && Number(cleanSeriesNumber) > 500) {
+    cleanSeriesNumber = undefined;
+  }
+
+  const classification = classifyBookMetadata({
+    title: metadata.title,
+    series: cleanSeries,
+    publisher: metadata.publisher,
+    collection: metadata.collection,
+    deweyCode: metadata.deweyCode,
+    rawSubjects: metadata.rawSubjects
+  });
+  const genres = buildCombinedGenres(classification);
+  const coverFallbackUrls = imageUtil.buildCoverCandidates(metadata.isbn, [
+    metadata.coverUrl,
+    ...extraCoverCandidates
+  ]);
+  return {
+    ...metadata,
+    series: cleanSeries,
+    seriesNumber: cleanSeriesNumber,
+    coverUrl: metadata.coverUrl || coverFallbackUrls[0],
+    ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
+    ...(genres.length ? { genres } : {})
+  };
 }
 
 export const externalMetadataService = {
   /**
-   * Récupère et fusionne en cascade séquentielle les métadonnées de la BNF, 
-   * d'Open Library et de Google Books. S'arrête dès que les métadonnées sont complètes.
+   * Récupère et fusionne les métadonnées de la BNF, d'Open Library et de Google Books,
+   * puis croise leurs sujets/indices pour calculer des genres multiples fiables.
    */
   async fetchFromExternalSources(isbn: string): Promise<ExternalBookMetadata | null> {
     if (!isbn) return null;
-    
+
     console.log(`[EXTERNAL METADATA SERVICE] Lancement de la récupération en cascade pour l'ISBN : ${isbn}`);
 
     let metadata: ExternalBookMetadata = {
       isbn,
       title: '',
-      authors: [],
+      authors: []
     };
 
     let hasFoundAny = false;
@@ -42,71 +101,70 @@ export const externalMetadataService = {
         metadata = {
           ...metadata,
           title: bnfData.title || metadata.title,
-          authors: (bnfData.authors && bnfData.authors.length > 0) ? bnfData.authors : metadata.authors,
+          authors: bnfData.authors && bnfData.authors.length > 0 ? bnfData.authors : metadata.authors,
           publisher: bnfData.publisher || metadata.publisher,
           publishDate: bnfData.publishDate || metadata.publishDate,
           pageCount: bnfData.pageCount || metadata.pageCount,
           coverUrl: bnfData.coverUrl || metadata.coverUrl,
           series: bnfData.series || metadata.series,
           seriesNumber: bnfData.seriesNumber || metadata.seriesNumber,
+          collection: bnfData.collection || metadata.collection,
+          deweyCode: bnfData.deweyCode || metadata.deweyCode,
+          rawSubjects: mergeSubjects(metadata.rawSubjects, bnfData.rawSubjects)
         };
 
         if (isMetadataComplete(metadata)) {
-          console.log(`[EXTERNAL METADATA SERVICE] 🎉 Arrêt précoce : Notice BNF complète pour l'ISBN ${isbn}`);
-          return metadata;
+          console.log(`[EXTERNAL METADATA SERVICE] 🎉 Notice BNF complète pour l'ISBN ${isbn}`);
+          return finalizeMetadataGenres(metadata);
         }
       }
     } catch (err) {
-      console.warn("[EXTERNAL METADATA SERVICE] Erreur résolveur BNF :", err);
+      console.warn('[EXTERNAL METADATA SERVICE] Erreur résolveur BNF :', err);
     }
 
-    // --- ÉTAPE 2 : OPEN LIBRARY (Priorité 2) ---
-    try {
-      console.log(`[EXTERNAL METADATA SERVICE] Métadonnées partielles après BNF. Interrogation d'Open Library...`);
-      const olData = await openLibraryResolver.resolve(isbn);
-      if (olData) {
-        hasFoundAny = true;
-        metadata = {
-          isbn,
-          title: metadata.title || olData.title || '',
-          authors: (metadata.authors && metadata.authors.length > 0) ? metadata.authors : (olData.authors || []),
-          publisher: metadata.publisher || olData.publisher,
-          publishDate: metadata.publishDate || olData.publishDate,
-          pageCount: metadata.pageCount || olData.pageCount,
-          coverUrl: metadata.coverUrl || olData.coverUrl,
-          series: metadata.series || olData.series,
-          seriesNumber: metadata.seriesNumber || olData.seriesNumber,
-        };
+    // --- ÉTAPES 2 & 3 : OPEN LIBRARY + GOOGLE BOOKS (croisement complémentaire & sujets) ---
+    const [olRes, gbRes] = await Promise.allSettled([
+      openLibraryResolver.resolve(isbn),
+      googleBooksResolver.resolve(isbn)
+    ]);
 
-        if (isMetadataComplete(metadata)) {
-          console.log(`[EXTERNAL METADATA SERVICE] 🎉 Arrêt précoce : Notice complétée par Open Library pour l'ISBN ${isbn}`);
-          return metadata;
-        }
-      }
-    } catch (err) {
-      console.warn("[EXTERNAL METADATA SERVICE] Erreur résolveur Open Library :", err);
+    const extraCovers: Array<string | undefined> = [];
+    const olData = olRes.status === 'fulfilled' ? olRes.value : null;
+    if (olData) {
+      hasFoundAny = true;
+      if (olData.coverUrl) extraCovers.push(olData.coverUrl);
+      metadata = {
+        ...metadata,
+        isbn,
+        title: metadata.title || olData.title || '',
+        authors: metadata.authors.length > 0 ? metadata.authors : (olData.authors || []),
+        publisher: metadata.publisher || olData.publisher,
+        publishDate: metadata.publishDate || olData.publishDate,
+        pageCount: metadata.pageCount || olData.pageCount,
+        coverUrl: metadata.coverUrl || olData.coverUrl,
+        series: metadata.series || olData.series,
+        seriesNumber: metadata.seriesNumber || olData.seriesNumber,
+        rawSubjects: mergeSubjects(metadata.rawSubjects, olData.rawSubjects)
+      };
     }
 
-    // --- ÉTAPE 3 : GOOGLE BOOKS (Priorité 3) ---
-    try {
-      console.log(`[EXTERNAL METADATA SERVICE] Métadonnées partielles après Open Library. Interrogation de Google Books...`);
-      const gbData = await googleBooksResolver.resolve(isbn);
-      if (gbData) {
-        hasFoundAny = true;
-        metadata = {
-          isbn,
-          title: metadata.title || gbData.title || '',
-          authors: (metadata.authors && metadata.authors.length > 0) ? metadata.authors : (gbData.authors || []),
-          publisher: metadata.publisher || gbData.publisher,
-          publishDate: metadata.publishDate || gbData.publishDate,
-          pageCount: metadata.pageCount || gbData.pageCount,
-          coverUrl: metadata.coverUrl || gbData.coverUrl,
-          series: metadata.series || gbData.series,
-          seriesNumber: metadata.seriesNumber || gbData.seriesNumber,
-        };
-      }
-    } catch (err) {
-      console.warn("[EXTERNAL METADATA SERVICE] Erreur résolveur Google Books :", err);
+    const gbData = gbRes.status === 'fulfilled' ? gbRes.value : null;
+    if (gbData) {
+      hasFoundAny = true;
+      if (gbData.coverUrl) extraCovers.push(gbData.coverUrl);
+      metadata = {
+        ...metadata,
+        isbn,
+        title: metadata.title || gbData.title || '',
+        authors: metadata.authors.length > 0 ? metadata.authors : (gbData.authors || []),
+        publisher: metadata.publisher || gbData.publisher,
+        publishDate: metadata.publishDate || gbData.publishDate,
+        pageCount: metadata.pageCount || gbData.pageCount,
+        coverUrl: metadata.coverUrl || gbData.coverUrl,
+        series: metadata.series || gbData.series,
+        seriesNumber: metadata.seriesNumber || gbData.seriesNumber,
+        rawSubjects: mergeSubjects(metadata.rawSubjects, gbData.rawSubjects)
+      };
     }
 
     if (!hasFoundAny) {
@@ -115,6 +173,6 @@ export const externalMetadataService = {
     }
 
     console.log(`[EXTERNAL METADATA SERVICE] ✅ Données agrégées finales pour l'ISBN ${isbn}`);
-    return metadata;
+    return finalizeMetadataGenres(metadata, extraCovers);
   }
 };

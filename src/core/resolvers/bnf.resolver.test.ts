@@ -12,7 +12,11 @@ import {
   extractBnfCoverId,
   parseSeriesFromString,
   parseSeriesFromTitle,
-  parseMarcFields
+  parseMarcFields,
+  parseIntermarcRecord,
+  scoreHintMatch,
+  isEditorialPaperbackCollectionName,
+  isFrancophoneBookIsbn13
 } from './bnf.resolver';
 
 describe('BNF Resolver & Parsers', () => {
@@ -49,8 +53,9 @@ describe('BNF Resolver & Parsers', () => {
   });
 
   describe('cleanSeriesName', () => {
-    it('doit nettoyer les parentheses de disambiguation', () => {
+    it('doit nettoyer les parentheses de disambiguation et les pipes de tri BNF', () => {
       expect(cleanSeriesName('Ex-libris (Paris. 2007)')).toBe('Ex-libris');
+      expect(cleanSeriesName('Les |Arènes BD')).toBe('Les Arènes BD');
       expect(cleanSeriesName('Thorgal')).toBe('Thorgal');
       expect(cleanSeriesName('')).toBe('');
     });
@@ -468,6 +473,254 @@ describe('BNF Resolver & Parsers', () => {
       expect(volumes[0].coverUrl).toContain('idImage=12345');
       expect(volumes[1].seriesNumber).toBe('14');
       expect(volumes[1].title).toBe('Les protecteurs');
+    });
+
+    it('doit extraire l EAN-13 en zone 038$a (ex: Mélusine / Les Schtroumpfs années 1990)', async () => {
+      const mockMelusineXml = `<?xml version="1.0" encoding="UTF-8"?>
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:numberOfRecords>1</srw:numberOfRecords>
+        <srw:records>
+          <srw:record>
+            <srw:recordData>
+              <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+                <mxc:controlfield tag="008">970515s 1997                 befre     d  001 </mxc:controlfield>
+                <mxc:datafield tag="020"><mxc:subfield code="a">2-8001-2447-4</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="038"><mxc:subfield code="a">9782800124476</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="100"><mxc:subfield code="a">Clarke</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="245"><mxc:subfield code="a">Histoires à lire au coin du feu</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="280"><mxc:subfield code="a">46 p.</mxc:subfield></mxc:datafield>
+                <mxc:datafield tag="460"><mxc:subfield code="t">Mélusine</mxc:subfield><mxc:subfield code="v">4</mxc:subfield></mxc:datafield>
+              </mxc:record>
+            </srw:recordData>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve(mockMelusineXml)
+      }));
+
+      const volumes = await bnfResolver.searchSeriesVolumes('Mélusine', 'Clarke');
+      expect(volumes).toHaveLength(1);
+      expect(volumes[0].isbn).toBe('9782800124476');
+      expect(volumes[0].title).toBe('Histoires à lire au coin du feu');
+      expect(volumes[0].series).toBe('Mélusine');
+      expect(volumes[0].seriesNumber).toBe('4');
+    });
+
+    it('doit extraire le titre d album en 245$p et le tome en 245$n pour les séries BnF type Tintin', () => {
+      const tintinXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">930515s 1993                 befre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="020"><mxc:subfield code="a">2-203-00110-0</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782203001107</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Hergé</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Les aventures de Tintin</mxc:subfield>
+            <mxc:subfield code="n">11</mxc:subfield>
+            <mxc:subfield code="p">Le secret de La Licorne</mxc:subfield>
+          </mxc:datafield>
+          <mxc:datafield tag="280"><mxc:subfield code="a">62 p.</mxc:subfield></mxc:datafield>
+        </mxc:record>`;
+
+      const parsed = parseIntermarcRecord(tintinXml);
+      expect(parsed).not.toBeNull();
+      expect(parsed?.title).toBe('Le secret de La Licorne');
+      expect(parsed?.series).toBe('Les aventures de Tintin');
+      expect(parsed?.seriesNumber).toBe('11');
+      expect(parsed?.isbn).toBe('9782203001107');
+    });
+
+    it('doit conserver les Intégrales FR BnF quand includeIntegrals=true (ex: Aya de Yopougon Intégrale 1)', () => {
+      const ayaIntXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">140515s 2014                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782070658787</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Abouet</mxc:subfield><mxc:subfield code="m">Marguerite</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Aya de Yopougon</mxc:subfield>
+            <mxc:subfield code="d">Texte imprimé</mxc:subfield>
+            <mxc:subfield code="e">intégrale</mxc:subfield>
+            <mxc:subfield code="h">1</mxc:subfield>
+          </mxc:datafield>
+          <mxc:datafield tag="460"><mxc:subfield code="t">Aya de Yopougon</mxc:subfield></mxc:datafield>
+        </mxc:record>`;
+
+      expect(parseIntermarcRecord(ayaIntXml, { includeIntegrals: false })).toBeNull();
+      const kept = parseIntermarcRecord(ayaIntXml, { includeIntegrals: true });
+      expect(kept).not.toBeNull();
+      expect(kept?.isbn).toBe('9782070658787');
+      expect(kept?.title).toContain('Intégrale 1');
+      expect(kept?.isIntegral).toBe(true);
+    });
+
+    it('doit rejeter les DVD / Blu-ray / CD Audio dans parseIntermarcRecord (245$d et EAN non-livre)', () => {
+      const dvdXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">180515s 2018                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">3607483250686</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">La mort de Staline</mxc:subfield>
+            <mxc:subfield code="d">Images animées</mxc:subfield>
+          </mxc:datafield>
+        </mxc:record>`;
+      const cdXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">180515s 2018                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782205063509</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Siegfried</mxc:subfield>
+            <mxc:subfield code="d">Enregistrement sonore</mxc:subfield>
+          </mxc:datafield>
+        </mxc:record>`;
+
+      expect(parseIntermarcRecord(dvdXml, { includeIntegrals: true })).toBeNull();
+      expect(parseIntermarcRecord(cdXml, { includeIntegrals: true })).toBeNull();
+    });
+
+    it('doit filtrer les ISBN étrangers et noter 0 un manga non lié partageant uniquement le n° de tome', () => {
+      expect(isFrancophoneBookIsbn13('9782070658787')).toBe(true);
+      expect(isFrancophoneBookIsbn13('9791032700013')).toBe(true);
+      expect(isFrancophoneBookIsbn13('3780833208992')).toBe(true);
+      expect(isFrancophoneBookIsbn13('9788467928914')).toBe(false); // Espagnol
+      expect(isFrancophoneBookIsbn13('9789069691329')).toBe(false); // Néerlandais
+      expect(isFrancophoneBookIsbn13('3607483250686')).toBe(false); // DVD
+
+      const unrelatedMangaScore = scoreHintMatch(
+        {
+          isbn: '9782811664510',
+          title: 'Chihayafuru',
+          series: 'Chihayafuru',
+          seriesNumber: '44',
+          authors: ['Yuki Suetsugu'],
+          publisher: 'Pika',
+          publishDate: '2023',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        {
+          title: 'Boule et Bill',
+          series: 'Boule et Bill',
+          volumeNumber: '44',
+          author: 'Cazenove'
+        }
+      );
+      expect(unrelatedMangaScore).toBe(0);
+    });
+
+    it('doit bloquer les collections poches (Folio #7304, J\'ai lu #12281, Librio, Rivages poche, Libretto) y compris dans Dublin Core et privilégier T.1 sans n° sur tranche', async () => {
+      for (const label of [
+        'Folio',
+        "J'ai lu",
+        '10-18',
+        'Babel',
+        'Librio',
+        'Libretto',
+        'Rivages poche',
+        'Météores',
+        'Un endroit où aller'
+      ]) {
+        expect(isEditorialPaperbackCollectionName(label)).toBe(true);
+      }
+
+      // Simuler une réponse BnF Dublin Core contenant "Collection : Folio ; 7304" + InterMarc
+      const dcXml = `
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <srw:numberOfRecords>1</srw:numberOfRecords>
+          <srw:records><srw:record><srw:recordData>
+            <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/">
+              <dc:title>Le roitelet</dc:title>
+              <dc:creator>Beauchemin, Jean-François</dc:creator>
+              <dc:publisher>Gallimard</dc:publisher>
+              <dc:date>2023</dc:date>
+              <dc:relation>Collection : Folio ; 7304</dc:relation>
+            </oai_dc:dc>
+          </srw:recordData></srw:record></srw:records>
+        </srw:searchRetrieveResponse>`;
+      const imXml = `
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+          <srw:numberOfRecords>1</srw:numberOfRecords>
+          <srw:records><srw:record>
+            <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+              <mxc:datafield tag="245"><mxc:subfield code="a">Le roitelet</mxc:subfield></mxc:datafield>
+              <mxc:datafield tag="410"><mxc:subfield code="t">Folio</mxc:subfield><mxc:subfield code="v">7304</mxc:subfield></mxc:datafield>
+            </mxc:record>
+          </srw:record></srw:records>
+        </srw:searchRetrieveResponse>`;
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const u = String(input);
+        return new Response(u.includes('schema=intermarc') ? imXml : dcXml, { status: 200 });
+      });
+      try {
+        const res = await bnfResolver.resolve('9782073038159');
+        expect(res).not.toBeNull();
+        expect(res?.series).toBeUndefined();
+        expect(res?.seriesNumber).toBeUndefined();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+
+      // Les Éphémères : tranche sans numéro -> Tome 1 (2023) doit battre Tome 2 (2024)
+      const t1Score = scoreHintMatch(
+        {
+          isbn: '9782754836531',
+          title: 'Les éphémères',
+          series: 'Les éphémères',
+          seriesNumber: '1',
+          authors: ['Jeff Lemire'],
+          publishDate: '2023',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Les Éphémères', author: 'Jeff Lemire', rawSpineText: 'Jeff Lemire Les Éphémères' }
+      );
+      const t2Score = scoreHintMatch(
+        {
+          isbn: '9782754843775',
+          title: 'Les éphémères',
+          series: 'Les éphémères',
+          seriesNumber: '2',
+          authors: ['Jeff Lemire'],
+          publishDate: '2024',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Les Éphémères', author: 'Jeff Lemire', rawSpineText: 'Jeff Lemire Les Éphémères' }
+      );
+      expect(t1Score).toBeGreaterThan(t2Score);
+    });
+
+    it('scoreHintMatch privilégie nettement l’éditeur demandé face à d’autres rééditions', () => {
+      const hachetteScore = scoreHintMatch(
+        {
+          isbn: '9782012101333',
+          title: 'Astérix le Gaulois',
+          series: 'Astérix',
+          seriesNumber: '1',
+          authors: ['René Goscinny', 'Albert Uderzo'],
+          publisher: 'Hachette',
+          publishDate: '2024',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Astérix le Gaulois', series: 'Astérix', volumeNumber: '1', publisher: 'Dargaud' }
+      );
+      const dargaudScore = scoreHintMatch(
+        {
+          isbn: '9782205000962',
+          title: 'Astérix le Gaulois',
+          series: 'Astérix',
+          seriesNumber: '1',
+          authors: ['René Goscinny', 'Albert Uderzo'],
+          publisher: 'Dargaud',
+          publishDate: '1999',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Astérix le Gaulois', series: 'Astérix', volumeNumber: '1', publisher: 'Dargaud' }
+      );
+      expect(dargaudScore).toBeGreaterThan(hachetteScore);
     });
   });
 });

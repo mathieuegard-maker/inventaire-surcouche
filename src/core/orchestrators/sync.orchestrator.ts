@@ -4,6 +4,10 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
+import { fetchV4SeriesBooksToIndexedDb, syncV4BooksToIndexedDb } from '../services/v4-client.service';
+import { scannerState } from '../../state/scanner';
+
+let activeHydrationPromise: Promise<void> | null = null;
 
 export const syncOrchestrator = {
   
@@ -53,8 +57,16 @@ export const syncOrchestrator = {
   async hydrateSeriesInBackground(seriesId: string, onProgress?: (current: number, total: number) => void): Promise<void> {
     console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
-      // 1. DRESSER LE BOUCLIER LOCAL
-      // On récupère instantanément ce qu'on a déjà pour cette série dans Dexie
+      // 0. Voie V4 pure prioritaire : lecture directe des tomes consolidés (`books` + `v4_library_books` + expansion C5 auto)
+      const v4Series = await fetchV4SeriesBooksToIndexedDb(seriesId).catch(() => null);
+      if (v4Series && v4Series.count > 1) {
+        onProgress?.(v4Series.count, v4Series.count);
+        scannerState.notifyCatalogChanged();
+        console.log(`[BACKGROUND] ✅ Série ${seriesId} hydratée via V4 pure (${v4Series.count} tomes).`);
+        return;
+      }
+
+      // 1. Repli V2 (si série historique absente de `v4_series` / `books`)
       const localTomes = await databaseService.getBooksBySeriesId(seriesId);
       
       // On crée un Set ultra-rapide contenant les URIs d'OEUVRES (wd:) déjà possédées
@@ -108,11 +120,50 @@ export const syncOrchestrator = {
    * TÂCHE GLOBALE (V2.1) : S'assure que le cache est synchronisé avec les registres
    */
   async hydrateCacheInBackground(): Promise<void> {
+    if (activeHydrationPromise) {
+      return activeHydrationPromise;
+    }
+    activeHydrationPromise = (async () => {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
+      const DB_RESET_TOKEN = 'reset_2026_11_21_v4_clean_v26';
+      if (
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&
+        typeof (databaseService as any).clearAllBookData === 'function'
+      ) {
+        console.log('[HYDRATATION] Purge complète de la base locale IndexedDB (Clean Slate)...');
+        await databaseService.clearAllBookData();
+        localStorage.removeItem('biblio_catalog_sync_version');
+        localStorage.removeItem('biblio_scan_photo_draft_v1');
+        localStorage.removeItem('biblio_v4_last_sync_at');
+        localStorage.setItem('biblio_db_reset_token', DB_RESET_TOKEN);
+      }
+
+      // 0. Synchronisation différentielle V4 pure (books + v4_library_books + tomes des séries suivies)
+      const v4Sync = await syncV4BooksToIndexedDb().catch(() => null);
+      if (v4Sync && v4Sync.syncedCount > 0) {
+        console.log(`[HYDRATATION] ✅ Synchro différentielle V4 : ${v4Sync.syncedCount} fiche(s) synchronisée(s).`);
+        scannerState.lastUpdatedTick.value++;
+      }
+
       // 1. Collecte des URIs Registres
       const inventoryRaw = await databaseService.getAllRegistryUris('inventory');
       const wishlistRaw = await databaseService.getAllRegistryUris('wishlist');
+
+      if (inventoryRaw.length === 0 && wishlistRaw.length === 0) {
+        // Si les registres distants sont vides (ex: purge serveur), réinitialiser tout statut local obsolète
+        const staleBooks = (await databaseService.getAllBooksFromCache()).filter(
+          (b) => b.ownershipStatus === 'owned' || b.ownershipStatus === 'wish'
+        );
+        if (staleBooks.length > 0) {
+          for (const stale of staleBooks) {
+            await databaseService.saveBookToCache({ ...stale, ownershipStatus: 'none' });
+          }
+          scannerState.lastUpdatedTick.value++;
+        }
+        return;
+      }
       
       // 2. Filtrage sémantique
       console.log(`[HYDRATATION] Filtrage sémantique de l'Inventaire (${inventoryRaw.length}) et Wishlist (${wishlistRaw.length})...`);
@@ -120,33 +171,60 @@ export const syncOrchestrator = {
       const wishlistPhysicalUris = await workUriResolver.resolveBulk(wishlistRaw);
 
       const missingItems: {uri: string, status: 'owned'|'wish'|'none'}[] = [];
+      const CATALOG_SYNC_VERSION = 'v2.4-covers-series';
+      const needsGlobalCatalogRefresh =
+        typeof localStorage !== 'undefined' &&
+        localStorage.getItem('biblio_catalog_sync_version') !== CATALOG_SYNC_VERSION;
+
+      const needsBookRefresh = (livre: any): boolean => {
+        if (!livre?.uri?.startsWith('isbn:')) return false;
+        // Ne jamais écraser par le pipeline V2 legacy un livre déjà consolidé en V4 ou édité par l'utilisateur !
+        if (livre.bookId || livre.isLocallyEdited) return false;
+        if (needsGlobalCatalogRefresh) return true;
+        if (livre.coverUrl && livre.coverUrl.includes('idArk=')) return true;
+        if (livre.series && livre.series.includes('|')) return true;
+        if (livre.title && livre.title.includes('|')) return true;
+        if (!livre.localCover && livre.coverUrl) return true;
+        return false;
+      };
 
       // 3. Analyse du delta Local vs Inventaire
       for (const uri of inventoryPhysicalUris) {
         const livre = await databaseService.getBookFromCache(uri);
-        if (!livre) {
+        if (!livre || needsBookRefresh(livre)) {
           missingItems.push({ uri, status: 'owned' });
         } else if (livre.ownershipStatus !== 'owned') {
            await bookCacheService.saveAndProcessImage(livre, 'owned');
         }
       }
 
-      // 4. Analyse du delta Local vs Wishlist
-      for (const uri of wishlistPhysicalUris) {
-         if (inventoryPhysicalUris.includes(uri)) continue;
+      const existingLocalBooks = await databaseService.getAllBooksFromCache();
 
-         const livre = await databaseService.getBookFromCache(uri);
-         if (!livre) {
-           missingItems.push({ uri, status: 'wish' });
-         } else if (livre.ownershipStatus !== 'wish') {
-           await bookCacheService.saveAndProcessImage(livre, 'wish');
-         }
+      // 4. Analyse du delta Local vs Wishlist (sans créer de doublon work + edition)
+      for (const uri of wishlistPhysicalUris) {
+        if (inventoryPhysicalUris.includes(uri)) continue;
+
+        let livre = await databaseService.getBookFromCache(uri);
+        if (!livre) {
+          // Si le registre D1 pointe vers un workUri déjà représenté par une édition locale, réutiliser celle-ci !
+          livre = existingLocalBooks.find((b) => b.workUri === uri);
+        }
+
+        if (!livre || needsBookRefresh(livre)) {
+          missingItems.push({ uri, status: 'wish' });
+        } else if (livre.ownershipStatus !== 'wish') {
+          await bookCacheService.saveAndProcessImage(livre, 'wish');
+        }
       }
 
       // 5. Téléchargement des manquants
       console.log(`[HYDRATATION] ${missingItems.length} nouvelles éditions physiques à télécharger...`);
       if (missingItems.length > 0) {
          await this.hydrateRemainingPhysicalEntities(missingItems);
+         scannerState.lastUpdatedTick.value++;
+      }
+      if (needsGlobalCatalogRefresh && typeof localStorage !== 'undefined') {
+        localStorage.setItem('biblio_catalog_sync_version', CATALOG_SYNC_VERSION);
       }
 
       // 6. Nettoyage du cache pour les livres retirés à distance
@@ -158,6 +236,16 @@ export const syncOrchestrator = {
       for (const book of localBooks) {
         const isActuallyOwned = inventoryUrisSet.has(book.uri) || (!!book.workUri && inventoryUrisSet.has(book.workUri));
         const isActuallyWished = wishlistUrisSet.has(book.uri) || (!!book.workUri && wishlistUrisSet.has(book.workUri));
+
+        // Dédoublonnage Wishlist : si un work nu et une édition du même workUri coexistent, supprimer le work nu redondant
+        if (
+          book.type !== 'edition' &&
+          !book.isbn13 &&
+          localBooks.some((other) => other.uri !== book.uri && other.workUri === book.uri)
+        ) {
+          await databaseService.deleteBookFromCache(book.uri);
+          continue;
+        }
 
         if (book.ownershipStatus === 'owned' && !isActuallyOwned) {
           if (isActuallyWished) {
@@ -176,9 +264,10 @@ export const syncOrchestrator = {
 
       // 7. Aspiration préventive des séries (Sagas)
       console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
+      const latestBooksForSeries = await databaseService.getAllBooksFromCache();
       const seriesIds = new Set<string>();
       
-      for (const book of localBooks) {
+      for (const book of latestBooksForSeries) {
         if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
           seriesIds.add(book.seriesId);
         }
@@ -199,8 +288,11 @@ export const syncOrchestrator = {
     } catch (error) {
       console.error("[HYDRATATION] Erreur globale :", error);
     } finally {
+      activeHydrationPromise = null;
       console.groupEnd();
     }
+    })();
+    return activeHydrationPromise;
   },
 
   /**

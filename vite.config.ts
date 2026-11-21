@@ -22,25 +22,34 @@ export default defineConfig({
       },
       // Ajout de cette section pour corriger l'avertissement
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'] // On retire .wasm de la liste
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'], // On retire .wasm de la liste
+        importScripts: ['/sw-push.js']
       },
       manifest: {
-        name: 'Inventaire Surcouche',
-        short_name: 'Inventaire',
-        description: 'Surcouche mobile optimisée pour Inventaire.io',
+        name: 'Ma Bibliothèque Cloud',
+        short_name: 'Ma Biblio',
+        description: 'Gestionnaire de bibliothèque personnelle et familiale',
         theme_color: '#4f46e5',
         background_color: '#ffffff',
         display: 'standalone',
         icons: [
           {
-            src: '/192.png',
+            src: '/icon-192-v2.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any'
           },
           {
-            src: '/512.png',
+            src: '/icon-512-v2.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icon-512-v2.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
           }
         ]
       }

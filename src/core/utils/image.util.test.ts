@@ -44,4 +44,73 @@ describe('Image Utility', () => {
       expect(imageUtil.resolveCoverUrl(book as HumanizedBook)).toBe(dataUrl);
     });
   });
+
+  describe('buildCoverCandidates & advanceCoverFallback', () => {
+    it('construit des URLs de repli CDN (Amazon EU, Eyrolles, OpenLibrary) en gardant les URLs explicites en tête', () => {
+      const candidates = imageUtil.buildCoverCandidates('9782203001107', [
+        'https://catalogue.bnf.fr/couverture?idImage=123',
+        'http://books.google.com/thumb.jpg'
+      ]);
+      expect(candidates[0]).toBe('https://catalogue.bnf.fr/couverture?idImage=123');
+      expect(candidates[1]).toBe('https://books.google.com/thumb.jpg');
+      expect(candidates.some((u) => u.includes('images-eu.ssl-images-amazon.com/images/P/2203001100'))).toBe(true);
+      expect(candidates.some((u) => u.includes('servimg.eyrolles.com'))).toBe(true);
+      expect(candidates.some((u) => u.includes('covers.openlibrary.org/b/isbn/9782203001107-L.jpg'))).toBe(true);
+    });
+
+    it('bascule sur l\'URL de repli suivante puis efface coverUrl quand toutes ont échoué', () => {
+      const target = {
+        coverUrl: 'https://a.example/1.jpg',
+        coverFallbackUrls: ['https://a.example/1.jpg', 'https://b.example/2.jpg']
+      };
+      imageUtil.advanceCoverFallback(target);
+      expect(target.coverUrl).toBe('https://b.example/2.jpg');
+
+      imageUtil.advanceCoverFallback(target);
+      expect(target.coverUrl).toBeUndefined();
+    });
+  });
+
+  describe('handleImageError', () => {
+    it('bascule automatiquement sur la source suivante lorsque la couverture proxifiée échoue puis déclenche onExhausted', () => {
+      let exhausted = false;
+      const fakeImgObj: {
+        src: string;
+        dataset: Record<string, string>;
+        getAttribute(name: string): string | null;
+      } = {
+        src: '/api/gateway?action=image-proxy&url=https%3A%2F%2Fbroken.example%2Fa.jpg',
+        dataset: {},
+        getAttribute(name: string) {
+          return name === 'src' ? fakeImgObj.src : null;
+        }
+      };
+      const fakeImg = fakeImgObj as unknown as HTMLImageElement;
+
+      const step1 = imageUtil.handleImageError(fakeImg, {
+        isbn: '9782203001107',
+        fallbackUrls: ['https://broken.example/a.jpg', 'https://good.example/b.jpg'],
+        onExhausted: () => {
+          exhausted = true;
+        }
+      });
+      expect(step1).toBe(true);
+      expect(exhausted).toBe(false);
+      expect(fakeImg.src).toBe(
+        '/api/gateway?action=image-proxy&url=https%3A%2F%2Fgood.example%2Fb.jpg&isbn=9782203001107'
+      );
+
+      // Tant qu'il reste les repli CDN ISBN, bascule dessus avant d'épuiser
+      while (imageUtil.handleImageError(fakeImg, {
+        isbn: '9782203001107',
+        fallbackUrls: ['https://broken.example/a.jpg', 'https://good.example/b.jpg'],
+        onExhausted: () => {
+          exhausted = true;
+        }
+      })) {
+        // avance jusqu'à épuisement
+      }
+      expect(exhausted).toBe(true);
+    });
+  });
 });

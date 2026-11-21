@@ -29,9 +29,18 @@ export const inventaireSyncService = {
   },
 
   /**
-   * Crée une entité de type spécifié sur inventaire.io.
+   * Crée une entité de type spécifié sur inventaire.io / D1.
    */
-  async createEntity(type: 'serie' | 'work' | 'edition' | 'human', label: string, claims: Record<string, any>): Promise<string> {
+  async createEntity(
+    type: 'serie' | 'work' | 'edition' | 'human',
+    label: string,
+    claims: Record<string, any>,
+    extras?: {
+      publisher?: string;
+      genres?: string[];
+      descriptions?: Record<string, string>;
+    }
+  ): Promise<string> {
     const body: Record<string, any> = {
       claims
     };
@@ -42,6 +51,11 @@ export const inventaireSyncService = {
         fr: label
       };
     }
+    if (extras?.publisher) body.publisher = extras.publisher;
+    if (Array.isArray(extras?.genres) && extras.genres.length > 0) {
+      body.genres = extras.genres;
+    }
+    if (extras?.descriptions) body.descriptions = extras.descriptions;
     
     const res = await fetchWithTimeout('/api/gateway?action=entities-create', {
       method: 'POST',
@@ -191,8 +205,18 @@ export const inventaireSyncService = {
       if (book.publishDate) {
         editionClaims['wdt:P577'] = [ book.publishDate ];
       }
+      if (book.pageCount && Number.isFinite(book.pageCount)) {
+        editionClaims['wdt:P1104'] = [ book.pageCount ];
+      }
+      if (book.coverUrl && !book.coverUrl.startsWith('data:')) {
+        editionClaims['invp:P2'] = [ book.coverUrl ];
+      }
       
-      editionUri = await this.createEntity('edition', book.title, editionClaims);
+      editionUri = await this.createEntity('edition', book.title, editionClaims, {
+        publisher: book.publisher,
+        genres: book.genres,
+        descriptions: book.description ? { fr: book.description } : undefined
+      });
       console.log(`[INVENTAIRE SYNC] Édition créée avec succès : ${editionUri}`);
     }
     
@@ -406,6 +430,7 @@ export const inventaireSyncService = {
       publishDate: string;
       pageCount?: number;
       coverUrl: string;
+      genres?: string[];
     },
     chosenSeriesUri?: string,
     chosenAuthorUris?: Record<string, string>
@@ -508,6 +533,62 @@ export const inventaireSyncService = {
     const newPublishDate = updatedData.publishDate || undefined;
     if (oldPublishDate !== newPublishDate) {
       await this.updateClaim(editionUri, 'wdt:P577', oldPublishDate, newPublishDate);
+    }
+
+    // 4b. Synchronisation complète de l'édition (éditeur, pages, couverture, série/numéro) sur D1
+    const hasEditionMetaChanged =
+      (updatedData.publisher || '') !== (originalBook.publisher || '') ||
+      (updatedData.pageCount ?? null) !== (originalBook.pageCount ?? null) ||
+      (updatedData.coverUrl || '') !== (originalBook.coverUrl || '') ||
+      (updatedData.series || '') !== (originalBook.series || '') ||
+      (updatedData.seriesNumber || '') !== (originalBook.seriesNumber || '') ||
+      updatedData.title !== originalBook.title ||
+      updatedData.authors.join('|') !== (originalBook.authors || []).join('|');
+
+    if (hasEditionMetaChanged) {
+      try {
+        await fetchWithTimeout('/api/gateway?action=entities-patch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            editionUri,
+            workUri: finalWorkUri,
+            title: updatedData.title,
+            seriesUri: seriesUri || '',
+            seriesNumber: updatedData.seriesNumber || '',
+            authorUris: newAuthorUris,
+            publisher: updatedData.publisher || '',
+            publishDate: updatedData.publishDate || '',
+            pageCount: updatedData.pageCount ?? null,
+            coverUrl: updatedData.coverUrl || ''
+          })
+        });
+      } catch (err) {
+        console.warn('[INVENTAIRE SYNC] Échec entities-patch :', err);
+      }
+    }
+
+    // 5. Mettre à jour les genres multiples si modifiés (propagé à toute la série côté D1)
+    if (Array.isArray(updatedData.genres)) {
+      const oldGenres = (originalBook.genres || []).join('|');
+      const newGenres = updatedData.genres.join('|');
+      if (oldGenres !== newGenres) {
+        try {
+          await fetchWithTimeout('/api/gateway?action=entities-update-genres', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uri: editionUri,
+              workUri: finalWorkUri,
+              seriesUri: seriesUri || undefined,
+              propagateSeries: Boolean(seriesUri || updatedData.series),
+              genres: updatedData.genres
+            })
+          });
+        } catch (err) {
+          console.warn('[INVENTAIRE SYNC] Échec mise à jour genres :', err);
+        }
+      }
     }
 
     return { editionUri, workUri: finalWorkUri, seriesUri };

@@ -2,6 +2,7 @@
 import type { RawBook, HumanizedBook } from '../types';
 import { databaseService } from '../database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { imageUtil } from '../utils/image.util';
 
 export const entityHumanizer = {
   async humanize(rawBook: RawBook): Promise<HumanizedBook> {
@@ -42,11 +43,16 @@ export const entityHumanizer = {
 
           for (const [uri, entity] of Object.entries(entities)) {
             const e = entity as any;
+            if (!e) {
+              dictionary[uri] = uri;
+              continue;
+            }
+            const pickLabel = (lbl: any): string => (typeof lbl === 'string' ? lbl : (lbl?.value || ''));
             // Élection de la langue adaptative avec replis sécurisés
-            if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
-            else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
-            else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
-            else if (e.label) dictionary[uri] = e.label;
+            if (e.labels && pickLabel(e.labels[browserLang])) dictionary[uri] = pickLabel(e.labels[browserLang]);
+            else if (e.labels && pickLabel(e.labels.fr)) dictionary[uri] = pickLabel(e.labels.fr);
+            else if (e.labels && pickLabel(e.labels.en)) dictionary[uri] = pickLabel(e.labels.en);
+            else if (pickLabel(e.label)) dictionary[uri] = pickLabel(e.label);
             else dictionary[uri] = uri;
           }
         }
@@ -59,6 +65,10 @@ export const entityHumanizer = {
     const translateSingle = (id?: string) => id ? (dictionary[id] || id) : undefined;
 
     const targetImageUrl = rawBook.coverUrl || (rawBook as any).image;
+    const coverFallbackUrls = imageUtil.buildCoverCandidates(
+      rawBook.isbn13 || rawBook.isbn10,
+      [targetImageUrl]
+    );
 
     // 3. ASSEMBLAGE
     const humanized: HumanizedBook = {
@@ -71,7 +81,8 @@ export const entityHumanizer = {
       description: rawBook.description,
       isbn13: rawBook.isbn13,
       isbn10: rawBook.isbn10,
-      coverUrl: targetImageUrl,
+      coverUrl: targetImageUrl || coverFallbackUrls[0],
+      ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
       localCover: undefined,
       pageCount: rawBook.pageCount,
       publishDate: rawBook.publishDate,
@@ -102,7 +113,7 @@ export const entityHumanizer = {
     const allIds = new Set<string>();
     
     const checkAndAdd = (val: string | undefined) => {
-      if (val && val.startsWith('wd:')) {
+      if (val && (val.startsWith('wd:') || val.startsWith('inv:'))) {
         allIds.add(val);
       }
     };
@@ -110,7 +121,7 @@ export const entityHumanizer = {
     const checkAndAddArray = (arr: string[] | undefined) => {
       if (arr) {
         arr.forEach(val => {
-          if (val && val.startsWith('wd:')) {
+          if (val && (val.startsWith('wd:') || val.startsWith('inv:'))) {
             allIds.add(val);
           }
         });
@@ -141,10 +152,12 @@ export const entityHumanizer = {
 
         for (const [uri, entity] of Object.entries(entities)) {
           const e = entity as any;
-          if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
-          else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
-          else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
-          else if (e.label) dictionary[uri] = e.label;
+          if (!e) continue;
+          const pickLabel = (lbl: any): string => (typeof lbl === 'string' ? lbl : (lbl?.value || ''));
+          if (e.labels && pickLabel(e.labels[browserLang])) dictionary[uri] = pickLabel(e.labels[browserLang]);
+          else if (e.labels && pickLabel(e.labels.fr)) dictionary[uri] = pickLabel(e.labels.fr);
+          else if (e.labels && pickLabel(e.labels.en)) dictionary[uri] = pickLabel(e.labels.en);
+          else if (pickLabel(e.label)) dictionary[uri] = pickLabel(e.label);
         }
       }
 

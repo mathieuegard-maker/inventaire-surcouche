@@ -1,0 +1,14 @@
+name = "biblio-release-cron"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+VAPID_PUBLIC_KEY = "BNB_NGB7iCIPWJtwbw3uLsRpUyPXbERkJe0YwQtKrhwFSQmdBuSjJoNZNMwF4dWUfFIWzyCoOfRx8-gO94q3-bw"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "biblio-catalog-db"
+database_id = "f1f0f7a3-f319-4c97-a495-1ef143881795"

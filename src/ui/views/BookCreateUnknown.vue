@@ -110,7 +110,7 @@ const handleSave = async () => {
   successMsg.value = null;
 
   if (connectionState.isOffline.value) {
-    errorMsg.value = "Vous devez être en ligne pour créer un livre sur inventaire.io.";
+    errorMsg.value = "Vous devez être en ligne pour créer un livre.";
     return;
   }
 
@@ -153,7 +153,7 @@ const confirmResolutionStep = async () => {
 
 const saveChanges = async () => {
   isLoading.value = true;
-  loadingStatus.value = "Création et synchronisation sur inventaire.io...";
+  loadingStatus.value = "Création et synchronisation dans le catalogue...";
 
   try {
     const cleanTitle = titleInput.value.trim();
@@ -216,7 +216,7 @@ const saveChanges = async () => {
       <div v-if="!successMsg" class="creation-box">
         <div class="info-alert-banner">
           <p>
-            <strong>ISBN inconnu d'inventaire.io :</strong> Nous avons cherché des informations sur la BNF et Open Library pour vous aider à pré-remplir la fiche de cet ouvrage. Vous pouvez modifier et valider les champs ci-dessous pour le créer sur inventaire.io et l'ajouter à votre collection.
+            <strong>ISBN non référencé :</strong> Nous avons cherché des informations sur la BNF et Open Library pour vous aider à pré-remplir la fiche de cet ouvrage. Vous pouvez modifier et valider les champs ci-dessous pour l'enregistrer et l'ajouter à votre collection.
           </p>
         </div>
 
@@ -275,7 +275,7 @@ const saveChanges = async () => {
               </div>
               <div v-if="!noSeries" class="checkbox-container">
                 <input type="checkbox" id="expandSeriesCheckbox" v-model="expandSeries" class="wireframe-checkbox" />
-                <label for="expandSeriesCheckbox" class="checkbox-label">Créer aussi les autres tomes manquants de cette série sur inventaire.io (tâche de fond)</label>
+                <label for="expandSeriesCheckbox" class="checkbox-label">Créer aussi les autres tomes manquants de cette série dans le catalogue (tâche de fond)</label>
               </div>
             </div>
 
