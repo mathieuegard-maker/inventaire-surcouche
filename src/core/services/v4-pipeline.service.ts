@@ -22,6 +22,13 @@ import {
   isEditorialPaperbackCollectionName,
   stripEditorialCollectionSuffixes
 } from '../utils/series-matcher.util';
+import {
+  areDistinctSeriesWorkTitles,
+  fetchCanonicalSeriesIndex,
+  isCleanerCanonicalSeriesName,
+  resolveCanonicalVolumeNumber,
+  type CanonicalSeriesIndex
+} from '../resolvers/series-canonical.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
 import { resolveBestCoverUrl, upsertCatalogEntity } from './d1-gateway.service';
 import { generateTraceId, PipelineTracer } from './pipeline-logger.service';
@@ -1419,23 +1426,31 @@ export async function discoverMultiSourceLayer3(
           sourcesHit.push('wikidata');
 
           // Extraire tous les P1545 sur l'ensemble des œuvres liées (crucial pour Intégrales multi-P629 !)
+          const extractP1545FromEntity = (wObj: any): string => {
+            const p179Claims = Array.isArray(wObj?.claims?.P179) ? wObj.claims.P179 : [];
+            for (const claim of p179Claims) {
+              const qVal = claim?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value;
+              if (qVal !== undefined && qVal !== null && String(qVal).trim()) {
+                return String(qVal);
+              }
+            }
+            const directVal = wObj?.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
+            return directVal !== undefined && directVal !== null ? String(directVal) : '';
+          };
           const isMultiWorkIntegral = wdBatchIds.length > 1;
           for (const qId of wdBatchIds) {
             const wObj = json?.entities?.[qId];
             if (!wObj) continue;
-            const qOrd =
-              wObj.claims?.P179?.[0]?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value ||
-              wObj.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
-            const normQOrd = qOrd ? normalizeSeriesNumber(String(qOrd)) : '';
+            const qOrd = extractP1545FromEntity(wObj);
+            const normQOrd = qOrd ? normalizeSeriesNumber(qOrd) : '';
             if (isMultiWorkIntegral && normQOrd && /^\d+$/.test(normQOrd)) {
               includedVolumeNumbersHint.add(normQOrd);
             }
           }
 
-          const p1545 = ent.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
           const p179Id = ent.claims?.P179?.[0]?.mainsnak?.datavalue?.value?.id;
-          const p1545Ord = ent.claims?.P179?.[0]?.qualifiers?.P1545?.[0]?.mainsnak?.datavalue?.value;
-          const wdVol = isMultiWorkIntegral ? '' : normalizeSeriesNumber(String(p1545Ord || p1545 || ''));
+          const rawEntOrd = extractP1545FromEntity(ent);
+          const wdVol = isMultiWorkIntegral ? '' : normalizeSeriesNumber(rawEntOrd);
           let wdSeriesLabel = '';
           if (p179Id && typeof p179Id === 'string') {
             wikidataSeriesQid = wikidataSeriesQid || p179Id;
@@ -1571,13 +1586,13 @@ export function detectIntegralAndIncludedVolumes(payload: StagingPayload): {
   const ordMatch = /(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\s*(?:n°\s*)?0*(\d{1,2})\b/i.exec(combined);
   const integralOrdinal = ordMatch ? String(parseInt(ordMatch[1], 10)) : payload.integralOrdinalHint;
 
-  // 2. Détection Album Double (ex: "Astérix le Gaulois / La serpe d'or" ou "Titre A ; Titre B")
+  // 2. Détection Album Double (ex: "Astérix le Gaulois / La serpe d'or", "Titre A ; Titre B", "Titre A suivi de Titre B")
   // Ne jamais déclencher sur un simple sous-titre de one-shot ("Journal", "Enquête", "Roman", etc.) !
   let isDoubleAlbum = false;
   let doubleSubTitles: string[] = [];
   const primaryTitle = payload.anchorTitle || payload.rawTitles[0] || '';
   const slashParts = primaryTitle
-    .split(/\s+\/\s+|\s+;\s+/)
+    .split(/\s+\/\s+|\s+;\s+|\s+suivi\s+de\s+/i)
     .map((p) => cleanTitle(p))
     .filter(
       (p) =>
@@ -1737,6 +1752,8 @@ export async function consolidateBookLayer4(
   // Upsert dans v4_series si série élue (matching par coreKey OU bnfEnsembleId OU wikidataQid)
   let seriesId: string | null = null;
   let seriesName: string | null = null;
+  let resolvedSeriesWdQid: string | null = null;
+  let canonicalSeriesIndex: CanonicalSeriesIndex | null = null;
   if (electedSeries) {
     let existingSeries = await db
       .prepare('SELECT * FROM v4_series WHERE normalized_core_key = ? LIMIT 1')
@@ -1754,6 +1771,17 @@ export async function consolidateBookLayer4(
         .prepare('SELECT * FROM v4_series WHERE bnf_ensemble_ids_json LIKE ? LIMIT 1')
         .bind(`%${electedSeries.ensembleIds[0]}%`)
         .first<Record<string, any>>();
+    }
+
+    resolvedSeriesWdQid =
+      (existingSeries?.wikidata_qid as string | null) ||
+      electedSeries.wikidataQids[0] ||
+      payload.wikidataSeriesQid ||
+      null;
+
+    // Résolveur canonique de série (Wikidata P179/P1545) : ordre officiel des tomes + nom propre FR
+    if (resolvedSeriesWdQid) {
+      canonicalSeriesIndex = await fetchCanonicalSeriesIndex(resolvedSeriesWdQid).catch(() => null);
     }
 
     // Réutiliser un éventuel URI de série existant dans catalog_entities pour garantir l'unification V4 <-> V2
@@ -1774,24 +1802,34 @@ export async function consolidateBookLayer4(
 
     if (existingSeries) {
       seriesId = String(existingSeries.id);
-      seriesName = String(existingSeries.canonical_name);
+      const currentDbSeriesName = String(existingSeries.canonical_name);
+      const cleanerCandidate =
+        canonicalSeriesIndex?.canonicalSeriesName &&
+        isCleanerCanonicalSeriesName(canonicalSeriesIndex.canonicalSeriesName, currentDbSeriesName)
+          ? canonicalSeriesIndex.canonicalSeriesName
+          : isCleanerCanonicalSeriesName(electedSeries.canonicalName, currentDbSeriesName)
+            ? electedSeries.canonicalName
+            : null;
+      seriesName = cleanerCandidate || currentDbSeriesName;
+
       const prevAliases = safeJsonParse<string[]>(existingSeries.aliases_json, []);
       const prevEns = safeJsonParse<string[]>(existingSeries.bnf_ensemble_ids_json, []);
       const prevAuthors = safeJsonParse<string[]>(existingSeries.primary_authors_json, []);
-      const mergedAliases = Array.from(new Set([...prevAliases, ...electedSeries.aliases, electedSeries.canonicalName])).filter(
-        (a) => a !== seriesName
-      );
+      const mergedAliases = Array.from(
+        new Set([...prevAliases, ...electedSeries.aliases, electedSeries.canonicalName, currentDbSeriesName])
+      ).filter((a) => a && a !== seriesName);
       const mergedEns = Array.from(new Set([...prevEns, ...electedSeries.ensembleIds]));
       const mergedAuthors = Array.from(new Set([...prevAuthors, ...payload.authors]));
-      const mergedWdQid = existingSeries.wikidata_qid || electedSeries.wikidataQids[0] || payload.wikidataSeriesQid || null;
+      const mergedWdQid = resolvedSeriesWdQid;
 
       await db
         .prepare(
           `UPDATE v4_series
-           SET aliases_json = ?, bnf_ensemble_ids_json = ?, primary_authors_json = ?, wikidata_qid = COALESCE(wikidata_qid, ?), updated_at = ?
+           SET canonical_name = ?, aliases_json = ?, bnf_ensemble_ids_json = ?, primary_authors_json = ?, wikidata_qid = COALESCE(wikidata_qid, ?), updated_at = ?
            WHERE id = ?`
         )
         .bind(
+          seriesName,
           JSON.stringify(mergedAliases),
           JSON.stringify(mergedEns),
           JSON.stringify(mergedAuthors),
@@ -1804,7 +1842,11 @@ export async function consolidateBookLayer4(
       seriesId =
         existingCatalogSeriesUri ||
         `ser_${electedSeries.coreKey.replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
-      seriesName = electedSeries.canonicalName;
+      seriesName =
+        canonicalSeriesIndex?.canonicalSeriesName &&
+        isCleanerCanonicalSeriesName(canonicalSeriesIndex.canonicalSeriesName, electedSeries.canonicalName)
+          ? canonicalSeriesIndex.canonicalSeriesName
+          : electedSeries.canonicalName;
       await db
         .prepare(
           `INSERT INTO v4_series
@@ -1817,7 +1859,7 @@ export async function consolidateBookLayer4(
           electedSeries.coreKey,
           JSON.stringify(electedSeries.aliases),
           JSON.stringify(payload.authors),
-          electedSeries.wikidataQids[0] || payload.wikidataSeriesQid || null,
+          resolvedSeriesWdQid,
           JSON.stringify(electedSeries.ensembleIds),
           now,
           now
@@ -1826,28 +1868,16 @@ export async function consolidateBookLayer4(
     }
   }
 
-  // 3. Règle CRITIQUE d'Héritage de Volume sur TOUTES les éditions sœurs FR AVANT classification Hors-Série !
-  let inheritedVolStr = userHint?.volumeNumber ? normalizeSeriesNumber(userHint.volumeNumber) : '';
-  if (!inheritedVolStr) {
-    for (const s of payload.sisterEditions) {
-      if (s.volumeNumber) {
-        const n = normalizeSeriesNumber(s.volumeNumber);
-        if (n && /^\d+$/.test(n) && Number(n) > 0) {
-          inheritedVolStr = n;
-          break;
-        }
-      }
-    }
-  }
-  if (!inheritedVolStr) {
-    for (const t of payload.rawTitles) {
-      const p = parseSeriesFromTitle(t);
-      if (p.seriesNumber && /^\d+$/.test(p.seriesNumber) && Number(p.seriesNumber) > 0) {
-        inheritedVolStr = p.seriesNumber;
-        break;
-      }
-    }
-  }
+  // 3. Résolution canonique du numéro de tome (Arbitrage utilisateur > Index canonique Wikidata > Vote pondéré éditions sœurs > Titre)
+  const resolvedVolume = resolveCanonicalVolumeNumber({
+    userHintVolume: userHint?.volumeNumber,
+    wikidataWorkQid: payload.wikidataWorkQid,
+    canonicalSeriesIndex,
+    sisterEditions: payload.sisterEditions,
+    rawTitles: [payload.anchorTitle, ...payload.rawTitles],
+    seriesName: seriesName || undefined
+  });
+  const inheritedVolStr = resolvedVolume.volumeNumber;
 
   const preferredRawTitle =
     (userHint?.title?.trim() ? userHint.title.trim() : '') ||
@@ -1993,7 +2023,7 @@ export async function consolidateBookLayer4(
   // 6. Clé canonique FRBR & Idempotence (anti-doublon à l'échelle de l'Œuvre)
   const normTitle = normalizeTextKey(canonicalTitle);
   const seriesCoreKey = electedSeries?.coreKey || '';
-  const workCanonicalId = integralCheck.isIntegral
+  let workCanonicalId = integralCheck.isIntegral
     ? `integral:${seriesCoreKey || normTitle}:${integralCheck.includedVolumeNumbers.join('-') || (integralCheck.integralOrdinal ? `int${integralCheck.integralOrdinal}` : payload.anchorIsbn13)}`
     : seriesId && volumeNumber !== null && !isHorsSerie
       ? `series:${seriesCoreKey}:vol:${volumeNumber}`
@@ -2001,7 +2031,7 @@ export async function consolidateBookLayer4(
         ? `wd:${payload.wikidataWorkQid}`
         : `work:${normTitle}:${normalizeTextKey(payload.authors[0] || payload.anchorIsbn13)}`;
 
-  // Vérifier si ce Work existe déjà (par work_canonical_id, ou par series_id + volume_number, ou par l'un des ISBNs connus)
+  // Vérifier si ce Work existe déjà (par work_canonical_id, ou par series_id + volume_number)
   let existingBook = await db
     .prepare('SELECT * FROM books WHERE work_canonical_id = ? LIMIT 1')
     .bind(workCanonicalId)
@@ -2011,6 +2041,38 @@ export async function consolidateBookLayer4(
     existingBook = await db
       .prepare('SELECT * FROM books WHERE series_id = ? AND volume_number = ? AND is_integral = 0 LIMIT 1')
       .bind(seriesId, volumeNumber)
+      .first<Record<string, any>>();
+  }
+
+  // GARDE CRITIQUE ANTI-ÉCRASEMENT : si un livre existant dans la série porte déjà ce volume_number
+  // mais avec un titre d'album DISTINCTIF incompatible (ex: "L'île noire" vs "L'étoile mystérieuse" sur Tintin #10),
+  // ne JAMAIS écraser l'œuvre existante ni mélanger leurs ISBNs/couvertures !
+  if (
+    existingBook &&
+    !integralCheck.isIntegral &&
+    seriesId &&
+    areDistinctSeriesWorkTitles(String(existingBook.canonical_title || ''), canonicalTitle, seriesName)
+  ) {
+    tracer?.record(
+      'C4',
+      'volume_collision_guard',
+      'warn',
+      `Collision de numéro évitée dans « ${seriesName} » #${volumeNumber} : « ${canonicalTitle} » ≠ « ${existingBook.canonical_title} »`,
+      {
+        seriesId,
+        volumeNumber,
+        existingBookId: existingBook.id,
+        existingTitle: existingBook.canonical_title,
+        incomingTitle: canonicalTitle,
+        volumeSource: resolvedVolume.source
+      }
+    );
+    workCanonicalId = payload.wikidataWorkQid
+      ? `series:${seriesCoreKey}:wd:${payload.wikidataWorkQid}`
+      : `series:${seriesCoreKey}:vol:${volumeNumber}:${normTitle.slice(0, 40)}`;
+    existingBook = await db
+      .prepare('SELECT * FROM books WHERE work_canonical_id = ? LIMIT 1')
+      .bind(workCanonicalId)
       .first<Record<string, any>>();
   }
 
@@ -2462,6 +2524,9 @@ export async function enqueueOrExpandSeriesLayer5(
   if (!sRow || Number(sRow.is_complete_expanded) === 1) return 0;
 
   const ensembleIds = safeJsonParse<string[]>(sRow.bnf_ensemble_ids_json, []);
+  const seriesWdIndex = sRow.wikidata_qid
+    ? await fetchCanonicalSeriesIndex(String(sRow.wikidata_qid)).catch(() => null)
+    : null;
   const discoveredSkeleton: Array<{
     title: string;
     volumeNumber?: number;
@@ -2482,11 +2547,20 @@ export async function enqueueOrExpandSeriesLayer5(
           const cand = extractMarcRecordMetadata(rec);
           if (!cand || !cand.isbn13 || !isStrictFrenchLanguage(cand.language)) continue;
           const isIntSkel = Boolean(cand._isIntegral);
-          const vNum = !isIntSkel && cand.volumeNumber && /^\d+$/.test(cand.volumeNumber)
-            ? parseInt(cand.volumeNumber, 10)
+          const cleanSkelTitle = cleanTitle(isIntSkel ? cand.title : parseSeriesFromTitle(cand.title).title || cand.title);
+          const resolvedSkelVol = !isIntSkel
+            ? resolveCanonicalVolumeNumber({
+                canonicalSeriesIndex: seriesWdIndex,
+                sisterEditions: [cand],
+                rawTitles: [cleanSkelTitle, cand.title],
+                seriesName: book.seriesName || undefined
+              }).volumeNumber
+            : '';
+          const vNum = !isIntSkel && resolvedSkelVol && /^\d+$/.test(resolvedSkelVol)
+            ? parseInt(resolvedSkelVol, 10)
             : undefined;
           discoveredSkeleton.push({
-            title: cleanTitle(isIntSkel ? cand.title : parseSeriesFromTitle(cand.title).title || cand.title),
+            title: cleanSkelTitle,
             volumeNumber: vNum,
             isbn13: cand.isbn13,
             coverUrl: cand.coverUrl,

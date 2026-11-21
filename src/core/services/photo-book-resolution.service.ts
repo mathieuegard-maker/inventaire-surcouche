@@ -508,6 +508,10 @@ async function discoverConsensusByHints(
     const slotKey = `${wk}|${isInt ? 'INT' : 'UNIT'}|${normalizeTextKey(entry.bucket.bestMeta.publisher || '')}`;
     if (seenEditionSlots.has(slotKey) && topAlternatives.length >= 2) continue;
     seenEditionSlots.add(slotKey);
+    const altFallbacks = imageUtil.buildCoverCandidates(entry.bucket.isbn13, [
+      entry.bucket.bestMeta.coverUrl,
+      ...(entry.bucket.bestMeta.coverFallbackUrls || [])
+    ]);
     topAlternatives.push({
       isbn13: entry.bucket.isbn13,
       title: entry.bucket.bestMeta.title || hints.title || 'Titre inconnu',
@@ -515,11 +519,8 @@ async function discoverConsensusByHints(
       publisher: entry.bucket.bestMeta.publisher,
       publishDate: entry.bucket.bestMeta.publishDate,
       pageCount: entry.bucket.bestMeta.pageCount,
-      coverUrl: entry.bucket.bestMeta.coverUrl,
-      coverFallbackUrls: imageUtil.buildCoverCandidates(entry.bucket.isbn13, [
-        entry.bucket.bestMeta.coverUrl,
-        ...(entry.bucket.bestMeta.coverFallbackUrls || [])
-      ]),
+      coverUrl: entry.bucket.bestMeta.coverUrl || altFallbacks[0],
+      coverFallbackUrls: altFallbacks,
       series: entry.bucket.bestMeta.series,
       seriesNumber: entry.bucket.bestMeta.seriesNumber,
       isIntegral: isInt,
@@ -759,6 +760,29 @@ export const photoBookResolutionService = {
           })
         );
         alternatives = enrichedAlternatives;
+      }
+
+      // Même hors doute, s'assurer que toutes les alternatives ont une couverture + fallbacks CDN à jour
+      if (!isDoubt && alternatives.length > 0) {
+        alternatives = alternatives.map((alt, idx) => {
+          const preferred =
+            idx === 0
+              ? [
+                  ownership.cachedCover,
+                  d1Entity?.localCover,
+                  d1Entity?.coverUrl,
+                  externalMeta?.coverUrl,
+                  ...(externalMeta?.coverFallbackUrls || []),
+                  alt.coverUrl
+                ]
+              : [alt.coverUrl, ...(alt.coverFallbackUrls || [])];
+          const fallbacks = imageUtil.buildCoverCandidates(alt.isbn13, preferred);
+          return {
+            ...alt,
+            coverUrl: preferred.find((u): u is string => Boolean(u)) || fallbacks[0],
+            coverFallbackUrls: fallbacks
+          };
+        });
       }
 
       const mergedTitle =

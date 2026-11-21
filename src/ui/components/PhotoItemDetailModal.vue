@@ -40,6 +40,128 @@ const localSelected = ref(true);
 const showManualForm = ref(false);
 const zoomedImageUrl = ref<string | null>(null);
 const zoomedImageAlt = ref('');
+const zoomScale = ref(1);
+const panX = ref(0);
+const panY = ref(0);
+const isDraggingZoom = ref(false);
+let dragStartX = 0;
+let dragStartY = 0;
+let dragOriginX = 0;
+let dragOriginY = 0;
+let pinchStartDist = 0;
+let pinchStartScale = 1;
+const exhaustedOptionCovers = ref<Record<string, boolean>>({});
+
+function resetZoomTransform() {
+  zoomScale.value = 1;
+  panX.value = 0;
+  panY.value = 0;
+  isDraggingZoom.value = false;
+}
+
+function clampZoom(next: number): number {
+  return Math.max(1, Math.min(4.5, Math.round(next * 100) / 100));
+}
+
+function adjustZoom(delta: number) {
+  const next = clampZoom(zoomScale.value + delta);
+  zoomScale.value = next;
+  if (next <= 1) {
+    panX.value = 0;
+    panY.value = 0;
+  }
+}
+
+function toggleDoubleTapZoom() {
+  if (zoomScale.value > 1.2) {
+    resetZoomTransform();
+  } else {
+    zoomScale.value = 2.5;
+  }
+}
+
+function onZoomWheel(e: WheelEvent) {
+  const step = e.deltaY < 0 ? 0.35 : -0.35;
+  adjustZoom(step);
+}
+
+function onZoomPointerDown(e: PointerEvent) {
+  if (zoomScale.value <= 1) return;
+  isDraggingZoom.value = true;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  dragOriginX = panX.value;
+  dragOriginY = panY.value;
+  (e.currentTarget as HTMLElement | null)?.setPointerCapture?.(e.pointerId);
+}
+
+function onZoomPointerMove(e: PointerEvent) {
+  if (!isDraggingZoom.value || zoomScale.value <= 1) return;
+  panX.value = dragOriginX + (e.clientX - dragStartX);
+  panY.value = dragOriginY + (e.clientY - dragStartY);
+}
+
+function onZoomPointerUp() {
+  isDraggingZoom.value = false;
+}
+
+function getTouchDistance(t1: Touch, t2: Touch): number {
+  const dx = t1.clientX - t2.clientX;
+  const dy = t1.clientY - t2.clientY;
+  return Math.hypot(dx, dy);
+}
+
+function onZoomTouchStart(e: TouchEvent) {
+  if (e.touches.length === 2) {
+    isDraggingZoom.value = false;
+    pinchStartDist = getTouchDistance(e.touches[0], e.touches[1]);
+    pinchStartScale = zoomScale.value;
+  }
+}
+
+function onZoomTouchMove(e: TouchEvent) {
+  if (e.touches.length === 2 && pinchStartDist > 0) {
+    e.preventDefault();
+    const dist = getTouchDistance(e.touches[0], e.touches[1]);
+    const ratio = dist / pinchStartDist;
+    const next = clampZoom(pinchStartScale * ratio);
+    zoomScale.value = next;
+    if (next <= 1) {
+      panX.value = 0;
+      panY.value = 0;
+    }
+  }
+}
+
+function onZoomTouchEnd(e: TouchEvent) {
+  if (e.touches.length < 2) {
+    pinchStartDist = 0;
+  }
+}
+
+function resolveOptionCoverSrc(opt: PhotoResolutionOption): string {
+  if (exhaustedOptionCovers.value[opt.isbn13]) return '';
+  if (opt.coverUrl) {
+    return imageUtil.resolveExternalUrl(opt.coverUrl, opt.isbn13);
+  }
+  const candidates = imageUtil.buildCoverCandidates(opt.isbn13, opt.coverFallbackUrls || []);
+  if (candidates.length > 0) {
+    opt.coverUrl = candidates[0];
+    opt.coverFallbackUrls = candidates;
+    return imageUtil.resolveExternalUrl(candidates[0], opt.isbn13);
+  }
+  return opt.isbn13 ? `/api/gateway?action=image-proxy&isbn=${encodeURIComponent(opt.isbn13)}` : '';
+}
+
+function onOptionCoverError(opt: PhotoResolutionOption) {
+  if (!opt.coverFallbackUrls || opt.coverFallbackUrls.length === 0) {
+    opt.coverFallbackUrls = imageUtil.buildCoverCandidates(opt.isbn13, [opt.coverUrl]);
+  }
+  imageUtil.advanceCoverFallback(opt);
+  if (!opt.coverUrl) {
+    exhaustedOptionCovers.value = { ...exhaustedOptionCovers.value, [opt.isbn13]: true };
+  }
+}
 
 function parseIncludedVolumesInput(raw: string): string[] {
   const result = new Set<number>();
@@ -93,6 +215,8 @@ watch(
     localSelected.value = Boolean(props.item.selected);
     showManualForm.value = props.item.status === 'unresolved' || (props.item.alternatives?.length || 0) === 0;
     zoomedImageUrl.value = null;
+    resetZoomTransform();
+    exhaustedOptionCovers.value = {};
   },
   { immediate: true }
 );
@@ -121,8 +245,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
 
 const openZoom = (url: string | undefined, alt: string) => {
   if (!url) return;
+  resetZoomTransform();
   zoomedImageUrl.value = url;
   zoomedImageAlt.value = alt;
+};
+
+const closeZoom = () => {
+  zoomedImageUrl.value = null;
+  resetZoomTransform();
 };
 
 const commitFieldChanges = () => {
@@ -211,7 +341,7 @@ const handleConfirmClose = () => {
                 @click="openZoom(imageUtil.resolveCoverUrl(item.coverUrl), localTitle)"
               >
                 <img
-                  :src="imageUtil.resolveCoverUrl(item.coverUrl)"
+                  :src="imageUtil.resolveExternalUrl(item.coverUrl, item.isbn13)"
                   :alt="localTitle"
                   class="summary-cover"
                   @error="imageUtil.advanceCoverFallback(item)"
@@ -307,13 +437,15 @@ const handleConfirmClose = () => {
                   @change="handleOptionTap(opt)"
                 />
                 <img
-                  v-if="opt.coverUrl"
-                  :src="imageUtil.resolveCoverUrl(opt.coverUrl)"
+                  v-if="resolveOptionCoverSrc(opt)"
+                  :src="resolveOptionCoverSrc(opt)"
                   :alt="opt.title"
                   class="alt-cover"
-                  @error="imageUtil.advanceCoverFallback(opt)"
+                  @error="onOptionCoverError(opt)"
                 />
-                <div v-else class="alt-cover alt-cover-empty">?</div>
+                <div v-else class="alt-cover alt-cover-empty" :title="opt.title">
+                  <span>{{ (opt.title || 'BD').slice(0, 10) }}</span>
+                </div>
                 <div class="alt-meta">
                   <div class="alt-top-row">
                     <span v-if="opt.isIntegral" class="badge integral">Intégrale</span>
@@ -353,14 +485,54 @@ const handleConfirmClose = () => {
             </button>
 
             <div v-if="showManualForm" class="manual-grid">
-              <input v-model="localTitle" placeholder="Titre exact" class="cand-input" />
-              <div class="manual-two-col">
-                <input v-model="localSeries" placeholder="Série (si applicable)" class="cand-input" />
-                <input v-model="localVolume" placeholder="N° Tome" class="cand-input" />
+              <div class="manual-field">
+                <label class="manual-field-label" for="manual-title-input">Titre du livre</label>
+                <input
+                  id="manual-title-input"
+                  v-model="localTitle"
+                  placeholder="Ex : Le Lotus bleu"
+                  class="cand-input"
+                />
               </div>
               <div class="manual-two-col">
-                <input v-model="localAuthor" placeholder="Auteur" class="cand-input" />
-                <input v-model="localIsbn" placeholder="ISBN-13 (optionnel)" class="cand-input" />
+                <div class="manual-field">
+                  <label class="manual-field-label" for="manual-series-input">Nom de la série</label>
+                  <input
+                    id="manual-series-input"
+                    v-model="localSeries"
+                    placeholder="Ex : Les Aventures de Tintin"
+                    class="cand-input"
+                  />
+                </div>
+                <div class="manual-field">
+                  <label class="manual-field-label" for="manual-volume-input">N° de tome</label>
+                  <input
+                    id="manual-volume-input"
+                    v-model="localVolume"
+                    placeholder="Ex : 5"
+                    class="cand-input"
+                  />
+                </div>
+              </div>
+              <div class="manual-two-col">
+                <div class="manual-field">
+                  <label class="manual-field-label" for="manual-author-input">Auteur</label>
+                  <input
+                    id="manual-author-input"
+                    v-model="localAuthor"
+                    placeholder="Ex : Hergé"
+                    class="cand-input"
+                  />
+                </div>
+                <div class="manual-field">
+                  <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel)</label>
+                  <input
+                    id="manual-isbn-input"
+                    v-model="localIsbn"
+                    placeholder="9782..."
+                    class="cand-input"
+                  />
+                </div>
               </div>
               <button
                 type="button"
@@ -383,10 +555,49 @@ const handleConfirmClose = () => {
       </div>
     </div>
 
-    <!-- Lightbox zoom plein écran (photo d'origine ou couverture) -->
-    <div v-if="zoomedImageUrl" class="zoom-lightbox" @click="zoomedImageUrl = null">
-      <button type="button" class="zoom-close-btn" @click.stop="zoomedImageUrl = null">✕ Fermer</button>
-      <img :src="zoomedImageUrl" :alt="zoomedImageAlt" class="zoom-lightbox-img" @click.stop />
+    <!-- Lightbox zoom plein écran interactif (pinch, molette, boutons +/-, glisser-déplacer) -->
+    <div
+      v-if="zoomedImageUrl"
+      class="zoom-lightbox"
+      @click.self="closeZoom"
+      @wheel.prevent="onZoomWheel"
+      @touchstart="onZoomTouchStart"
+      @touchmove="onZoomTouchMove"
+      @touchend="onZoomTouchEnd"
+    >
+      <div class="zoom-toolbar" @click.stop>
+        <div class="zoom-controls-group">
+          <button type="button" class="zoom-tool-btn" aria-label="Dézoomer" :disabled="zoomScale <= 1" @click="adjustZoom(-0.5)">−</button>
+          <button type="button" class="zoom-tool-btn zoom-pct-btn" title="Réinitialiser le zoom" @click="resetZoomTransform">
+            {{ Math.round(zoomScale * 100) }}%
+          </button>
+          <button type="button" class="zoom-tool-btn" aria-label="Zoomer" :disabled="zoomScale >= 4.5" @click="adjustZoom(0.5)">+</button>
+        </div>
+        <button type="button" class="zoom-close-btn" @click="closeZoom">✕ Fermer</button>
+      </div>
+      <div
+        class="zoom-stage"
+        :class="{ 'is-zoomed': zoomScale > 1, 'is-dragging': isDraggingZoom }"
+        @pointerdown="onZoomPointerDown"
+        @pointermove="onZoomPointerMove"
+        @pointerup="onZoomPointerUp"
+        @pointercancel="onZoomPointerUp"
+        @dblclick.stop="toggleDoubleTapZoom"
+      >
+        <img
+          :src="zoomedImageUrl"
+          :alt="zoomedImageAlt"
+          class="zoom-lightbox-img"
+          draggable="false"
+          :style="{
+            transform: `translate3d(${panX}px, ${panY}px, 0) scale(${zoomScale})`
+          }"
+          @click.stop
+        />
+      </div>
+      <div class="zoom-help-hint">
+        Pincez à 2 doigts, utilisez la molette ou + / − pour zoomer • Double-clic pour agrandir
+      </div>
     </div>
   </Teleport>
 </template>
@@ -615,17 +826,61 @@ const handleConfirmClose = () => {
   position: fixed;
   inset: 0;
   z-index: 2500;
-  background: rgba(2, 6, 23, 0.92);
+  background: rgba(2, 6, 23, 0.94);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem;
+  touch-action: none;
+  user-select: none;
+}
+
+.zoom-toolbar {
+  width: 100%;
+  max-width: 960px;
   display: flex;
   align-items: center;
-  justify-content: center;
-  padding: 1rem;
+  justify-content: space-between;
+  gap: 0.5rem;
+  z-index: 2;
+}
+
+.zoom-controls-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 0.25rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.zoom-tool-btn {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 0.6rem;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.zoom-tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.zoom-pct-btn {
+  font-size: 0.82rem;
+  min-width: 56px;
+  background: transparent;
 }
 
 .zoom-close-btn {
-  position: absolute;
-  top: 1rem;
-  right: 1rem;
   background: rgba(255, 255, 255, 0.16);
   color: #fff;
   border: 1px solid rgba(255, 255, 255, 0.35);
@@ -636,12 +891,44 @@ const handleConfirmClose = () => {
   cursor: pointer;
 }
 
+.zoom-stage {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.zoom-stage.is-zoomed {
+  cursor: grab;
+}
+
+.zoom-stage.is-dragging {
+  cursor: grabbing;
+}
+
 .zoom-lightbox-img {
   max-width: 96vw;
-  max-height: 88dvh;
+  max-height: 78dvh;
   object-fit: contain;
   border-radius: 8px;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
+  will-change: transform;
+}
+
+.zoom-stage.is-dragging .zoom-lightbox-img {
+  transition: none;
+}
+
+.zoom-help-hint {
+  color: rgba(226, 232, 240, 0.85);
+  font-size: 0.76rem;
+  text-align: center;
+  padding-top: 0.35rem;
 }
 
 .summary-meta {
@@ -779,9 +1066,14 @@ const handleConfirmClose = () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #e2e8f0;
-  color: #64748b;
+  text-align: center;
+  padding: 0.2rem;
+  background: linear-gradient(135deg, #e2e8f0, #cbd5e1);
+  color: #334155;
   font-weight: 700;
+  font-size: 0.62rem;
+  line-height: 1.15;
+  overflow: hidden;
 }
 
 .alt-meta {
@@ -837,7 +1129,19 @@ const handleConfirmClose = () => {
 .manual-grid {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.6rem;
+}
+
+.manual-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.manual-field-label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #334155;
 }
 
 .manual-two-col {

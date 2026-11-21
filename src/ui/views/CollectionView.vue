@@ -6,7 +6,7 @@ import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { inventoryService } from '../../core/services/inventory.service';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
-import BaseTitle from '../components/BaseTitle.vue';
+import CollectionSubNav from '../components/CollectionSubNav.vue';
 import CollectionControls from '../components/CollectionControls.vue';
 import SeriesMiniCard from '../components/SeriesMiniCard.vue';
 import WireframeTable from '../components/WireframeTable.vue';
@@ -307,19 +307,11 @@ const resetSelection = () => {
 <template>
   <div class="view-container">
     <BaseHeader />
-    <BaseTitle :text="TEXTS.collectionView?.title" level="h2" />
-
-    <div class="collection-modes-tabs">
-      <button :class="['tab-button', { active: currentMode === 'books' }]" @click="currentMode = 'books'; resetSelection()">
-        {{ TEXTS.collectionView?.modeBooks }}
-      </button>
-      <button :class="['tab-button', { active: currentMode === 'series' }]" @click="currentMode = 'series'; resetSelection()">
-        {{ TEXTS.collectionView?.modeSeries }}
-      </button>
-      <button :class="['tab-button', { active: currentMode === 'oneshots' }]" @click="currentMode = 'oneshots'; resetSelection()">
-        {{ TEXTS.collectionView?.modeOneShots }}
-      </button>
-    </div>
+    <CollectionSubNav
+      inline
+      :active-mode="currentMode"
+      @select-mode="(mode) => { currentMode = mode; resetSelection(); }"
+    />
 
     <CollectionControls
       v-if="!isLoading"

@@ -2,6 +2,7 @@
 import { ref, computed } from 'vue';
 import { databaseService } from '../database/database.service';
 import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
+import { areDistinctSeriesWorkTitles } from '../resolvers/series-canonical.resolver';
 import { syncOrchestrator } from './sync.orchestrator';
 import type { SeriesContext, HumanizedBook } from '../types';
 
@@ -121,9 +122,15 @@ export const seriesOrchestrator = {
         normTitle.length >= 3 && !normNum && !tome.isIntegral
           ? seenWorkKeys.get(`title:${normTitle}`)
           : undefined;
+      const numCandidate = normNum ? seenWorkKeys.get(`num:${normNum}`) : undefined;
+      const safeNumMatch =
+        numCandidate &&
+        !areDistinctSeriesWorkTitles(numCandidate.title, tome.title, seriesName || numCandidate.series || tome.series)
+          ? numCandidate
+          : undefined;
       const existing =
         (tome.workUri ? seenWorkKeys.get(`work:${tome.workUri}`) : undefined) ||
-        (normNum ? seenWorkKeys.get(`num:${normNum}`) : undefined) ||
+        safeNumMatch ||
         titleMatch;
 
       if (existing) {

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BookMiniCard from '../components/BookMiniCard.vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
+import CollectionSubNav from '../components/CollectionSubNav.vue';
 import WireframeTable from '../components/WireframeTable.vue';
 import WireframePagination from '../components/WireframePagination.vue';
 import BaseLoading from '../components/BaseLoading.vue';
@@ -191,8 +192,9 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
 <template>
   <div class="view-container">
     <BaseHeader @back="handleBackToCollection" />
-    
-    <BaseTitle :text="seriesName" level="h2" />
+    <CollectionSubNav active-mode="series" />
+
+    <BaseTitle :text="seriesName" level="h3" />
 
     <div v-if="progressState.isActive" class="progress-container">
       <div class="progress-text-summary">

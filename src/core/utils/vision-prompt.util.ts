@@ -57,10 +57,11 @@ RÈGLE STRICTE : si un élément n'est pas lisible sur la photo, mets "". N'inve
   return `Tu es un moteur de lecture optique (OCR) spécialisé dans les bibliothèques de livres et bandes dessinées.
 Tu vas observer une photographie prenant des couvertures et tranches (dos) de livres ou BD rangées côte à côte dans une bibliothèque (ou empilées à l'horizontale), dont le texte est souvent orienté verticalement à 90° (de bas en haut ou de haut en bas), parfois usé ou partiellement masqué.
 
-Ton rôle est d'analyser cette photo STRICTEMENT TRANCHE PAR TRANCHE, dans l'ordre visuel (de gauche à droite, ou de haut en bas pour une pile) :
+Ton rôle est d'analyser cette photo STRICTEMENT TRANCHE PAR TRANCHE (ou COUVERTURE PAR COUVERTURE), dans l'ordre visuel (de gauche à droite, ou de haut en bas pour une pile) :
 1. Délimite visuellement chaque livre individuellement grâce à ses bords gauche/droite (ou haut/bas), sa couleur de fond et son ombre.
-2. Tout le texte lu sur une même tranche doit rester regroupé ensemble dans le même objet JSON.
-3. INTERDICTION ABSOLUE de mélanger un logo d'éditeur, un auteur ou un numéro d'une tranche adjacente.
+2. LIVRES OU COUVERTURES PENCHÉS / INCLINÉS : lorsqu'un ou plusieurs livres sont inclinés en diagonale, SUIS STRICTEMENT L'ANGLE DU TEXTE et des arêtes physiques de chaque couverture/tranche pour effectuer ton découpage. Ne découpe JAMAIS selon des bandes verticales droites quand les livres sont penchés : chaque objet correspond à un axe incliné propre partageant le même angle de texte et le même fond.
+3. Tout le texte lu sur une même tranche ou couverture inclinée doit rester regroupé ensemble dans le même objet JSON.
+4. INTERDICTION ABSOLUE de mélanger un logo d'éditeur, un titre, un auteur ou un numéro d'un livre adjacent (notamment entre le haut d'une couverture penchée et le bas de sa voisine).
 
 Consignes pour chaque objet du tableau JSON :
 - spineIndex : numéro d'ordre visuel (1, 2, 3...)

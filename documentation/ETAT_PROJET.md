@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T10:57+01:00`
+* **Dernière mise à jour :** `2026-11-21T11:45+01:00`
 * **Branche active :** `feat/architecture-v4`
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -73,6 +73,10 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
    * En Couche 3 (`api_bnf_sisters`), lorsqu'un tome ancre est numéroté (`1`, `2`...) et porte un titre générique identique à la série (*Culottées*, *Aya de Yopougon*), rejeter les notices sœurs sans numéro de tome (évite la contamination croisée d'ISBN entre T1 et T2).
    * Retirer les modèles Gemini obsolètes renvoyant HTTP 404 (`gemini-3-flash`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`) de `PREFERRED_GEMINI_MODELS` pour ne pas gaspiller la moitié des tentatives OCR Vision.
    * Permettre la saisie explicite des **tomes inclus** (`UserIngestHint.includedVolumeNumbers`) dans `PhotoItemDetailModal.vue` lorsqu'une Intégrale est sélectionnée, propager ces tomes en Couche 4 (`integral_metadata_json`), et marquer les tomes couverts comme possédés dans `series.orchestrator.ts`.
+8. **Résolveur canonique de séries & Garde anti-écrasement de tomes (Audit Test #4 — Tintin, 2026-11-21) :**
+   * **Pourquoi :** Les logs D1 ont montré que les rééditions BnF secondaires (*Archives Tintin*, *Les aventures de Tintin reporter*, *Fac-similés*, *France Loisirs*) portent des numéros internes divergents (*Le Lotus bleu* #1, *L'île noire* #10, *Le trésor de Rackham le Rouge* #8, *Les cigares du pharaon* #20). `consolidateBookLayer4` prenait le 1er numéro trouvé (`break`) puis fusionnait par `(series_id, volume_number)` sans vérifier le titre, écrasant *Le sceptre d'Ottokar* (#8) et *L'étoile mystérieuse* (#10) et mélangeant couvertures + ISBNs.
+   * **Décision :** Introduire `src/core/resolvers/series-canonical.resolver.ts` (index canonique Wikidata `P179/P1545` + vote pondéré déclassant les collections secondaires + `areDistinctSeriesWorkTitles` + upgrade du nom canonique de série). Interdire strictement l'écrasement/fusion de deux œuvres aux titres distinctifs incompatibles en Couche 4 **et** dans `series.orchestrator.ts`. Détecter aussi `suivi de` comme album double / intégrale.
+   * **UX & Vision :** Consigne explicite dans `vision-prompt.util.ts` de suivre l'angle du texte sur les couvertures/tranches penchées ; fallbacks CDN/image-proxy systématiques sur les éditions proposées (fin des `?` abusifs) ; lightbox zoomable (pinch/molette/`+`/`-`/pan) + labels explicites BnF dans `PhotoItemDetailModal.vue` ; barre persistante `CollectionSubNav.vue` dans `CollectionView`, `SeriesView` et `BookDetailView`.
 
 ---
 

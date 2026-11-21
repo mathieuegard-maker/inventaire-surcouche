@@ -9,6 +9,7 @@ import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
 import { isbnUtil } from '../../core/utils/isbn.util';
 import BaseHeader from '../components/BaseHeader.vue';
+import CollectionSubNav from '../components/CollectionSubNav.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
@@ -513,6 +514,7 @@ const confirmDelete = async () => {
         <BaseButton v-if="hasSeries" @click="navigateToSeries">{{ TEXTS.bookDetail.btnSeries }}</BaseButton>
       </template>
     </BaseHeader>
+    <CollectionSubNav :active-mode="hasSeries ? 'series' : 'books'" />
 
     <BaseLoading v-if="isLoading" />
 
