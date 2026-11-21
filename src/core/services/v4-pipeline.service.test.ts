@@ -8,6 +8,7 @@ import {
   electCanonicalSeriesFromVotes,
   normalizeIsbnWithPressFallback,
   searchLocalBooksForCanal3,
+  updateV4BookMetadata,
   type StagingPayload
 } from './v4-pipeline.service';
 
@@ -19,13 +20,27 @@ function createInMemoryV4Db(): {
   series: Map<string, Record<string, any>>;
   books: Map<string, Record<string, any>>;
   isbnIndex: Map<string, { isbn13: string; book_id: string; is_integral: number }>;
-  libBooks: Map<string, { library_id: string; book_id: string; is_owned: number; is_wished: number }>;
+  libBooks: Map<string, {
+    library_id: string;
+    book_id: string;
+    is_owned: number;
+    is_wished: number;
+    selected_cover_url?: string | null;
+    custom_overrides_json?: string | null;
+  }>;
   logs: any[];
 } {
   const series = new Map<string, Record<string, any>>();
   const books = new Map<string, Record<string, any>>();
   const isbnIndex = new Map<string, { isbn13: string; book_id: string; is_integral: number }>();
-  const libBooks = new Map<string, { library_id: string; book_id: string; is_owned: number; is_wished: number }>();
+  const libBooks = new Map<string, {
+    library_id: string;
+    book_id: string;
+    is_owned: number;
+    is_wished: number;
+    selected_cover_url?: string | null;
+    custom_overrides_json?: string | null;
+  }>();
   const logs: any[] = [];
 
   const makeStmt = (sql: string, args: unknown[] = []): SqlPreparedStatement => {
@@ -46,7 +61,7 @@ function createInMemoryV4Db(): {
           }
           return null;
         }
-        if (cleanSql.startsWith('SELECT is_owned, is_wished FROM v4_library_books')) {
+        if (cleanSql.startsWith('SELECT is_owned, is_wished')) {
           const row = libBooks.get(`${args[0]}::${args[1]}`);
           return (row || null) as T | null;
         }
@@ -177,6 +192,7 @@ function createInMemoryV4Db(): {
             is_integral: Number(is_integral)
           });
         } else if (cleanSql.startsWith('INSERT INTO v4_library_books')) {
+          const isManualEdit = cleanSql.includes('custom_overrides_json');
           const [library_id, book_id, is_owned, is_wished] = args;
           const key = `${library_id}::${book_id}`;
           const prev = libBooks.get(key);
@@ -184,7 +200,13 @@ function createInMemoryV4Db(): {
             library_id: String(library_id),
             book_id: String(book_id),
             is_owned: Math.max(prev?.is_owned || 0, Number(is_owned)),
-            is_wished: Number(is_owned) === 1 ? 0 : Number(is_wished)
+            is_wished: Number(is_owned) === 1 ? 0 : Number(is_wished),
+            selected_cover_url: isManualEdit
+              ? (args[4] as string | null)
+              : ((args[5] as string | null) ?? prev?.selected_cover_url ?? null),
+            custom_overrides_json: isManualEdit
+              ? (args[5] as string | null)
+              : (prev?.custom_overrides_json ?? null)
           });
         } else if (cleanSql.startsWith('INSERT INTO pipeline_logs')) {
           logs.push(args);
@@ -660,5 +682,62 @@ describe('v4-pipeline.service', () => {
     expect(l2.status).toBe('INCLUDED_IN_INTEGRAL');
     expect(l2.ownedIntegralMatches.length).toBeGreaterThanOrEqual(1);
     expect(l2.ownedIntegralMatches[0].isbn13).toBe('9782070658787');
+  });
+
+  it('Option B : isole les modifications (couverture, titre) par foyer dans v4_library_books sans écraser books', async () => {
+    const { db, books } = createInMemoryV4Db();
+    const created = await consolidateBookLayer4(
+      db,
+      {
+        anchorIsbn13: '9782012101333',
+        anchorTitle: 'Astérix le Gaulois',
+        language: 'fre',
+        sisterEditions: [
+          {
+            source: 'bnf',
+            isbn13: '9782012101333',
+            title: 'Astérix le Gaulois',
+            volumeNumber: '1',
+            language: 'fre',
+            coverUrl: 'https://covers.example/default.jpg'
+          }
+        ],
+        seriesCandidates: [
+          { source: 'bnf', rawName: 'Astérix', coreKey: 'asterix', cleanDisplay: 'Astérix', weight: 4 }
+        ],
+        authors: ['René Goscinny', 'Albert Uderzo'],
+        illustrators: [],
+        scriptwriters: [],
+        rawSubjects: ['BD'],
+        rawTitles: ['Astérix le Gaulois'],
+        sourcesHit: ['bnf']
+      },
+      { sourceChannel: 'canal_1_barcode', libraryId: 'lib_user_A', action: 'owned' }
+    );
+
+    // L'utilisateur A change sa couverture et son titre
+    const updatedForA = await updateV4BookMetadata(db, {
+      bookId: created.id,
+      libraryId: 'lib_user_A',
+      title: 'Astérix (Édition Collector A)',
+      coverUrl: 'https://covers.example/custom-A.jpg'
+    });
+    expect(updatedForA?.canonicalTitle).toBe('Astérix (Édition Collector A)');
+    expect(updatedForA?.selectedCoverUrl).toBe('https://covers.example/custom-A.jpg');
+
+    // Le catalogue commun `books` reste intact pour les autres utilisateurs !
+    const centralRow = books.get(created.id);
+    expect(centralRow?.canonical_title).toBe('Astérix le Gaulois');
+    expect(centralRow?.selected_cover_url).toBe(created.selectedCoverUrl);
+    expect(centralRow?.selected_cover_url).not.toBe('https://covers.example/custom-A.jpg');
+
+    // L'utilisateur B voit la fiche d'origine, et A voit ses propres surcharges en Couche 2
+    const l2ForB = await checkBookIndexLayer2(db, '9782012101333', 'lib_user_B');
+    expect(l2ForB.book?.canonicalTitle).toBe('Astérix le Gaulois');
+    expect(l2ForB.book?.selectedCoverUrl).toBe(created.selectedCoverUrl);
+
+    const l2ForA = await checkBookIndexLayer2(db, '9782012101333', 'lib_user_A');
+    expect(l2ForA.book?.canonicalTitle).toBe('Astérix (Édition Collector A)');
+    expect(l2ForA.book?.selectedCoverUrl).toBe('https://covers.example/custom-A.jpg');
   });
 });

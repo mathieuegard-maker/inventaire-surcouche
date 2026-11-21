@@ -392,6 +392,61 @@ function mapBookRow(row: Record<string, any>): V4BookRecord {
   };
 }
 
+export interface LibraryBookOverrides {
+  title?: string;
+  authors?: string[];
+  seriesId?: string | null;
+  seriesName?: string | null;
+  volumeNumber?: number | null;
+  volumeLabel?: string | null;
+  isHorsSerie?: boolean;
+  publisher?: string;
+  publicationYear?: string;
+  mainCategory?: string;
+  subgenres?: string[];
+}
+
+/**
+ * Option B : Applique les surcharges privées d'un foyer (`v4_library_books`) par-dessus
+ * la fiche de référence commune (`books`), sans jamais altérer la fiche partagée des autres utilisateurs.
+ */
+function applyLibraryOverridesToBook(
+  book: V4BookRecord,
+  libSelectedCoverUrl?: string | null,
+  customOverridesJson?: string | null
+): V4BookRecord {
+  const cleanCover = typeof libSelectedCoverUrl === 'string' && libSelectedCoverUrl.trim()
+    ? libSelectedCoverUrl.trim()
+    : null;
+  const ov = customOverridesJson ? safeJsonParse<LibraryBookOverrides>(customOverridesJson, {}) : {};
+  const hasOverrides = Boolean(cleanCover || Object.keys(ov).length > 0);
+  if (!hasOverrides) return book;
+
+  const nextEditions = [...book.editionsCatalog];
+  if ((ov.publisher !== undefined || ov.publicationYear !== undefined) && nextEditions.length > 0) {
+    nextEditions[0] = {
+      ...nextEditions[0],
+      ...(ov.publisher !== undefined ? { publisher: ov.publisher } : {}),
+      ...(ov.publicationYear !== undefined ? { publicationYear: ov.publicationYear } : {})
+    };
+  }
+
+  return {
+    ...book,
+    ...(ov.title ? { canonicalTitle: ov.title, normalizedTitle: normalizeTextKey(ov.title) } : {}),
+    ...(Array.isArray(ov.authors) && ov.authors.length > 0 ? { authors: ov.authors } : {}),
+    ...(ov.seriesId !== undefined ? { seriesId: ov.seriesId } : {}),
+    ...(ov.seriesName !== undefined ? { seriesName: ov.seriesName } : {}),
+    ...(ov.volumeNumber !== undefined ? { volumeNumber: ov.volumeNumber } : {}),
+    ...(ov.volumeLabel !== undefined ? { volumeLabel: ov.volumeLabel } : {}),
+    ...(ov.isHorsSerie !== undefined ? { isHorsSerie: ov.isHorsSerie } : {}),
+    ...(ov.mainCategory !== undefined ? { mainCategory: ov.mainCategory } : {}),
+    ...(Array.isArray(ov.subgenres) ? { subgenres: ov.subgenres } : {}),
+    editionsCatalog: nextEditions,
+    ...(cleanCover ? { selectedCoverUrl: cleanCover } : {})
+  };
+}
+
 function isStrictFrenchLanguage(lang?: string): boolean {
   if (!lang) return true; // BnF / sources sans balise explicite tolérées seulement si pas marquées étrangères
   const low = lang.trim().toLowerCase();
@@ -590,7 +645,7 @@ export async function checkBookIndexLayer2(
     };
   }
 
-  const book = mapBookRow(indexRow);
+  let book = mapBookRow(indexRow);
   const ownedIntegralMatches: ParentIntegralRef[] = [];
   const includedOwnedWorkIds: string[] = [];
 
@@ -650,9 +705,18 @@ export async function checkBookIndexLayer2(
   }
 
   const libEntry = await db
-    .prepare('SELECT is_owned, is_wished FROM v4_library_books WHERE library_id = ? AND book_id = ? LIMIT 1')
+    .prepare('SELECT is_owned, is_wished, selected_cover_url, custom_overrides_json FROM v4_library_books WHERE library_id = ? AND book_id = ? LIMIT 1')
     .bind(libraryId, book.id)
-    .first<{ is_owned: number; is_wished: number }>();
+    .first<{
+      is_owned: number;
+      is_wished: number;
+      selected_cover_url?: string | null;
+      custom_overrides_json?: string | null;
+    }>();
+
+  if (libEntry) {
+    book = applyLibraryOverridesToBook(book, libEntry.selected_cover_url, libEntry.custom_overrides_json);
+  }
 
   if (libEntry && Number(libEntry.is_owned) === 1) {
     tracer?.record(
@@ -3483,21 +3547,41 @@ export async function syncV4LibraryBooks(
   const serverTime = new Date().toISOString();
   const since = params.since?.trim() || null;
 
-  // 1. Récupérer tous les liens bibliothèque de l'utilisateur
+  // 1. Récupérer tous les liens bibliothèque de l'utilisateur (avec ses surcharges privées)
   const linkRows = await db
     .prepare(
-      `SELECT book_id, is_owned, is_wished, updated_at
+      `SELECT book_id, is_owned, is_wished, selected_cover_url, custom_overrides_json, updated_at
        FROM v4_library_books
        WHERE library_id = ?`
     )
     .bind(params.libraryId)
-    .all<{ book_id: string; is_owned: number; is_wished: number; updated_at: string }>();
+    .all<{
+      book_id: string;
+      is_owned: number;
+      is_wished: number;
+      selected_cover_url?: string | null;
+      custom_overrides_json?: string | null;
+      updated_at: string;
+    }>();
 
-  const statusByBookId = new Map<string, { status: 'owned' | 'wish' | 'none'; updatedAt: string }>();
+  const statusByBookId = new Map<
+    string,
+    {
+      status: 'owned' | 'wish' | 'none';
+      selectedCoverUrl?: string | null;
+      customOverridesJson?: string | null;
+      updatedAt: string;
+    }
+  >();
   for (const row of linkRows.results || []) {
     const status: 'owned' | 'wish' | 'none' =
       Number(row.is_owned) === 1 ? 'owned' : Number(row.is_wished) === 1 ? 'wish' : 'none';
-    statusByBookId.set(String(row.book_id), { status, updatedAt: String(row.updated_at || '') });
+    statusByBookId.set(String(row.book_id), {
+      status,
+      selectedCoverUrl: row.selected_cover_url ?? null,
+      customOverridesJson: row.custom_overrides_json ?? null,
+      updatedAt: String(row.updated_at || '')
+    });
   }
 
   // 2. Récupérer les livres directement liés (possédés/souhaités) + tous les livres des séries suivies par l'utilisateur
@@ -3524,8 +3608,12 @@ export async function syncV4LibraryBooks(
 
   const items: V4SyncBookItem[] = [];
   for (const row of bookRows.results || []) {
-    const book = mapBookRow(row);
-    const link = statusByBookId.get(book.id);
+    const link = statusByBookId.get(String(row.id));
+    const book = applyLibraryOverridesToBook(
+      mapBookRow(row),
+      link?.selectedCoverUrl,
+      link?.customOverridesJson
+    );
     const maxUpdatedAt = link && link.updatedAt > book.updatedAt ? link.updatedAt : book.updatedAt;
     if (since && maxUpdatedAt && maxUpdatedAt <= since) {
       continue;
@@ -3560,7 +3648,9 @@ export async function getV4SeriesBooks(
       .prepare(
         `SELECT b.*,
                 COALESCE(lb.is_owned, 0) AS lib_is_owned,
-                COALESCE(lb.is_wished, 0) AS lib_is_wished
+                COALESCE(lb.is_wished, 0) AS lib_is_wished,
+                lb.selected_cover_url AS lib_selected_cover_url,
+                lb.custom_overrides_json AS lib_custom_overrides_json
          FROM books b
          LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
          WHERE b.series_id = ?
@@ -3610,7 +3700,11 @@ export async function getV4SeriesBooks(
     const ownershipStatus: 'owned' | 'wish' | 'none' =
       Number(row.lib_is_owned) === 1 ? 'owned' : Number(row.lib_is_wished) === 1 ? 'wish' : 'none';
     return {
-      book: mapBookRow(row),
+      book: applyLibraryOverridesToBook(
+        mapBookRow(row),
+        row.lib_selected_cover_url ?? null,
+        row.lib_custom_overrides_json ?? null
+      ),
       ownershipStatus
     };
   });
@@ -3629,9 +3723,9 @@ export async function getV4SeriesBooks(
 }
 
 /**
- * Met à jour les métadonnées éditées par l'utilisateur (`BookEdit.vue`) directement dans les tables V4
- * (`books`, `v4_library_books`, `v4_series`) afin que toute modification (couverture, titre, série,
- * tome, auteurs, éditeur, genres) soit persistante et reflétée dans toute l'application.
+ * Option B : Enregistre les modifications éditées par l'utilisateur (`BookEdit.vue`) uniquement
+ * comme surcharges privées de son foyer (`v4_library_books.selected_cover_url` + `custom_overrides_json`),
+ * en laissant la fiche de référence commune (`books`) immuable pour les autres utilisateurs.
  */
 export async function updateV4BookMetadata(
   db: DatabaseBinding,
@@ -3697,20 +3791,52 @@ export async function updateV4BookMetadata(
   if (!existingRow) return null;
 
   const bookId = String(existingRow.id);
-  const nextTitle = params.title?.trim() || String(existingRow.canonical_title);
-  const nextNormTitle = normalizeTextKey(nextTitle);
-  const nextAuthors = Array.isArray(params.authors) && params.authors.length > 0
-    ? params.authors.map((a) => a.trim()).filter(Boolean)
-    : safeJsonParse<string[]>(existingRow.authors_json, []);
+  const baseBook = mapBookRow(existingRow);
 
-  // Gestion série : mise à jour ou détachement (one-shot)
-  let nextSeriesId: string | null = existingRow.series_id ?? null;
-  let nextSeriesName: string | null = existingRow.series_name ?? null;
+  // Si aucun libraryId n'est fourni, ne pas altérer la table centrale `books`
+  if (!params.libraryId) {
+    return baseBook;
+  }
+
+  const existingLink = await db
+    .prepare(
+      'SELECT is_owned, is_wished, selected_cover_url, custom_overrides_json FROM v4_library_books WHERE library_id = ? AND book_id = ? LIMIT 1'
+    )
+    .bind(params.libraryId, bookId)
+    .first<{
+      is_owned: number;
+      is_wished: number;
+      selected_cover_url?: string | null;
+      custom_overrides_json?: string | null;
+    }>();
+
+  const currentOverrides = existingLink?.custom_overrides_json
+    ? safeJsonParse<LibraryBookOverrides>(existingLink.custom_overrides_json, {})
+    : {};
+
+  const nextOverrides: LibraryBookOverrides = { ...currentOverrides };
+
+  if (params.title?.trim() && params.title.trim() !== baseBook.canonicalTitle) {
+    nextOverrides.title = params.title.trim();
+  } else if (params.title?.trim() === baseBook.canonicalTitle) {
+    delete nextOverrides.title;
+  }
+
+  if (Array.isArray(params.authors) && params.authors.length > 0) {
+    const cleanAuthors = params.authors.map((a) => a.trim()).filter(Boolean);
+    if (cleanAuthors.length > 0) {
+      nextOverrides.authors = cleanAuthors;
+    }
+  }
+
+  // Gestion série privée du foyer (création/résolution non destructrice de v4_series si nouvelle série saisie)
+  let nextSeriesId: string | null = (nextOverrides.seriesId !== undefined ? nextOverrides.seriesId : baseBook.seriesId) ?? null;
   if (params.series !== undefined) {
     const cleanSeries = params.series.trim();
     if (!cleanSeries) {
       nextSeriesId = null;
-      nextSeriesName = null;
+      nextOverrides.seriesId = null;
+      nextOverrides.seriesName = null;
     } else {
       const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(cleanSeries));
       const targetName = cleanDisplay || cleanSeries;
@@ -3722,118 +3848,119 @@ export async function updateV4BookMetadata(
       }
       if (sRow) {
         nextSeriesId = String(sRow.id);
-        nextSeriesName = String(sRow.canonical_name);
+        nextOverrides.seriesId = nextSeriesId;
+        nextOverrides.seriesName = String(sRow.canonical_name);
       } else {
-        nextSeriesId = params.seriesId || `ser_${(coreKey || nextNormTitle).replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
-        nextSeriesName = targetName;
+        nextSeriesId = params.seriesId || `ser_${(coreKey || normalizeTextKey(targetName)).replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
+        nextOverrides.seriesId = nextSeriesId;
+        nextOverrides.seriesName = targetName;
         await db
           .prepare(
             `INSERT OR IGNORE INTO v4_series
               (id, canonical_name, normalized_core_key, aliases_json, primary_authors_json, bnf_ensemble_ids_json, is_complete_expanded, known_volumes_count, created_at, updated_at)
              VALUES (?, ?, ?, '[]', ?, '[]', 0, 1, ?, ?)`
           )
-          .bind(nextSeriesId, nextSeriesName, coreKey || normalizeTextKey(targetName), JSON.stringify(nextAuthors), now, now)
+          .bind(nextSeriesId, targetName, coreKey || normalizeTextKey(targetName), JSON.stringify(nextOverrides.authors || baseBook.authors), now, now)
           .run();
       }
     }
   }
 
-  // Gestion numéro de tome
+  // Gestion numéro de tome privée
   const isRowIntegral = Number(existingRow.is_integral) === 1;
-  let nextVolNum: number | null = typeof existingRow.volume_number === 'number' ? existingRow.volume_number : existingRow.volume_number ? Number(existingRow.volume_number) : null;
-  let nextVolLabel: string | null = existingRow.volume_label ?? null;
-  let nextIsHs = isRowIntegral ? 0 : (Number(existingRow.is_hors_serie) === 1 ? 1 : 0);
   if (params.seriesNumber !== undefined) {
     const cleanNum = params.seriesNumber.trim();
     if (!nextSeriesId || !cleanNum) {
-      nextVolNum = null;
-      nextVolLabel = isRowIntegral ? existingRow.volume_label : null;
-      nextIsHs = nextSeriesId && !isRowIntegral ? 1 : 0;
+      nextOverrides.volumeNumber = null;
+      nextOverrides.volumeLabel = isRowIntegral ? baseBook.volumeLabel : null;
+      nextOverrides.isHorsSerie = Boolean(nextSeriesId && !isRowIntegral);
     } else if (isRowIntegral) {
-      nextVolNum = null;
-      nextVolLabel = cleanNum;
-      nextIsHs = 0;
+      nextOverrides.volumeNumber = null;
+      nextOverrides.volumeLabel = cleanNum;
+      nextOverrides.isHorsSerie = false;
     } else {
       const normNum = normalizeSeriesNumber(cleanNum);
       if (normNum && /^\d+$/.test(normNum)) {
-        nextVolNum = parseInt(normNum, 10);
-        nextVolLabel = String(nextVolNum);
-        nextIsHs = 0;
+        const parsed = parseInt(normNum, 10);
+        nextOverrides.volumeNumber = parsed;
+        nextOverrides.volumeLabel = String(parsed);
+        nextOverrides.isHorsSerie = false;
       } else {
-        nextVolNum = null;
-        nextVolLabel = cleanNum;
-        nextIsHs = 1;
+        nextOverrides.volumeNumber = null;
+        nextOverrides.volumeLabel = cleanNum;
+        nextOverrides.isHorsSerie = true;
       }
     }
   }
 
-  // Couverture & catalogue d'éditions
-  const nextCoverUrl = params.coverUrl !== undefined ? (params.coverUrl.trim() || null) : (existingRow.selected_cover_url ?? null);
-  const editionsCatalog = safeJsonParse<EditionCatalogEntry[]>(existingRow.editions_catalog_json, []);
-  if (editionsCatalog.length > 0 && (params.publisher !== undefined || params.publishDate !== undefined || params.coverUrl !== undefined)) {
-    editionsCatalog[0] = {
-      ...editionsCatalog[0],
-      ...(params.publisher !== undefined ? { publisher: params.publisher.trim() || undefined } : {}),
-      ...(params.publishDate !== undefined ? { publicationYear: params.publishDate.trim() || undefined } : {}),
-      ...(params.coverUrl !== undefined ? { coverUrl: nextCoverUrl || undefined } : {})
-    };
+  if (params.publisher !== undefined) {
+    nextOverrides.publisher = params.publisher.trim() || undefined;
+  }
+  if (params.publishDate !== undefined) {
+    nextOverrides.publicationYear = params.publishDate.trim() || undefined;
   }
 
-  // Genres
-  let nextMainCategory = String(existingRow.main_category || 'Autre');
-  let nextSubgenres = safeJsonParse<string[]>(existingRow.subgenres_json, []);
   if (Array.isArray(params.genres) && params.genres.length > 0) {
-    nextMainCategory = params.genres[0];
-    nextSubgenres = params.genres.slice(1);
+    nextOverrides.mainCategory = params.genres[0];
+    nextOverrides.subgenres = params.genres.slice(1);
   }
+
+  const nextCoverUrl =
+    params.coverUrl !== undefined
+      ? params.coverUrl.trim() || null
+      : (existingLink?.selected_cover_url ?? null);
+
+  const overridesJson = JSON.stringify(nextOverrides);
 
   await db
     .prepare(
-      `UPDATE books SET
-        canonical_title = ?, normalized_title = ?, series_id = ?, series_name = ?,
-        volume_number = ?, volume_label = ?, is_hors_serie = ?,
-        authors_json = ?, editions_catalog_json = ?, selected_cover_url = ?,
-        main_category = ?, subgenres_json = ?, updated_at = ?
-       WHERE id = ?`
+      `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, custom_overrides_json, added_at, updated_at)
+       VALUES (?, ?, ?, ?, 'manual_edit', ?, ?, ?, ?)
+       ON CONFLICT(library_id, book_id) DO UPDATE SET
+         selected_cover_url = excluded.selected_cover_url,
+         custom_overrides_json = excluded.custom_overrides_json,
+         updated_at = excluded.updated_at`
     )
     .bind(
-      nextTitle,
-      nextNormTitle,
-      nextSeriesId,
-      nextSeriesName,
-      nextVolNum,
-      nextVolLabel,
-      nextIsHs,
-      JSON.stringify(nextAuthors),
-      JSON.stringify(editionsCatalog),
+      params.libraryId,
+      bookId,
+      existingLink ? Number(existingLink.is_owned) : 0,
+      existingLink ? Number(existingLink.is_wished) : 0,
       nextCoverUrl,
-      nextMainCategory,
-      JSON.stringify(nextSubgenres),
+      overridesJson,
       now,
-      bookId
+      now
     )
     .run();
 
+  // Propager les genres modifiés uniquement aux autres tomes de la série DANS LA BIBLIOTHÈQUE DU FOYER (`v4_library_books`)
   if (Array.isArray(params.genres) && params.genres.length > 0 && nextSeriesId) {
-    await db
-      .prepare('UPDATE books SET main_category = ?, subgenres_json = ?, updated_at = ? WHERE series_id = ?')
-      .bind(nextMainCategory, JSON.stringify(nextSubgenres), now, nextSeriesId)
-      .run()
-      .catch(() => {});
-  }
-
-  if (params.libraryId) {
-    await db
+    const siblingLinks = await db
       .prepare(
-        `UPDATE v4_library_books
-         SET selected_cover_url = ?, updated_at = ?
-         WHERE library_id = ? AND book_id = ?`
+        `SELECT lb.book_id, lb.custom_overrides_json
+         FROM v4_library_books lb
+         JOIN books b ON b.id = lb.book_id
+         WHERE lb.library_id = ? AND b.series_id = ? AND lb.book_id != ?`
       )
-      .bind(nextCoverUrl, now, params.libraryId, bookId)
-      .run()
-      .catch(() => {});
+      .bind(params.libraryId, nextSeriesId, bookId)
+      .all<{ book_id: string; custom_overrides_json?: string | null }>()
+      .catch(() => ({ results: [] as Array<{ book_id: string; custom_overrides_json?: string | null }> }));
+
+    for (const sib of siblingLinks.results || []) {
+      const sibOv = sib.custom_overrides_json
+        ? safeJsonParse<LibraryBookOverrides>(sib.custom_overrides_json, {})
+        : {};
+      sibOv.mainCategory = params.genres[0];
+      sibOv.subgenres = params.genres.slice(1);
+      await db
+        .prepare(
+          'UPDATE v4_library_books SET custom_overrides_json = ?, updated_at = ? WHERE library_id = ? AND book_id = ?'
+        )
+        .bind(JSON.stringify(sibOv), now, params.libraryId, sib.book_id)
+        .run()
+        .catch(() => {});
+    }
   }
 
-  const refreshed = await db.prepare('SELECT * FROM books WHERE id = ? LIMIT 1').bind(bookId).first<Record<string, any>>();
-  return refreshed ? mapBookRow(refreshed) : null;
+  return applyLibraryOverridesToBook(baseBook, nextCoverUrl, overridesJson);
 }

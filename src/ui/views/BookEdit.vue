@@ -144,6 +144,83 @@ watch(seriesInput, (val) => {
   }
 });
 
+const refreshAlternativeCovers = async (forceRefresh = true) => {
+  const currentBook = originalBook.value;
+  if (!currentBook) return;
+  const isbn = currentBook.isbn13 || currentBook.isbn10;
+  if (!isbn && !currentBook.workUri && !currentBook.title) return;
+
+  isLoadingExtCovers.value = true;
+  try {
+    const coverParams = new URLSearchParams({
+      isbn: isbn || '',
+      bookId: currentBook.bookId || '',
+      workUri: currentBook.workUri || '',
+      title: currentBook.title || '',
+      author: currentBook.authors?.[0] || '',
+      ...(forceRefresh ? { forceRefresh: '1' } : {})
+    });
+    const [extData, edCoversData] = await Promise.all([
+      isbn && (forceRefresh || !currentBook.coverUrl)
+        ? externalMetadataService.fetchFromExternalSources(isbn).catch(() => null)
+        : Promise.resolve(null),
+      fetch(`/api/gateway?action=work-edition-covers&${coverParams.toString()}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+    ]);
+
+    if (Array.isArray(edCoversData?.coverUrls)) {
+      editionExtraCovers.value = edCoversData.coverUrls;
+    }
+
+    if (extData) {
+      extMetadata.value = extData;
+      if (!titleInput.value.trim() && extData.title) titleInput.value = extData.title;
+      if (!authorsInput.value.trim() && Array.isArray(extData.authors) && extData.authors.length > 0) {
+        authorsInput.value = extData.authors.join(', ');
+      }
+      if (!seriesInput.value.trim() && extData.series) {
+        seriesInput.value = extData.series;
+        noSeries.value = false;
+      }
+      if (!noSeries.value && !seriesNumberInput.value.trim() && extData.seriesNumber) {
+        seriesNumberInput.value = extData.seriesNumber;
+      }
+      if (!publisherInput.value.trim() && extData.publisher) publisherInput.value = extData.publisher;
+      if (!publishDateInput.value.trim() && extData.publishDate) publishDateInput.value = extData.publishDate;
+      if (!pageCountInput.value && extData.pageCount) pageCountInput.value = extData.pageCount;
+      if (!coverUrlInput.value.trim() && extData.coverUrl) coverUrlInput.value = extData.coverUrl;
+      if (genresInput.value.length === 0 && Array.isArray(extData.genres) && extData.genres.length > 0) {
+        genresInput.value = [...extData.genres];
+      }
+    }
+
+    // Mémoriser les URLs découvertes dans le cache local IndexedDB pour affichage instantané la prochaine fois
+    const mergedFallbacks = Array.from(
+      new Set([
+        ...(currentBook.coverFallbackUrls || []),
+        ...editionExtraCovers.value,
+        ...(extData?.coverFallbackUrls || [])
+      ])
+    ).slice(0, 36);
+    if (mergedFallbacks.length > (currentBook.coverFallbackUrls?.length || 0)) {
+      currentBook.coverFallbackUrls = mergedFallbacks;
+      await databaseService.saveBookToCache(JSON.parse(JSON.stringify(currentBook))).catch(() => {});
+    }
+
+    isLoadingExtCovers.value = false;
+    void deduplicateCoverUrls(rawCandidateUrls.value, {
+      maxCandidates: 36
+    }).then((deduped) => {
+      if (deduped.length > 0) deduplicatedCovers.value = deduped;
+    });
+  } catch (err: any) {
+    console.warn('[BOOK EDIT] Recherche sources externes non critique :', err.message);
+  } finally {
+    isLoadingExtCovers.value = false;
+  }
+};
+
 const normStr = (v: unknown) => String(v ?? '').trim();
 
 const loadBookForEdit = async () => {
@@ -187,72 +264,18 @@ const loadBookForEdit = async () => {
 
     isLoading.value = false;
 
-    // Recherche en arrière-plan sur nos sources + autres éditions de l'œuvre (Inventaire/Wikidata/OL) + déduplication visuelle dHash
+    // Recherche des couvertures alternatives :
+    // 1) Si le cache local/serveur contient déjà >= 2 URLs, affichage immédiat sans appel externe !
+    // 2) Sinon, recherche en arrière-plan sur nos sources + D1 et sauvegarde des URLs découvertes en IndexedDB.
     const isbn = currentBook.isbn13 || currentBook.isbn10;
-    if (isbn || currentBook.workUri || currentBook.title) {
-      isLoadingExtCovers.value = true;
-      try {
-        const coverParams = new URLSearchParams({
-          isbn: isbn || '',
-          workUri: currentBook.workUri || '',
-          title: currentBook.title || '',
-          author: currentBook.authors?.[0] || ''
-        });
-        const [extData, edCoversData] = await Promise.all([
-          isbn ? externalMetadataService.fetchFromExternalSources(isbn).catch(() => null) : Promise.resolve(null),
-          fetch(`/api/gateway?action=work-edition-covers&${coverParams.toString()}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null)
-        ]);
-
-        if (Array.isArray(edCoversData?.coverUrls)) {
-          editionExtraCovers.value = edCoversData.coverUrls;
-        }
-
-        if (extData) {
-          extMetadata.value = extData;
-          if (!titleInput.value.trim() && extData.title) {
-            titleInput.value = extData.title;
-          }
-          if (!authorsInput.value.trim() && Array.isArray(extData.authors) && extData.authors.length > 0) {
-            authorsInput.value = extData.authors.join(', ');
-          }
-          if (!hadInitialSeries && !seriesInput.value.trim() && extData.series) {
-            seriesInput.value = extData.series;
-            noSeries.value = false;
-          }
-          if (!noSeries.value && !seriesNumberInput.value.trim() && extData.seriesNumber) {
-            seriesNumberInput.value = extData.seriesNumber;
-          }
-          if (!publisherInput.value.trim() && extData.publisher) {
-            publisherInput.value = extData.publisher;
-          }
-          if (!publishDateInput.value.trim() && extData.publishDate) {
-            publishDateInput.value = extData.publishDate;
-          }
-          if (!pageCountInput.value && extData.pageCount) {
-            pageCountInput.value = extData.pageCount;
-          }
-          if (!coverUrlInput.value.trim() && extData.coverUrl) {
-            coverUrlInput.value = extData.coverUrl;
-          }
-          if (genresInput.value.length === 0 && Array.isArray(extData.genres) && extData.genres.length > 0) {
-            genresInput.value = [...extData.genres];
-          }
-        }
-
-        // Afficher immédiatement la galerie, puis filtrer les doublons visuels en arrière-plan
-        isLoadingExtCovers.value = false;
-        void deduplicateCoverUrls(rawCandidateUrls.value, {
-          maxCandidates: 36
-        }).then((deduped) => {
-          if (deduped.length > 0) deduplicatedCovers.value = deduped;
-        });
-      } catch (err: any) {
-        console.warn('[BOOK EDIT] Recherche sources externes non critique :', err.message);
-      } finally {
-        isLoadingExtCovers.value = false;
-      }
+    if (rawCandidateUrls.value.length >= 2) {
+      void deduplicateCoverUrls(rawCandidateUrls.value, {
+        maxCandidates: 36
+      }).then((deduped) => {
+        if (deduped.length > 0) deduplicatedCovers.value = deduped;
+      });
+    } else if (isbn || currentBook.workUri || currentBook.title) {
+      void refreshAlternativeCovers(false);
     }
   } catch (err: any) {
     console.error("[BOOK EDIT] Erreur d'initialisation :", err);
@@ -477,11 +500,19 @@ const saveChanges = async () => {
               </div>
             </div>
 
-            <div v-if="isLoadingExtCovers" class="covers-hint-line">
-              Recherche de couvertures alternatives en cours...
-            </div>
-            <div v-else-if="suggestedCoverCandidates.length > 0" class="cover-candidates-block">
-              <span class="cover-candidates-title">Couvertures disponibles (cliquez pour choisir) :</span>
+            <div v-if="suggestedCoverCandidates.length > 0" class="cover-candidates-block">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;">
+                <span class="cover-candidates-title">Couvertures disponibles (cliquez pour choisir) :</span>
+                <button
+                  type="button"
+                  class="wireframe-btn apply-btn-inline"
+                  style="width: auto; font-size: 0.78rem; padding: 0.25rem 0.6rem;"
+                  :disabled="isLoadingExtCovers"
+                  @click="refreshAlternativeCovers(true)"
+                >
+                  {{ isLoadingExtCovers ? 'Recherche...' : 'Rechercher d’autres couvertures' }}
+                </button>
+              </div>
               <div class="cover-candidates-gallery">
                 <button
                   v-for="(candUrl, idx) in suggestedCoverCandidates"
@@ -499,6 +530,9 @@ const saveChanges = async () => {
                   />
                 </button>
               </div>
+            </div>
+            <div v-else-if="isLoadingExtCovers" class="covers-hint-line">
+              Recherche de couvertures alternatives en cours...
             </div>
           </div>
 

@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T14:50+01:00`
+* **Dernière mise à jour :** `2026-11-21T15:05+01:00`
 * **Branche active :** `feat/architecture-v4`
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -54,6 +54,12 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 ### ADR-06 — Parcours `/scan` dédié et sous-vue d’arbitrage aérée (2026-11-18)
 * **Contexte :** Les modales imbriquées rendaient le tri Photo IA illisible sur mobile (listes denses, `<select>` en ligne, blocages sur Rafale/Scan simple).
 * **Décision :** Extraire une vraie route `/scan` ([ScanView.vue](file:///Users/mathieuegard/Dropbox/Mac/Desktop/script_app_bd/inventaire-surcouche/src/ui/views/ScanView.vue)) avec 3 onglets côte à côte (`Photo IA`, `Rafale`, `Scan simple`), une modale caméra dédiée ([CameraBarcodeModal.vue](file:///Users/mathieuegard/Dropbox/Mac/Desktop/script_app_bd/inventaire-surcouche/src/ui/components/CameraBarcodeModal.vue)) qui s’ouvre directement sur `Rafale` et `Scan simple` (fermeture auto sur `Scan simple` + spinner de chargement vers la fiche), une grille de couvertures épurée et une sous-vue dédiée ([PhotoItemDetailModal.vue](file:///Users/mathieuegard/Dropbox/Mac/Desktop/script_app_bd/inventaire-surcouche/src/ui/components/PhotoItemDetailModal.vue)) affichant la position physique gauche/droite sur l’étagère et les options d’édition.
+
+### ADR-07 — Option B : Catalogue commun `books` immuable + surcharges privées par foyer (`v4_library_books`) + cache des couvertures (2026-11-21)
+* **Contexte :** Si un utilisateur modifiait une couverture ou une métadonnée dans `BookEdit.vue`, `updateV4BookMetadata` écrasait la ligne partagée dans `books`, écrasant ainsi les choix des autres utilisateurs. De plus, `work-edition-covers` réinterrogeait 5 APIs externes à chaque ouverture de `BookEdit.vue`.
+* **Décision :**
+  1. Rendre `books` **immuable** après la consolidation initiale (1er découvreur) ; enregistrer toutes les éditions ultérieures uniquement comme surcharges privées du foyer (`v4_library_books.selected_cover_url` et `v4_library_books.custom_overrides_json`, migration `0012`) fusionnées à la lecture (`applyLibraryOverridesToBook`).
+  2. Mettre en cache les URLs de couvertures découvertes dans `books.editions_catalog_json` (D1) et `coverFallbackUrls` (IndexedDB) : `BookEdit.vue` affiche instantanément la galerie déjà connue sans appel externe, avec un bouton explicite *« Rechercher d’autres couvertures »* (`forceRefresh=1`).
 
 ---
 

@@ -128,29 +128,32 @@ export const bookSemanticOrchestrator = {
     const effectiveSeriesId =
       resolvedSeriesUri ?? (updatedData.series ? (!hasSeriesNameChanged ? originalBook.seriesId : undefined) : null);
 
-    // 1. Synchronisation distante V2 (catalog_entities) + V4 (books & v4_library_books)
-    const [res, v4Updated] = await Promise.all([
-      inventaireSyncService.patchBookOnInventaire(
-        originalBook,
-        updatedData,
-        resolvedSeriesUri,
-        resolvedAuthorUris
-      ),
-      patchV4BookMetadata({
-        bookId: originalBook.bookId,
-        uri: originalBook.uri,
-        isbn13: originalBook.isbn13,
-        title: updatedData.title,
-        authors: updatedData.authors,
-        series: updatedData.series,
-        seriesId: effectiveSeriesId,
-        seriesNumber: updatedData.seriesNumber,
-        publisher: updatedData.publisher,
-        publishDate: updatedData.publishDate,
-        coverUrl: updatedData.coverUrl,
-        genres: updatedData.genres
-      }).catch(() => null)
-    ]);
+    // 1. Option B : Pour un livre V4, enregistrer uniquement les surcharges privées du foyer dans `v4_library_books`
+    //    afin de ne jamais écraser le catalogue commun ni les choix des autres utilisateurs.
+    const v4Updated = await patchV4BookMetadata({
+      bookId: originalBook.bookId,
+      uri: originalBook.uri,
+      isbn13: originalBook.isbn13,
+      title: updatedData.title,
+      authors: updatedData.authors,
+      series: updatedData.series,
+      seriesId: effectiveSeriesId,
+      seriesNumber: updatedData.seriesNumber,
+      publisher: updatedData.publisher,
+      publishDate: updatedData.publishDate,
+      coverUrl: updatedData.coverUrl,
+      genres: updatedData.genres
+    }).catch(() => null);
+
+    const res =
+      !v4Updated && !originalBook.bookId
+        ? await inventaireSyncService.patchBookOnInventaire(
+            originalBook,
+            updatedData,
+            resolvedSeriesUri,
+            resolvedAuthorUris
+          )
+        : { seriesUri: effectiveSeriesId || undefined, workUri: originalBook.workUri };
 
     const newCoverUrl = updatedData.coverUrl || undefined;
     const isDataCover = Boolean(newCoverUrl && newCoverUrl.startsWith('data:image/'));

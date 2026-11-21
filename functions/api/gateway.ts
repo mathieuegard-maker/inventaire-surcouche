@@ -508,9 +508,65 @@ export const onRequest = async (context: {
 
       case 'work-edition-covers': {
         const isbnParam = (url.searchParams.get('isbn') || '').replace(/[^0-9Xx]/g, '').trim();
+        const bookIdParam = (url.searchParams.get('bookId') || '').trim();
         const titleParam = (url.searchParams.get('title') || '').trim();
         const authorParam = (url.searchParams.get('author') || '').trim();
+        const forceRefresh = url.searchParams.get('forceRefresh') === '1';
         let targetWorkUri = (url.searchParams.get('workUri') || '').trim();
+
+        // 0. Court-circuit D1 : si les URLs des différentes éditions/couvertures ont déjà été mises en cache dans `books`,
+        //    les renvoyer instantanément sans relancer 5 appels API externes à chaque ouverture de BookEdit.vue !
+        let cachedBookRow: { id: string; editions_catalog_json: string | null; known_isbns_json: string | null; selected_cover_url: string | null } | null = null;
+        if (env?.DB) {
+          try {
+            if (bookIdParam) {
+              cachedBookRow = await env.DB
+                .prepare('SELECT id, editions_catalog_json, known_isbns_json, selected_cover_url FROM books WHERE id = ? LIMIT 1')
+                .bind(bookIdParam)
+                .first();
+            }
+            if (!cachedBookRow && isbnParam) {
+              const norm13 = isbnUtil.normalize(isbnParam);
+              if (norm13) {
+                cachedBookRow = await env.DB
+                  .prepare(
+                    `SELECT b.id, b.editions_catalog_json, b.known_isbns_json, b.selected_cover_url
+                     FROM book_isbn_index bi
+                     JOIN books b ON b.id = bi.book_id
+                     WHERE bi.isbn13 = ?
+                     LIMIT 1`
+                  )
+                  .bind(norm13)
+                  .first();
+              }
+            }
+            if (cachedBookRow && !forceRefresh) {
+              const eds: Array<{ isbn13?: string; coverUrl?: string }> = cachedBookRow.editions_catalog_json
+                ? JSON.parse(cachedBookRow.editions_catalog_json)
+                : [];
+              const knownIsbns: string[] = cachedBookRow.known_isbns_json
+                ? JSON.parse(cachedBookRow.known_isbns_json)
+                : [];
+              const cachedUrls = new Set<string>();
+              if (cachedBookRow.selected_cover_url) cachedUrls.add(cachedBookRow.selected_cover_url);
+              for (const ed of eds) {
+                if (ed?.coverUrl) cachedUrls.add(ed.coverUrl);
+              }
+              if (cachedUrls.size >= 2) {
+                return jsonResp({
+                  ok: true,
+                  fromCache: true,
+                  workUri: targetWorkUri || null,
+                  editionIsbns: knownIsbns,
+                  coverUrls: Array.from(cachedUrls)
+                });
+              }
+            }
+          } catch {
+            // Non bloquant
+          }
+        }
+
         const workUrisToCheck = new Set<string>();
         if (targetWorkUri && targetWorkUri.startsWith('wd:')) {
           workUrisToCheck.add(targetWorkUri);
@@ -768,11 +824,48 @@ export const onRequest = async (context: {
           coverSet.add(`https://covers.openlibrary.org/b/isbn/${edIsbn}-L.jpg?default=false`);
         }
 
+        const finalCoverUrls = Array.from(coverSet);
+        const finalEditionIsbns = Array.from(editionIsbns);
+
+        // Persister les URLs de couvertures découvertes dans `books.editions_catalog_json` en D1
+        // (donnée factuelle commune) pour accélérer toutes les ouvertures ultérieures !
+        if (env?.DB && cachedBookRow && finalCoverUrls.length > 0) {
+          const persistCoversTask = (async () => {
+            try {
+              const eds: Array<{ isbn13?: string; coverUrl?: string; publisher?: string; publicationYear?: string }> =
+                cachedBookRow!.editions_catalog_json ? JSON.parse(cachedBookRow!.editions_catalog_json) : [];
+              const existingCoverSet = new Set(eds.map((e) => e.coverUrl).filter(Boolean) as string[]);
+              let changed = false;
+              for (const cu of finalCoverUrls.slice(0, 30)) {
+                if (!existingCoverSet.has(cu)) {
+                  eds.push({ coverUrl: cu });
+                  existingCoverSet.add(cu);
+                  changed = true;
+                }
+              }
+              if (changed) {
+                await env.DB!
+                  .prepare('UPDATE books SET editions_catalog_json = ? WHERE id = ?')
+                  .bind(JSON.stringify(eds), cachedBookRow!.id)
+                  .run();
+              }
+            } catch {
+              // Non bloquant
+            }
+          })();
+          if (typeof context.waitUntil === 'function') {
+            context.waitUntil(persistCoversTask);
+          } else {
+            await persistCoversTask;
+          }
+        }
+
         return jsonResp({
           ok: true,
+          fromCache: false,
           workUri: targetWorkUri || null,
-          editionIsbns: Array.from(editionIsbns),
-          coverUrls: Array.from(coverSet)
+          editionIsbns: finalEditionIsbns,
+          coverUrls: finalCoverUrls
         });
       }
 
