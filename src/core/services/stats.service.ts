@@ -206,32 +206,39 @@ export const statsService = {
     }
     const ownedBooks = Array.from(ownedBookMap.values());
     const distinctOwnedKeys = new Set<string>(ownedBookMap.keys());
-    for (const entry of inventoryEntries) {
-      const matched = findCachedBookForUri(entry.uri);
-      if (matched) {
-        distinctOwnedKeys.add(canonicalBookKey(matched));
-      } else {
+    if (allBooks.length === 0) {
+      for (const entry of inventoryEntries) {
         distinctOwnedKeys.add(entry.uri);
+      }
+    } else {
+      for (const entry of inventoryEntries) {
+        const matched = findCachedBookForUri(entry.uri);
+        if (matched && matched.ownershipStatus === 'owned') {
+          distinctOwnedKeys.add(canonicalBookKey(matched));
+        }
       }
     }
     const totalOwned = distinctOwnedKeys.size;
     const totalLoans = loans.length;
 
-    // 2. Déduplication canonique de la wishlist (évite double comptage work + edition + v4)
+    // 2. Déduplication canonique de la wishlist (alignée 1-pour-1 avec WishlistView en mode V4)
+    const hasV4Books = allBooks.some((b) => Boolean(b.bookId));
     const distinctWishKeys = new Set<string>();
     for (const b of allBooks) {
       if (b.ownershipStatus === 'wish') {
         distinctWishKeys.add(canonicalBookKey(b));
       }
     }
-    for (const entry of wishlistEntries) {
-      const matched = findCachedBookForUri(entry.uri);
-      if (matched) {
-        if (matched.ownershipStatus === 'wish') {
-          distinctWishKeys.add(canonicalBookKey(matched));
+    if (!hasV4Books || distinctWishKeys.size === 0) {
+      for (const entry of wishlistEntries) {
+        const matched = findCachedBookForUri(entry.uri);
+        if (matched) {
+          if (matched.ownershipStatus === 'wish') {
+            distinctWishKeys.add(canonicalBookKey(matched));
+          }
+        } else {
+          distinctWishKeys.add(entry.uri);
         }
-      } else {
-        distinctWishKeys.add(entry.uri);
       }
     }
     const totalWishlist = distinctWishKeys.size;

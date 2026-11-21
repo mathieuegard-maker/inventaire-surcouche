@@ -47,7 +47,7 @@ const formatScanTime = (ts: number) =>
 
 let hasRequestedBackgroundHydration = false;
 
-const loadDashboardData = async () => {
+const loadDashboardData = async (silent = false) => {
   try {
     const [statsRes, cachedBooks, loans, invRegistry, wishRegistry] = await Promise.all([
       statsService.getDashboardStats(30),
@@ -80,21 +80,19 @@ const loadDashboardData = async () => {
         .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || a.title.localeCompare(b.title))
         .slice(0, 5);
 
-    const sameUriList = (a: HumanizedBook[], b: HumanizedBook[]) =>
-      a.length === b.length && a.every((item, idx) => item.uri === b[idx]?.uri);
-
     const nextCollection = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'owned'));
     const nextWishlist = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'wish'));
     const loanUris = new Set(loans.map((l) => l.uri));
     const nextLoans = byRecent(cachedBooks.filter((b) => loanUris.has(b.uri)));
 
-    if (!sameUriList(previewCollection.value, nextCollection)) {
+    // Ne pas permuter les miniatures déjà affichées lors d'un rafraîchissement silencieux en tâche de fond
+    if (!silent || previewCollection.value.length === 0) {
       previewCollection.value = nextCollection;
     }
-    if (!sameUriList(previewWishlist.value, nextWishlist)) {
+    if (!silent || previewWishlist.value.length === 0) {
       previewWishlist.value = nextWishlist;
     }
-    if (!sameUriList(previewLoans.value, nextLoans)) {
+    if (!silent || previewLoans.value.length === 0) {
       previewLoans.value = nextLoans;
     }
   } catch (e) {
@@ -108,13 +106,13 @@ const openBook = (uri: string) => {
 };
 
 onMounted(async () => {
-  await loadDashboardData();
+  await loadDashboardData(false);
 });
 
 watch(
   () => scannerState.lastUpdatedTick.value,
   () => {
-    loadDashboardData();
+    loadDashboardData(true);
   }
 );
 </script>

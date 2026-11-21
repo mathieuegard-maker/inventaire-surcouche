@@ -113,7 +113,16 @@ const fetchWishlist = async (silent = false) => {
       }
     }
 
-    allWishBooks.value = Array.from(dedupMap.values());
+    const nextWished = Array.from(dedupMap.values());
+    const buildSig = (list: HumanizedBook[]) =>
+      list
+        .map((b) => `${b.uri}|${b.ownershipStatus}|${b.wishedByName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`)
+        .sort()
+        .join('\n');
+
+    if (!silent || buildSig(allWishBooks.value) !== buildSig(nextWished)) {
+      allWishBooks.value = nextWished;
+    }
     if (!silent) {
       selectedIds.value = [];
     }
