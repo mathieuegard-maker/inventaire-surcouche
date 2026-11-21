@@ -1,0 +1,41 @@
+services:
+  biblio-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: biblio-collection-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      CRON_ENABLED: "true"
+      CRON_INTERVAL_MINUTES: "60"
+    volumes:
+      - ./data:/data
+    # Si vous utilisez déjà Nginx/Traefik sur l'hôte Debian (sans le service caddy ci-dessous),
+    # décommentez les 2 lignes suivantes et supprimez le bloc `caddy` :
+    # ports:
+    #   - "127.0.0.1:3000:3000"
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: biblio-collection-caddy
+    restart: unless-stopped
+    depends_on:
+      - biblio-app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

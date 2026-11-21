@@ -58,3 +58,4 @@ export_project.py
 full_project_code.txt
 .wrangler/
 scratch/
+data/

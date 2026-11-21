@@ -1,7 +1,7 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T20:16+01:00`
-* **Branche active :** `feat/architecture-v4`
+* **Dernière mise à jour :** `2026-11-21T20:59+01:00`
+* **Branche active :** `feat/self-hosted-server` (issue de `main` après merge de `feat/architecture-v4`)
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
 
@@ -65,6 +65,10 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 * **Contexte :** Certaines séries rééditées dans une autre maquette éditoriale changent de nombre de tomes (*Fables* en 22 tomes *Vertigo* vs 10 tomes *Urban Comics Nomad*) tout en partageant la même œuvre mère : `api_bnf_sisters` remonte des tomes d'autres découpages (ex. T.11 *La forêt noire*) dans la même série.
 * **Alternatives écartées :** Scinder automatiquement les séries par `460$3`, nom de collection ou pagination. L'audit réel BnF montre qu'Astérix ou Tintin possèdent chacun ~7 `460$3` distincts pour des tomes strictement identiques (Hachette, Dargaud, Albert René, Casterman, Éditions Atlas...) : une scission automatique fragmenterait ces collections standard en sous-séries incomplètes.
 * **Décision :** Conserver le regroupement standard et offrir au foyer une correction chirurgicale isolée en **Option B** (`POST /api/v2/books/exclude-from-series`, stockée dans `v4_library_books.custom_overrides_json.hiddenFromSeriesIds`, + `series-merge` / `BookDetailView` *« Rattacher / Changer de série »*) pour masquer ou déplacer ponctuellement un tome intrus sans affecter le catalogue commun.
+
+### ADR-09 — Packaging auto-hébergé Debian + Docker sans dépendance Cloudflare (`feat/self-hosted-server`, 2026-11-21)
+* **Contexte :** Les limites d'usage Cloudflare (quotas, 50 sous-requêtes, IP partagée) freinent l'exploitation quotidienne.
+* **Décision :** Conserver la compatibilité Cloudflare intacte tout en ajoutant un runtime autonome Node 22 + Hono + `better-sqlite3` (`server/index.ts`, `server/adapters/sqlite-db.adapter.ts`, `server/adapters/fs-cover-bucket.adapter.ts`, `server/scheduler.ts`), en extrayant le routeur `/api/gateway` dans `src/core/services/gateway-router.service.ts` et en fournissant `Dockerfile`, `docker-compose.yml`, `deploy/Caddyfile` (HTTPS Let's Encrypt pour `mathieuegardtest.fr`), `deploy/nginx-mathieuegardtest.fr.conf` et `documentation/DEPLOIEMENT_SERVEUR_DEBIAN.md`.
 
 ---
 

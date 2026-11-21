@@ -1,0 +1,13 @@
+mathieuegardtest.fr {
+    encode zstd gzip
+
+    reverse_proxy biblio-app:3000 {
+        flush_interval -1
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options SAMEORIGIN
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}
