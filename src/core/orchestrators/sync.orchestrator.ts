@@ -117,7 +117,7 @@ export const syncOrchestrator = {
     activeHydrationPromise = (async () => {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const DB_RESET_TOKEN = 'reset_2026_11_21_v4_clean_v20';
+      const DB_RESET_TOKEN = 'reset_2026_11_21_v4_clean_v21';
       if (
         typeof localStorage !== 'undefined' &&
         localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&
@@ -126,6 +126,7 @@ export const syncOrchestrator = {
         console.log('[HYDRATATION] Purge complète de la base locale IndexedDB (Clean Slate)...');
         await databaseService.clearAllBookData();
         localStorage.removeItem('biblio_catalog_sync_version');
+        localStorage.removeItem('biblio_scan_photo_draft_v1');
         localStorage.setItem('biblio_db_reset_token', DB_RESET_TOKEN);
       }
 
