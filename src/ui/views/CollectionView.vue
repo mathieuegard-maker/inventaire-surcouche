@@ -92,8 +92,10 @@ onBeforeRouteLeave((to, from) => {
   });
 });
 
+let hasTriggeredBackgroundHydration = false;
+
 onMounted(async () => {
-  await fetchCatalogue();
+  await fetchCatalogue(false);
   if (pageState.scrollPosition > 0) {
     setTimeout(() => {
       window.scrollTo({ top: pageState.scrollPosition, behavior: 'instant' });
@@ -104,31 +106,50 @@ onMounted(async () => {
 watch(
   () => scannerState.lastUpdatedTick.value,
   () => {
-    fetchCatalogue();
+    fetchCatalogue(true);
   }
 );
 
-const fetchCatalogue = async () => {
-  isLoading.value = true;
+const fetchCatalogue = async (silent = false) => {
+  if (!silent && allOwnedBooks.value.length === 0) {
+    isLoading.value = true;
+  }
   try {
-    let cached = await databaseService.getAllBooksFromCache();
-    let owned = cached.filter(b => b.ownershipStatus === 'owned');
-    const registryUris = await databaseService.getAllRegistryUris('inventory');
-    if (registryUris.length !== owned.length) {
-      await syncOrchestrator.hydrateCacheInBackground();
-      cached = await databaseService.getAllBooksFromCache();
-      owned = cached.filter(b => b.ownershipStatus === 'owned');
+    const cached = await databaseService.getAllBooksFromCache();
+    const rawOwned = cached.filter(b => b.ownershipStatus === 'owned');
+
+    // Déduplication canonique (évite doublons work + edition + v4)
+    const dedupMap = new Map<string, HumanizedBook>();
+    for (const book of rawOwned) {
+      const key = book.bookId || book.workUri || book.isbn13 || book.uri;
+      if (!dedupMap.has(key)) {
+        dedupMap.set(key, book);
+      }
     }
-    
+    const owned = Array.from(dedupMap.values());
+
+    const loans = await databaseService.getAllLoans();
+    const loanByUri = new Map(loans.map((l) => [l.uri, l]));
     for (const livre of owned) {
-      const activeLoan = await databaseService.getLoan(livre.uri);
+      const activeLoan = loanByUri.get(livre.uri);
       if (activeLoan) {
         livre.loan = activeLoan;
       }
     }
-    
+
     allOwnedBooks.value = owned;
-    selectedIds.value = [];
+    if (!silent) {
+      selectedIds.value = [];
+    }
+
+    // Déclencher la synchronisation serveur en arrière-plan sans bloquer ni faire sauter l'UI (au plus 1 fois par montage)
+    if (!hasTriggeredBackgroundHydration) {
+      const registryUris = await databaseService.getAllRegistryUris('inventory');
+      if (registryUris.length !== owned.length) {
+        hasTriggeredBackgroundHydration = true;
+        syncOrchestrator.hydrateCacheInBackground().catch(() => {});
+      }
+    }
   } catch (e) {
     console.error(e);
   } finally {

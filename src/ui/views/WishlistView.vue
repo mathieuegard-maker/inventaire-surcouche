@@ -74,7 +74,7 @@ onBeforeRouteLeave((to, from) => {
 });
 
 onMounted(async () => {
-  await fetchWishlist();
+  await fetchWishlist(false);
   if (pageState.scrollPosition > 0) {
     setTimeout(() => {
       window.scrollTo({ top: pageState.scrollPosition, behavior: 'instant' });
@@ -85,17 +85,19 @@ onMounted(async () => {
 watch(
   () => scannerState.lastUpdatedTick.value,
   () => {
-    fetchWishlist();
+    fetchWishlist(true);
   }
 );
 
-const fetchWishlist = async () => {
-  isLoading.value = true;
+const fetchWishlist = async (silent = false) => {
+  if (!silent && allWishBooks.value.length === 0) {
+    isLoading.value = true;
+  }
   try {
     const cached = await databaseService.getAllBooksFromCache();
     const rawWished = cached.filter((b) => b.ownershipStatus === 'wish');
 
-    // Déduplication canonique (évite d'afficher 2 fois le même livre s'il existait sous workUri + editionUri)
+    // Déduplication canonique (évite d'afficher 2 fois le même livre s'il existait sous workUri + editionUri + bookId)
     const dedupMap = new Map<string, HumanizedBook>();
     const scoreBook = (b: HumanizedBook) =>
       (b.type === 'edition' ? 4 : 0) +
@@ -104,7 +106,7 @@ const fetchWishlist = async () => {
       (!b.uri.startsWith('isbn:') ? 1 : 0);
 
     for (const book of rawWished) {
-      const key = book.workUri || book.isbn13 || book.uri;
+      const key = book.bookId || book.workUri || book.isbn13 || book.uri;
       const existing = dedupMap.get(key);
       if (!existing || scoreBook(book) > scoreBook(existing)) {
         dedupMap.set(key, book);
@@ -112,7 +114,9 @@ const fetchWishlist = async () => {
     }
 
     allWishBooks.value = Array.from(dedupMap.values());
-    selectedIds.value = [];
+    if (!silent) {
+      selectedIds.value = [];
+    }
   } catch (e) {
     console.error("[WISHLIST VIEW] Échec de lecture du cache :", e);
   } finally {

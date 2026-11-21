@@ -140,11 +140,12 @@ export const syncOrchestrator = {
         localStorage.setItem('biblio_db_reset_token', DB_RESET_TOKEN);
       }
 
+      let hasChanges = false;
       // 0. Synchronisation différentielle V4 pure (books + v4_library_books + tomes des séries suivies)
       const v4Sync = await syncV4BooksToIndexedDb().catch(() => null);
       if (v4Sync && v4Sync.syncedCount > 0) {
         console.log(`[HYDRATATION] ✅ Synchro différentielle V4 : ${v4Sync.syncedCount} fiche(s) synchronisée(s).`);
-        scannerState.lastUpdatedTick.value++;
+        hasChanges = true;
       }
 
       // 1. Collecte des URIs Registres
@@ -160,8 +161,9 @@ export const syncOrchestrator = {
           for (const stale of staleBooks) {
             await databaseService.saveBookToCache({ ...stale, ownershipStatus: 'none' });
           }
-          scannerState.lastUpdatedTick.value++;
+          hasChanges = true;
         }
+        if (hasChanges) scannerState.lastUpdatedTick.value++;
         return;
       }
       
@@ -221,7 +223,7 @@ export const syncOrchestrator = {
       console.log(`[HYDRATATION] ${missingItems.length} nouvelles éditions physiques à télécharger...`);
       if (missingItems.length > 0) {
          await this.hydrateRemainingPhysicalEntities(missingItems);
-         scannerState.lastUpdatedTick.value++;
+         hasChanges = true;
       }
       if (needsGlobalCatalogRefresh && typeof localStorage !== 'undefined') {
         localStorage.setItem('biblio_catalog_sync_version', CATALOG_SYNC_VERSION);
@@ -260,6 +262,10 @@ export const syncOrchestrator = {
             await bookCacheService.saveAndProcessImage(book, 'none');
           }
         }
+      }
+
+      if (hasChanges) {
+        scannerState.lastUpdatedTick.value++;
       }
 
       // 7. Aspiration préventive des séries (Sagas)

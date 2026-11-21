@@ -72,39 +72,97 @@ const selectTab = async (mode: ScannerMode) => {
 };
 
 // ============================================================================
-// MODE SIMPLE & SAISIE ISBN RAPIDE
+// MODE SIMPLE (MODALE CAMÉRA -> AFFICHAGE IDENTIQUE AU MODE RAFALE)
 // ============================================================================
-const manualIsbnInput = ref('');
-const manualLookupBusy = ref(false);
-const manualLookupError = ref('');
+const simpleBooks = computed(() => scannerState.simpleBooks.value);
+const simpleSelectedUris = ref<string[]>([]);
+const showSimpleLendModal = ref(false);
+const simpleFeedback = ref('');
 
-const handleManualIsbnLookup = async () => {
-  const clean = isbnUtil.normalize(manualIsbnInput.value);
-  if (!clean) return;
-  manualLookupBusy.value = true;
-  manualLookupError.value = '';
-  try {
-    const res = await searchService.searchByIsbn(clean);
-    if ((res as any)?.isOfflineUnavailable) {
-      pendingScansStore.addPendingScan(clean);
-      manualLookupError.value = `Hors réseau : le code-barres (${clean}) a été mémorisé pour consultation ultérieure.`;
-      return;
-    }
-    if ((res as any)?.isUnknown) {
-      await router.push({ name: 'BookCreateUnknown', query: { isbn: (res as any).isbn || clean } });
-      return;
-    }
-    if (res?.mainBook?.uri) {
-      saveBookNavigationOrder([res.mainBook.uri], 'direct');
-      await router.push(`/book/${encodeURIComponent(res.mainBook.uri)}`);
-      return;
-    }
-    manualLookupError.value = 'Aucun ouvrage trouvé pour cet ISBN.';
-  } catch (e: unknown) {
-    manualLookupError.value = e instanceof Error ? e.message : 'Erreur lors de la recherche ISBN.';
-  } finally {
-    manualLookupBusy.value = false;
+const isAllSimpleSelected = computed(
+  () => simpleBooks.value.length > 0 && simpleSelectedUris.value.length === simpleBooks.value.length
+);
+
+const toggleAllSimple = (checked: boolean) => {
+  simpleSelectedUris.value = checked ? simpleBooks.value.map((b) => b.uri) : [];
+};
+
+const selectedSimpleBooks = computed(() =>
+  simpleBooks.value.filter((b) => simpleSelectedUris.value.includes(b.uri))
+);
+
+const dispatchSimpleBatchAction = async (
+  action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
+) => {
+  if (selectedSimpleBooks.value.length === 0) return;
+  if (action === 'LEND') {
+    showSimpleLendModal.value = true;
+    return;
   }
+
+  let processed = 0;
+  for (const book of selectedSimpleBooks.value) {
+    if (action === 'DELETE') {
+      if (book.ownershipStatus === 'owned') {
+        await inventoryService.removeFromLibrary(book.uri);
+      } else if (book.ownershipStatus === 'wish') {
+        await wishlistService.removeFromWishlist([book.uri]);
+      }
+      book.ownershipStatus = 'none';
+      if (book.loan) delete book.loan;
+      processed++;
+      continue;
+    }
+    if (action === 'RETURN') {
+      await queueService.enqueueAction('RETURN', book.uri);
+      if (book.loan) delete book.loan;
+      processed++;
+      continue;
+    }
+    if (action === 'ADD_INVENTORY' || action === 'ADD_WISHLIST') {
+      const targetStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
+      const v4Target = action === 'ADD_INVENTORY' ? 'owned' : 'wishlist';
+      const cleanIsbn = book.isbn13 || (book.uri.startsWith('isbn:') ? book.uri.slice(5) : '');
+      let handledByV4 = false;
+      if (cleanIsbn) {
+        const v4Res = await ingestIsbnsViaV4({
+          isbns: [cleanIsbn],
+          sourceChannel: 'canal_1_barcode',
+          action: v4Target
+        });
+        if (v4Res?.results?.[0]?.book) {
+          const humanized = v4BookRecordToHumanizedBook(v4Res.results[0].book, targetStatus);
+          await databaseService.saveBookToCache(humanized);
+          await databaseService.addRegistryEntry(action === 'ADD_INVENTORY' ? 'inventory' : 'wishlist', humanized.uri);
+          handledByV4 = true;
+        }
+      }
+      if (!handledByV4) {
+        await queueService.enqueueAction(action, book.uri);
+      }
+      book.ownershipStatus = targetStatus;
+      processed++;
+    }
+  }
+  simpleSelectedUris.value = [];
+  simpleFeedback.value = `${processed} ouvrage(s) mis à jour.`;
+  scannerState.notifyCatalogChanged();
+};
+
+const confirmSimpleGroupLend = async (friendName: string) => {
+  showSimpleLendModal.value = false;
+  if (!friendName || selectedSimpleBooks.value.length === 0) return;
+  for (const book of selectedSimpleBooks.value) {
+    if (book.ownershipStatus !== 'owned') {
+      await queueService.enqueueAction('ADD_INVENTORY', book.uri);
+      book.ownershipStatus = 'owned';
+    }
+    await queueService.enqueueAction('LEND', book.uri, { friendName });
+    book.loan = { uri: book.uri, friendName, loanDate: Date.now() };
+  }
+  simpleFeedback.value = `${selectedSimpleBooks.value.length} livre(s) prêté(s) à ${friendName}.`;
+  simpleSelectedUris.value = [];
+  scannerState.notifyCatalogChanged();
 };
 
 // ============================================================================
@@ -858,20 +916,6 @@ async function clearPhotoQueueAndForm() {
 // ============================================================================
 // ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CHAMPS
 // ============================================================================
-interface TextSearchResultItem {
-  isbn13: string;
-  title: string;
-  authors: string[];
-  series?: string;
-  seriesNumber?: string;
-  publisher?: string;
-  edition?: string;
-  publishDate?: string;
-  coverUrl?: string;
-  localStatus?: 'owned' | 'wish' | 'none';
-  localUri?: string;
-}
-
 const textSearchForm = ref({
   title: '',
   series: '',
@@ -885,8 +929,10 @@ const textSearchBusy = ref(false);
 const textSearchError = ref('');
 const textSearchFeedback = ref('');
 const textSearchDone = ref(false);
-const textSearchResults = ref<TextSearchResultItem[]>([]);
-const textSearchActionBusyIsbn = ref<string | null>(null);
+const textSearchBooks = ref<HumanizedBook[]>([]);
+const textSearchSelectedUris = ref<string[]>([]);
+const textSearchBatchBusy = ref(false);
+const showTextSearchLendModal = ref(false);
 
 const hasTextSearchCriteria = computed(() => {
   const f = textSearchForm.value;
@@ -901,6 +947,18 @@ const hasTextSearchCriteria = computed(() => {
   );
 });
 
+const isAllTextSearchSelected = computed(
+  () => textSearchBooks.value.length > 0 && textSearchSelectedUris.value.length === textSearchBooks.value.length
+);
+
+const toggleAllTextSearch = (checked: boolean) => {
+  textSearchSelectedUris.value = checked ? textSearchBooks.value.map((b) => b.uri) : [];
+};
+
+const selectedTextSearchBooks = computed(() =>
+  textSearchBooks.value.filter((b) => textSearchSelectedUris.value.includes(b.uri))
+);
+
 const resetTextSearchForm = () => {
   textSearchForm.value = {
     title: '',
@@ -911,21 +969,41 @@ const resetTextSearchForm = () => {
     publisher: '',
     isbn: ''
   };
-  textSearchResults.value = [];
+  textSearchBooks.value = [];
+  textSearchSelectedUris.value = [];
   textSearchError.value = '';
   textSearchFeedback.value = '';
   textSearchDone.value = false;
 };
 
-const hydrateLocalStatusForResults = async (items: TextSearchResultItem[]) => {
-  for (const item of items) {
-    if (!item.isbn13) continue;
-    const cached = await databaseService.getBookFromCache(`isbn:${item.isbn13}`).catch(() => null);
-    if (cached) {
-      item.localStatus = cached.ownershipStatus;
-      item.localUri = cached.uri;
-    }
-  }
+const optionToHumanizedBook = async (opt: Canal3ResolutionOption): Promise<HumanizedBook | null> => {
+  const isbn13 = String(opt.isbn13 || '').trim();
+  if (!isbn13) return null;
+  const uri = `isbn:${isbn13}`;
+  const cached = await databaseService.getBookFromCache(uri).catch(() => null);
+  const candidates = imageUtil.buildCoverCandidates(isbn13, [opt.meta?.coverUrl]);
+  return {
+    uri: cached?.uri || uri,
+    bookId: cached?.bookId,
+    type: 'edition',
+    isbn13,
+    title: cached?.title || opt.meta?.title || 'Titre inconnu',
+    authors: cached?.authors?.length ? cached.authors : (opt.meta?.authors?.length ? opt.meta.authors : ['Auteur inconnu']),
+    illustrators: cached?.illustrators || [],
+    scriptwriters: cached?.scriptwriters || [],
+    publisher: cached?.publisher || opt.meta?.publisher,
+    publishDate: cached?.publishDate || opt.meta?.publishDate,
+    series: cached?.series || opt.meta?.series,
+    seriesId: cached?.seriesId,
+    seriesNumber: cached?.seriesNumber || opt.meta?.seriesNumber,
+    collection: cached?.collection || opt.meta?.collection,
+    genres: cached?.genres || [],
+    coverUrl: cached?.localCover || cached?.coverUrl || candidates[0],
+    coverFallbackUrls: cached?.coverFallbackUrls || candidates,
+    ownershipStatus: cached?.ownershipStatus || 'none',
+    wishedByName: cached?.wishedByName,
+    loan: cached?.loan
+  };
 };
 
 const handleMultiFieldSearch = async () => {
@@ -934,7 +1012,8 @@ const handleMultiFieldSearch = async () => {
   textSearchError.value = '';
   textSearchFeedback.value = '';
   textSearchDone.value = false;
-  textSearchResults.value = [];
+  textSearchBooks.value = [];
+  textSearchSelectedUris.value = [];
 
   try {
     const f = textSearchForm.value;
@@ -949,22 +1028,8 @@ const handleMultiFieldSearch = async () => {
         return;
       }
       if (res?.mainBook) {
-        const b = res.mainBook;
-        textSearchResults.value = [
-          {
-            isbn13: b.isbn13 || isbn13,
-            title: b.title,
-            authors: b.authors || [],
-            series: b.series,
-            seriesNumber: b.seriesNumber,
-            publisher: b.publisher,
-            edition: b.collection,
-            publishDate: b.publishDate,
-            coverUrl: b.localCover || b.coverUrl,
-            localStatus: b.ownershipStatus,
-            localUri: b.uri
-          }
-        ];
+        textSearchBooks.value = [res.mainBook];
+        saveBookNavigationOrder([res.mainBook.uri], 'direct');
       }
       textSearchDone.value = true;
       return;
@@ -989,26 +1054,17 @@ const handleMultiFieldSearch = async () => {
     }
 
     const seen = new Set<string>();
-    const items: TextSearchResultItem[] = [];
-    const pushOption = (opt: Canal3ResolutionOption) => {
+    const books: HumanizedBook[] = [];
+    const pushOption = async (opt: Canal3ResolutionOption) => {
       const code = String(opt.isbn13 || '').trim();
       if (!code || seen.has(code)) return;
       seen.add(code);
-      items.push({
-        isbn13: code,
-        title: opt.meta?.title || 'Titre inconnu',
-        authors: opt.meta?.authors || [],
-        series: opt.meta?.series,
-        seriesNumber: opt.meta?.seriesNumber,
-        publisher: opt.meta?.publisher,
-        edition: opt.meta?.collection,
-        publishDate: opt.meta?.publishDate,
-        coverUrl: opt.meta?.coverUrl
-      });
+      const book = await optionToHumanizedBook(opt);
+      if (book) books.push(book);
     };
 
     if (resolved.isbn13 && resolved.meta) {
-      pushOption({
+      await pushOption({
         isbn13: resolved.isbn13,
         meta: resolved.meta,
         sourcesCount: resolved.sourcesCount || 1,
@@ -1016,11 +1072,11 @@ const handleMultiFieldSearch = async () => {
       });
     }
     for (const alt of resolved.alternatives || []) {
-      pushOption(alt);
+      await pushOption(alt);
     }
 
-    await hydrateLocalStatusForResults(items);
-    textSearchResults.value = items;
+    textSearchBooks.value = books;
+    saveBookNavigationOrder(books.map((b) => b.uri), 'direct');
     textSearchDone.value = true;
   } catch (e: unknown) {
     textSearchError.value = e instanceof Error ? e.message : 'Erreur lors de la recherche.';
@@ -1029,67 +1085,97 @@ const handleMultiFieldSearch = async () => {
   }
 };
 
-const handleTextResultOpen = async (item: TextSearchResultItem) => {
-  if (item.localUri) {
-    saveBookNavigationOrder([item.localUri], 'direct');
-    await router.push(`/book/${encodeURIComponent(item.localUri)}`);
+const dispatchTextSearchBatchAction = async (
+  action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'
+) => {
+  if (selectedTextSearchBooks.value.length === 0) return;
+  if (action === 'LEND') {
+    showTextSearchLendModal.value = true;
     return;
   }
-  textSearchActionBusyIsbn.value = item.isbn13;
+  textSearchBatchBusy.value = true;
   textSearchError.value = '';
+  textSearchFeedback.value = '';
+  let processed = 0;
+
   try {
-    const res = await searchService.searchByIsbn(item.isbn13);
-    if (res?.mainBook?.uri) {
-      saveBookNavigationOrder([res.mainBook.uri], 'direct');
-      await router.push(`/book/${encodeURIComponent(res.mainBook.uri)}`);
-    } else {
-      textSearchError.value = 'Impossible d’ouvrir la fiche de cet ouvrage.';
+    for (const book of selectedTextSearchBooks.value) {
+      if (action === 'DELETE') {
+        if (book.ownershipStatus === 'owned') {
+          await inventoryService.removeFromLibrary(book.uri);
+        } else if (book.ownershipStatus === 'wish') {
+          await wishlistService.removeFromWishlist([book.uri]);
+        }
+        book.ownershipStatus = 'none';
+        if (book.loan) delete book.loan;
+        processed++;
+        continue;
+      }
+      if (action === 'RETURN') {
+        await queueService.enqueueAction('RETURN', book.uri);
+        if (book.loan) delete book.loan;
+        processed++;
+        continue;
+      }
+      if (action === 'ADD_INVENTORY' || action === 'ADD_WISHLIST') {
+        const targetStatus = action === 'ADD_INVENTORY' ? 'owned' : 'wish';
+        const v4Action = action === 'ADD_INVENTORY' ? 'owned' : 'wishlist';
+        const cleanIsbn = book.isbn13 || (book.uri.startsWith('isbn:') ? book.uri.slice(5) : '');
+        if (cleanIsbn) {
+          const batch = await ingestIsbnsViaV4([cleanIsbn], {
+            sourceChannel: 'canal_3_text_search',
+            action: v4Action,
+            hints: {
+              [cleanIsbn]: {
+                title: book.title,
+                series: book.series,
+                volumeNumber: book.seriesNumber,
+                coverUrl: book.coverUrl
+              }
+            }
+          });
+          const first = batch?.results?.[0];
+          if (first?.book) {
+            const humanized = v4BookRecordToHumanizedBook(first.book, targetStatus);
+            await databaseService.saveBookToCache(humanized);
+            await databaseService.addRegistryEntry(
+              action === 'ADD_INVENTORY' ? 'inventory' : 'wishlist',
+              humanized.uri
+            );
+            Object.assign(book, humanized);
+            processed++;
+            continue;
+          }
+        }
+        await queueService.enqueueAction(action, book.uri);
+        book.ownershipStatus = targetStatus;
+        processed++;
+      }
     }
+    textSearchSelectedUris.value = [];
+    textSearchFeedback.value = `${processed} ouvrage(s) mis à jour.`;
+    scannerState.notifyCatalogChanged();
+  } catch (e: unknown) {
+    textSearchError.value = e instanceof Error ? e.message : 'Erreur lors du traitement.';
   } finally {
-    textSearchActionBusyIsbn.value = null;
+    textSearchBatchBusy.value = false;
   }
 };
 
-const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' | 'wishlist') => {
-  textSearchActionBusyIsbn.value = item.isbn13;
-  textSearchError.value = '';
-  textSearchFeedback.value = '';
-  try {
-    const batch = await ingestIsbnsViaV4([item.isbn13], {
-      sourceChannel: 'canal_3_text_search',
-      action,
-      hints: {
-        [item.isbn13]: {
-          title: item.title,
-          series: item.series,
-          volumeNumber: item.seriesNumber,
-          coverUrl: item.coverUrl
-        }
-      }
-    });
-    const first = batch?.results?.[0];
-    if (first?.book) {
-      const status = action === 'owned' ? 'owned' : 'wish';
-      const humanized = v4BookRecordToHumanizedBook(first.book, status);
-      await databaseService.saveBookToCache(humanized);
-      await databaseService.addRegistryEntry(action === 'owned' ? 'inventory' : 'wishlist', humanized.uri);
-      item.localStatus = status;
-      item.localUri = humanized.uri;
-      const notice = formatV4StatusNotice(first);
-      textSearchFeedback.value =
-        notice ||
-        (action === 'owned'
-          ? `« ${item.title} » ajouté à votre collection.`
-          : `« ${item.title} » ajouté à votre wishlist.`);
-      scannerState.notifyCatalogChanged();
-    } else {
-      textSearchError.value = 'Échec de l’enregistrement sur le serveur.';
+const confirmTextSearchGroupLend = async (friendName: string) => {
+  showTextSearchLendModal.value = false;
+  if (!friendName || selectedTextSearchBooks.value.length === 0) return;
+  for (const book of selectedTextSearchBooks.value) {
+    if (book.ownershipStatus !== 'owned') {
+      await queueService.enqueueAction('ADD_INVENTORY', book.uri);
+      book.ownershipStatus = 'owned';
     }
-  } catch (e: unknown) {
-    textSearchError.value = e instanceof Error ? e.message : 'Erreur lors de l’ajout.';
-  } finally {
-    textSearchActionBusyIsbn.value = null;
+    await queueService.enqueueAction('LEND', book.uri, { friendName });
+    book.loan = { uri: book.uri, friendName, loanDate: Date.now() };
   }
+  textSearchFeedback.value = `${selectedTextSearchBooks.value.length} livre(s) prêté(s) à ${friendName}.`;
+  textSearchSelectedUris.value = [];
+  scannerState.notifyCatalogChanged();
 };
 </script>
 
@@ -1543,9 +1629,11 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
     </section>
 
     <!-- ================================================================ -->
-    <!-- ONGLET 3 : SCAN SIMPLE (MODALE AUTO-FERMANTE + SAISIE ISBN)      -->
+    <!-- ONGLET 3 : SCAN SIMPLE (CAMÉRA -> AFFICHAGE IDENTIQUE AU RAFALE) -->
     <!-- ================================================================ -->
     <section v-if="activeMode === 'simple'" class="scan-section">
+      <div v-if="simpleFeedback" class="success-banner">{{ simpleFeedback }}</div>
+
       <div v-if="scannerState.isSimpleResolving.value" class="scan-card progress-card simple-loading-card">
         <div class="ingest-toast-row">
           <span class="ingest-spinner" aria-hidden="true"></span>
@@ -1553,34 +1641,68 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             Chargement de l'ouvrage ({{ scannerState.simpleResolvingIsbn.value }}) en cours...
           </strong>
         </div>
-        <small>La fiche complète du livre va s'ouvrir automatiquement.</small>
       </div>
 
-      <div class="scan-card simple-scan-card">
-        <p class="simple-hint">
-          La caméra s'ouvre automatiquement sur cet onglet. Vous pouvez aussi saisir directement un ISBN-10 / ISBN-13 (ou EAN presse) ci-dessous :
+      <div v-if="simpleBooks.length === 0" class="scan-card empty-burst-card">
+        <p class="simple-hint" style="margin: 0;">
+          Aucun livre scanné pour le moment. Appuyez sur l'onglet <strong>Scan simple</strong> ci-dessus pour ouvrir la caméra : la fiche apparaîtra ici dès que vous fermerez la fenêtre.
         </p>
+      </div>
 
-        <div class="manual-isbn-inline">
-          <input
-            v-model="manualIsbnInput"
-            type="text"
-            placeholder="Ex: 9782203001060 ou 2-203-00106-2"
-            class="cand-input"
-            @keyup.enter="handleManualIsbnLookup"
-          />
+      <div v-else class="scan-card">
+        <div class="section-header-row">
+          <label class="select-all-label">
+            <input
+              type="checkbox"
+              class="wireframe-checkbox"
+              :checked="isAllSimpleSelected"
+              @change="toggleAllSimple(($event.target as HTMLInputElement).checked)"
+            />
+            <span>
+              {{ simpleSelectedUris.length === 0 ? `Tout cocher (${simpleBooks.length})` : `${simpleSelectedUris.length} sélectionné(s)` }}
+            </span>
+          </label>
           <button
             type="button"
-            class="wireframe-btn primary"
-            :disabled="manualLookupBusy || !manualIsbnInput.trim()"
-            @click="handleManualIsbnLookup"
+            class="link-btn"
+            @click="() => { scannerState.clearSimpleBooks(); simpleSelectedUris = []; }"
           >
-            {{ manualLookupBusy ? 'Chargement...' : 'Ouvrir' }}
+            Vider la liste
           </button>
         </div>
 
-        <div v-if="manualLookupError" class="error-banner">{{ manualLookupError }}</div>
+        <WireframeTable>
+          <BookMiniCard
+            v-for="livre in simpleBooks"
+            :key="livre.uri"
+            :book="livre"
+            :model-value="simpleSelectedUris.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if (val) {
+                if (!simpleSelectedUris.includes(livre.uri)) simpleSelectedUris.push(livre.uri);
+              } else {
+                const idx = simpleSelectedUris.indexOf(livre.uri);
+                if (idx > -1) simpleSelectedUris.splice(idx, 1);
+              }
+            }"
+          />
+        </WireframeTable>
+
+        <BatchActionBar
+          :inline="true"
+          :selected-count="simpleSelectedUris.length"
+          :selected-books="selectedSimpleBooks"
+          @execute="dispatchSimpleBatchAction"
+          @clear="simpleSelectedUris = []"
+        />
       </div>
+
+      <LendModal
+        :show="showSimpleLendModal"
+        :bookCount="selectedSimpleBooks.length"
+        @close="showSimpleLendModal = false"
+        @confirm="confirmSimpleGroupLend"
+      />
     </section>
 
     <!-- ================================================================ -->
@@ -1588,7 +1710,7 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
     <!-- ================================================================ -->
     <section v-if="activeMode === 'search'" class="scan-section">
       <form class="scan-card text-search-card" @submit.prevent="handleMultiFieldSearch">
-        <p class="simple-hint">
+        <p class="simple-hint" style="margin-bottom: 0.6rem;">
           Renseignez un ou plusieurs champs pour rechercher un ouvrage (BnF &amp; catalogue) :
         </p>
 
@@ -1598,7 +1720,7 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.title"
               type="text"
-              class="cand-input"
+              class="ts-input"
               placeholder="Ex: Le Secret de la Licorne"
             />
           </label>
@@ -1607,8 +1729,8 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.series"
               type="text"
-              class="cand-input"
-              placeholder="Ex: Les Aventures de Tintin"
+              class="ts-input"
+              placeholder="Ex: Tintin"
             />
           </label>
           <label class="ts-field">
@@ -1616,7 +1738,7 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.volumeNumber"
               type="text"
-              class="cand-input"
+              class="ts-input"
               placeholder="Ex: 11"
             />
           </label>
@@ -1625,7 +1747,7 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.author"
               type="text"
-              class="cand-input"
+              class="ts-input"
               placeholder="Ex: Hergé"
             />
           </label>
@@ -1634,8 +1756,8 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.edition"
               type="text"
-              class="cand-input"
-              placeholder="Ex: Édition collector, Intégrale..."
+              class="ts-input"
+              placeholder="Ex: Collector, Intégrale..."
             />
           </label>
           <label class="ts-field">
@@ -1643,16 +1765,16 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
             <input
               v-model="textSearchForm.publisher"
               type="text"
-              class="cand-input"
+              class="ts-input"
               placeholder="Ex: Casterman, Dargaud..."
             />
           </label>
-          <label class="ts-field ts-field-full">
+          <label class="ts-field">
             <span>ISBN</span>
             <input
               v-model="textSearchForm.isbn"
               type="text"
-              class="cand-input"
+              class="ts-input"
               placeholder="Ex: 9782203001107"
             />
           </label>
@@ -1677,76 +1799,63 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
         </div>
 
         <div v-if="textSearchError" class="error-banner">{{ textSearchError }}</div>
-        <div v-if="textSearchFeedback" class="ts-feedback-banner">{{ textSearchFeedback }}</div>
+        <div v-if="textSearchFeedback" class="success-banner">{{ textSearchFeedback }}</div>
       </form>
 
-      <div v-if="textSearchDone && textSearchResults.length === 0" class="scan-card">
-        <p class="simple-hint">
+      <div v-if="textSearchDone && textSearchBooks.length === 0" class="scan-card">
+        <p class="simple-hint" style="margin: 0;">
           Aucun résultat trouvé pour ces critères. Essayez de simplifier le titre ou de retirer un filtre.
         </p>
       </div>
 
-      <div v-if="textSearchResults.length > 0" class="ts-results-list">
-        <article
-          v-for="item in textSearchResults"
-          :key="item.isbn13"
-          class="scan-card ts-result-card"
-        >
-          <div class="ts-result-cover">
-            <img v-if="item.coverUrl" :src="item.coverUrl" :alt="item.title" loading="lazy" />
-            <div v-else class="ts-cover-placeholder">📚</div>
-          </div>
+      <div v-if="textSearchBooks.length > 0" class="scan-card">
+        <div class="section-header-row">
+          <label class="select-all-label">
+            <input
+              type="checkbox"
+              class="wireframe-checkbox"
+              :checked="isAllTextSearchSelected"
+              @change="toggleAllTextSearch(($event.target as HTMLInputElement).checked)"
+            />
+            <span>
+              {{ textSearchSelectedUris.length === 0 ? `Tout cocher (${textSearchBooks.length})` : `${textSearchSelectedUris.length} sélectionné(s)` }}
+            </span>
+          </label>
+        </div>
 
-          <div class="ts-result-body">
-            <div v-if="item.series || item.seriesNumber" class="ts-result-series">
-              {{ item.series }}<span v-if="item.seriesNumber"> · T.{{ item.seriesNumber }}</span>
-            </div>
-            <h4 class="ts-result-title">{{ item.title }}</h4>
-            <div v-if="item.authors?.length" class="ts-result-meta">
-              {{ item.authors.join(', ') }}
-            </div>
-            <div class="ts-result-meta">
-              <span v-if="item.publisher">{{ item.publisher }}</span>
-              <span v-if="item.edition"> · {{ item.edition }}</span>
-              <span v-if="item.publishDate"> ({{ item.publishDate }})</span>
-              <span> · ISBN {{ item.isbn13 }}</span>
-            </div>
+        <WireframeTable>
+          <BookMiniCard
+            v-for="livre in textSearchBooks"
+            :key="livre.uri"
+            :book="livre"
+            :model-value="textSearchSelectedUris.includes(livre.uri)"
+            @update:model-value="(val) => {
+              if (val) {
+                if (!textSearchSelectedUris.includes(livre.uri)) textSearchSelectedUris.push(livre.uri);
+              } else {
+                const idx = textSearchSelectedUris.indexOf(livre.uri);
+                if (idx > -1) textSearchSelectedUris.splice(idx, 1);
+              }
+            }"
+          />
+        </WireframeTable>
 
-            <div class="ts-result-actions">
-              <button
-                type="button"
-                class="wireframe-btn"
-                :disabled="textSearchActionBusyIsbn === item.isbn13"
-                @click="handleTextResultOpen(item)"
-              >
-                Voir la fiche
-              </button>
-              <button
-                v-if="item.localStatus !== 'owned'"
-                type="button"
-                class="wireframe-btn primary"
-                :disabled="textSearchActionBusyIsbn === item.isbn13"
-                @click="handleTextResultAdd(item, 'owned')"
-              >
-                + Collection
-              </button>
-              <span v-else class="ts-status-pill owned">Dans ma collection</span>
-              <button
-                v-if="item.localStatus !== 'owned' && item.localStatus !== 'wish'"
-                type="button"
-                class="wireframe-btn"
-                :disabled="textSearchActionBusyIsbn === item.isbn13"
-                @click="handleTextResultAdd(item, 'wishlist')"
-              >
-                + Wishlist
-              </button>
-              <span v-else-if="item.localStatus === 'wish'" class="ts-status-pill wish">
-                Dans la wishlist
-              </span>
-            </div>
-          </div>
-        </article>
+        <BatchActionBar
+          :inline="true"
+          :selected-count="textSearchSelectedUris.length"
+          :selected-books="selectedTextSearchBooks"
+          :busy="textSearchBatchBusy"
+          @execute="dispatchTextSearchBatchAction"
+          @clear="textSearchSelectedUris = []"
+        />
       </div>
+
+      <LendModal
+        :show="showTextSearchLendModal"
+        :bookCount="selectedTextSearchBooks.length"
+        @close="showTextSearchLendModal = false"
+        @confirm="confirmTextSearchGroupLend"
+      />
     </section>
   </div>
 </template>
@@ -2347,131 +2456,35 @@ const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' |
 
 .text-search-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.7rem;
-}
-
-@media (max-width: 600px) {
-  .text-search-grid {
-    grid-template-columns: 1fr;
-  }
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 0.5rem;
 }
 
 .ts-field {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.8rem;
+  gap: 0.2rem;
+  font-size: 0.74rem;
   font-weight: 700;
   color: #334155;
 }
 
-.ts-field-full {
-  grid-column: 1 / -1;
+.ts-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  background: #fff;
+  color: #0f172a;
 }
 
 .ts-actions-row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  margin-top: 0.85rem;
-}
-
-.ts-feedback-banner {
   margin-top: 0.75rem;
-  padding: 0.55rem 0.75rem;
-  border-radius: 8px;
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  color: #065f46;
-  font-size: 0.84rem;
-  font-weight: 600;
-}
-
-.ts-results-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.ts-result-card {
-  display: flex;
-  gap: 0.9rem;
-  align-items: flex-start;
-}
-
-.ts-result-cover {
-  width: 68px;
-  flex-shrink: 0;
-}
-
-.ts-result-cover img {
-  width: 100%;
-  aspect-ratio: 2 / 3;
-  object-fit: cover;
-  border-radius: 6px;
-  border: 1px solid #e2e8f0;
-}
-
-.ts-cover-placeholder {
-  width: 100%;
-  aspect-ratio: 2 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #f1f5f9;
-  border-radius: 6px;
-  font-size: 1.4rem;
-}
-
-.ts-result-body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.ts-result-series {
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: #2563eb;
-}
-
-.ts-result-title {
-  margin: 0;
-  font-size: 0.98rem;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.ts-result-meta {
-  font-size: 0.8rem;
-  color: #475569;
-}
-
-.ts-result-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem;
-  margin-top: 0.4rem;
-}
-
-.ts-status-pill {
-  font-size: 0.75rem;
-  font-weight: 700;
-  padding: 0.25rem 0.6rem;
-  border-radius: 999px;
-}
-
-.ts-status-pill.owned {
-  background: #dcfce7;
-  color: #166534;
-}
-
-.ts-status-pill.wish {
-  background: #fef3c7;
-  color: #92400e;
 }
 </style>

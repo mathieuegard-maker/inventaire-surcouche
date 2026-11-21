@@ -28,6 +28,7 @@ const simpleResolvingIsbn = ref<string | null>(null);
 const errorMessage = ref<string | null>(null);
 const activeMode = ref<ScannerMode>('photo');
 const burstBooks = ref<HumanizedBook[]>([]);
+const simpleBooks = ref<HumanizedBook[]>([]);
 const latestBurstBook = ref<HumanizedBook | null>(null);
 const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate' } | null>(null);
 const lastUpdatedTick = ref<number>(Date.now());
@@ -53,9 +54,14 @@ export const scannerState = {
   errorMessage,
   activeMode,
   burstBooks,
+  simpleBooks,
   latestBurstBook,
   burstFlashEvent,
   lastUpdatedTick,
+
+  clearSimpleBooks() {
+    simpleBooks.value = [];
+  },
 
   notifyCatalogChanged() {
     lastUpdatedTick.value = Date.now();
@@ -129,8 +135,11 @@ export const scannerState = {
                   query: { isbn: response.isbn || rawIsbn || '' }
                 });
               } else if (response.mainBook?.uri) {
-                saveBookNavigationOrder([response.mainBook.uri], 'direct');
-                await router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
+                const alreadyInSimple = simpleBooks.value.some((b) => b.uri === response.mainBook.uri);
+                if (!alreadyInSimple) {
+                  simpleBooks.value.unshift(response.mainBook);
+                }
+                saveBookNavigationOrder(simpleBooks.value.map((b) => b.uri), 'direct');
               } else {
                 errorMessage.value = 'Ouvrage non trouvé.';
               }

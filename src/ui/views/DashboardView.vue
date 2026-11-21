@@ -45,9 +45,11 @@ const formatScanTime = (ts: number) =>
     minute: '2-digit'
   });
 
+let hasRequestedBackgroundHydration = false;
+
 const loadDashboardData = async () => {
   try {
-    let [statsRes, cachedBooks, loans, invRegistry, wishRegistry] = await Promise.all([
+    const [statsRes, cachedBooks, loans, invRegistry, wishRegistry] = await Promise.all([
       statsService.getDashboardStats(30),
       databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
       databaseService.getAllLoans().catch(() => []),
@@ -57,13 +59,13 @@ const loadDashboardData = async () => {
 
     const cachedOwnedCount = cachedBooks.filter((b) => b.ownershipStatus === 'owned').length;
     const cachedWishCount = cachedBooks.filter((b) => b.ownershipStatus === 'wish').length;
-    if (!isOffline.value && (invRegistry.length > cachedOwnedCount || wishRegistry.length > cachedWishCount)) {
-      await syncOrchestrator.hydrateCacheInBackground().catch(() => {});
-      [statsRes, cachedBooks, loans] = await Promise.all([
-        statsService.getDashboardStats(30),
-        databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]),
-        databaseService.getAllLoans().catch(() => [])
-      ]);
+    if (
+      !hasRequestedBackgroundHydration &&
+      !isOffline.value &&
+      (invRegistry.length > cachedOwnedCount || wishRegistry.length > cachedWishCount)
+    ) {
+      hasRequestedBackgroundHydration = true;
+      syncOrchestrator.hydrateCacheInBackground().catch(() => {});
     }
 
     counts.value = {

@@ -177,28 +177,61 @@ export const statsService = {
     const loans = await databaseService.getAllLoans();
     const allBooks = await databaseService.getAllCachedBooks();
 
+    const findCachedBookForUri = (uri: string) => {
+      for (const b of allBooks) {
+        if (
+          b.uri === uri ||
+          b.workUri === uri ||
+          b.bookId === uri ||
+          (b.bookId && `v4:${b.bookId}` === uri) ||
+          (b.bookId && `book:${b.bookId}` === uri) ||
+          (b.isbn13 && `isbn:${b.isbn13}` === uri)
+        ) {
+          return b;
+        }
+      }
+      return undefined;
+    };
+
+    const canonicalBookKey = (b: (typeof allBooks)[0]) =>
+      b.bookId || b.workUri || b.isbn13 || b.uri;
+
     const ownedUris = new Set(inventoryEntries.map((e) => e.uri));
     const ownedBookMap = new Map<string, (typeof allBooks)[0]>();
     for (const b of allBooks) {
       if (b.ownershipStatus === 'owned' || ownedUris.has(b.uri) || (b.workUri && ownedUris.has(b.workUri))) {
-        const key = b.bookId || b.workUri || b.uri;
+        const key = canonicalBookKey(b);
         if (!ownedBookMap.has(key)) ownedBookMap.set(key, b);
       }
     }
     const ownedBooks = Array.from(ownedBookMap.values());
-    const totalOwned = Math.max(inventoryEntries.length, ownedBooks.length);
+    const distinctOwnedKeys = new Set<string>(ownedBookMap.keys());
+    for (const entry of inventoryEntries) {
+      const matched = findCachedBookForUri(entry.uri);
+      if (matched) {
+        distinctOwnedKeys.add(canonicalBookKey(matched));
+      } else {
+        distinctOwnedKeys.add(entry.uri);
+      }
+    }
+    const totalOwned = distinctOwnedKeys.size;
     const totalLoans = loans.length;
 
-    // 2. Déduplication canonique de la wishlist (évite double comptage work + edition)
-    const cachedByUri = new Map(allBooks.map((b) => [b.uri, b]));
+    // 2. Déduplication canonique de la wishlist (évite double comptage work + edition + v4)
     const distinctWishKeys = new Set<string>();
-    for (const entry of wishlistEntries) {
-      const cached = cachedByUri.get(entry.uri);
-      distinctWishKeys.add(cached?.bookId || cached?.workUri || entry.uri);
-    }
     for (const b of allBooks) {
       if (b.ownershipStatus === 'wish') {
-        distinctWishKeys.add(b.bookId || b.workUri || b.uri);
+        distinctWishKeys.add(canonicalBookKey(b));
+      }
+    }
+    for (const entry of wishlistEntries) {
+      const matched = findCachedBookForUri(entry.uri);
+      if (matched) {
+        if (matched.ownershipStatus === 'wish') {
+          distinctWishKeys.add(canonicalBookKey(matched));
+        }
+      } else {
+        distinctWishKeys.add(entry.uri);
       }
     }
     const totalWishlist = distinctWishKeys.size;
