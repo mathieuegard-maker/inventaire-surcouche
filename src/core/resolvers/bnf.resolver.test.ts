@@ -15,6 +15,7 @@ import {
   parseMarcFields,
   parseIntermarcRecord,
   scoreHintMatch,
+  isEditorialPaperbackCollectionName,
   isFrancophoneBookIsbn13
 } from './bnf.resolver';
 
@@ -606,6 +607,88 @@ describe('BNF Resolver & Parsers', () => {
         }
       );
       expect(unrelatedMangaScore).toBe(0);
+    });
+
+    it('doit bloquer les collections poches (Folio #7304, J\'ai lu #12281, Librio, Rivages poche, Libretto) y compris dans Dublin Core et privilégier T.1 sans n° sur tranche', async () => {
+      for (const label of [
+        'Folio',
+        "J'ai lu",
+        '10-18',
+        'Babel',
+        'Librio',
+        'Libretto',
+        'Rivages poche',
+        'Météores',
+        'Un endroit où aller'
+      ]) {
+        expect(isEditorialPaperbackCollectionName(label)).toBe(true);
+      }
+
+      // Simuler une réponse BnF Dublin Core contenant "Collection : Folio ; 7304" + InterMarc
+      const dcXml = `
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+          <srw:numberOfRecords>1</srw:numberOfRecords>
+          <srw:records><srw:record><srw:recordData>
+            <oai_dc:dc xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/">
+              <dc:title>Le roitelet</dc:title>
+              <dc:creator>Beauchemin, Jean-François</dc:creator>
+              <dc:publisher>Gallimard</dc:publisher>
+              <dc:date>2023</dc:date>
+              <dc:relation>Collection : Folio ; 7304</dc:relation>
+            </oai_dc:dc>
+          </srw:recordData></srw:record></srw:records>
+        </srw:searchRetrieveResponse>`;
+      const imXml = `
+        <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+          <srw:numberOfRecords>1</srw:numberOfRecords>
+          <srw:records><srw:record>
+            <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+              <mxc:datafield tag="245"><mxc:subfield code="a">Le roitelet</mxc:subfield></mxc:datafield>
+              <mxc:datafield tag="410"><mxc:subfield code="t">Folio</mxc:subfield><mxc:subfield code="v">7304</mxc:subfield></mxc:datafield>
+            </mxc:record>
+          </srw:record></srw:records>
+        </srw:searchRetrieveResponse>`;
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const u = String(input);
+        return new Response(u.includes('schema=intermarc') ? imXml : dcXml, { status: 200 });
+      });
+      try {
+        const res = await bnfResolver.resolve('9782073038159');
+        expect(res).not.toBeNull();
+        expect(res?.series).toBeUndefined();
+        expect(res?.seriesNumber).toBeUndefined();
+      } finally {
+        fetchSpy.mockRestore();
+      }
+
+      // Les Éphémères : tranche sans numéro -> Tome 1 (2023) doit battre Tome 2 (2024)
+      const t1Score = scoreHintMatch(
+        {
+          isbn: '9782754836531',
+          title: 'Les éphémères',
+          series: 'Les éphémères',
+          seriesNumber: '1',
+          authors: ['Jeff Lemire'],
+          publishDate: '2023',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Les Éphémères', author: 'Jeff Lemire', rawSpineText: 'Jeff Lemire Les Éphémères' }
+      );
+      const t2Score = scoreHintMatch(
+        {
+          isbn: '9782754843775',
+          title: 'Les éphémères',
+          series: 'Les éphémères',
+          seriesNumber: '2',
+          authors: ['Jeff Lemire'],
+          publishDate: '2024',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Les Éphémères', author: 'Jeff Lemire', rawSpineText: 'Jeff Lemire Les Éphémères' }
+      );
+      expect(t1Score).toBeGreaterThan(t2Score);
     });
   });
 });

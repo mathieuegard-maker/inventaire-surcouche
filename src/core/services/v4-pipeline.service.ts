@@ -1921,18 +1921,21 @@ export async function consolidateBookLayer4(
     integralCheck.isDoubleAlbum = false;
   }
 
-  // Si l'utilisateur a spécifié ou corrigé le nom de série, l'injecter avec un poids fort
+  // Si l'utilisateur a spécifié ou corrigé le nom de série, l'injecter avec un poids fort (hors collections poches/éditeurs)
   const seriesVotePool = [...payload.seriesCandidates];
-  if (userHint?.series?.trim()) {
-    const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(userHint.series));
-    if (coreKey.length >= 2) {
-      seriesVotePool.push({
-        source: 'user_hint',
-        rawName: userHint.series.trim(),
-        coreKey,
-        cleanDisplay: cleanDisplay || cleanSeriesName(userHint.series),
-        weight: 5
-      });
+  if (userHint?.series?.trim() && !isEditorialPaperbackCollectionName(userHint.series)) {
+    const cleanedUserSeries = cleanSeriesName(userHint.series);
+    if (!isEditorialPaperbackCollectionName(cleanedUserSeries)) {
+      const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanedUserSeries);
+      if (coreKey.length >= 2 && !isEditorialPaperbackCollectionName(cleanDisplay)) {
+        seriesVotePool.push({
+          source: 'user_hint',
+          rawName: userHint.series.trim(),
+          coreKey,
+          cleanDisplay: cleanDisplay || cleanedUserSeries,
+          weight: 5
+        });
+      }
     }
   }
 
@@ -2129,8 +2132,10 @@ export async function consolidateBookLayer4(
       payload.rawTitles.join(' ')
     );
   let volumeNumber: number | null =
-    !integralCheck.isIntegral && !isExplicitHs && inheritedVolStr ? parseInt(inheritedVolStr, 10) : null;
-  if (volumeNumber !== null && (!Number.isFinite(volumeNumber) || volumeNumber <= 0)) {
+    seriesId && !integralCheck.isIntegral && !isExplicitHs && inheritedVolStr
+      ? parseInt(inheritedVolStr, 10)
+      : null;
+  if (volumeNumber !== null && (!Number.isFinite(volumeNumber) || volumeNumber <= 0 || volumeNumber > 500)) {
     volumeNumber = null;
   }
 
@@ -3487,9 +3492,9 @@ export async function runV4IngestionPipeline(
       });
     }
 
-    // Couche 5 : Squelette rapide + file d'attente
+    // Couche 5 : Squelette rapide + file d'attente (strictement limité au 1er miss de la requête pour éviter la limite de 50 sous-requêtes Workers)
     let queuedCount = 0;
-    if (subrequestBudgetUsed <= 3) {
+    if (subrequestBudgetUsed <= 1) {
       queuedCount = await enqueueOrExpandSeriesLayer5(db, consolidated, tracer);
     }
 

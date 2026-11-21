@@ -3,6 +3,10 @@ import { bnfResolver } from '../resolvers/bnf.resolver';
 import { openLibraryResolver } from '../resolvers/openlibrary.resolver';
 import { googleBooksResolver } from '../resolvers/googlebooks.resolver';
 import { classifyBookMetadata, buildCombinedGenres } from '../utils/category-classifier.util';
+import {
+  isEditorialPaperbackCollectionName,
+  isPlausibleFallbackSeriesNumber
+} from '../utils/editorial-collection.util';
 import { imageUtil } from '../utils/image.util';
 import type { ExternalBookMetadata } from '../types';
 
@@ -37,9 +41,20 @@ function finalizeMetadataGenres(
   metadata: ExternalBookMetadata,
   extraCoverCandidates: Array<string | undefined> = []
 ): ExternalBookMetadata {
+  let cleanSeries = metadata.series?.trim() || undefined;
+  let cleanSeriesNumber = metadata.seriesNumber?.trim() || undefined;
+  if (cleanSeries && isEditorialPaperbackCollectionName(cleanSeries)) {
+    cleanSeries = undefined;
+    cleanSeriesNumber = undefined;
+  } else if (!cleanSeries && cleanSeriesNumber && !isPlausibleFallbackSeriesNumber(cleanSeriesNumber)) {
+    cleanSeriesNumber = undefined;
+  } else if (cleanSeriesNumber && /^\d+$/.test(cleanSeriesNumber) && Number(cleanSeriesNumber) > 500) {
+    cleanSeriesNumber = undefined;
+  }
+
   const classification = classifyBookMetadata({
     title: metadata.title,
-    series: metadata.series,
+    series: cleanSeries,
     publisher: metadata.publisher,
     collection: metadata.collection,
     deweyCode: metadata.deweyCode,
@@ -52,6 +67,8 @@ function finalizeMetadataGenres(
   ]);
   return {
     ...metadata,
+    series: cleanSeries,
+    seriesNumber: cleanSeriesNumber,
     coverUrl: metadata.coverUrl || coverFallbackUrls[0],
     ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
     ...(genres.length ? { genres } : {})

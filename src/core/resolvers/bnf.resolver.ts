@@ -3,7 +3,13 @@ import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
 import { getLevenshteinDistance } from '../utils/string.util';
+import {
+  isEditorialPaperbackCollectionName,
+  isPlausibleFallbackSeriesNumber
+} from '../utils/editorial-collection.util';
 import { areDistinctSeriesWorkTitles, DIVERGENT_NUMBERING_EDITION_REGEX } from './series-canonical.resolver';
+
+export { isEditorialPaperbackCollectionName, isPlausibleFallbackSeriesNumber };
 
 const JUNK_SERIES_REGEX = /\b(intégrale|coffret|box\s*set|pack|compilation)\b|tomes?\s*\d+\s*[-–à]\s*\d+|vols?\s*\d+\s*[-–à]\s*\d+/i;
 
@@ -207,6 +213,16 @@ export function scoreHintMatch(
       if (new RegExp(`\\b0*${escapedVol}\\b`, 'i').test(cand.title || '')) {
         score += 22;
       }
+    }
+  } else if (hasExplicitTitleOrSeries) {
+    // Aucun numéro lu sur la tranche (cas typique d'un Tome 1 sans n° comme "Les Éphémères") :
+    // privilégier le Tome 1 face aux suites récentes (Tome 2+) sinon favorisées par la récence d'édition.
+    const candVol = normalizeSeriesNumber(cand.seriesNumber);
+    const candVolNum = candVol && /^\d+$/.test(candVol) ? Number(candVol) : NaN;
+    if (!candVol || candVol === '1') {
+      score += 8;
+    } else if (Number.isFinite(candVolNum) && candVolNum >= 2 && candSeriesNorm === hintMainTitleNorm) {
+      score -= 8;
     }
   }
 
@@ -491,20 +507,6 @@ function extractControlField(xml: string, tag: string): string {
   return match ? match[1] : '';
 }
 
-function isPaperbackCollectionLabel(raw?: string): boolean {
-  const norm = normalizeTextKey(raw || '');
-  return /^(?:(?:la )?collection )?(?:folio(?: bd| cadets| junior| sf| policier)?|livre de poche|le livre de poche|pocket(?: bd)?|j ai lu|10 18|points|babel|flammarion|gallimard|dupuis|dargaud|le lombard|glenat|delcourt|soleil|casterman|hachette|rombaldi|france loisirs|aire libre|long courrier|signe|reperages|troisieme vague|poisson pilote)$/.test(
-    norm
-  );
-}
-
-function isPlausibleFallbackSeriesNumber(rawVol?: string): boolean {
-  const norm = normalizeSeriesNumber(rawVol);
-  if (!norm) return false;
-  const num = Number(norm);
-  return Number.isFinite(num) ? num > 0 && num <= 150 : norm.length <= 6;
-}
-
 export function parseIntermarcRecord(
   recordXml: string,
   options?: { includeIntegrals?: boolean }
@@ -600,7 +602,7 @@ export function parseIntermarcRecord(
     if (candEnsId && /^[34]\d{6,}$/.test(candEnsId) && !bnfEnsembleId) {
       bnfEnsembleId = candEnsId;
     }
-    if (candSeries460 && !isPaperbackCollectionLabel(candSeries460)) {
+    if (candSeries460 && !isEditorialPaperbackCollectionName(candSeries460)) {
       imSeries = candSeries460;
       imSeriesNumber = getSubfield(f460, 'v') || imSeriesNumber;
       if (candEnsId && /^[34]\d{6,}$/.test(candEnsId)) bnfEnsembleId = candEnsId;
@@ -611,7 +613,7 @@ export function parseIntermarcRecord(
     for (const f290 of fields.filter(f => f.tag === '290')) {
       const v290 = getSubfield(f290, 'v');
       const cand290 = getSubfield(f290, 'a') || getSubfield(f290, 't');
-      if (cand290 && v290 && !isPaperbackCollectionLabel(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
+      if (cand290 && v290 && !isEditorialPaperbackCollectionName(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
         imSeries = cand290;
         imSeriesNumber = v290;
         break;
@@ -622,7 +624,7 @@ export function parseIntermarcRecord(
     for (const f410 of fields.filter(f => f.tag === '410')) {
       const v410 = getSubfield(f410, 'v');
       const cand410 = getSubfield(f410, 't') || getSubfield(f410, 'a');
-      if (cand410 && v410 && !isPaperbackCollectionLabel(cand410) && isPlausibleFallbackSeriesNumber(v410)) {
+      if (cand410 && v410 && !isEditorialPaperbackCollectionName(cand410) && isPlausibleFallbackSeriesNumber(v410)) {
         imSeries = cand410;
         imSeriesNumber = v410;
         break;
@@ -632,14 +634,19 @@ export function parseIntermarcRecord(
 
   const titleParse = parseSeriesFromTitle(rawImTitle);
   const title = titleParse.title || rawImTitle.trim();
-  const series = cleanSeriesName(imSeries || titleParse.series || '');
-  const rawSeriesNum = isDoubleOrIntegral
+  const candidateSeries = cleanSeriesName(imSeries || titleParse.series || '');
+  const series = candidateSeries && !isEditorialPaperbackCollectionName(candidateSeries) ? candidateSeries : '';
+  const rawSeriesNum = isDoubleOrIntegral || !series
     ? undefined
     : (imSeriesNumber ||
       imVolumeNumber ||
       (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245) ? rawE245 : undefined) ||
       titleParse.seriesNumber);
-  const seriesNumber = normalizeSeriesNumber(rawSeriesNum) || undefined;
+  const normalizedNum = normalizeSeriesNumber(rawSeriesNum) || undefined;
+  const seriesNumber =
+    normalizedNum && (Boolean(imSeries) || isPlausibleFallbackSeriesNumber(normalizedNum))
+      ? normalizedNum
+      : undefined;
 
   if (!options?.includeIntegrals && (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series)))) {
     return null;
@@ -783,10 +790,11 @@ export const bnfResolver = {
             imVolumeNumber = getSubfield(f245, 'u');
           }
 
-          // 3. Série (Tag 460/461 - Notice d'ensemble)
+          // 3. Série (Tag 460/461 - Notice d'ensemble, hors collections éditoriales génériques)
           const f460 = imFields.find(f => f.tag === '460' || f.tag === '461');
-          if (f460) {
-            imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a');
+          const s460 = f460 ? getSubfield(f460, 't') || getSubfield(f460, 'a') : undefined;
+          if (f460 && s460 && !isEditorialPaperbackCollectionName(s460)) {
+            imSeries = s460;
             imSeriesNumber = getSubfield(f460, 'v');
           }
 
@@ -795,7 +803,7 @@ export const bnfResolver = {
             const f290 = imFields.find(f => f.tag === '290');
             const v290 = f290 ? getSubfield(f290, 'v') : undefined;
             const s290 = f290 ? getSubfield(f290, 'a') || getSubfield(f290, 't') : undefined;
-            if (f290 && s290 && v290 && !isPaperbackCollectionLabel(s290) && isPlausibleFallbackSeriesNumber(v290)) {
+            if (f290 && s290 && v290 && !isEditorialPaperbackCollectionName(s290) && isPlausibleFallbackSeriesNumber(v290)) {
               imSeries = s290;
               imSeriesNumber = v290;
             }
@@ -806,7 +814,7 @@ export const bnfResolver = {
             const f410 = imFields.find(f => f.tag === '410');
             const v410 = f410 ? getSubfield(f410, 'v') : undefined;
             const s410 = f410 ? getSubfield(f410, 't') || getSubfield(f410, 'a') : undefined;
-            if (f410 && s410 && v410 && !isPaperbackCollectionLabel(s410) && isPlausibleFallbackSeriesNumber(v410)) {
+            if (f410 && s410 && v410 && !isEditorialPaperbackCollectionName(s410) && isPlausibleFallbackSeriesNumber(v410)) {
               imSeries = s410;
               imSeriesNumber = v410;
             }
@@ -814,6 +822,10 @@ export const bnfResolver = {
 
           if (imSeries) {
             imSeries = cleanSeriesName(imSeries);
+            if (isEditorialPaperbackCollectionName(imSeries)) {
+              imSeries = undefined;
+              imSeriesNumber = undefined;
+            }
           }
         }
       } catch (imErr: any) {
@@ -832,17 +844,22 @@ export const bnfResolver = {
         title = titleParseDC.title;
       }
 
-      // Extraction depuis Dublin Core strings (relations + descriptions)
+      // Extraction depuis Dublin Core strings (relations + descriptions), en filtrant les collections poches & numéros géants
       let dcSeries: string | undefined = undefined;
       let dcSeriesNumber: string | undefined = undefined;
       const allTexts = [...rawRelations, ...rawDescriptions];
       for (const text of allTexts) {
         const parsed = parseSeriesFromString(text);
         if (parsed && parsed.series) {
+          if (isEditorialPaperbackCollectionName(parsed.series)) continue;
           const isEnsemble = /^Titre d'ensemble/i.test(text.trim());
+          // Une ligne "Collection : X ; 7304" avec numéro > 150 désigne un catalogue éditeur, jamais un tome de série
+          if (parsed.seriesNumber && !isEnsemble && !isPlausibleFallbackSeriesNumber(parsed.seriesNumber)) {
+            continue;
+          }
           if (parsed.seriesNumber || isEnsemble) {
             dcSeries = parsed.series;
-            if (parsed.seriesNumber) {
+            if (parsed.seriesNumber && (isEnsemble || isPlausibleFallbackSeriesNumber(parsed.seriesNumber))) {
               dcSeriesNumber = parsed.seriesNumber;
             }
             break;
@@ -851,8 +868,25 @@ export const bnfResolver = {
       }
 
       // Fusion des informations de série
-      const finalSeries = imSeries || dcSeries || (titleParseIM && titleParseIM.series) || titleParseDC.series;
-      const finalSeriesNumber = imSeriesNumber || dcSeriesNumber || imVolumeNumber || (titleParseIM && titleParseIM.seriesNumber) || titleParseDC.seriesNumber;
+      const candidateFinalSeries = cleanSeriesName(
+        imSeries || dcSeries || (titleParseIM && titleParseIM.series) || titleParseDC.series || ''
+      );
+      const finalSeries =
+        candidateFinalSeries && !isEditorialPaperbackCollectionName(candidateFinalSeries)
+          ? candidateFinalSeries
+          : undefined;
+      const rawFinalNumber =
+        imSeriesNumber ||
+        dcSeriesNumber ||
+        imVolumeNumber ||
+        (titleParseIM && titleParseIM.seriesNumber) ||
+        titleParseDC.seriesNumber;
+      const finalSeriesNumber =
+        finalSeries &&
+        rawFinalNumber &&
+        (Boolean(imSeries || dcSeries) || isPlausibleFallbackSeriesNumber(rawFinalNumber))
+          ? rawFinalNumber
+          : undefined;
 
       return {
         isbn,

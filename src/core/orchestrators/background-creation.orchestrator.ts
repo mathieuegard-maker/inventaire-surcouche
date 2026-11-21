@@ -182,6 +182,8 @@ export const backgroundCreationOrchestrator = {
         .harvestKnownIsbnsForWork({
           title: optimisticBook.title,
           authors: optimisticBook.authors,
+          series: optimisticBook.series,
+          seriesNumber: optimisticBook.seriesNumber,
           seedIsbns: [optimisticBook.isbn13, optimisticBook.isbn10, ...(optimisticBook.knownIsbns || [])]
         })
         .then(async (harvest) => {

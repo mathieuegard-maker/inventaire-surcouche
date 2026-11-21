@@ -3,6 +3,7 @@
 // 100% portable sur fetch() standard, zéro dépendance propriétaire Cloudflare.
 
 import { normalizeSeriesNumber, normalizeTextKey, parseSeriesFromTitle } from './bnf.resolver';
+import { isEditorialPaperbackCollectionName } from '../utils/editorial-collection.util';
 import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/4.0 (mathieu.egard@gmail.com)';
@@ -196,11 +197,14 @@ export function resolveCanonicalVolumeNumber(params: {
   rawTitles: string[];
   seriesName?: string;
 }): { volumeNumber: string; source: 'user_hint' | 'wikidata_series_index' | 'weighted_vote' | 'title_parse' | 'none' } {
-  // 1. Arbitrage explicite utilisateur
-  if (params.userHintVolume) {
+  // 1. Arbitrage explicite utilisateur (uniquement s'il existe une série valide et que le n° reste plausible <= 500)
+  if (params.userHintVolume && params.seriesName) {
     const normUser = normalizeSeriesNumber(params.userHintVolume);
-    if (normUser && /^\d+$/.test(normUser) && Number(normUser) > 0) {
-      return { volumeNumber: normUser, source: 'user_hint' };
+    if (normUser && /^\d+$/.test(normUser)) {
+      const n = Number(normUser);
+      if (n > 0 && n <= 500) {
+        return { volumeNumber: normUser, source: 'user_hint' };
+      }
     }
   }
 
@@ -218,6 +222,8 @@ export function resolveCanonicalVolumeNumber(params: {
   const votes = new Map<string, number>();
   for (const ed of params.sisterEditions) {
     if (!ed.volumeNumber) continue;
+    if (ed.seriesRaw && isEditorialPaperbackCollectionName(ed.seriesRaw)) continue;
+    if (ed.collectionRaw && isEditorialPaperbackCollectionName(ed.collectionRaw) && !ed.seriesRaw) continue;
     const norm = normalizeSeriesNumber(ed.volumeNumber);
     if (!norm || !/^\d+$/.test(norm) || Number(norm) <= 0 || Number(norm) > 500) continue;
 

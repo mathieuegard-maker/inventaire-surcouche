@@ -268,90 +268,89 @@ export async function ingestIsbnsViaV4(params: {
   const uniqueIsbns = Array.from(new Set(params.isbns.map((s) => String(s || '').trim()).filter(Boolean)));
   if (!uniqueIsbns.length) return null;
 
-  // Micro-lots de 2 ISBNs maximum par appel HTTP pour rester sous la limite de 50 sous-requêtes Cloudflare
-  // et garantir que 100 % des livres passent par Couche 3 -> Couche 4 (0 bascule V2 legacy).
-  const step = Math.min(3, Math.max(1, Math.trunc(params.chunkSize || 2)));
+  // Traitement par tranches courtes (1 ISBN par défaut sur gros lots) pour rester sous la limite de 50 sous-requêtes Cloudflare
+  // et éviter qu'une tranche lente ne fasse basculer tout le lot en V2 legacy.
+  const step = Math.min(2, Math.max(1, Math.trunc(params.chunkSize || 1)));
   const savedUri = sessionStore.getUserUri() || undefined;
   const allResults: IngestSingleResult[] = [];
   let effectiveTraceId = params.traceId || '';
   let anyNetworkSuccess = false;
 
-  try {
-    for (let i = 0; i < uniqueIsbns.length; i += step) {
-      const slice = uniqueIsbns.slice(i, i + step);
-      const sliceHints: Record<string, UserIngestHint> = {};
-      if (params.hints) {
-        for (const k of slice) {
-          if (params.hints[k]) sliceHints[k] = params.hints[k];
-        }
-      }
-      const res = await fetchWithTimeout('/api/v2/books/ingest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 24000,
-        body: JSON.stringify({
-          isbns: slice,
-          source_channel: params.sourceChannel,
-          action: params.action || 'preview',
-          userUri: savedUri,
-          ...(Object.keys(sliceHints).length > 0 ? { hints: sliceHints } : {}),
-          ...(effectiveTraceId ? { traceId: effectiveTraceId } : {})
-        })
-      });
-
-      if (!res?.ok) {
-        if (i === 0) return null;
-        continue;
-      }
-      const data = (await res.json()) as IngestBatchResult;
-      if (!data || !Array.isArray(data.results)) {
-        if (i === 0) return null;
-        continue;
-      }
-      anyNetworkSuccess = true;
-      if (!effectiveTraceId && data.traceId) effectiveTraceId = data.traceId;
-      allResults.push(...data.results);
-      params.onProgress?.(Math.min(uniqueIsbns.length, i + slice.length), uniqueIsbns.length);
-
-      // Synchroniser immédiatement chaque livre consolidé dans IndexedDB (cache_books + registres inventory/wishlist)
-      for (const r of data.results) {
-        if (!r.book) continue;
-        const isDirectlyOwned =
-          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED';
-        const targetStatus: 'owned' | 'wish' | 'none' = isDirectlyOwned
-          ? 'owned'
-          : params.action === 'wishlist'
-            ? 'wish'
-            : 'none';
-        const humanized = v4BookRecordToHumanizedBook(r.book, targetStatus);
-        await saveV4BookPreservingLocalCover(humanized);
-        if (typeof databaseService.addRegistryEntry === 'function') {
-          if (targetStatus === 'owned') {
-            await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
-            await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
-          } else if (targetStatus === 'wish') {
-            await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
-          }
-        }
+  for (let i = 0; i < uniqueIsbns.length; i += step) {
+    const slice = uniqueIsbns.slice(i, i + step);
+    const sliceHints: Record<string, UserIngestHint> = {};
+    if (params.hints) {
+      for (const k of slice) {
+        if (params.hints[k]) sliceHints[k] = params.hints[k];
       }
     }
 
-    return anyNetworkSuccess
-      ? {
-          traceId: effectiveTraceId || '',
-          sourceChannel: params.sourceChannel,
-          results: allResults
+    let data: IngestBatchResult | null = null;
+    for (let attempt = 0; attempt < 2 && !data; attempt++) {
+      try {
+        const res = await fetchWithTimeout('/api/v2/books/ingest', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 28000,
+          body: JSON.stringify({
+            isbns: slice,
+            source_channel: params.sourceChannel,
+            action: params.action || 'preview',
+            userUri: savedUri,
+            ...(Object.keys(sliceHints).length > 0 ? { hints: sliceHints } : {}),
+            ...(effectiveTraceId ? { traceId: effectiveTraceId } : {})
+          })
+        });
+        if (!res?.ok) {
+          if (res && res.status >= 500 && attempt === 0) continue;
+          break;
         }
-      : null;
-  } catch {
-    return anyNetworkSuccess
-      ? {
-          traceId: effectiveTraceId || '',
-          sourceChannel: params.sourceChannel,
-          results: allResults
+        const parsed = (await res.json().catch(() => null)) as IngestBatchResult | null;
+        if (parsed && Array.isArray(parsed.results)) {
+          data = parsed;
         }
-      : null;
+      } catch {
+        if (attempt === 0 && !connectionState.isOffline.value) continue;
+      }
+    }
+
+    params.onProgress?.(Math.min(uniqueIsbns.length, i + slice.length), uniqueIsbns.length);
+    if (!data) continue;
+
+    anyNetworkSuccess = true;
+    if (!effectiveTraceId && data.traceId) effectiveTraceId = data.traceId;
+    allResults.push(...data.results);
+
+    // Synchroniser immédiatement chaque livre consolidé dans IndexedDB (cache_books + registres inventory/wishlist)
+    for (const r of data.results) {
+      if (!r.book) continue;
+      const isDirectlyOwned =
+        params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED';
+      const targetStatus: 'owned' | 'wish' | 'none' = isDirectlyOwned
+        ? 'owned'
+        : params.action === 'wishlist'
+          ? 'wish'
+          : 'none';
+      const humanized = v4BookRecordToHumanizedBook(r.book, targetStatus);
+      await saveV4BookPreservingLocalCover(humanized);
+      if (typeof databaseService.addRegistryEntry === 'function') {
+        if (targetStatus === 'owned') {
+          await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
+          await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
+        } else if (targetStatus === 'wish') {
+          await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+        }
+      }
+    }
   }
+
+  return anyNetworkSuccess
+    ? {
+        traceId: effectiveTraceId || '',
+        sourceChannel: params.sourceChannel,
+        results: allResults
+      }
+    : null;
 }
 
 const V4_LAST_SYNC_KEY = 'biblio_v4_last_sync_at';

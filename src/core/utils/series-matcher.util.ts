@@ -3,6 +3,9 @@
 // causée par les noms de collections éditoriales (ex: "Astérix - La Grande Collection" vs "Une aventure d'Astérix").
 
 import { normalizeTextKey } from '../resolvers/bnf.resolver';
+import { isEditorialPaperbackCollectionName } from './editorial-collection.util';
+
+export { isEditorialPaperbackCollectionName };
 
 const EDITORIAL_COLLECTION_MARKERS = [
   'la grande collection',
@@ -45,21 +48,6 @@ const SERIES_LEADING_PREFIXES = [
   'la saga ',
   'saga '
 ];
-
-const PAPERBACK_AND_PUBLISHER_COLLECTION_RE =
-  /^(?:(?:la\s+)?collection\s+|editions?\s+|éditions?\s+)?(?:folio(?:\s+bd|\s+cadets|\s+junior|\s+sf|\s+policier)?|livre\s+de\s+poche|le\s+livre\s+de\s+poche|pocket(?:\s+bd)?|j['’]?\s*ai\s+lu|10\/18|10\s*18|points|babel|flammarion|gallimard(?:\s+jeunesse)?|dupuis|dargaud|le\s+lombard|gl[ée]nat|delcourt|soleil|casterman|hachette|rombaldi|france\s+loisirs|aire\s+libre|long\s+courrier|sign[ée]|rep[ée]rages|troisi[èe]me\s+vague|poisson\s+pilote)$/i;
-
-/**
- * Détecte les noms de collections éditoriales génériques (ex: "Folio", "Collection Folio", "Pocket")
- * qui ne doivent jamais être élues en tant que Série narrative ni fournir leur n° de collection comme n° de tome.
- */
-export function isEditorialPaperbackCollectionName(raw?: string): boolean {
-  const cleaned = (raw || '').replace(/\s+/g, ' ').trim();
-  if (!cleaned) return false;
-  if (PAPERBACK_AND_PUBLISHER_COLLECTION_RE.test(cleaned)) return true;
-  const norm = normalizeTextKey(cleaned);
-  return PAPERBACK_AND_PUBLISHER_COLLECTION_RE.test(norm);
-}
 
 const SERIES_STOP_WORDS = new Set([
   'et',

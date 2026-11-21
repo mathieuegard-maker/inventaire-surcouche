@@ -854,4 +854,47 @@ describe('v4-pipeline.service', () => {
     expect(parsed?.volumeNumber).toBe('7');
     expect(parsed?.title).toBe('Un tout petit mondes');
   });
+
+  it("consolidateBookLayer4 rejette les collections poches (Folio #7304, J'ai lu #12281) même injectées via userHint", async () => {
+    const { db, series } = createInMemoryV4Db();
+    const book = await consolidateBookLayer4(
+      db,
+      {
+        anchorIsbn13: '9782073038159',
+        anchorTitle: 'Le roitelet',
+        language: 'fre',
+        sisterEditions: [
+          {
+            source: 'bnf',
+            isbn13: '9782073038159',
+            title: 'Le roitelet',
+            collectionRaw: 'Folio',
+            language: 'fre'
+          }
+        ],
+        seriesCandidates: [],
+        authors: ['Jean-François Beauchemin'],
+        illustrators: [],
+        scriptwriters: [],
+        rawSubjects: ['Roman'],
+        rawTitles: ['Le roitelet'],
+        sourcesHit: ['bnf']
+      },
+      {
+        sourceChannel: 'canal_4_ai_photo',
+        libraryId: 'lib_A',
+        action: 'owned',
+        userHint: {
+          title: 'Le roitelet',
+          series: 'Folio',
+          volumeNumber: '7304'
+        }
+      }
+    );
+
+    expect(book.seriesId).toBeNull();
+    expect(book.seriesName).toBeNull();
+    expect(book.volumeNumber).toBeNull();
+    expect(series.size).toBe(0);
+  });
 });

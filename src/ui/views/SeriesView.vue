@@ -66,11 +66,23 @@ const fetchSeriesMetadata = async () => {
 };
 
 const loadLocalData = async () => {
-  const context = await seriesOrchestrator.getCompleteSeriesForUI(seriesId.value);
+  let context = await seriesOrchestrator.getCompleteSeriesForUI(
+    seriesId.value,
+    resolvedSeriesTitle.value || undefined
+  );
+  if (!resolvedSeriesTitle.value && (!context || context.tomes.length === 0)) {
+    await fetchSeriesMetadata();
+    if (resolvedSeriesTitle.value) {
+      context = await seriesOrchestrator.getCompleteSeriesForUI(
+        seriesId.value,
+        resolvedSeriesTitle.value
+      );
+    }
+  }
   if (context && context.tomes.length > 0) {
     seriesTomes.value = sortSeriesTomes(context.tomes);
     saveBookNavigationOrder(seriesTomes.value.map((t) => t.uri), 'series');
-  } else {
+  } else if (!resolvedSeriesTitle.value) {
     await fetchSeriesMetadata();
   }
 };

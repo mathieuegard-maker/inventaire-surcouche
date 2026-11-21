@@ -67,7 +67,7 @@ export const seriesOrchestrator = {
     console.group(`[SERIES ORCHESTRATOR] Analyse de la saga : ${seriesId}`);
 
     // 1. Extraction rapide depuis le cache local (Local-First)
-    const rawTomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
+    const rawTomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId, seriesName);
     const tomes: HumanizedBook[] = rawTomes.filter(
       (t) => !(t.hiddenSeriesIds || []).includes(seriesId)
     );

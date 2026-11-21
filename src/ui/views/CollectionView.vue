@@ -200,18 +200,40 @@ const seriesGondolas = computed(() => {
   }
 
   const groups: Record<string, { id: string; name: string; tomes: HumanizedBook[] }> = {};
+  const idByNormName = new Map<string, string>();
 
-  list.forEach(book => {
-    const key = book.seriesId || book.series || 'unknown';
+  // Passe 1 : regrouper d'abord les livres ayant un seriesId explicite
+  for (const book of list) {
+    if (!book.seriesId) continue;
+    const key = book.seriesId;
     if (!groups[key]) {
       groups[key] = {
-        id: book.seriesId || book.series || '',
-        name: book.series || book.seriesId || '',
+        id: book.seriesId,
+        name: book.series || book.seriesId,
+        tomes: []
+      };
+    }
+    if (book.series && !idByNormName.has(normalizeTextKey(book.series))) {
+      idByNormName.set(normalizeTextKey(book.series), key);
+    }
+    groups[key].tomes.push(book);
+  }
+
+  // Passe 2 : rattacher les livres locaux sans seriesId au groupe existant de même nom si présent
+  for (const book of list) {
+    if (book.seriesId) continue;
+    const nameKey = book.series ? normalizeTextKey(book.series) : '';
+    const existingIdKey = nameKey ? idByNormName.get(nameKey) : undefined;
+    const key = existingIdKey || book.series || 'unknown';
+    if (!groups[key]) {
+      groups[key] = {
+        id: book.series || '',
+        name: book.series || '',
         tomes: []
       };
     }
     groups[key].tomes.push(book);
-  });
+  }
 
   const gondolas = Object.values(groups).map(g => {
     const sortedTomes = sortSeriesTomes(g.tomes);

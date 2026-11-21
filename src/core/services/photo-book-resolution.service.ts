@@ -18,6 +18,7 @@ import { imageUtil } from '../utils/image.util';
 import {
   findBestMatchingSeries,
   findMatchingOwnedWork,
+  isEditorialPaperbackCollectionName,
   stripEditorialCollectionSuffixes
 } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
@@ -913,16 +914,29 @@ export const photoBookResolutionService = {
         workEditionCoverUrls[0] ||
         coverFallbackUrls[0];
 
-      const mergedSeries =
-        externalMeta?.series ||
-        d1Entity?.series ||
-        hintMatchMeta?.series ||
-        cand.series;
+      const rawSeriesCandidates = [
+        externalMeta?.series,
+        d1Entity?.series,
+        hintMatchMeta?.series,
+        cand.series
+      ];
+      const mergedSeries = rawSeriesCandidates.find(
+        (s): s is string => Boolean(s?.trim()) && !isEditorialPaperbackCollectionName(s)
+      );
+      const rawSeriesNumCandidates = [
+        externalMeta?.seriesNumber,
+        d1Entity?.seriesNumber,
+        hintMatchMeta?.seriesNumber,
+        cand.volumeNumber
+      ];
+      const candidateNum = mergedSeries
+        ? rawSeriesNumCandidates.find((v): v is string => Boolean(v?.trim()))
+        : undefined;
+      const numVal = candidateNum && /^\d+$/.test(candidateNum.trim()) ? Number(candidateNum.trim()) : NaN;
       const mergedSeriesNum =
-        externalMeta?.seriesNumber ||
-        d1Entity?.seriesNumber ||
-        hintMatchMeta?.seriesNumber ||
-        cand.volumeNumber;
+        candidateNum && (!Number.isFinite(numVal) || (numVal > 0 && numVal <= 500))
+          ? candidateNum
+          : undefined;
 
       const correctedFromAi = detectAiCorrection(cand, mergedTitle, mergedAuthors);
 

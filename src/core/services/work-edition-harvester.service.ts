@@ -1,7 +1,12 @@
 // src/core/services/work-edition-harvester.service.ts
 // Moissonnage multi-éditions en arrière-plan pour rattacher tous les ISBN connus d'une Œuvre.
 
-import { bnfResolver, isFrancophoneBookIsbn13, normalizeTextKey } from '../resolvers/bnf.resolver';
+import {
+  bnfResolver,
+  isFrancophoneBookIsbn13,
+  normalizeSeriesNumber,
+  normalizeTextKey
+} from '../resolvers/bnf.resolver';
 import { isbnUtil } from '../utils/isbn.util';
 
 export interface HarvestWorkEditionsResult {
@@ -30,6 +35,8 @@ export const workEditionHarvesterService = {
   async harvestKnownIsbnsForWork(params: {
     title: string;
     authors?: string[];
+    series?: string;
+    seriesNumber?: string;
     seedIsbns?: Array<string | undefined>;
   }): Promise<HarvestWorkEditionsResult> {
     const isbns = new Set<string>();
@@ -37,6 +44,15 @@ export const workEditionHarvesterService = {
 
     const cleanTitle = (params.title || '').trim();
     const normTargetTitle = normalizeTextKey(cleanTitle);
+    const normTargetSeries = params.series ? normalizeTextKey(params.series) : '';
+    const targetVol = params.seriesNumber ? normalizeSeriesNumber(params.seriesNumber) : '';
+    const isHomonymousSeriesTitle = Boolean(normTargetSeries && normTargetTitle === normTargetSeries);
+
+    // Si un titre de tome est identique au nom de la série sans numéro de tome (ex: "Les éphémères"),
+    // tout moissonnage par titre fusionnerait les ISBN de tous les tomes ensemble.
+    if (isHomonymousSeriesTitle && !targetVol) {
+      return { knownIsbns: Array.from(isbns) };
+    }
     const primaryAuthor = (params.authors || []).find(
       (a) => a && normalizeTextKey(a) !== 'auteur inconnu'
     );
@@ -45,32 +61,38 @@ export const workEditionHarvesterService = {
       return { knownIsbns: Array.from(isbns) };
     }
 
+    const skipOpenLibrary = Boolean(targetVol || isHomonymousSeriesTitle);
+
     const [bnfRes, olRes] = await Promise.allSettled([
       bnfResolver.searchCandidatesByHints({
         title: cleanTitle,
+        series: params.series,
+        volumeNumber: params.seriesNumber,
         author: primaryAuthor
       }),
-      (async () => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 3500);
-        try {
-          const qs = new URLSearchParams({
-            title: cleanTitle,
-            limit: '2',
-            fields: 'key,title,isbn,cover_i'
-          });
-          if (primaryAuthor) qs.set('author', primaryAuthor);
-          const res = await fetch(`https://openlibrary.org/search.json?${qs.toString()}`, {
-            signal: controller.signal
-          });
-          if (!res.ok) return null;
-          return (await res.json()) as {
-            docs?: Array<{ key?: string; title?: string; isbn?: string[]; cover_i?: number }>;
-          };
-        } finally {
-          clearTimeout(timer);
-        }
-      })()
+      skipOpenLibrary
+        ? Promise.resolve(null)
+        : (async () => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 3500);
+            try {
+              const qs = new URLSearchParams({
+                title: cleanTitle,
+                limit: '2',
+                fields: 'key,title,isbn,cover_i'
+              });
+              if (primaryAuthor) qs.set('author', primaryAuthor);
+              const res = await fetch(`https://openlibrary.org/search.json?${qs.toString()}`, {
+                signal: controller.signal
+              });
+              if (!res.ok) return null;
+              return (await res.json()) as {
+                docs?: Array<{ key?: string; title?: string; isbn?: string[]; cover_i?: number }>;
+              };
+            } finally {
+              clearTimeout(timer);
+            }
+          })()
     ]);
 
     let fallbackCoverUrl: string | undefined;
@@ -78,11 +100,17 @@ export const workEditionHarvesterService = {
       for (const cand of bnfRes.value.slice(0, 12)) {
         if ((cand.meta as any).isIntegral || (cand.meta as any)._isIntegral) continue;
         const candTitleNorm = normalizeTextKey(cand.meta.title || '');
-        if (candTitleNorm === normTargetTitle) {
-          addNormalizedIsbn(isbns, cand.meta.isbn, true);
-          if (!fallbackCoverUrl && cand.meta.coverUrl) {
-            fallbackCoverUrl = cand.meta.coverUrl;
+        if (candTitleNorm !== normTargetTitle) continue;
+        const candVol = cand.meta.seriesNumber ? normalizeSeriesNumber(cand.meta.seriesNumber) : '';
+        if (targetVol && candVol && candVol !== targetVol) continue;
+        if ((targetVol && !candVol) || (!targetVol && candVol)) {
+          if (isHomonymousSeriesTitle || (cand.meta.series && normalizeTextKey(cand.meta.series) === candTitleNorm)) {
+            continue;
           }
+        }
+        addNormalizedIsbn(isbns, cand.meta.isbn, true);
+        if (!fallbackCoverUrl && cand.meta.coverUrl) {
+          fallbackCoverUrl = cand.meta.coverUrl;
         }
       }
     }

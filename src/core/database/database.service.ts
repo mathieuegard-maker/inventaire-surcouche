@@ -4,6 +4,16 @@ import type { HumanizedBook, LoanRecord, RegistryEntry, QueueActionPayload } fro
 import type { PhotoBatchResolutionResult } from '../services/photo-book-resolution.service';
 import { isbnUtil } from '../utils/isbn.util';
 
+function normalizeSeriesText(raw?: string): string {
+  return (raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['’".,:;!?()\[\]-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /**
  * Supprime récursivement les Proxies réactifs Vue et champs non clonables
  * tout en préservant les types binaires/natifs supportés par IndexedDB (Blob, Date, ArrayBuffer...).
@@ -208,11 +218,40 @@ export const databaseService = {
   },
 
   /**
-   * [NOUVEAU V2] Récupère tous les tomes physiques associés à une série
+   * [NOUVEAU V2] Récupère tous les tomes physiques associés à une série (par seriesId, avec repli par nom si seriesId absent)
    */
-  async getBooksBySeriesId(seriesId: string): Promise<HumanizedBook[]> {
-    const allForSeries = await db.cache_books.where('seriesId').equals(seriesId).toArray();
-    return allForSeries.filter((b) => !(b.hiddenSeriesIds || []).includes(seriesId));
+  async getBooksBySeriesId(seriesId: string, seriesNameHint?: string): Promise<HumanizedBook[]> {
+    const byId = await db.cache_books.where('seriesId').equals(seriesId).toArray();
+    const isOpaqueSeriesUri =
+      seriesId.startsWith('inv:') || seriesId.startsWith('ser_') || seriesId.startsWith('wd:');
+
+    const normTargets = new Set<string>();
+    const addTarget = (raw?: string) => {
+      const n = normalizeSeriesText(raw);
+      if (n && n.length >= 2) normTargets.add(n);
+    };
+    if (seriesNameHint) addTarget(seriesNameHint);
+    if (!isOpaqueSeriesUri) addTarget(seriesId);
+    for (const b of byId) {
+      if (b.series) addTarget(b.series);
+    }
+
+    let combined = byId;
+    if (normTargets.size > 0 && (byId.length === 0 || !isOpaqueSeriesUri || Boolean(seriesNameHint))) {
+      const allBooks = await db.cache_books.toArray();
+      const byUri = new Map<string, HumanizedBook>();
+      for (const b of byId) byUri.set(b.uri, b);
+      for (const b of allBooks) {
+        if (byUri.has(b.uri) || !b.series) continue;
+        if (!normTargets.has(normalizeSeriesText(b.series))) continue;
+        if (!b.seriesId || b.seriesId.startsWith('local:') || !isOpaqueSeriesUri) {
+          byUri.set(b.uri, b);
+        }
+      }
+      combined = Array.from(byUri.values());
+    }
+
+    return combined.filter((b) => !(b.hiddenSeriesIds || []).includes(seriesId));
   },
 
   // --- GESTION DU CACHE (Fiches complètes) ---
@@ -426,26 +465,13 @@ export const databaseService = {
   },
 
   async findLocalSeriesMatches(seriesName?: string, seriesId?: string): Promise<HumanizedBook[]> {
-    const normTarget = (seriesName || '')
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toLowerCase()
-      .replace(/['’".,:;!?()\[\]-]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const normTarget = normalizeSeriesText(seriesName);
 
     const allBooks = await db.cache_books.toArray();
     return allBooks.filter(book => {
       if (seriesId && book.seriesId === seriesId) return true;
       if (!normTarget || !book.series) return false;
-      const normBookSeries = book.series
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .toLowerCase()
-        .replace(/['’".,:;!?()\[\]-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-      return normBookSeries === normTarget;
+      return normalizeSeriesText(book.series) === normTarget;
     });
   },
 

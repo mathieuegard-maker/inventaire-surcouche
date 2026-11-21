@@ -414,6 +414,9 @@ function applyEditionChoice(item: ResolvedPhotoItem, selectedIsbn: string) {
   if (opt.isbn13 !== item.isbn13) {
     item.existingUri = undefined;
     item.existingWorkUri = undefined;
+    item.knownIsbns = [opt.isbn13];
+    item.alreadyOwned = false;
+    item.alreadyWished = false;
   }
   item.selectedAlternativeIsbn = opt.isbn13;
   item.isbn13 = opt.isbn13;
@@ -732,7 +735,7 @@ const dispatchPhotoBatchAction = async (
           isbns: isbnsToIngest,
           sourceChannel: 'canal_4_ai_photo',
           action: target === 'owned' ? 'owned' : 'wishlist',
-          chunkSize: 2,
+          chunkSize: 1,
           hints: hintsByIsbn,
           onProgress: (done, total) => {
             ingestProgress.value = {
