@@ -106,6 +106,66 @@ async function runWithConcurrency<T, R>(
   return results;
 }
 
+interface QueuedResolutionTask<T> {
+  run: () => Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+}
+
+const highPriorityQueue: Array<QueuedResolutionTask<any>> = [];
+const normalPriorityQueue: Array<QueuedResolutionTask<any>> = [];
+let activeQueueWorker: Promise<void> | null = null;
+let consecutiveSlowMisses = 0;
+
+function enqueueBnfResolutionTask<T>(
+  run: () => Promise<T>,
+  priority: 'high' | 'normal' = 'normal'
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const entry: QueuedResolutionTask<T> = { run, resolve, reject };
+    if (priority === 'high') {
+      highPriorityQueue.push(entry);
+    } else {
+      normalPriorityQueue.push(entry);
+    }
+    if (!activeQueueWorker) {
+      activeQueueWorker = drainBnfResolutionQueues();
+    }
+  });
+}
+
+async function drainBnfResolutionQueues(): Promise<void> {
+  try {
+    while (highPriorityQueue.length > 0 || normalPriorityQueue.length > 0) {
+      const next = highPriorityQueue.shift() || normalPriorityQueue.shift();
+      if (!next) break;
+      const startedAt = Date.now();
+      let outcome: any;
+      try {
+        outcome = await next.run();
+        next.resolve(outcome);
+      } catch (err) {
+        next.reject(err);
+      }
+      const elapsed = Date.now() - startedAt;
+      const isUnresolvedOutcome = outcome && typeof outcome === 'object' && outcome.status === 'unresolved';
+      if (isUnresolvedOutcome && elapsed >= 300) {
+        consecutiveSlowMisses++;
+      } else {
+        consecutiveSlowMisses = 0;
+      }
+      // Pause anti-saturation BnF uniquement sur vrais appels réseau lents (> 180 ms) avec des tâches restantes en file
+      const hasMorePending = highPriorityQueue.length > 0 || normalPriorityQueue.length > 0;
+      if (hasMorePending && elapsed >= 180 && highPriorityQueue.length === 0) {
+        const cooldownMs = consecutiveSlowMisses >= 3 ? 750 : 120;
+        await new Promise((r) => setTimeout(r, cooldownMs));
+      }
+    }
+  } finally {
+    activeQueueWorker = null;
+  }
+}
+
 async function checkOwnershipByIsbn(
   isbn13: string,
   hints?: { title?: string; authors?: string[]; series?: string; seriesNumber?: string }
@@ -556,7 +616,7 @@ async function discoverConsensusByHints(
       score: entry.finalScore,
       sourcesCount: entry.effectiveSources
     });
-    if (topAlternatives.length >= 5) break;
+    if (topAlternatives.length >= 10) break;
   }
 
   // Ne retenir le gap de concurrence que sur des œuvres distinctes (pas deux éditions d'une même œuvre)
@@ -653,58 +713,64 @@ export const photoBookResolutionService = {
   async resolveSingleCandidate(
     cand: RecognizedBookCandidate,
     idPrefix = 'det',
-    onExternalLookup?: (delta: number) => void
+    onExternalLookup?: (delta: number) => void,
+    options?: { priority?: 'high' | 'normal'; bypassCache?: boolean }
   ): Promise<ResolvedPhotoItem> {
-    const uid = `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const priority = options?.priority ?? (idPrefix === 'retry' ? 'high' : 'normal');
+    const bypassCache = Boolean(options?.bypassCache ?? (idPrefix === 'retry' || Boolean(cand.publisher?.trim())));
 
-    try {
-      // 1. Retrouver un ISBN-13 officiel par consensus multi-sources à partir des indices visuels (si absent)
-      let isbn13 = normalizeToIsbn13(cand.isbn);
-      let knownIsbns: string[] | undefined = isbn13 ? [isbn13] : undefined;
-      let hintMatchMeta: ExternalBookMetadata | undefined;
-      let sourcesCount = isbn13 ? 1 : 0;
-      let isDoubt = false;
-      let alternatives: PhotoResolutionOption[] = [];
+    return enqueueBnfResolutionTask(async () => {
+      const uid = `${idPrefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-      if (!isbn13) {
-        // Canal 3 Passe 1 : vérifier d'abord IndexedDB + DB Serveur D1 pour éviter les appels externes inutiles
-        const localOrD1 = await tryResolveFromLocalOrServerCatalog(cand);
-        if (localOrD1) {
-          isbn13 = localOrD1.isbn13;
-          knownIsbns = localOrD1.knownIsbns;
-          hintMatchMeta = localOrD1.meta;
-          sourcesCount = 1;
-        } else {
-          // Voie V4 Back-End prioritaire : délégation Canal 3 -> POST /api/v2/books/resolve-hints (1 seul appel réseau)
-          onExternalLookup?.(1);
-          const backendRes = await resolveHintsViaV4Backend({
-            hints: buildHintQuery(cand),
-            aiConfidence: cand.confidence,
-            sourceChannel: 'canal_4_ai_photo'
-          });
-          if (backendRes) {
-            isbn13 = backendRes.isbn13;
-            knownIsbns = backendRes.knownIsbns;
-            hintMatchMeta = backendRes.meta;
-            sourcesCount = backendRes.sourcesCount;
-            isDoubt = backendRes.isDoubt;
-            alternatives = backendRes.alternatives;
+      try {
+        // 1. Retrouver un ISBN-13 officiel par consensus multi-sources à partir des indices visuels (si absent)
+        let isbn13 = normalizeToIsbn13(cand.isbn);
+        let knownIsbns: string[] | undefined = isbn13 ? [isbn13] : undefined;
+        let hintMatchMeta: ExternalBookMetadata | undefined;
+        let sourcesCount = isbn13 ? 1 : 0;
+        let isDoubt = false;
+        let alternatives: PhotoResolutionOption[] = [];
+
+        if (!isbn13) {
+          // Canal 3 Passe 1 : vérifier d'abord IndexedDB + DB Serveur D1 sauf en cas de relance manuelle ou filtre éditeur explicite
+          const localOrD1 = !bypassCache ? await tryResolveFromLocalOrServerCatalog(cand) : null;
+          if (localOrD1) {
+            isbn13 = localOrD1.isbn13;
+            knownIsbns = localOrD1.knownIsbns;
+            hintMatchMeta = localOrD1.meta;
+            sourcesCount = 1;
           } else {
-            // Repli client uniquement si l'endpoint serveur est indisponible (ou en test unitaire isolé)
-            const consensus = await discoverConsensusByHints(
-              buildHintQuery(cand),
-              cand.confidence,
-              onExternalLookup
-            );
-            isbn13 = consensus.isbn13;
-            knownIsbns = consensus.knownIsbns;
-            hintMatchMeta = consensus.meta;
-            sourcesCount = consensus.sourcesCount;
-            isDoubt = consensus.isDoubt;
-            alternatives = consensus.alternatives;
+            // Voie V4 Back-End prioritaire : délégation Canal 3 -> POST /api/v2/books/resolve-hints (1 seul appel réseau)
+            onExternalLookup?.(1);
+            const backendRes = await resolveHintsViaV4Backend({
+              hints: buildHintQuery(cand),
+              aiConfidence: cand.confidence,
+              sourceChannel: 'canal_4_ai_photo',
+              skipLocalD1: bypassCache
+            });
+            if (backendRes) {
+              isbn13 = backendRes.isbn13;
+              knownIsbns = backendRes.knownIsbns;
+              hintMatchMeta = backendRes.meta;
+              sourcesCount = backendRes.sourcesCount;
+              isDoubt = backendRes.isDoubt;
+              alternatives = backendRes.alternatives;
+            } else {
+              // Repli client uniquement si l'endpoint serveur est indisponible (ou en test unitaire isolé)
+              const consensus = await discoverConsensusByHints(
+                buildHintQuery(cand),
+                cand.confidence,
+                onExternalLookup
+              );
+              isbn13 = consensus.isbn13;
+              knownIsbns = consensus.knownIsbns;
+              hintMatchMeta = consensus.meta;
+              sourcesCount = consensus.sourcesCount;
+              isDoubt = consensus.isDoubt;
+              alternatives = consensus.alternatives;
+            }
           }
         }
-      }
 
       if (!isbn13) {
         return {
@@ -1010,6 +1076,7 @@ export const photoBookResolutionService = {
         failureReason: errMsg
       };
     }
+    }, priority);
   },
 
   /**
@@ -1026,18 +1093,17 @@ export const photoBookResolutionService = {
     let completed = 0;
     onStatus?.(`Identification multi-sources & BnF (0/${candidates.length})...`);
 
+    const passStartAt = Date.now();
     const totalSpines = candidates.length;
-    const batchConcurrency = totalSpines > 8 ? 2 : 3;
-    const resolvedRaw = await runWithConcurrency(candidates, batchConcurrency, async (cand, idx) => {
-      if (totalSpines > 8 && idx >= batchConcurrency) {
-        await new Promise((resolve) => setTimeout(resolve, 90));
-      }
+    const resolvedRaw = await runWithConcurrency(candidates, 1, async (cand, idx) => {
       const normalizedCand: RecognizedBookCandidate = {
         ...cand,
         spineIndex: typeof cand.spineIndex === 'number' ? cand.spineIndex : idx + 1,
         totalSpines: typeof cand.totalSpines === 'number' ? cand.totalSpines : totalSpines
       };
-      const item = await this.resolveSingleCandidate(normalizedCand, `det-${idx}`, onExternalLookup);
+      const item = await this.resolveSingleCandidate(normalizedCand, `det-${idx}`, onExternalLookup, {
+        priority: 'normal'
+      });
       completed++;
       onStatus?.(`Identification multi-sources & BnF (${completed}/${candidates.length})...`);
       return item;
@@ -1062,7 +1128,7 @@ export const photoBookResolutionService = {
       .filter(({ item }) => item.status === 'unresolved');
 
     if (unresolvedIndices.length > 0 && shelfNeighbors.length > 0) {
-      await runWithConcurrency(unresolvedIndices, 2, async ({ item, idx }) => {
+      await runWithConcurrency(unresolvedIndices, 1, async ({ item, idx }) => {
         const neighbor = findMatchingNeighborSeries(item.rawCandidate, idx, shelfNeighbors);
         if (!neighbor) return;
 
@@ -1074,7 +1140,9 @@ export const photoBookResolutionService = {
           publisher: item.rawCandidate.publisher || neighbor.publisher
         };
 
-        const rescuedItem = await this.resolveSingleCandidate(rescuedCand, `rescue-${idx}`, onExternalLookup);
+        const rescuedItem = await this.resolveSingleCandidate(rescuedCand, `rescue-${idx}`, onExternalLookup, {
+          priority: 'normal'
+        });
         if (rescuedItem.status === 'resolved' || rescuedItem.status === 'doubt') {
           resolvedRaw[idx] = {
             ...rescuedItem,
@@ -1085,16 +1153,21 @@ export const photoBookResolutionService = {
       });
     }
 
-    // Passe de relance automatique anti-timeout/saturation BnF sur les livres encore non identifiés
+    // Passe de relance automatique anti-timeout/saturation BnF sur TOUS les livres encore non identifiés
     const stillUnresolved = resolvedRaw
       .map((item, idx) => ({ item, idx }))
       .filter(({ item }) => item.status === 'unresolved' && Boolean(item.rawCandidate.title?.trim() || item.rawCandidate.series?.trim() || item.rawCandidate.isbn?.trim()));
 
-    if (stillUnresolved.length > 0 && stillUnresolved.length <= 15) {
+    if (stillUnresolved.length > 0) {
       onStatus?.(`Relance automatique BnF pour ${stillUnresolved.length} livre(s) non identifié(s)...`);
-      await new Promise((resolve) => setTimeout(resolve, 650));
+      if (Date.now() - passStartAt > 400) {
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      }
       await runWithConcurrency(stillUnresolved, 1, async ({ item, idx }) => {
-        const retried = await this.resolveSingleCandidate(item.rawCandidate, `autoretry-${idx}`, onExternalLookup);
+        const retried = await this.resolveSingleCandidate(item.rawCandidate, `autoretry-${idx}`, onExternalLookup, {
+          priority: 'normal',
+          bypassCache: true
+        });
         if (retried.status !== 'unresolved') {
           resolvedRaw[idx] = {
             ...retried,

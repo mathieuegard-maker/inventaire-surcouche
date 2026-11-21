@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T15:05+01:00`
+* **Dernière mise à jour :** `2026-11-21T20:03+01:00`
 * **Branche active :** `feat/architecture-v4`
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -105,12 +105,16 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
     * **Zéro bascule silencieuse V4 → V2 :** `ScanView.vue` passe en `chunkSize: 1` vers `/api/v2/books/ingest`, `runV4IngestionPipeline` borne Couche 5 synchrone à `subrequestBudgetUsed <= 1`, et `ingestIsbnsViaV4` (`v4-client.service.ts`) retente chaque tranche individuellement (28s) sans plus jamais renvoyer `null` pour tout le lot si la tranche 0 échoue. `databaseService.getBooksBySeriesId(seriesId, seriesNameHint)` + `CollectionView.vue` / `SeriesView.vue` réconcilient aussi les livres sans `seriesId` par nom normalisé de série.
     * **Verrouillage complet des collections poches (`Folio #7304`, `J'ai lu #12281`, `Librio`, `Rivages poche`, `Libretto`, `10-18`, `Babel`, `Météores`…) :** Liste unifiée dans `editorial-collection.util.ts`, filtrage Dublin Core (`dc:relation`) dans `bnf.resolver.ts`, filtrage dans `external-metadata.service.ts`, `photo-book-resolution.service.ts`, `consolidateBookLayer4` (`userHint.series`) et `resolveCanonicalVolumeNumber` (refus de `userHintVolume` sans `seriesName` ou `> 500`, refus de `volumeNumber` sans `seriesId`).
     * **Anti-contamination inter-tomes (*Les Éphémères*) :** `workEditionHarvesterService.harvestKnownIsbnsForWork` exige désormais le même `seriesNumber` (et renonce sur titre homonyme sans numéro de tome et saute OpenLibrary), `ScanView.applyEditionChoice` réinitialise `knownIsbns` lors d'un changement d'édition, et `scoreHintMatch` privilégie le Tome 1 / non-numéroté devant un Tome 2+ plus récent lorsque la tranche ne porte pas de numéro.
+12. **Anti-homonymie Couche 5, File BnF prioritaire & Filtre Éditeur (`Test #7`, 2026-11-21) :**
+    * **Couche 5 sur séries courtes (*Les Éphémères* / *Jeff Lemire*) :** Lorsque `discoveredByWorkKey.size < 3` déclenche le repli BnF `bib.anywhere` sans auteur (`enqueueOrExpandSeriesLayer5`), `registerCandidateFromRecord` rejette désormais tout candidat dont les auteurs MARC (`100`/`700` extraits par `extractMarcRecordMetadata`) contredisent les auteurs de la série, et n’accepte le rapprochement par titre seul sans `seriesRaw` que si l’auteur, un numéro de tome ou un statut d’intégrale confirme le rattachement (évite d’absorber *Ephémères rencontres*, *Les Éphémères sont éternels*, etc.). Les squelettes conservent aussi leurs propres auteurs au lieu de copier aveuglément `book.authors`.
+    * **File d’attente BnF / Canal 3 séquencée et prioritaire (`photo-book-resolution.service.ts` + `ScanView.vue`) :** Remplacement des rafales parallèles vers la BnF (qui déclenchaient des `BnF:0` en ~1015 ms) par une file unifiée livre-par-livre (`enqueueBnfResolutionTask`) à deux niveaux de priorité (`high` pour la recherche manuelle BnF de l’utilisateur, `normal` pour le lot et les relances) : toute recherche manuelle passe immédiatement devant les tâches suivantes sans jamais annuler ni perdre les recherches en attente derrière elle. Suppression du plafond `<= 15` sur `stillUnresolved`, et ajout d’un bouton *« Tout relancer (N) »* dans *Non identifiés* de `ScanView.vue`.
+    * **Filtre Éditeur dans la recherche BnF (`PhotoItemDetailModal.vue` + `bnf.resolver.ts` + `canal3-resolver.service.ts`) :** Ajout du champ *Éditeur* (avec bouton `✕`, réinitialisation dans *Tout effacer*), requêtes CQL `(bib.publisher all "...")` côté client et serveur Canal 3, scoring renforcé (`+28` / `-18`), bypass du cache D1 lors d’une relance manuelle ou avec éditeur explicite, et passage à 10 alternatives max.
 
 ---
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Correctifs post-Test #6 implémentés et validés (`npx tsc --noEmit` 0 erreur, `npx vitest run` 36/36 fichiers et 177/177 tests verts, `npm run build` OK) et bases D1 + PWA (`reset_2026_11_21_v4_clean_v25`) remises à zéro pour repartir sur des séries et poches propres.
+* **État actuel :** Correctifs post-Test #7 implémentés et validés (`npx tsc --noEmit` 0 erreur, `npx vitest run` 36/36 fichiers et 181/181 tests verts, `npm run build` OK) et squelettes intrus de *Les éphémères* purgés en D1.
 * **Prochaine étape immédiate :** Nouvelle passe de test terrain sur les gros lots Photo IA, les romans poche (`Folio`, `J'ai lu`, `Librio`…), les séries (*Les Tuniques Bleues*, *Universal War One*, *Nestor Burma*) et la recherche sur séries homonymes (*Les Éphémères*).
 * **Chantiers ultérieurs envisagés :** activation R2 (`biblio-covers-webp`) si stockage externe des WebP souhaité ; migration éventuelle vers serveur local Mac (SQLite/Postgres + Cloudflare Tunnel) une fois le pipeline validé sur tests réels.
 

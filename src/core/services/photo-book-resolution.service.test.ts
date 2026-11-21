@@ -510,4 +510,108 @@ describe('photoBookResolutionService', () => {
     expect(result.detectedItems[0].isIntegral).toBe(false);
     expect(result.detectedItems[0].hasIntegralOption).toBe(false);
   });
+
+  it('passe une recherche manuelle (priority: high) en tête de file tout en poursuivant les recherches restantes derrière', async () => {
+    const executionOrder: string[] = [];
+    let releaseFirstTask!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirstTask = resolve;
+    });
+
+    vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockImplementation(async (hints) => {
+      const label = hints.title || '?';
+      executionOrder.push(label);
+      if (label === 'Lot A') {
+        await firstGate;
+      }
+      return [
+        {
+          score: 120,
+          meta: {
+            isbn: label === 'Prioritaire' ? '9782351787502' : label === 'Lot A' ? '9782205000962' : '9782800114064',
+            title: label,
+            authors: ['Auteur Test']
+          }
+        }
+      ];
+    });
+    vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockImplementation(async (isbn) => ({
+      isbn,
+      title: `Livre ${isbn}`,
+      authors: ['Auteur Test'],
+      genres: []
+    }));
+
+    const pLotA = photoBookResolutionService.resolveSingleCandidate(
+      { rawSpineText: 'Lot A', title: 'Lot A', confidence: 'high' },
+      'det-0',
+      undefined,
+      { priority: 'normal', bypassCache: true }
+    );
+    const pLotB = photoBookResolutionService.resolveSingleCandidate(
+      { rawSpineText: 'Lot B', title: 'Lot B', confidence: 'high' },
+      'det-1',
+      undefined,
+      { priority: 'normal', bypassCache: true }
+    );
+    const pManualHigh = photoBookResolutionService.resolveSingleCandidate(
+      { rawSpineText: 'Prioritaire', title: 'Prioritaire', publisher: 'Éditeur X', confidence: 'high' },
+      'retry',
+      undefined,
+      { priority: 'high', bypassCache: true }
+    );
+
+    await new Promise((r) => setTimeout(r, 20));
+    releaseFirstTask();
+
+    const [resA, resB, resHigh] = await Promise.all([pLotA, pLotB, pManualHigh]);
+    expect(executionOrder).toEqual(['Lot A', 'Prioritaire', 'Lot B']);
+    expect(resA.status).toBe('resolved');
+    expect(resHigh.status).toBe('resolved');
+    expect(resB.status).toBe('resolved');
+  });
+
+  it('relance automatiquement même lorsqu’il y a plus de 15 livres non identifiés dans un lot', async () => {
+    const makeValidFrIsbn13 = (n: number): string => {
+      const base12 = `978220500${String(n).padStart(3, '0')}`;
+      let sum = 0;
+      for (let i = 0; i < 12; i++) {
+        sum += Number(base12[i]) * (i % 2 === 0 ? 1 : 3);
+      }
+      const check = (10 - (sum % 10)) % 10;
+      return `${base12}${check}`;
+    };
+
+    const attemptsByTitle = new Map<string, number>();
+    vi.spyOn(bnfResolver, 'searchCandidatesByHints').mockImplementation(async (hints) => {
+      const t = hints.title || '?';
+      const count = (attemptsByTitle.get(t) || 0) + 1;
+      attemptsByTitle.set(t, count);
+      if (count === 1) return [];
+      const idx = Number(t.replace('Album ', '')) || 1;
+      return [
+        {
+          score: 120,
+          meta: { isbn: makeValidFrIsbn13(idx), title: t, authors: ['Auteur'], genres: [] }
+        }
+      ];
+    });
+    vi.spyOn(externalMetadataService, 'fetchFromExternalSources').mockImplementation(async (isbn) => ({
+      isbn,
+      title: `Album ${isbn}`,
+      authors: ['Auteur'],
+      genres: []
+    }));
+
+    const candidates = Array.from({ length: 17 }, (_, i) => ({
+      rawSpineText: `Album ${i + 1}`,
+      title: `Album ${i + 1}`,
+      confidence: 'high' as const
+    }));
+
+    const res = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries(candidates);
+    expect(res.detectedItems).toHaveLength(17);
+    expect(res.detectedItems.every((d) => d.status === 'resolved')).toBe(true);
+    expect(attemptsByTitle.get('Album 17')).toBe(2);
+  });
 });

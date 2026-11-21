@@ -690,5 +690,37 @@ describe('BNF Resolver & Parsers', () => {
       );
       expect(t1Score).toBeGreaterThan(t2Score);
     });
+
+    it('scoreHintMatch privilégie nettement l’éditeur demandé face à d’autres rééditions', () => {
+      const hachetteScore = scoreHintMatch(
+        {
+          isbn: '9782012101333',
+          title: 'Astérix le Gaulois',
+          series: 'Astérix',
+          seriesNumber: '1',
+          authors: ['René Goscinny', 'Albert Uderzo'],
+          publisher: 'Hachette',
+          publishDate: '2024',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Astérix le Gaulois', series: 'Astérix', volumeNumber: '1', publisher: 'Dargaud' }
+      );
+      const dargaudScore = scoreHintMatch(
+        {
+          isbn: '9782205000962',
+          title: 'Astérix le Gaulois',
+          series: 'Astérix',
+          seriesNumber: '1',
+          authors: ['René Goscinny', 'Albert Uderzo'],
+          publisher: 'Dargaud',
+          publishDate: '1999',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        { title: 'Astérix le Gaulois', series: 'Astérix', volumeNumber: '1', publisher: 'Dargaud' }
+      );
+      expect(dargaudScore).toBeGreaterThan(hachetteScore);
+    });
   });
 });

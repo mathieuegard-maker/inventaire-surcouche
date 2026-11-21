@@ -6,6 +6,7 @@ import {
   detectIntegralAndIncludedVolumes,
   discoverMultiSourceLayer3,
   electCanonicalSeriesFromVotes,
+  enqueueOrExpandSeriesLayer5,
   excludeBookFromSeriesForLibrary,
   extractMarcRecordMetadata,
   getV4SeriesBooks,
@@ -78,10 +79,24 @@ function createInMemoryV4Db(): {
           }
           return null;
         }
-        if (cleanSql.startsWith('SELECT id, canonical_name, wikidata_qid, aliases_json, is_complete_expanded, primary_authors_json FROM v4_series WHERE id = ?')) {
+        if (cleanSql.startsWith('SELECT id, canonical_name, wikidata_qid, aliases_json, is_complete_expanded, primary_authors_json FROM v4_series WHERE id = ?') || cleanSql.startsWith('SELECT * FROM v4_series WHERE id = ?')) {
           return (series.get(String(args[0])) || null) as T | null;
         }
-        if (cleanSql.startsWith('SELECT * FROM books WHERE work_canonical_id = ?')) {
+        if (cleanSql.startsWith('SELECT book_id FROM book_isbn_index WHERE isbn13 = ?')) {
+          const hit = isbnIndex.get(String(args[0]));
+          return (hit ? { book_id: hit.book_id } : null) as T | null;
+        }
+        if (cleanSql.startsWith('SELECT id FROM books WHERE work_canonical_id = ?')) {
+          for (const b of books.values()) {
+            if (b.work_canonical_id === args[0]) return { id: b.id } as T;
+          }
+          return null;
+        }
+        if (cleanSql.startsWith('SELECT COUNT(*) as cnt FROM books WHERE series_id = ?')) {
+          const cnt = Array.from(books.values()).filter((b) => b.series_id === args[0]).length;
+          return { cnt } as T;
+        }
+        if (cleanSql.startsWith('SELECT * FROM books WHERE work_canonical_id = ?') || cleanSql.startsWith('SELECT id, canonical_title, known_isbns_json FROM books WHERE work_canonical_id = ?')) {
           for (const b of books.values()) {
             if (b.work_canonical_id === args[0]) return b as T;
           }
@@ -214,7 +229,26 @@ function createInMemoryV4Db(): {
         } else if (cleanSql.startsWith('UPDATE books SET integral_metadata_json')) {
           const b = books.get(String(args[2]));
           if (b) b.integral_metadata_json = args[0];
-        } else if (cleanSql.startsWith('INSERT INTO book_isbn_index')) {
+        } else if (cleanSql.startsWith('INSERT OR IGNORE INTO books')) {
+          const [
+            id, work_canonical_id, canonical_title, normalized_title, series_id, series_name,
+            volume_number, volume_label, is_hors_serie, is_integral, authors_json,
+            known_isbns_json, editions_catalog_json, selected_cover_url, main_category,
+            subgenres_json, created_at, updated_at
+          ] = args;
+          const exists = Array.from(books.values()).some((b) => b.work_canonical_id === work_canonical_id);
+          if (!exists) {
+            books.set(String(id), {
+              id, work_canonical_id, canonical_title, normalized_title, series_id, series_name,
+              volume_number, volume_label, is_hors_serie, hors_serie_label: null, is_integral,
+              integral_metadata_json: '{"includedWorkIds":[],"includedVolumeNumbers":[]}',
+              parent_integrals_json: '[]',
+              authors_json, language: 'fr',
+              known_isbns_json, editions_catalog_json, selected_cover_url, main_category,
+              subgenres_json, legacy_entity_uri: null, created_at, updated_at
+            });
+          }
+        } else if (cleanSql.startsWith('INSERT INTO book_isbn_index') || cleanSql.startsWith('INSERT OR IGNORE INTO book_isbn_index')) {
           const [isbn13, book_id, is_integral] = args;
           isbnIndex.set(String(isbn13), {
             isbn13: String(isbn13),
@@ -896,5 +930,86 @@ describe('v4-pipeline.service', () => {
     expect(book.seriesName).toBeNull();
     expect(book.volumeNumber).toBeNull();
     expect(series.size).toBe(0);
+  });
+
+  it("enqueueOrExpandSeriesLayer5 rejette les homonymes d'autres auteurs (Les Éphémères / Jeff Lemire)", async () => {
+    const { db } = createInMemoryV4Db();
+    const t1 = await consolidateBookLayer4(
+      db,
+      {
+        anchorIsbn13: '9782754836531',
+        anchorTitle: 'Les éphémères',
+        language: 'fre',
+        sisterEditions: [
+          {
+            source: 'bnf',
+            isbn13: '9782754836531',
+            title: 'Les éphémères',
+            seriesRaw: 'Les éphémères',
+            volumeNumber: '1',
+            language: 'fre'
+          }
+        ],
+        seriesCandidates: [
+          { source: 'bnf', rawName: 'Les éphémères', coreKey: 'ephemeres', cleanDisplay: 'Les éphémères', weight: 4 }
+        ],
+        authors: ['Jeff Lemire'],
+        illustrators: [],
+        scriptwriters: [],
+        rawSubjects: ['Bande dessinée'],
+        rawTitles: ['Les éphémères'],
+        sourcesHit: ['bnf']
+      },
+      { sourceChannel: 'canal_4_ai_photo', libraryId: 'lib_A', action: 'owned' }
+    );
+
+    const bnfMockXml = `
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:records>
+          <srw:record>
+            <record xmlns="http://catalogue.bnf.fr/namespaces/InterXMarc">
+              <controlfield tag="008">990101s2024    fr             fre          </controlfield>
+              <datafield tag="020"><subfield code="a">9782754843775</subfield></datafield>
+              <datafield tag="100"><subfield code="a">Lemire, Jeff</subfield></datafield>
+              <datafield tag="245"><subfield code="a">Les éphémères</subfield><subfield code="h">2</subfield></datafield>
+              <datafield tag="460"><subfield code="t">Les éphémères</subfield><subfield code="v">2</subfield></datafield>
+            </record>
+          </srw:record>
+          <srw:record>
+            <record xmlns="http://catalogue.bnf.fr/namespaces/InterXMarc">
+              <controlfield tag="008">990101s2025    fr             fre          </controlfield>
+              <datafield tag="020"><subfield code="a">9782322560080</subfield></datafield>
+              <datafield tag="100"><subfield code="a">Dupont, Jean</subfield></datafield>
+              <datafield tag="245"><subfield code="a">Les Éphémères sont éternels</subfield></datafield>
+            </record>
+          </srw:record>
+          <srw:record>
+            <record xmlns="http://catalogue.bnf.fr/namespaces/InterXMarc">
+              <controlfield tag="008">990101s2025    fr             fre          </controlfield>
+              <datafield tag="020"><subfield code="a">9782905469007</subfield></datafield>
+              <datafield tag="100"><subfield code="a">Martin, Claire</subfield></datafield>
+              <datafield tag="245"><subfield code="a">Les Éphémères</subfield></datafield>
+            </record>
+          </srw:record>
+        </srw:records>
+      </srw:searchRetrieveResponse>`;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(bnfMockXml, { status: 200 }))
+    );
+    try {
+      await enqueueOrExpandSeriesLayer5(db, t1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    const res = await getV4SeriesBooks(db, { seriesId: t1.seriesId!, libraryId: 'lib_A' });
+    const titles = res.books.map((b) => b.book.canonicalTitle);
+    const isbns = res.books.flatMap((b) => b.book.knownIsbns);
+    expect(titles).not.toContain('Les Éphémères sont éternels');
+    expect(isbns).not.toContain('9782322560080');
+    expect(isbns).not.toContain('9782905469007');
+    expect(isbns).toContain('9782754843775');
   });
 });

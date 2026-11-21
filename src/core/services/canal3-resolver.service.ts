@@ -133,8 +133,14 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
   const series = cleanTerm(hints.series);
   const vol = normalizeSeriesNumber(hints.volumeNumber);
   const authorLast = extractAuthorLastNameForBnfCql(hints.author || hints.illustrator);
+  const publisher = cleanTerm(hints.publisher);
 
   const queries: string[] = [];
+  if (title && publisher) {
+    const clauses = [`(bib.title all "${title}")`, `(bib.publisher all "${publisher}")`, `(bib.doctype all "a")`];
+    if (authorLast) clauses.splice(1, 0, `(bib.author all "${authorLast}")`);
+    queries.push(clauses.join(' and '));
+  }
   if (title && authorLast) {
     queries.push(`(bib.title all "${title}") and (bib.author all "${authorLast}") and (bib.doctype all "a")`);
   }
@@ -142,13 +148,13 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
     const combinedSeriesTitle = title && normalizeTextKey(title) !== normalizeTextKey(series)
       ? `${series} ${title} ${vol}`
       : `${series} ${vol}`;
-    queries.push(
-      authorLast
-        ? `(bib.anywhere all "${combinedSeriesTitle}") and (bib.author all "${authorLast}") and (bib.doctype all "a")`
-        : `(bib.anywhere all "${combinedSeriesTitle}") and (bib.doctype all "a")`
-    );
+    const clauses = [`(bib.anywhere all "${combinedSeriesTitle}")`, `(bib.doctype all "a")`];
+    if (authorLast) clauses.splice(1, 0, `(bib.author all "${authorLast}")`);
+    if (publisher) clauses.splice(1, 0, `(bib.publisher all "${publisher}")`);
+    queries.push(clauses.join(' and '));
   } else if (title && vol && !series) {
-    queries.push(`(bib.anywhere all "${title} ${vol}") and (bib.doctype all "a")`);
+    const pubClause = publisher ? ` and (bib.publisher all "${publisher}")` : '';
+    queries.push(`(bib.anywhere all "${title} ${vol}")${pubClause} and (bib.doctype all "a")`);
   }
   if (title && queries.length === 0) {
     queries.push(`(bib.title all "${title}") and (bib.doctype all "a")`);
@@ -157,7 +163,7 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
   const primaryResults = await Promise.all(queries.slice(0, 2).map((cql) => fetchBnfByCql(cql, 18)));
   let merged = primaryResults.flat();
 
-  // Repli sans contrainte d'auteur (et en conservant titre + série) si trop peu de résultats
+  // Repli sans contrainte d'auteur ni d'éditeur (et en conservant titre + série) si trop peu de résultats
   if (merged.length < 2 && (title || series)) {
     const distinctParts: string[] = [];
     if (series) distinctParts.push(series);
@@ -485,7 +491,7 @@ export async function resolveBookHintsCanal3(
       score: entry.finalScore,
       sourcesCount: entry.effectiveSources
     });
-    if (alternatives.length >= 5) break;
+    if (alternatives.length >= 10) break;
   }
 
   const topIsInt = isMetaIntegral(top.bucket.bestMeta);

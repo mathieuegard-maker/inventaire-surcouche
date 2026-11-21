@@ -226,11 +226,19 @@ export function scoreHintMatch(
     }
   }
 
-  // 5. Éditeur & collection
-  const hintPublisherJoined = [hints.publisher, hints.collection].filter(Boolean).join(' ');
+  // 5. Éditeur & collection (renforcé si l'utilisateur a saisi un éditeur explicite pour filtrer les rééditions)
+  const explicitPub = hints.publisher?.trim() || '';
+  const hintPublisherJoined = [explicitPub, hints.collection].filter(Boolean).join(' ');
   if (hintPublisherJoined.trim() && cand.publisher) {
     const ratio = tokenOverlapRatio(hintPublisherJoined, cand.publisher);
-    if (ratio > 0) score += 12;
+    if (explicitPub) {
+      const pubRatio = tokenOverlapRatio(explicitPub, cand.publisher);
+      if (pubRatio >= 0.5) score += 28;
+      else if (pubRatio > 0 || ratio > 0) score += 16;
+      else if (explicitPub.length >= 3) score -= 18;
+    } else if (ratio > 0) {
+      score += 12;
+    }
   }
 
   // 6. Qualité et récence de l'édition ("meilleure édition, la dernière")
@@ -1224,6 +1232,16 @@ export const bnfResolver = {
     }
 
     if (seriesAndVolQuery && normalizeTextKey(seriesAndVolQuery) !== normalizeTextKey(combinedQueryTitle)) {
+      if (mainAuthorOrIllus && cleanPublisherHint) {
+        queryPlans.push({
+          titleQuery: seriesAndVolQuery,
+          authorQuery: mainAuthorOrIllus,
+          publisherQuery: cleanPublisherHint
+        });
+      }
+      if (cleanPublisherHint) {
+        queryPlans.push({ titleQuery: seriesAndVolQuery, publisherQuery: cleanPublisherHint });
+      }
       if (mainAuthorOrIllus) {
         queryPlans.push({ titleQuery: seriesAndVolQuery, authorQuery: mainAuthorOrIllus });
       }
@@ -1231,6 +1249,13 @@ export const bnfResolver = {
     }
 
     if (cleanTitleHint) {
+      if (cleanPublisherHint) {
+        queryPlans.push({
+          titleQuery: cleanTitleHint,
+          publisherQuery: cleanPublisherHint,
+          queryMode: 'anywhere'
+        });
+      }
       queryPlans.push({ titleQuery: cleanTitleHint, queryMode: 'anywhere' });
     }
     if (fallbackRawTitle && normalizeTextKey(fallbackRawTitle) !== normalizeTextKey(cleanTitleHint)) {

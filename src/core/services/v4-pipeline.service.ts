@@ -160,6 +160,7 @@ export interface SisterEditionCandidate {
   source: 'bnf' | 'inventaire' | 'wikidata' | 'openlibrary' | 'google_books';
   isbn13?: string;
   title: string;
+  authors?: string[];
   seriesRaw?: string;
   collectionRaw?: string;
   volumeNumber?: string;
@@ -897,6 +898,7 @@ export function extractMarcRecordMetadata(
   let pageCount: number | undefined;
   let coverUrl = '';
   let language = '';
+  const authors: string[] = [];
   let isDualPages = false;
   let secondTitleHint = '';
   let explicitIntegralTag245 = false;
@@ -1016,6 +1018,9 @@ export function extractMarcRecordMetadata(
     } else if (f.tag === '260') {
       publisher = publisher || cleanPublisher(getSf('c') || getSf('b'));
       publishDate = publishDate || cleanPublishDate(getSf('d'));
+    } else if (f.tag === '100' || f.tag === '700') {
+      const cleaned = cleanAuthor([getSf('a'), getSf('m')].filter(Boolean).join(', '));
+      if (cleaned && !authors.includes(cleaned)) authors.push(cleaned);
     } else if (f.tag === '280') {
       const raw280 = getSf('a');
       if (/\d+\s*-\s*\d+\s*p\./i.test(raw280)) isDualPages = true;
@@ -1066,6 +1071,7 @@ export function extractMarcRecordMetadata(
     source: 'bnf',
     isbn13: isbn13 || undefined,
     title,
+    ...(authors.length ? { authors } : {}),
     seriesRaw: seriesRaw || undefined,
     collectionRaw: collectionRaw || undefined,
     volumeNumber: _isIntegral ? undefined : (volumeNumber || undefined),
@@ -2803,6 +2809,23 @@ export async function enqueueOrExpandSeriesLayer5(
     ? await fetchCanonicalSeriesIndex(String(sRow.wikidata_qid)).catch(() => null)
     : null;
   const targetCoreKey = String(sRow.normalized_core_key || stripEditorialCollectionSuffixes(book.seriesName).coreKey);
+  const expectedAuthors = Array.from(
+    new Set([...(book.authors || []), ...safeJsonParse<string[]>(sRow.primary_authors_json, [])].filter(Boolean))
+  );
+  const hasAuthorOverlap = (candAuthors?: string[]): boolean => {
+    if (!candAuthors?.length || expectedAuthors.length === 0) return false;
+    const expectedTokens = new Set(
+      expectedAuthors
+        .flatMap((a) => normalizeTextKey(a).split(/\s+/))
+        .filter((t) => t.length >= 3)
+    );
+    if (expectedTokens.size === 0) return false;
+    return candAuthors.some((ca) =>
+      normalizeTextKey(ca)
+        .split(/\s+/)
+        .some((t) => t.length >= 3 && expectedTokens.has(t))
+    );
+  };
   const discoveredByWorkKey = new Map<
     string,
     {
@@ -2811,6 +2834,7 @@ export async function enqueueOrExpandSeriesLayer5(
       isbn13: string;
       coverUrl?: string;
       isIntegral?: boolean;
+      authors?: string[];
       score: number;
     }
   >();
@@ -2827,16 +2851,27 @@ export async function enqueueOrExpandSeriesLayer5(
     }
 
     if (!isFromEns2Bib) {
+      // Garde anti-homonyme : si la série a un auteur connu et que la notice candidate porte des auteurs divergents
+      // (ex: « Les Éphémères sont éternels » d'un autre auteur que Jeff Lemire), rejeter immédiatement.
+      if (expectedAuthors.length > 0 && cand.authors && cand.authors.length > 0 && !hasAuthorOverlap(cand.authors)) {
+        return;
+      }
       const candSeriesCore = cand.seriesRaw ? stripEditorialCollectionSuffixes(cand.seriesRaw).coreKey : '';
       const candTitleCore = stripEditorialCollectionSuffixes(cand.title).coreKey;
-      const matchesSeries =
-        (candSeriesCore &&
+      const matchesExplicitSeries = Boolean(
+        candSeriesCore &&
           (candSeriesCore === targetCoreKey ||
             candSeriesCore.includes(targetCoreKey) ||
             targetCoreKey.includes(candSeriesCore) ||
-            (targetCoreKey.length >= 4 && getLevenshteinDistance(candSeriesCore, targetCoreKey) <= 2))) ||
-        (candTitleCore && (candTitleCore === targetCoreKey || candTitleCore.startsWith(`${targetCoreKey} `)));
-      if (!matchesSeries) return;
+            (targetCoreKey.length >= 4 && getLevenshteinDistance(candSeriesCore, targetCoreKey) <= 2))
+      );
+      const authorConfirmed = hasAuthorOverlap(cand.authors);
+      const matchesTitleWithContext = Boolean(
+        candTitleCore &&
+          (candTitleCore === targetCoreKey || candTitleCore.startsWith(`${targetCoreKey} `)) &&
+          (authorConfirmed || Boolean(cand.volumeNumber) || Boolean(cand._isIntegral))
+      );
+      if (!matchesExplicitSeries && !matchesTitleWithContext) return;
     }
 
     const isIntSkel = Boolean(cand._isIntegral);
@@ -2887,6 +2922,7 @@ export async function enqueueOrExpandSeriesLayer5(
           isbn13: cand.isbn13,
           coverUrl: cand.coverUrl || altExisting?.coverUrl,
           isIntegral: isIntSkel,
+          authors: cand.authors?.length ? cand.authors : altExisting?.authors,
           score: candScore
         });
       }
@@ -2900,6 +2936,7 @@ export async function enqueueOrExpandSeriesLayer5(
         isbn13: cand.isbn13,
         coverUrl: cand.coverUrl || existing?.coverUrl,
         isIntegral: isIntSkel,
+        authors: cand.authors?.length ? cand.authors : existing?.authors,
         score: candScore
       });
     } else if (!existing.coverUrl && cand.coverUrl) {
@@ -3064,7 +3101,7 @@ export async function enqueueOrExpandSeriesLayer5(
         skelVolLabel,
         skel.isIntegral || skel.volumeNumber ? 0 : 1,
         skel.isIntegral ? 1 : 0,
-        JSON.stringify(book.authors),
+        JSON.stringify(skel.authors?.length ? skel.authors : book.authors),
         JSON.stringify([skel.isbn13]),
         JSON.stringify([{ isbn13: skel.isbn13, coverUrl: skel.coverUrl }]),
         skel.coverUrl || null,

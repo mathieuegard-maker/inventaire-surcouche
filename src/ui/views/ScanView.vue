@@ -250,7 +250,12 @@ const doubtItems = scanDraftStore.doubtItems;
 const unresolvedItems = scanDraftStore.unresolvedItems;
 const seriesExtraItems = scanDraftStore.seriesExtraItems;
 const detectedSeriesNames = scanDraftStore.detectedSeriesNames;
-const retryingItemId = ref<string | null>(null);
+const retryingItemIds = ref<Record<string, boolean>>({});
+const retryAllProgress = ref<{ active: boolean; done: number; total: number }>({
+  active: false,
+  done: 0,
+  total: 0
+});
 const expandedSeriesKeys = scanDraftStore.expandedSeriesKeys;
 const lastSavedToCollection = ref<boolean>(false);
 const activeDetailItemId = ref<string | null>(null);
@@ -458,9 +463,12 @@ function handleDetailUpdateFields(
 
 async function handleDetailRetryBnf(item: ResolvedPhotoItem, candidate: RecognizedBookCandidate) {
   item.rawCandidate = { ...candidate };
-  retryingItemId.value = item.id;
+  retryingItemIds.value = { ...retryingItemIds.value, [item.id]: true };
   try {
-    const resolved = await photoBookResolutionService.resolveSingleCandidate(candidate, 'retry');
+    const resolved = await photoBookResolutionService.resolveSingleCandidate(candidate, 'retry', undefined, {
+      priority: 'high',
+      bypassCache: true
+    });
     resolved.sourceJobId = item.sourceJobId;
     if (resolved.status === 'unresolved') {
       item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
@@ -480,7 +488,9 @@ async function handleDetailRetryBnf(item: ResolvedPhotoItem, candidate: Recogniz
     }
     activeDetailItemId.value = resolved.id;
   } finally {
-    retryingItemId.value = null;
+    const next = { ...retryingItemIds.value };
+    delete next[item.id];
+    retryingItemIds.value = next;
   }
 }
 
@@ -507,11 +517,16 @@ async function handlePhotoSelected(event: Event, mode: 'cover' | 'shelf') {
   }
 }
 
-async function retryUnresolvedItem(item: ResolvedPhotoItem) {
+async function retryUnresolvedItem(item: ResolvedPhotoItem, priority: 'high' | 'normal' = 'high') {
   if (!item.rawCandidate.title.trim() && !item.rawCandidate.isbn?.trim() && !item.rawCandidate.series?.trim()) return;
-  retryingItemId.value = item.id;
+  retryingItemIds.value = { ...retryingItemIds.value, [item.id]: true };
   try {
-    const resolved = await photoBookResolutionService.resolveSingleCandidate(item.rawCandidate, 'retry');
+    const resolved = await photoBookResolutionService.resolveSingleCandidate(
+      item.rawCandidate,
+      priority === 'high' ? 'retry' : 'autoretry',
+      undefined,
+      { priority, bypassCache: true }
+    );
     resolved.sourceJobId = item.sourceJobId;
     if (resolved.status === 'unresolved') {
       item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
@@ -530,7 +545,26 @@ async function retryUnresolvedItem(item: ResolvedPhotoItem) {
       sortItemsByShelfOrder(resolvedDetectedItems.value);
     }
   } finally {
-    retryingItemId.value = null;
+    const next = { ...retryingItemIds.value };
+    delete next[item.id];
+    retryingItemIds.value = next;
+  }
+}
+
+async function retryAllUnresolvedItems() {
+  if (retryAllProgress.value.active || unresolvedItems.value.length === 0) return;
+  const targetIds = unresolvedItems.value.map((u) => u.id);
+  retryAllProgress.value = { active: true, done: 0, total: targetIds.length };
+  try {
+    for (const targetId of targetIds) {
+      const liveItem = unresolvedItems.value.find((u) => u.id === targetId);
+      if (liveItem) {
+        await retryUnresolvedItem(liveItem, 'normal');
+      }
+      retryAllProgress.value.done++;
+    }
+  } finally {
+    retryAllProgress.value = { active: false, done: 0, total: 0 };
   }
 }
 
@@ -1129,7 +1163,21 @@ async function clearPhotoQueueAndForm() {
 
         <!-- Non identifiés / Edition manuelle (ouvrable dans la sous-vue) -->
         <div v-if="unresolvedItems.length > 0" class="validation-section unresolved-section">
-          <h4>Non identifiés ({{ unresolvedItems.length }})</h4>
+          <div class="section-header-row">
+            <h4>Non identifiés ({{ unresolvedItems.length }})</h4>
+            <button
+              type="button"
+              class="wireframe-btn small-btn"
+              :disabled="retryAllProgress.active"
+              @click="retryAllUnresolvedItems"
+            >
+              {{
+                retryAllProgress.active
+                  ? `Relance BnF (${retryAllProgress.done}/${retryAllProgress.total})...`
+                  : `Tout relancer (${unresolvedItems.length})`
+              }}
+            </button>
+          </div>
           <div class="photo-cover-grid">
             <article
               v-for="u in unresolvedItems"
@@ -1169,7 +1217,7 @@ async function clearPhotoQueueAndForm() {
         :item="activeDetailItem"
         :source-photo-url="activeDetailPhotoUrl"
         :position-label="activeDetailPosLabel"
-        :retrying="Boolean(activeDetailItem && retryingItemId === activeDetailItem.id)"
+        :retrying="Boolean(activeDetailItem && retryingItemIds[activeDetailItem.id])"
         @close="closePhotoItemDetail"
         @select-option="(opt) => { if (activeDetailItem) selectDoubtOption(activeDetailItem, opt); }"
         @update-fields="(p) => { if (activeDetailItem) handleDetailUpdateFields(activeDetailItem, p); }"

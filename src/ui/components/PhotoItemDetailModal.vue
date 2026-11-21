@@ -34,6 +34,7 @@ const localTitle = ref('');
 const localSeries = ref('');
 const localVolume = ref('');
 const localAuthor = ref('');
+const localPublisher = ref('');
 const localIsbn = ref('');
 const localIsIntegral = ref(false);
 const localIncludedVolumesText = ref('');
@@ -211,6 +212,7 @@ watch(
     localSeries.value = props.item.series || props.item.rawCandidate.series || '';
     localVolume.value = props.item.seriesNumber || props.item.rawCandidate.volumeNumber || '';
     localAuthor.value = props.item.authors?.[0] || props.item.rawCandidate.author || '';
+    localPublisher.value = props.item.publisher || props.item.rawCandidate.publisher || '';
     localIsbn.value = props.item.isbn13 || props.item.rawCandidate.isbn || '';
     localIsIntegral.value = Boolean(props.item.isIntegral);
     localIncludedVolumesText.value = props.item.includedVolumeNumbers?.length
@@ -289,6 +291,7 @@ const clearAllManualFields = () => {
   localSeries.value = '';
   localVolume.value = '';
   localAuthor.value = '';
+  localPublisher.value = '';
   localIsbn.value = '';
   skipNextEmptyIsbnClick.value = false;
 };
@@ -320,6 +323,7 @@ const handleOptionTap = (opt: PhotoResolutionOption | null) => {
     localTitle.value = opt.title || localTitle.value;
     localSeries.value = opt.series || localSeries.value;
     localVolume.value = opt.seriesNumber || '';
+    if (opt.publisher) localPublisher.value = opt.publisher;
     localIsIntegral.value = Boolean(opt.isIntegral);
     if ((opt as any).includedVolumeNumbers?.length) {
       localIncludedVolumesText.value = (opt as any).includedVolumeNumbers.join(', ');
@@ -339,6 +343,7 @@ const handleSearchBnf = () => {
     series: localSeries.value.trim() || undefined,
     volumeNumber: localVolume.value.trim() || undefined,
     author: localAuthor.value.trim() || undefined,
+    publisher: localPublisher.value.trim() || undefined,
     isbn: localIsbn.value.trim() || undefined
   });
 };
@@ -636,35 +641,56 @@ const handleConfirmClose = () => {
                   </div>
                 </div>
                 <div class="manual-field">
-                  <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel)</label>
+                  <label class="manual-field-label" for="manual-publisher-input">Éditeur (optionnel)</label>
                   <div class="input-with-actions">
                     <input
-                      id="manual-isbn-input"
-                      v-model="localIsbn"
-                      :placeholder="!localIsbn && !skipNextEmptyIsbnClick ? 'Cliquer pour scanner...' : '9782...'"
-                      class="cand-input cand-input--isbn"
-                      @click="handleIsbnInputClick"
+                      id="manual-publisher-input"
+                      v-model="localPublisher"
+                      placeholder="Ex : Dargaud, Dupuis, Folio..."
+                      class="cand-input cand-input--has-clear"
                     />
                     <button
-                      v-if="localIsbn"
+                      v-if="localPublisher"
                       type="button"
                       class="field-icon-btn"
-                      title="Effacer l'ISBN"
-                      aria-label="Effacer l'ISBN"
-                      @click="clearIsbnField"
+                      title="Effacer l'éditeur"
+                      aria-label="Effacer l'éditeur"
+                      @click="localPublisher = ''"
                     >
                       ✕
                     </button>
-                    <button
-                      type="button"
-                      class="field-icon-btn field-icon-btn--scan"
-                      title="Scanner le code-barres ISBN"
-                      aria-label="Scanner le code-barres ISBN"
-                      @click="openManualIsbnScanner"
-                    >
-                      📷
-                    </button>
                   </div>
+                </div>
+              </div>
+              <div class="manual-field">
+                <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel)</label>
+                <div class="input-with-actions">
+                  <input
+                    id="manual-isbn-input"
+                    v-model="localIsbn"
+                    :placeholder="!localIsbn && !skipNextEmptyIsbnClick ? 'Cliquer pour scanner...' : '9782...'"
+                    class="cand-input cand-input--isbn"
+                    @click="handleIsbnInputClick"
+                  />
+                  <button
+                    v-if="localIsbn"
+                    type="button"
+                    class="field-icon-btn"
+                    title="Effacer l'ISBN"
+                    aria-label="Effacer l'ISBN"
+                    @click="clearIsbnField"
+                  >
+                    ✕
+                  </button>
+                  <button
+                    type="button"
+                    class="field-icon-btn field-icon-btn--scan"
+                    title="Scanner le code-barres ISBN"
+                    aria-label="Scanner le code-barres ISBN"
+                    @click="openManualIsbnScanner"
+                  >
+                    📷
+                  </button>
                 </div>
               </div>
               <button
