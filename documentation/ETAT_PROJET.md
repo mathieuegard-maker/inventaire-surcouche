@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T20:59+01:00`
+* **Dernière mise à jour :** `2026-11-21T21:28+01:00`
 * **Branche active :** `feat/self-hosted-server` (issue de `main` après merge de `feat/architecture-v4`)
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -9,15 +9,19 @@
 
 ## 1. Résumé exécutif : ce qu’est l’application aujourd’hui
 
-`biblio-collection-pwa` est une PWA Vue 3 + TypeScript **local-first** (cache miroir dans IndexedDB via Dexie) adossée à une API portable tournant aujourd’hui en **Cloudflare Pages Functions + D1 (`biblio-catalog-db`, région WEUR) + Worker CRON (`biblio-release-cron`)**.
+`biblio-collection-pwa` est une PWA Vue 3 + TypeScript **local-first** (cache miroir dans IndexedDB via Dexie) adossée à une API portable (`DatabaseBinding` + `CoverBucketBinding` + `fetch()` standard) désormais **déployée en production auto-hébergée sur serveur Debian + Docker** derrière Cloudflare Tunnel (tout en conservant la compatibilité Cloudflare Pages Functions / D1 / R2).
 
 Son objectif : gérer une bibliothèque familiale multi-membres (inventaire, wishlist, prêts, alertes de sorties, partage foyer/amis, statistiques, interface admin) avec **acquisition rapide sans erreur** par code-barres (`Canal 1`), ISBN manuel (`Canal 2`), recherche texte (`Canal 3`) et photo IA de couverture ou d’étagère (`Canal 4`).
 
-### Infrastructure déployée (état au 2026-11-18)
-* **Front-End & Functions :** Cloudflare Pages `biblio-collection-pwa` (`wrangler.toml`, `functions/[[path]].ts` → routeurs `v2-backend-router.service.ts` et `d1-gateway-actions.service.ts`).
-* **Base D1 :** `biblio-catalog-db` (ID `f1f0f7a3-f319-4c97-a495-1ef143881795`), migrations `0001` à `0011`.
-* **Worker CRON :** `workers/release-cron` (`biblio-release-cron`, schedule horaire `0 * * * *`) : dépile `enrichment_queue` (Couche 5B), surveille les nouveautés de séries, lance l’enrichissement silencieux d’éditions sœurs, envoie les digests push/email et purge les vieux logs.
-* **Stockage couvertures :** tables D1 `catalog_covers` (R2 `COVERS_BUCKET` préparé dans `wrangler.toml`, non encore activé : `r2CoversBucket: false`).
+### Infrastructure déployée (état au 2026-11-21)
+* **Serveur de production :** Dell OptiPlex 3060 Micro (Debian 13 Trixie, headless), dossier `/srv/docker/inventaire-surcouche`, branche `feat/self-hosted-server`.
+* **Exposition publique :** Cloudflare Tunnel (`cloudflared`) routant `https://biblio.mathieuegardtest.fr` → `http://127.0.0.1:8082` → port `3000` du conteneur `biblio-collection-app` (lancé via `docker-compose.tunnel.yml` en non-root `node`, `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit: 512m` ; aucun Caddy/Nginx sur `80/443`, et `127.0.0.1:8081` reste réservé à `effectif_MAR`).
+* **Base de données & Couvertures :** SQLite local WAL `/srv/docker/inventaire-surcouche/data/biblio.sqlite` (12 migrations `0001`–`0012` appliquées automatiquement) + couvertures WebP sur disque `/srv/docker/inventaire-surcouche/data/covers/` montés dans `/data`.
+* **Planificateur CRON :** scheduler interne Node (`server/scheduler.ts`, `CRON_ENABLED=true`, toutes les 60 min) remplaçant le Worker CRON Cloudflare.
+* **Sauvegardes automatiques :** `/srv/backups/backup-serveur.sh` chaque nuit à **03h00** (`sqlite3 .backup` à chaud + `.env` + `covers/`) vers Google Drive (`gdrive:Serveur_Backups/daily`, rétention 14j local / 30j Drive).
+* **Déploiement continu manuel :** `git push origin feat/self-hosted-server` puis `ssh serveur "/srv/docker/inventaire-surcouche/deploy.sh"` (ou `ssh serveur-vpn ...` via Tailscale VPN).
+* **Secrets serveur (`/srv/docker/inventaire-surcouche/.env`, `format: raw`, jamais dans Git) :** `JWT_SECRET`, `BIBLIO_TUNNEL_PORT=8082`, `MAIL_FROM`, `VAPID_PUBLIC_KEY`, `VAPID_SUBJECT` configurés ; `GEMINI_API_KEY`, `RESEND_API_KEY` et `VAPID_PRIVATE_JWK` à renseigner selon les fonctionnalités voulues.
+* **Compatibilité Cloudflare conservée :** `functions/api/gateway.ts`, `functions/api/v2/[[route]].ts` et `workers/release-cron/` restent fonctionnels.
 
 ---
 
@@ -66,9 +70,9 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 * **Alternatives écartées :** Scinder automatiquement les séries par `460$3`, nom de collection ou pagination. L'audit réel BnF montre qu'Astérix ou Tintin possèdent chacun ~7 `460$3` distincts pour des tomes strictement identiques (Hachette, Dargaud, Albert René, Casterman, Éditions Atlas...) : une scission automatique fragmenterait ces collections standard en sous-séries incomplètes.
 * **Décision :** Conserver le regroupement standard et offrir au foyer une correction chirurgicale isolée en **Option B** (`POST /api/v2/books/exclude-from-series`, stockée dans `v4_library_books.custom_overrides_json.hiddenFromSeriesIds`, + `series-merge` / `BookDetailView` *« Rattacher / Changer de série »*) pour masquer ou déplacer ponctuellement un tome intrus sans affecter le catalogue commun.
 
-### ADR-09 — Packaging auto-hébergé Debian + Docker sans dépendance Cloudflare (`feat/self-hosted-server`, 2026-11-21)
-* **Contexte :** Les limites d'usage Cloudflare (quotas, 50 sous-requêtes, IP partagée) freinent l'exploitation quotidienne.
-* **Décision :** Conserver la compatibilité Cloudflare intacte tout en ajoutant un runtime autonome Node 22 + Hono + `better-sqlite3` (`server/index.ts`, `server/adapters/sqlite-db.adapter.ts`, `server/adapters/fs-cover-bucket.adapter.ts`, `server/scheduler.ts`), en extrayant le routeur `/api/gateway` dans `src/core/services/gateway-router.service.ts` et en fournissant `Dockerfile`, `docker-compose.yml`, `deploy/Caddyfile` (HTTPS Let's Encrypt pour `mathieuegardtest.fr`), `deploy/nginx-mathieuegardtest.fr.conf` et `documentation/DEPLOIEMENT_SERVEUR_DEBIAN.md`.
+### ADR-09 — Packaging auto-hébergé Debian + Docker via Cloudflare Tunnel (`feat/self-hosted-server`, 2026-11-21)
+* **Contexte :** Les limites d'usage Cloudflare Workers/D1 (quotas, 50 sous-requêtes, IP partagée) freinent l'exploitation quotidienne. Le serveur personnel Debian 13 (Dell OptiPlex 3060 Micro) héberge déjà `effectif_MAR` sur `127.0.0.1:8081` derrière un Tunnel Cloudflare (`cloudflared`).
+* **Décision :** Conserver la compatibilité Cloudflare intacte tout en ajoutant un runtime autonome Node 22 + Hono + `better-sqlite3` (`server/index.ts`, `server/adapters/sqlite-db.adapter.ts`, `server/adapters/fs-cover-bucket.adapter.ts`, `server/scheduler.ts`), en extrayant `/api/gateway` dans `src/core/services/gateway-router.service.ts`, et en déployant via `docker-compose.tunnel.yml` (`127.0.0.1:8082:3000`, utilisateur non-root `node`, `cap_drop: [ALL]`, `mem_limit: 512m`) + `deploy.sh` + en-têtes sécurité/PWA (`Permissions-Policy: camera=(self)`, `no-cache` sur `sw.js`/`sw-push.js`, `manifest+json`). Référence détaillée : [`RAPPORT_POUR_AGENT_INVENTAIRE.md`](./RAPPORT_POUR_AGENT_INVENTAIRE.md).
 
 ---
 
@@ -125,9 +129,9 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Socle bibliographique unifié, pipeline V4 modularisé et validé (`npx tsc --noEmit` 0 erreur, `npx vitest run` 37/37 fichiers et 186/186 tests verts, `npm run build` OK) ; bases D1 + PWA (`reset_2026_11_21_v4_clean_v26`) remises à zéro pour repartir sur un état propre.
-* **Prochaine étape immédiate :** Nouvelle passe de test terrain sur les gros lots Photo IA, les romans poche (`Folio`, `J'ai lu`, `Librio`…), les séries (*Les Tuniques Bleues*, *Universal War One*, *Nestor Burma*) et la recherche sur séries homonymes (*Les Éphémères*).
-* **Chantiers ultérieurs envisagés :** activation R2 (`biblio-covers-webp`) si stockage externe des WebP souhaité ; migration éventuelle vers serveur local Mac (SQLite/Postgres + Cloudflare Tunnel) une fois le pipeline validé sur tests réels.
+* **État actuel :** Application déployée en production auto-hébergée sur `https://biblio.mathieuegardtest.fr` (Dell OptiPlex 3060 Micro Debian 13, Docker `docker-compose.tunnel.yml` sur `127.0.0.1:8082:3000`, SQLite WAL + couvertures disque `/data`, CRON interne actif, sauvegardes quotidiennes 03h00) ; validation complète verte (`npx tsc --noEmit`, `npm run typecheck:server`, `npx vitest run` : **38/38 fichiers, 188/188 tests**). Compte admin `MATHIEU EGARD` (`usr_57b9be14614d4e78`) activé sur le serveur.
+* **Prochaine étape immédiate :** Renseigner `GEMINI_API_KEY` (et `RESEND_API_KEY` / `VAPID_PRIVATE_JWK` si souhaités) dans `/srv/docker/inventaire-surcouche/.env` sur le serveur, puis tests terrain en production sur `biblio.mathieuegardtest.fr`.
+* **Chantiers ultérieurs envisagés :** auto-promotion admin du 1er utilisateur créé sur base vierge, et poursuite du nettoyage/allègement des gros composants Vue (`ScanView.vue`, `PhotoItemDetailModal.vue`).
 
 ---
 

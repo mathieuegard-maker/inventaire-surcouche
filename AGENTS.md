@@ -24,6 +24,19 @@ Ce document s'applique à toute session de travail sur ce dépôt. Son but est d
   * Tout ajout V4 (`ingestIsbnsViaV4`, `ScanView.vue`, etc.) doit écrire à la fois dans `cache_books` (`saveBookToCache`) **et** dans le registre `inventory`/`wishlist` (`addRegistryEntry`).
   * En cas de changement incompatible du modèle local ou de remise à zéro D1 pour tests, incrémenter `DB_RESET_TOKEN` dans `src/core/orchestrators/sync.orchestrator.ts`.
 
-## 3. Contrôle Qualité avant Clôture ou Déploiement
-* Exécuter systématiquement `npx tsc --noEmit` et `npx vitest run` après modification de code et rapporter uniquement les résultats réellement observés.
+## 3. Déploiement & Exploitation Serveur Auto-Hébergé (Debian + Docker)
+* **Production active :** serveur personnel Debian 13 Trixie (Dell OptiPlex 3060 Micro), dossier `/srv/docker/inventaire-surcouche`, URL publique `https://biblio.mathieuegardtest.fr`, branche déployée `feat/self-hosted-server`.
+* **Architecture réseau impérative :** tout le trafic public passe par **Cloudflare Tunnel (`cloudflared`)** vers `127.0.0.1:8082` → port `3000` du conteneur `biblio-collection-app` (non-root `node`, `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit: 512m`).
+  * **Ne jamais** utiliser `docker-compose.yml` (Caddy) ni toucher aux ports `80`, `443` ou `8081` (`effectif_MAR`). Toujours utiliser `docker-compose.tunnel.yml`.
+* **Données & Sauvegardes :** `/srv/docker/inventaire-surcouche/data/` (`biblio.sqlite` + `covers/`) monté sur `/data` (ignoré par Git). Sauvegarde quotidienne automatique à 03h00 (`sqlite3 .backup` + `.env` + `covers/`) vers Google Drive via `/srv/backups/backup-serveur.sh`.
+* **Migrations SQL (`migrations/*.sql`) :** toujours créer de nouvelles migrations incrémentales (`0013+`) ; **ne jamais** modifier un fichier de migration déjà appliqué (`0001` à `0012`).
+* **Zéro secret dans Git :** `JWT_SECRET`, `GEMINI_API_KEY`, `RESEND_API_KEY` et `VAPID_PRIVATE_JWK` vivent uniquement dans `/srv/docker/inventaire-surcouche/.env` sur le serveur (`format: raw`).
+* **En-têtes PWA & Caméra (`server/index.ts`) :** préserver `Cache-Control: no-cache, no-store, must-revalidate` sur `/sw.js` et `/sw-push.js`, `Content-Type: application/manifest+json; charset=utf-8` sur `/manifest.webmanifest`, et `Permissions-Policy: camera=(self)`.
+* **Procédure de mise à jour serveur :**
+  1. `npx tsc --noEmit && npm run typecheck:server && npx vitest run`
+  2. `git push origin feat/self-hosted-server`
+  3. `ssh serveur "/srv/docker/inventaire-surcouche/deploy.sh"` (Wi-Fi local) ou `ssh serveur-vpn "/srv/docker/inventaire-surcouche/deploy.sh"` (via Tailscale VPN).
+
+## 4. Contrôle Qualité avant Clôture ou Déploiement
+* Exécuter systématiquement `npx tsc --noEmit`, `npm run typecheck:server` et `npx vitest run` après modification de code et rapporter uniquement les résultats réellement observés.
 * Répondre en **français** avec des liens cliquables vers les fichiers modifiés.
