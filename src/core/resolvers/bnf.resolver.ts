@@ -160,23 +160,33 @@ export function scoreHintMatch(
     score += rawSpineScore;
   }
 
-  // Garde anti-hors-sujet : si un titre/série était demandé mais qu'AUCUN token de titre, série ni auteur ne correspond,
-  // ne JAMAIS attribuer le bonus de numéro de tome ni le bonus d'édition (évite Chihayafuru #44 pour Boule & Bill #44).
+  // Garde anti-hors-sujet :
+  // 1) Si un titre/série était demandé mais qu'AUCUN token de titre, série ni auteur ne correspond,
+  //    ne JAMAIS attribuer le bonus de numéro de tome ni le bonus d'édition (évite Chihayafuru #44 pour Boule & Bill #44).
   const hasAnyTitleOrSeriesHint = Boolean(hintMainTitleNorm || hintSeriesNorm);
   const hasSemanticAnchor = textMatchScore > 0 || authorMatchScore > 0 || rawSpineScore >= 6;
   if (hasAnyTitleOrSeriesHint && !hasSemanticAnchor) {
     return 0;
   }
 
-  // 4. Numéro de tome (uniquement si un ancrage sémantique titre/série/auteur est confirmé)
+  // 2) Si un titre ou une série explicite (>= 4 car.) était demandé mais ne matche PAS DU TOUT (textMatchScore === 0),
+  //    l'auteur seul (ex: Goscinny commun à Astérix, Lucky Luke et Le Petit Nicolas) ne doit PAS déclencher le bonus de tome !
+  const hasExplicitTitleOrSeries = hintMainTitleNorm.length >= 4 || hintSeriesNorm.length >= 4;
+  if (hasExplicitTitleOrSeries && textMatchScore === 0) {
+    score -= 35;
+  }
+
+  // 4. Numéro de tome (uniquement si un ancrage titre/série est confirmé, ou si aucun titre/série explicite n'était fourni)
   const hintVol = normalizeSeriesNumber(hints.volumeNumber);
   if (hintVol) {
     const candVol = normalizeSeriesNumber(cand.seriesNumber);
     if (candVol === hintVol) {
-      score += 42;
+      if (!hasExplicitTitleOrSeries || textMatchScore > 0) {
+        score += 42;
+      }
     } else if (candVol && candVol !== hintVol) {
       score -= 55;
-    } else {
+    } else if (!hasExplicitTitleOrSeries || textMatchScore > 0) {
       // Sur Google Books / Open Library, le numéro de tome figure souvent dans le titre
       const escapedVol = hintVol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       if (new RegExp(`\\b0*${escapedVol}\\b`, 'i').test(cand.title || '')) {

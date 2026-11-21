@@ -843,6 +843,11 @@ export const photoBookResolutionService = {
         .slice(0, 4)
         .flatMap((k) => imageUtil.buildCoverCandidates(k, []).slice(0, 2));
 
+      const alternativeCovers = alternatives
+        .flatMap((a) => [a.coverUrl, ...(a.coverFallbackUrls || [])])
+        .filter((u): u is string => Boolean(u))
+        .slice(0, 6);
+
       const coverFallbackUrls = imageUtil.buildCoverCandidates(isbn13, [
         ownership.cachedCover,
         d1Entity?.localCover,
@@ -851,6 +856,7 @@ export const photoBookResolutionService = {
         hintMatchMeta?.coverUrl,
         ...workEditionCoverUrls,
         ...(externalMeta?.coverFallbackUrls || []),
+        ...alternativeCovers,
         ...knownIsbnCandidates
       ]);
       const mergedCover =
@@ -916,6 +922,19 @@ export const photoBookResolutionService = {
           : {})
       };
     } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : 'Erreur lors de la recherche BnF.';
+      void pushClientPipelineLogs({
+        sourceChannel: 'canal_4_ai_photo',
+        steps: [
+          {
+            layer: 'C3',
+            stepName: 'client_hint_lookup',
+            status: 'error',
+            summary: `Canal 3 erreur sur « ${cand.title || cand.series || '?'} » : ${errMsg}`,
+            payload: { cand, error: errMsg }
+          }
+        ]
+      });
       return {
         id: uid,
         sourceKind: 'detected',
@@ -929,7 +948,7 @@ export const photoBookResolutionService = {
         publisher: cand.publisher,
         series: cand.series,
         seriesNumber: cand.volumeNumber,
-        failureReason: err instanceof Error ? err.message : 'Erreur lors de la recherche BnF.'
+        failureReason: errMsg
       };
     }
   },
@@ -949,7 +968,11 @@ export const photoBookResolutionService = {
     onStatus?.(`Identification multi-sources & BnF (0/${candidates.length})...`);
 
     const totalSpines = candidates.length;
-    const resolvedRaw = await runWithConcurrency(candidates, 3, async (cand, idx) => {
+    const batchConcurrency = totalSpines > 8 ? 2 : 3;
+    const resolvedRaw = await runWithConcurrency(candidates, batchConcurrency, async (cand, idx) => {
+      if (totalSpines > 8 && idx >= batchConcurrency) {
+        await new Promise((resolve) => setTimeout(resolve, 90));
+      }
       const normalizedCand: RecognizedBookCandidate = {
         ...cand,
         spineIndex: typeof cand.spineIndex === 'number' ? cand.spineIndex : idx + 1,
@@ -980,7 +1003,7 @@ export const photoBookResolutionService = {
       .filter(({ item }) => item.status === 'unresolved');
 
     if (unresolvedIndices.length > 0 && shelfNeighbors.length > 0) {
-      await runWithConcurrency(unresolvedIndices, 3, async ({ item, idx }) => {
+      await runWithConcurrency(unresolvedIndices, 2, async ({ item, idx }) => {
         const neighbor = findMatchingNeighborSeries(item.rawCandidate, idx, shelfNeighbors);
         if (!neighbor) return;
 
@@ -993,11 +1016,30 @@ export const photoBookResolutionService = {
         };
 
         const rescuedItem = await this.resolveSingleCandidate(rescuedCand, `rescue-${idx}`, onExternalLookup);
-        if (rescuedItem.status === 'resolved') {
+        if (rescuedItem.status === 'resolved' || rescuedItem.status === 'doubt') {
           resolvedRaw[idx] = {
             ...rescuedItem,
             rawCandidate: item.rawCandidate,
             correctedFromAi: true
+          };
+        }
+      });
+    }
+
+    // Passe de relance automatique anti-timeout/saturation BnF sur les livres encore non identifiés
+    const stillUnresolved = resolvedRaw
+      .map((item, idx) => ({ item, idx }))
+      .filter(({ item }) => item.status === 'unresolved' && Boolean(item.rawCandidate.title?.trim() || item.rawCandidate.series?.trim() || item.rawCandidate.isbn?.trim()));
+
+    if (stillUnresolved.length > 0 && stillUnresolved.length <= 15) {
+      onStatus?.(`Relance automatique BnF pour ${stillUnresolved.length} livre(s) non identifié(s)...`);
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await runWithConcurrency(stillUnresolved, 1, async ({ item, idx }) => {
+        const retried = await this.resolveSingleCandidate(item.rawCandidate, `autoretry-${idx}`, onExternalLookup);
+        if (retried.status !== 'unresolved') {
+          resolvedRaw[idx] = {
+            ...retried,
+            rawCandidate: item.rawCandidate
           };
         }
       });

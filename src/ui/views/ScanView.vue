@@ -27,6 +27,7 @@ import {
 } from '../../core/services/v4-client.service';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import { pendingScansStore } from '../../state/pendingScans';
+import { scanDraftStore, sortItemsByShelfOrder } from '../../state/scanDraft';
 import type { HumanizedBook } from '../../core/types';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
@@ -238,13 +239,13 @@ const isPhotoProcessing = photoBatchQueueService.isProcessing;
 const photoLoadingStatus = photoBatchQueueService.currentStatusMessage;
 const photoError = ref('');
 const photoSavingFeedback = ref('');
-const resolvedDetectedItems = ref<ResolvedPhotoItem[]>([]);
-const doubtItems = ref<ResolvedPhotoItem[]>([]);
-const unresolvedItems = ref<ResolvedPhotoItem[]>([]);
-const seriesExtraItems = ref<ResolvedPhotoItem[]>([]);
-const detectedSeriesNames = ref<string[]>([]);
+const resolvedDetectedItems = scanDraftStore.resolvedDetectedItems;
+const doubtItems = scanDraftStore.doubtItems;
+const unresolvedItems = scanDraftStore.unresolvedItems;
+const seriesExtraItems = scanDraftStore.seriesExtraItems;
+const detectedSeriesNames = scanDraftStore.detectedSeriesNames;
 const retryingItemId = ref<string | null>(null);
-const expandedSeriesKeys = ref<Record<string, boolean>>({});
+const expandedSeriesKeys = scanDraftStore.expandedSeriesKeys;
 const lastSavedToCollection = ref<boolean>(false);
 const activeDetailItemId = ref<string | null>(null);
 const ingestProgress = ref<{ active: boolean; done: number; total: number; label?: string }>({
@@ -267,8 +268,16 @@ const activeDetailItem = computed(() =>
 );
 
 const activeDetailPosLabel = computed(() => {
-  if (!activeDetailItemId.value) return '';
-  const idx = allValidationPool.value.findIndex((i) => i.id === activeDetailItemId.value);
+  const item = activeDetailItem.value;
+  if (!item) return '';
+  const spineIdx = item.rawCandidate?.spineIndex;
+  const totalSpines = item.rawCandidate?.totalSpines;
+  if (typeof spineIdx === 'number' && spineIdx > 0) {
+    return totalSpines && totalSpines >= spineIdx
+      ? `Tranche #${spineIdx} / ${totalSpines}`
+      : `Tranche #${spineIdx}`;
+  }
+  const idx = allValidationPool.value.findIndex((i) => i.id === item.id);
   return idx >= 0 ? `Livre ${idx + 1} / ${allValidationPool.value.length}` : '';
 });
 
@@ -306,13 +315,33 @@ function formatCompactShelfPos(item: ResolvedPhotoItem): string {
   return `G#${idx}`;
 }
 
+function resolveCardCoverSrc(item: ResolvedPhotoItem): string {
+  if (item.coverUrl) {
+    return imageUtil.resolveExternalUrl(item.coverUrl, item.isbn13);
+  }
+  if (item.isbn13) {
+    return `/api/gateway?action=image-proxy&isbn=${encodeURIComponent(item.isbn13)}`;
+  }
+  return '';
+}
+
+function onCardCoverError(item: ResolvedPhotoItem) {
+  if (!item.coverFallbackUrls || item.coverFallbackUrls.length === 0) {
+    if (item.isbn13) {
+      item.coverFallbackUrls = imageUtil.buildCoverCandidates(item.isbn13, [item.coverUrl]);
+    }
+  }
+  imageUtil.advanceCoverFallback(item);
+}
+
 function syncValidationFromQueue() {
   const agg = photoBatchQueueService.getAggregatedResults();
+  const handled = new Set(scanDraftStore.handledSourceIds.value);
 
   const knownResolvedIds = new Set(resolvedDetectedItems.value.map((i) => i.id));
   const knownResolvedIsbns = new Set(resolvedDetectedItems.value.map((i) => i.isbn13).filter(Boolean));
   for (const item of agg.sureItems) {
-    if (knownResolvedIds.has(item.id) || (item.isbn13 && knownResolvedIsbns.has(item.isbn13))) continue;
+    if (handled.has(item.id) || knownResolvedIds.has(item.id) || (item.isbn13 && knownResolvedIsbns.has(item.isbn13))) continue;
     resolvedDetectedItems.value.push(JSON.parse(JSON.stringify(item)));
     knownResolvedIds.add(item.id);
     if (item.isbn13) knownResolvedIsbns.add(item.isbn13);
@@ -320,7 +349,7 @@ function syncValidationFromQueue() {
 
   const knownDoubtIds = new Set(doubtItems.value.map((i) => i.id));
   for (const d of agg.doubtItems) {
-    if (!knownDoubtIds.has(d.id)) {
+    if (!handled.has(d.id) && !knownDoubtIds.has(d.id)) {
       doubtItems.value.push(JSON.parse(JSON.stringify(d)));
       knownDoubtIds.add(d.id);
     }
@@ -328,11 +357,16 @@ function syncValidationFromQueue() {
 
   const knownUnresolvedIds = new Set(unresolvedItems.value.map((i) => i.id));
   for (const u of agg.unresolvedItems) {
-    if (!knownUnresolvedIds.has(u.id)) {
+    if (!handled.has(u.id) && !knownUnresolvedIds.has(u.id)) {
       unresolvedItems.value.push(JSON.parse(JSON.stringify(u)));
       knownUnresolvedIds.add(u.id);
     }
   }
+
+  // Maintenir strictement l'ordre physique de chaque photo (gauche -> droite)
+  sortItemsByShelfOrder(resolvedDetectedItems.value);
+  sortItemsByShelfOrder(doubtItems.value);
+  sortItemsByShelfOrder(unresolvedItems.value);
 
   const knownExtraIsbns = new Set(seriesExtraItems.value.map((i) => i.isbn13).filter(Boolean));
   for (const e of agg.seriesExtraItems) {
@@ -421,13 +455,16 @@ async function handleDetailRetryBnf(item: ResolvedPhotoItem, candidate: Recogniz
       return;
     }
     const oldId = item.id;
+    scanDraftStore.markSourceIdHandled(oldId);
     resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => i.id !== oldId);
     doubtItems.value = doubtItems.value.filter((d) => d.id !== oldId);
     unresolvedItems.value = unresolvedItems.value.filter((u) => u.id !== oldId);
     if (resolved.status === 'doubt') {
-      doubtItems.value.unshift(resolved);
+      doubtItems.value.push(resolved);
+      sortItemsByShelfOrder(doubtItems.value);
     } else {
-      resolvedDetectedItems.value.unshift(resolved);
+      resolvedDetectedItems.value.push(resolved);
+      sortItemsByShelfOrder(resolvedDetectedItems.value);
     }
     activeDetailItemId.value = resolved.id;
   } finally {
@@ -635,6 +672,7 @@ const dispatchPhotoBatchAction = async (
   try {
     if (action === 'DELETE') {
       const removedSet = new Set(itemsToSave.map((i) => i.id));
+      for (const rid of removedSet) scanDraftStore.markSourceIdHandled(rid);
       resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !removedSet.has(i.id));
       doubtItems.value = doubtItems.value.filter((d) => !removedSet.has(d.id));
       seriesExtraItems.value = seriesExtraItems.value.filter((e) => !removedSet.has(e.id));
@@ -732,6 +770,7 @@ const dispatchPhotoBatchAction = async (
     }
 
     const savedSet = new Set(itemsToSave.map((i) => i.id));
+    for (const sid of savedSet) scanDraftStore.markSourceIdHandled(sid);
     resolvedDetectedItems.value = resolvedDetectedItems.value.filter((i) => !savedSet.has(i.id));
     doubtItems.value = doubtItems.value.filter((d) => !savedSet.has(d.id));
     seriesExtraItems.value = seriesExtraItems.value.filter((e) => !savedSet.has(e.id));
@@ -742,6 +781,7 @@ const dispatchPhotoBatchAction = async (
       unresolvedItems.value.length === 0
     ) {
       await photoBatchQueueService.clearCompletedJobs();
+      scanDraftStore.clearAll();
     }
     scannerState.notifyCatalogChanged();
     lastSavedToCollection.value = target === 'owned' && savedCount > 0;
@@ -760,11 +800,7 @@ const dispatchPhotoBatchAction = async (
 
 async function clearPhotoQueueAndForm() {
   await photoBatchQueueService.clearAllJobs();
-  resolvedDetectedItems.value = [];
-  doubtItems.value = [];
-  unresolvedItems.value = [];
-  seriesExtraItems.value = [];
-  detectedSeriesNames.value = [];
+  scanDraftStore.clearAll();
 }
 </script>
 
@@ -961,11 +997,11 @@ async function clearPhotoQueueAndForm() {
 
               <div class="card-cover-frame">
                 <img
-                  v-if="item.coverUrl"
-                  :src="imageUtil.resolveCoverUrl(item.coverUrl)"
+                  v-if="resolveCardCoverSrc(item)"
+                  :src="resolveCardCoverSrc(item)"
                   :alt="item.title"
                   class="card-cover-img"
-                  @error="imageUtil.advanceCoverFallback(item)"
+                  @error="onCardCoverError(item)"
                 />
                 <div v-else class="card-cover-placeholder">
                   <span>{{ item.title.slice(0, 28) }}</span>
@@ -1017,11 +1053,11 @@ async function clearPhotoQueueAndForm() {
 
               <div class="card-cover-frame">
                 <img
-                  v-if="d.coverUrl"
-                  :src="imageUtil.resolveCoverUrl(d.coverUrl)"
+                  v-if="resolveCardCoverSrc(d)"
+                  :src="resolveCardCoverSrc(d)"
                   :alt="d.title"
                   class="card-cover-img"
-                  @error="imageUtil.advanceCoverFallback(d)"
+                  @error="onCardCoverError(d)"
                 />
                 <div v-else class="card-cover-placeholder">
                   <span>{{ (d.rawCandidate.title || d.title).slice(0, 28) }}</span>

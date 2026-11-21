@@ -74,6 +74,114 @@ async function resilientFetch(url: string, options?: RequestInit, retries = 3): 
   throw new Error('Unreachable');
 }
 
+async function tryDownloadValidCoverImage(
+  targetUrl: string,
+  timeoutMs = 3500
+): Promise<{ bytes: Uint8Array; contentType: string; finalUrl: string } | null> {
+  const validated = validateImageProxyUrl(targetUrl);
+  if (!validated) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(validated.toString(), {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+        Referer: `${validated.protocol}//${validated.host}/`
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) return null;
+    if (response.url && !validateImageProxyUrl(response.url)) return null;
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.toLowerCase().startsWith('image/')) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    // Rejeter les pixels 1x1 / placeholders vides (< 800o) et le placeholder BnF générique (63601o)
+    if (arrayBuffer.byteLength < 800 || arrayBuffer.byteLength === 63601 || arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
+      return null;
+    }
+    return {
+      bytes: new Uint8Array(arrayBuffer),
+      contentType,
+      finalUrl: validated.toString()
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolveFallbackCoverBytesByIsbn(
+  rawIsbn: string
+): Promise<{ bytes: Uint8Array; contentType: string; sourceUrl: string } | null> {
+  const cleanIsbn = rawIsbn.replace(/[^0-9Xx]/g, '').trim();
+  if (cleanIsbn.length !== 13) return null;
+
+  const candidateUrls: string[] = [];
+
+  // 1. Découverte parallèle rapide : Inventaire.io (image) + BnF SRU (ARK -> couverture BnF)
+  const [invUrls, bnfUrls] = await Promise.all([
+    (async (): Promise<string[]> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2400);
+      try {
+        const res = await fetch(
+          `https://inventaire.io/api/entities?action=by-uris&uris=isbn:${encodeURIComponent(cleanIsbn)}&attributes=image`,
+          { headers: { 'User-Agent': USER_AGENT_BASE }, signal: controller.signal }
+        );
+        if (!res.ok) return [];
+        const data = (await res.json()) as any;
+        const ent = data?.entities?.[`isbn:${cleanIsbn}`];
+        const rawImg = ent?.image?.url;
+        if (typeof rawImg === 'string' && rawImg.trim()) {
+          const filename = rawImg.split('/').pop();
+          if (filename) return [`https://inventaire.io/img/entities/500x500/${filename}`];
+        }
+        return [];
+      } catch {
+        return [];
+      } finally {
+        clearTimeout(timer);
+      }
+    })(),
+    (async (): Promise<string[]> => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2400);
+      try {
+        const cql = `bib.anywhere all "${cleanIsbn}"`;
+        const res = await fetch(
+          `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=dublincore&maximumRecords=2`,
+          { headers: { 'User-Agent': USER_AGENT_BASE }, signal: controller.signal }
+        );
+        if (!res.ok) return [];
+        const xml = await res.text();
+        const arkMatch = /ark:\/12148\/cb[0-9a-z]+/i.exec(xml);
+        if (arkMatch?.[0]) {
+          return [`https://catalogue.bnf.fr/couverture?appName=NE&idArk=${encodeURIComponent(arkMatch[0])}&couverture=1`];
+        }
+        return [];
+      } catch {
+        return [];
+      } finally {
+        clearTimeout(timer);
+      }
+    })()
+  ]);
+
+  candidateUrls.push(...bnfUrls, ...invUrls, `https://covers.openlibrary.org/b/isbn/${cleanIsbn}-L.jpg?default=false`);
+
+  for (const candUrl of candidateUrls) {
+    const img = await tryDownloadValidCoverImage(candUrl, 2800);
+    if (img) {
+      return { bytes: img.bytes, contentType: img.contentType, sourceUrl: img.finalUrl };
+    }
+  }
+  return null;
+}
+
 function jsonResp(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -275,7 +383,7 @@ export const onRequest = async (context: {
         const trimmedUrl = rawUrl?.trim() || '';
 
         // 1. Vérifier d'abord le stockage central Cloudflare R2 / D1
-        // Si une URL précise est demandée, on ne cherche que par URL pour ne pas écraser les couvertures alternatives d'autres éditions.
+        // Si une URL précise est demandée, on cherche d'abord par URL (puis par ISBN si l'URL échoue).
         const stored = await getStoredCover(env, {
           isbn: trimmedUrl ? undefined : isbnParam,
           url: trimmedUrl || undefined
@@ -291,49 +399,45 @@ export const onRequest = async (context: {
           });
         }
 
-        if (!trimmedUrl) {
-          return jsonResp({ error: 'URL ou couverture en cache requise' }, 404);
-        }
-        const validatedUrl = validateImageProxyUrl(trimmedUrl);
-        if (!validatedUrl) {
-          return jsonResp({ error: 'URL image invalide ou interdite' }, 400);
-        }
+        let resolvedImg: { bytes: Uint8Array; contentType: string; sourceUrl: string } | null = null;
 
-        const response = await resilientFetch(validatedUrl.toString(), {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-            'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-            Referer: `${validatedUrl.protocol}//${validatedUrl.host}/`
+        if (trimmedUrl) {
+          const validatedUrl = validateImageProxyUrl(trimmedUrl);
+          if (!validatedUrl) {
+            return jsonResp({ error: 'URL image invalide ou interdite' }, 400);
           }
-        });
-        if (!response.ok) {
-          return jsonResp({ error: `Erreur réseau distante: ${response.status}` }, 502);
-        }
-        if (response.url && !validateImageProxyUrl(response.url)) {
-          return jsonResp({ error: 'Redirection image interdite' }, 400);
+          const direct = await tryDownloadValidCoverImage(validatedUrl.toString(), 4500);
+          if (direct) {
+            resolvedImg = { bytes: direct.bytes, contentType: direct.contentType, sourceUrl: direct.finalUrl };
+          }
         }
 
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.toLowerCase().startsWith('image/')) {
-          return jsonResp({ error: 'Le contenu distant n est pas une image' }, 415);
+        // 2. Fallback serveur intelligent par ISBN (D1 cache par ISBN -> BnF ARK couverture -> Inventaire.io -> OpenLibrary)
+        if (!resolvedImg && isbnParam) {
+          const storedByIsbn = await getStoredCover(env, { isbn: isbnParam });
+          if (storedByIsbn) {
+            return new Response(storedByIsbn.bytes, {
+              status: 200,
+              headers: {
+                'Content-Type': storedByIsbn.contentType,
+                'Cache-Control': 'public, max-age=31536000, immutable',
+                'X-Cover-Cache': `${storedByIsbn.storage.toUpperCase()}-ISBN-HIT`
+              }
+            });
+          }
+          resolvedImg = await resolveFallbackCoverBytesByIsbn(isbnParam);
         }
 
-        const arrayBuffer = await response.arrayBuffer();
-        if (arrayBuffer.byteLength < 800 || arrayBuffer.byteLength === 63601) {
-          return jsonResp({ error: 'Image placeholder vide ou générique rejetée' }, 404);
-        }
-        if (arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
-          return jsonResp({ error: 'Image trop volumineuse' }, 413);
+        if (!resolvedImg) {
+          return jsonResp({ error: 'Couverture introuvable ou placeholder rejeté' }, 404);
         }
 
-        // 2. Mise en cache read-through asynchrone vers R2 / D1 pour résister à l'extinction future du CDN source
+        // 3. Mise en cache read-through asynchrone vers R2 / D1 pour résister à l'extinction future du CDN source
         const persistTask = storeCompressedCover(env, {
           isbn: isbnParam,
-          url: trimmedUrl,
-          contentType,
-          bytes: new Uint8Array(arrayBuffer)
+          url: resolvedImg.sourceUrl,
+          contentType: resolvedImg.contentType,
+          bytes: resolvedImg.bytes
         });
         if (typeof context.waitUntil === 'function') {
           context.waitUntil(persistTask);
@@ -341,10 +445,10 @@ export const onRequest = async (context: {
           await persistTask;
         }
 
-        return new Response(arrayBuffer, {
+        return new Response(resolvedImg.bytes, {
           status: 200,
           headers: {
-            'Content-Type': contentType,
+            'Content-Type': resolvedImg.contentType,
             'Cache-Control': 'public, max-age=31536000, immutable',
             'X-Cover-Cache': 'MISS'
           }
