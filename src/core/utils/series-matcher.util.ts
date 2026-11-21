@@ -113,6 +113,8 @@ export function stripEditorialCollectionSuffixes(rawSeries: string): {
   let normalized = normalizeWithAmpersand(display);
   // Retirer les préfixes numériques génériques de séries (ex: "60 gags de Boule et Bill")
   normalized = normalized.replace(/^\d+\s+gags\s+(?:de|d)\s+/i, '').trim();
+  // Alias BnF historique connu : "Les aventures de Tintin reporter" -> "Tintin"
+  normalized = normalized.replace(/\btintin\s+reporter\b/i, 'tintin').trim();
 
   for (const prefix of SERIES_LEADING_PREFIXES) {
     if (normalized.startsWith(prefix) && normalized.slice(prefix.length).trim().length >= 3) {

@@ -10,6 +10,8 @@ import {
   cleanPublisher,
   cleanSeriesName,
   cleanTitle,
+  isBookOrPressEan13,
+  isNonBookMarcType,
   normalizeSeriesNumber,
   normalizeTextKey,
   parseSeriesFromTitle
@@ -98,6 +100,7 @@ export interface UserIngestHint {
   series?: string;
   volumeNumber?: string;
   isIntegral?: boolean;
+  includedVolumeNumbers?: string[];
   coverUrl?: string;
 }
 
@@ -506,8 +509,16 @@ export async function checkBookIndexLayer2(
   } catch {
     // Table absente en mock unitaire isolé
   }
+  const userIncludedVols = (options?.userHint?.includedVolumeNumbers || [])
+    .map((v) => normalizeSeriesNumber(String(v)))
+    .filter(Boolean);
+  const existingIncludedSet = new Set(book.integralMetadata?.includedVolumeNumbers || []);
+  const hasMissingUserIncludedVols =
+    options?.userHint?.isIntegral === true &&
+    userIncludedVols.some((v) => !existingIncludedSet.has(v));
   const hasFormatConflict =
-    options?.userHint?.isIntegral !== undefined && options.userHint.isIntegral !== book.isIntegral;
+    (options?.userHint?.isIntegral !== undefined && options.userHint.isIntegral !== book.isIntegral) ||
+    hasMissingUserIncludedVols;
 
   if (isUnenrichedSkeleton || hasFormatConflict) {
     tracer?.record(
@@ -729,7 +740,7 @@ function extractMarcRecordMetadata(
     if (f.tag === '020' || f.tag === '038') {
       const rawIsbn = isbnUtil.normalize(getSf('a'));
       const conv = rawIsbn.length === 10 ? isbnUtil.toIsbn13(rawIsbn) : rawIsbn;
-      if (isbnUtil.isValidBookBarcode(conv)) {
+      if (isbnUtil.isValidBookBarcode(conv) && isBookOrPressEan13(conv)) {
         isbn13 = conv;
       }
     } else if (f.tag === '101') {
@@ -741,6 +752,9 @@ function extractMarcRecordMetadata(
         coverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
       }
     } else if (f.tag === '245') {
+      if (isNonBookMarcType(getSf('d'))) {
+        return null;
+      }
       const a = cleanTitle(getSf('a'));
       const b = cleanTitle(getSf('b'));
       const e = cleanTitle(getSf('e'));
@@ -1297,8 +1311,8 @@ export async function discoverMultiSourceLayer3(
         try {
           const firstAuthorLast = authors[0] ? authors[0].split(/[,\s]+/)[0].replace(/["()]/g, '') : '';
           const cql = firstAuthorLast
-            ? `(bib.title all "${searchTitleClean}") and (bib.author all "${firstAuthorLast}")`
-            : `(bib.title all "${searchTitleClean}")`;
+            ? `(bib.title all "${searchTitleClean}") and (bib.author all "${firstAuthorLast}") and (bib.doctype all "a")`
+            : `(bib.title all "${searchTitleClean}") and (bib.doctype all "a")`;
           const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=12&startRecord=1`;
           const res = await fetch(sruUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
           if (!res.ok) {
@@ -1334,6 +1348,18 @@ export async function discoverMultiSourceLayer3(
             // Garde critique anti-absorption entre tomes distincts (ex: Culottées T1 vs T2) ou Intégrale vs Tome
             const candVol = normalizeSeriesNumber(cand.volumeNumber || parseSeriesFromTitle(cand.title).seriesNumber || '');
             if (effectiveAnchorVol && candVol && candVol !== effectiveAnchorVol) {
+              rejectedDiffVol++;
+              continue;
+            }
+            // Si le tome ancre est numéroté mais la notice sœur n'a PAS de numéro ET porte un titre générique identique à la série
+            // (ex: "Culottées", "Aya de Yopougon", "Mattéo"), ne pas l'absorber (évite la contamination T1 <-> T2).
+            const candSeriesCore = cand.seriesRaw ? stripEditorialCollectionSuffixes(cand.seriesRaw).coreKey : '';
+            const normCandCore = stripEditorialCollectionSuffixes(candTitleClean).coreKey;
+            const anchorSeriesCore = seriesCandidates[0]?.coreKey || '';
+            const isGenericSeriesTitle =
+              (candSeriesCore && normCandCore === candSeriesCore) ||
+              (anchorSeriesCore && normCandCore === anchorSeriesCore);
+            if (effectiveAnchorVol && !candVol && isGenericSeriesTitle) {
               rejectedDiffVol++;
               continue;
             }
@@ -1518,7 +1544,7 @@ export function detectIntegralAndIncludedVolumes(payload: StagingPayload): {
   const desc = payload.description || '';
 
   // 1. Détection explicite d'intégrale / coffret / omnibus / plage de tomes
-  const hasExplicitIntegralKeyword = /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\bdouble\s+album\b|\b2\s+en\s+1\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+  const hasExplicitIntegralKeyword = /(?:l['’]?\s*int[ée]grale|\bint[ée]grale?\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\bdouble\s+album\b|\b2\s+en\s+1\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
     combined
   );
 
@@ -1668,6 +1694,14 @@ export async function consolidateBookLayer4(
   const integralCheck = detectIntegralAndIncludedVolumes(payload);
   if (userHint?.isIntegral === true) {
     integralCheck.isIntegral = true;
+    if (Array.isArray(userHint.includedVolumeNumbers) && userHint.includedVolumeNumbers.length > 0) {
+      const mergedVols = new Set<string>(integralCheck.includedVolumeNumbers);
+      for (const rawVol of userHint.includedVolumeNumbers) {
+        const norm = normalizeSeriesNumber(String(rawVol));
+        if (norm) mergedVols.add(norm);
+      }
+      integralCheck.includedVolumeNumbers = Array.from(mergedVols).sort((a, b) => Number(a) - Number(b));
+    }
   } else if (userHint?.isIntegral === false) {
     integralCheck.isIntegral = false;
     integralCheck.isDoubleAlbum = false;

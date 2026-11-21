@@ -597,4 +597,68 @@ describe('v4-pipeline.service', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('propage userHint.includedVolumeNumbers sur une Intégrale et détecte INCLUDED_IN_INTEGRAL sur le tome inclus', async () => {
+    const { db } = createInMemoryV4Db();
+
+    const integralStaging: StagingPayload = {
+      anchorIsbn13: '9782070658787',
+      anchorTitle: 'Aya de Yopougon — Intégrale 1',
+      language: 'fre',
+      sisterEditions: [
+        { isbn13: '9782070658787', title: 'Aya de Yopougon — Intégrale 1', language: 'fre', source: 'bnf' }
+      ],
+      seriesCandidates: [
+        { source: 'bnf', rawName: 'Aya de Yopougon', coreKey: 'aya yopougon', cleanDisplay: 'Aya de Yopougon', weight: 4 }
+      ],
+      authors: ['Marguerite Abouet', 'Clément Oubrerie'],
+      illustrators: [],
+      scriptwriters: [],
+      rawSubjects: ['Bande dessinée'],
+      rawTitles: ['Aya de Yopougon — Intégrale 1'],
+      sourcesHit: ['bnf']
+    };
+
+    const savedIntegral = await consolidateBookLayer4(db, integralStaging, {
+      sourceChannel: 'canal_4_ai_photo',
+      libraryId: 'lib_1',
+      action: 'owned',
+      userHint: {
+        isIntegral: true,
+        includedVolumeNumbers: ['1', '2', '3']
+      }
+    });
+
+    expect(savedIntegral.isIntegral).toBe(true);
+    expect(savedIntegral.integralMetadata.includedVolumeNumbers).toEqual(['1', '2', '3']);
+
+    // Ajout d'un tome unitaire 3 (non possédé) -> Couche 2 doit détecter INCLUDED_IN_INTEGRAL
+    const vol3Staging: StagingPayload = {
+      anchorIsbn13: '9782075171229',
+      anchorTitle: 'Aya de Yopougon',
+      language: 'fre',
+      sisterEditions: [
+        { isbn13: '9782075171229', title: 'Aya de Yopougon', volumeNumber: '3', language: 'fre', source: 'bnf' }
+      ],
+      seriesCandidates: [
+        { source: 'bnf', rawName: 'Aya de Yopougon', coreKey: 'aya yopougon', cleanDisplay: 'Aya de Yopougon', weight: 4 }
+      ],
+      authors: ['Marguerite Abouet'],
+      illustrators: [],
+      scriptwriters: [],
+      rawSubjects: ['Bande dessinée'],
+      rawTitles: ['Aya de Yopougon'],
+      sourcesHit: ['bnf']
+    };
+    await consolidateBookLayer4(db, vol3Staging, {
+      sourceChannel: 'canal_2_manual_isbn',
+      libraryId: 'lib_1',
+      action: 'preview'
+    });
+
+    const l2 = await checkBookIndexLayer2(db, '9782075171229', 'lib_1');
+    expect(l2.status).toBe('INCLUDED_IN_INTEGRAL');
+    expect(l2.ownedIntegralMatches.length).toBeGreaterThanOrEqual(1);
+    expect(l2.ownedIntegralMatches[0].isbn13).toBe('9782070658787');
+  });
 });

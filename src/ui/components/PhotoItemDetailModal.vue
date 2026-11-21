@@ -7,6 +7,7 @@ import { imageUtil } from '../../core/utils/image.util';
 const props = defineProps<{
   show: boolean;
   item: ResolvedPhotoItem | null;
+  sourcePhotoUrl?: string;
   positionLabel?: string;
   retrying?: boolean;
 }>();
@@ -16,7 +17,14 @@ const emit = defineEmits<{
   (e: 'select-option', option: PhotoResolutionOption | null): void;
   (
     e: 'update-fields',
-    payload: { title: string; series: string; seriesNumber: string; isIntegral: boolean; selected: boolean }
+    payload: {
+      title: string;
+      series: string;
+      seriesNumber: string;
+      isIntegral: boolean;
+      includedVolumeNumbers?: string[];
+      selected: boolean;
+    }
   ): void;
   (e: 'retry-bnf', candidate: RecognizedBookCandidate): void;
 }>();
@@ -27,11 +35,50 @@ const localVolume = ref('');
 const localAuthor = ref('');
 const localIsbn = ref('');
 const localIsIntegral = ref(false);
+const localIncludedVolumesText = ref('');
 const localSelected = ref(true);
 const showManualForm = ref(false);
+const zoomedImageUrl = ref<string | null>(null);
+const zoomedImageAlt = ref('');
+
+function parseIncludedVolumesInput(raw: string): string[] {
+  const result = new Set<number>();
+  const cleaned = (raw || '').trim();
+  if (!cleaned) return [];
+  // Plages : "1 à 3", "1-3", "4 au 6"
+  const rangeRe = /(\d{1,3})\s*(?:[àa]|au|-|–)\s*(\d{1,3})/gi;
+  let m: RegExpExecArray | null;
+  let stripped = cleaned;
+  while ((m = rangeRe.exec(cleaned)) !== null) {
+    const start = parseInt(m[1], 10);
+    const end = parseInt(m[2], 10);
+    if (start > 0 && end >= start && end - start <= 30) {
+      for (let i = start; i <= end; i++) result.add(i);
+    }
+    stripped = stripped.replace(m[0], ' ');
+  }
+  // Numéros isolés : "1, 2, 3" ou "1 2 3"
+  for (const tok of stripped.split(/[^0-9]+/)) {
+    if (!tok) continue;
+    const n = parseInt(tok, 10);
+    if (n > 0 && n <= 200) result.add(n);
+  }
+  return Array.from(result)
+    .sort((a, b) => a - b)
+    .map(String);
+}
+
+const parsedIncludedVolumes = computed(() => parseIncludedVolumesInput(localIncludedVolumesText.value));
 
 watch(
-  () => [props.show, props.item?.id, props.item?.isbn13, props.item?.title, props.item?.isIntegral, props.item?.selected],
+  () => [
+    props.show,
+    props.item?.id,
+    props.item?.isbn13,
+    props.item?.title,
+    props.item?.isIntegral,
+    props.item?.selected
+  ],
   () => {
     if (!props.item) return;
     localTitle.value = props.item.title || props.item.rawCandidate.title || '';
@@ -40,8 +87,12 @@ watch(
     localAuthor.value = props.item.authors?.[0] || props.item.rawCandidate.author || '';
     localIsbn.value = props.item.isbn13 || props.item.rawCandidate.isbn || '';
     localIsIntegral.value = Boolean(props.item.isIntegral);
+    localIncludedVolumesText.value = props.item.includedVolumeNumbers?.length
+      ? props.item.includedVolumeNumbers.join(', ')
+      : '';
     localSelected.value = Boolean(props.item.selected);
     showManualForm.value = props.item.status === 'unresolved' || (props.item.alternatives?.length || 0) === 0;
+    zoomedImageUrl.value = null;
   },
   { immediate: true }
 );
@@ -57,10 +108,22 @@ const spinePositionText = computed(() => {
 });
 
 const onKeyDown = (e: KeyboardEvent) => {
-  if (e.key === 'Escape' && props.show) emit('close');
+  if (e.key === 'Escape') {
+    if (zoomedImageUrl.value) {
+      zoomedImageUrl.value = null;
+      return;
+    }
+    if (props.show) emit('close');
+  }
 };
 onMounted(() => window.addEventListener('keydown', onKeyDown));
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeyDown));
+
+const openZoom = (url: string | undefined, alt: string) => {
+  if (!url) return;
+  zoomedImageUrl.value = url;
+  zoomedImageAlt.value = alt;
+};
 
 const commitFieldChanges = () => {
   emit('update-fields', {
@@ -68,6 +131,7 @@ const commitFieldChanges = () => {
     series: localSeries.value.trim(),
     seriesNumber: localVolume.value.trim(),
     isIntegral: localIsIntegral.value,
+    includedVolumeNumbers: localIsIntegral.value ? parsedIncludedVolumes.value : undefined,
     selected: localSelected.value
   });
 };
@@ -116,33 +180,53 @@ const handleConfirmClose = () => {
         </header>
 
         <div class="detail-body">
-          <!-- Localisation physique sur l'étagère -->
-          <div v-if="spinePositionText || item.rawCandidate.rawSpineText" class="shelf-locator-box">
+          <!-- Localisation physique sur l'étagère + photo d'origine -->
+          <div v-if="spinePositionText || item.rawCandidate.rawSpineText || sourcePhotoUrl" class="shelf-locator-box">
             <div v-if="spinePositionText" class="shelf-pos-line">
               <strong>Position sur votre photo :</strong> {{ spinePositionText }}
             </div>
             <div v-if="item.rawCandidate.rawSpineText" class="shelf-ocr-line">
               Texte lu sur la tranche : « {{ item.rawCandidate.rawSpineText }} »
             </div>
+            <button
+              v-if="sourcePhotoUrl"
+              type="button"
+              class="shelf-photo-btn"
+              title="Agrandir la photo d'origine"
+              @click="openZoom(sourcePhotoUrl, 'Photo d’origine de votre étagère')"
+            >
+              <img :src="sourcePhotoUrl" alt="Photo de l'étagère" class="shelf-photo-preview" />
+              <span class="zoom-hint-pill">🔍 Agrandir la photo</span>
+            </button>
           </div>
 
-          <!-- Aperçu du livre actuellement retenu -->
+          <!-- Aperçu agrandi du livre actuellement retenu -->
           <div class="current-summary-card">
             <div class="summary-cover-wrap">
-              <img
+              <button
                 v-if="item.coverUrl"
-                :src="imageUtil.resolveCoverUrl(item.coverUrl)"
-                :alt="localTitle"
-                class="summary-cover"
-                @error="imageUtil.advanceCoverFallback(item)"
-              />
+                type="button"
+                class="cover-zoom-btn"
+                title="Agrandir la couverture"
+                @click="openZoom(imageUtil.resolveCoverUrl(item.coverUrl), localTitle)"
+              >
+                <img
+                  :src="imageUtil.resolveCoverUrl(item.coverUrl)"
+                  :alt="localTitle"
+                  class="summary-cover"
+                  @error="imageUtil.advanceCoverFallback(item)"
+                />
+                <span class="cover-zoom-badge">🔍</span>
+              </button>
               <div v-else class="summary-cover-placeholder">
                 <span>{{ localTitle.slice(0, 24) }}</span>
               </div>
             </div>
             <div class="summary-meta">
               <div class="summary-badges">
-                <span v-if="localIsIntegral" class="badge integral">Intégrale</span>
+                <span v-if="localIsIntegral" class="badge integral">
+                  Intégrale<template v-if="parsedIncludedVolumes.length"> (T.{{ parsedIncludedVolumes.join(', ') }})</template>
+                </span>
                 <span v-else-if="localSeries" class="badge series">
                   {{ localSeries }}<template v-if="localVolume"> T.{{ localVolume }}</template>
                 </span>
@@ -159,7 +243,7 @@ const handleConfirmClose = () => {
             </div>
           </div>
 
-          <!-- Contrôle explicite Format & Sélection -->
+          <!-- Contrôle explicite Format & Tomes inclus (si Intégrale) & Sélection -->
           <div class="format-bar">
             <div class="format-segmented" role="group" aria-label="Format du livre">
               <button
@@ -178,6 +262,26 @@ const handleConfirmClose = () => {
               >
                 Intégrale / Coffret
               </button>
+            </div>
+
+            <div v-if="localIsIntegral" class="integral-volumes-box">
+              <label class="integral-volumes-label" for="integral-vols-input">
+                <strong>Tomes inclus dans cette intégrale :</strong>
+              </label>
+              <input
+                id="integral-vols-input"
+                v-model="localIncludedVolumesText"
+                type="text"
+                class="cand-input"
+                placeholder="ex : 1 à 3  ou  4, 5, 6"
+                @input="commitFieldChanges"
+              />
+              <div v-if="parsedIncludedVolumes.length > 0" class="included-vols-chips">
+                <span v-for="v in parsedIncludedVolumes" :key="v" class="vol-chip">Tome {{ v }}</span>
+              </div>
+              <small v-else class="integral-vols-hint">
+                Précisez les numéros de tomes (ex: « 1 à 3 » ou « 4, 5, 6 ») pour que votre série sache exactement quels tomes vous possédez.
+              </small>
             </div>
 
             <label class="include-check-row">
@@ -278,6 +382,12 @@ const handleConfirmClose = () => {
         </footer>
       </div>
     </div>
+
+    <!-- Lightbox zoom plein écran (photo d'origine ou couverture) -->
+    <div v-if="zoomedImageUrl" class="zoom-lightbox" @click="zoomedImageUrl = null">
+      <button type="button" class="zoom-close-btn" @click.stop="zoomedImageUrl = null">✕ Fermer</button>
+      <img :src="zoomedImageUrl" :alt="zoomedImageAlt" class="zoom-lightbox-img" @click.stop />
+    </div>
   </Teleport>
 </template>
 
@@ -376,39 +486,162 @@ const handleConfirmClose = () => {
   color: #334155;
 }
 
+.shelf-photo-btn {
+  position: relative;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  cursor: zoom-in;
+  display: block;
+  width: 100%;
+}
+
+.shelf-photo-preview {
+  display: block;
+  width: 100%;
+  max-height: 155px;
+  object-fit: cover;
+}
+
+.zoom-hint-pill {
+  position: absolute;
+  right: 0.45rem;
+  bottom: 0.45rem;
+  background: rgba(15, 23, 42, 0.78);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+}
+
 .current-summary-card {
   display: flex;
-  gap: 0.85rem;
-  padding: 0.75rem;
+  gap: 0.95rem;
+  padding: 0.85rem;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
   background: #fff;
+  align-items: flex-start;
 }
 
 .summary-cover-wrap {
   flex-shrink: 0;
 }
 
+.cover-zoom-btn {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: zoom-in;
+}
+
 .summary-cover {
-  width: 68px;
-  height: 102px;
+  width: 132px;
+  height: 192px;
   object-fit: cover;
   border-radius: 8px;
   background: #f1f5f9;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.14);
+}
+
+.cover-zoom-badge {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: rgba(15, 23, 42, 0.75);
+  color: #fff;
+  font-size: 0.75rem;
+  padding: 0.12rem 0.35rem;
+  border-radius: 999px;
 }
 
 .summary-cover-placeholder {
-  width: 68px;
-  height: 102px;
+  width: 132px;
+  height: 192px;
   border-radius: 8px;
   background: #e2e8f0;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 0.35rem;
-  font-size: 0.7rem;
+  padding: 0.5rem;
+  font-size: 0.78rem;
   color: #475569;
+}
+
+.integral-volumes-box {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 10px;
+  padding: 0.7rem 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.integral-volumes-label {
+  font-size: 0.82rem;
+  color: #92400e;
+}
+
+.included-vols-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.vol-chip {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+}
+
+.integral-vols-hint {
+  font-size: 0.76rem;
+  color: #78350f;
+}
+
+.zoom-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2500;
+  background: rgba(2, 6, 23, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.zoom-close-btn {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  font-weight: 700;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.zoom-lightbox-img {
+  max-width: 96vw;
+  max-height: 88dvh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
 }
 
 .summary-meta {

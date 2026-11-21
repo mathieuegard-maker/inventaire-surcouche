@@ -1,4 +1,4 @@
-// src/core/resolvers/openlibrary.resolver.ts
+import { isFrancophoneBookIsbn13 } from './bnf.resolver';
 import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
@@ -135,7 +135,7 @@ export const openLibraryResolver = {
             continue;
           }
           const isbn13 = pickBestIsbnFromList(doc.isbn);
-          if (!isbn13 || byIsbn.has(isbn13)) continue;
+          if (!isbn13 || !isFrancophoneBookIsbn13(isbn13) || byIsbn.has(isbn13)) continue;
 
           const parsedSeries = extractSeriesAndVolumeHints(String(doc.title).trim(), doc.subtitle ? String(doc.subtitle).trim() : undefined);
           const coverUrl = doc.cover_i

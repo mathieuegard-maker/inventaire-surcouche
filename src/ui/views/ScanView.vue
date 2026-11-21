@@ -272,6 +272,22 @@ const activeDetailPosLabel = computed(() => {
   return idx >= 0 ? `Livre ${idx + 1} / ${allValidationPool.value.length}` : '';
 });
 
+const activeDetailPhotoUrl = computed(() => {
+  const jobId = activeDetailItem.value?.sourceJobId;
+  if (typeof jobId === 'number') {
+    const matchedJob = photoBatchQueueService.jobs.value.find((j) => j.id === jobId);
+    if (matchedJob?.imageDataUrl) return matchedJob.imageDataUrl;
+  }
+  const itemId = activeDetailItem.value?.id;
+  if (itemId) {
+    const fallbackJob = photoBatchQueueService.jobs.value.find((j) =>
+      j.result?.detectedItems?.some((d) => d.id === itemId)
+    );
+    if (fallbackJob?.imageDataUrl) return fallbackJob.imageDataUrl;
+  }
+  return undefined;
+});
+
 function openPhotoItemDetail(item: ResolvedPhotoItem) {
   activeDetailItemId.value = item.id;
 }
@@ -376,12 +392,21 @@ function applyEditionChoice(item: ResolvedPhotoItem, selectedIsbn: string) {
 
 function handleDetailUpdateFields(
   item: ResolvedPhotoItem,
-  payload: { title: string; series: string; seriesNumber: string; isIntegral: boolean; selected: boolean }
+  payload: {
+    title: string;
+    series: string;
+    seriesNumber: string;
+    isIntegral: boolean;
+    includedVolumeNumbers?: string[];
+    selected: boolean;
+  }
 ) {
   if (payload.title) item.title = payload.title;
   item.series = payload.series || undefined;
   item.seriesNumber = payload.isIntegral ? undefined : payload.seriesNumber || undefined;
   item.isIntegral = payload.isIntegral;
+  item.includedVolumeNumbers =
+    payload.isIntegral && payload.includedVolumeNumbers?.length ? payload.includedVolumeNumbers : undefined;
   item.selected = payload.selected;
 }
 
@@ -390,6 +415,7 @@ async function handleDetailRetryBnf(item: ResolvedPhotoItem, candidate: Recogniz
   retryingItemId.value = item.id;
   try {
     const resolved = await photoBookResolutionService.resolveSingleCandidate(candidate, 'retry');
+    resolved.sourceJobId = item.sourceJobId;
     if (resolved.status === 'unresolved') {
       item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
       return;
@@ -637,6 +663,8 @@ const dispatchPhotoBatchAction = async (
           series: item.series,
           volumeNumber: item.isIntegral ? undefined : item.seriesNumber,
           isIntegral: Boolean(item.isIntegral),
+          includedVolumeNumbers:
+            item.isIntegral && item.includedVolumeNumbers?.length ? item.includedVolumeNumbers : undefined,
           coverUrl: item.coverUrl
         };
       }
@@ -1087,6 +1115,7 @@ async function clearPhotoQueueAndForm() {
       <PhotoItemDetailModal
         :show="Boolean(activeDetailItem)"
         :item="activeDetailItem"
+        :source-photo-url="activeDetailPhotoUrl"
         :position-label="activeDetailPosLabel"
         :retrying="Boolean(activeDetailItem && retryingItemId === activeDetailItem.id)"
         @close="closePhotoItemDetail"

@@ -37,6 +37,8 @@ describe('series-matcher.util', () => {
     expect(stripEditorialCollectionSuffixes('La collection les Schtroumpfs').coreKey).toBe('schtroumpfs');
     expect(stripEditorialCollectionSuffixes('Les Schtroumpfs: série classique').coreKey).toBe('schtroumpfs');
     expect(stripEditorialCollectionSuffixes('Les Schtroumpfs: série classique').cleanDisplay).toBe('Les Schtroumpfs');
+    expect(stripEditorialCollectionSuffixes('Les aventures de Tintin reporter').coreKey).toBe('tintin');
+    expect(stripEditorialCollectionSuffixes('Les aventures de Tintin').coreKey).toBe('tintin');
     expect(isEditorialPaperbackCollectionName('Collection Folio')).toBe(true);
     expect(isEditorialPaperbackCollectionName('Folio')).toBe(true);
     expect(isEditorialPaperbackCollectionName('Les Schtroumpfs')).toBe(false);

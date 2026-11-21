@@ -2,6 +2,7 @@
 import { databaseService } from '../database/database.service';
 import {
   bnfResolver,
+  isFrancophoneBookIsbn13,
   normalizeSeriesNumber,
   normalizeTextKey,
   scoreHintMatch,
@@ -35,6 +36,7 @@ export interface PhotoResolutionOption {
   series?: string;
   seriesNumber?: string;
   isIntegral?: boolean;
+  includedVolumeNumbers?: string[];
   score: number;
   sourcesCount: number;
 }
@@ -42,6 +44,7 @@ export interface PhotoResolutionOption {
 export interface ResolvedPhotoItem {
   id: string;
   sourceKind: 'detected' | 'series_extra';
+  sourceJobId?: number;
   rawCandidate: RecognizedBookCandidate;
   status: 'resolved' | 'doubt' | 'unresolved';
   selected: boolean;
@@ -59,6 +62,7 @@ export interface ResolvedPhotoItem {
   series?: string;
   seriesNumber?: string;
   isIntegral?: boolean;
+  includedVolumeNumbers?: string[];
   hasIntegralOption?: boolean;
   existingUri?: string;
   existingWorkUri?: string;
@@ -391,9 +395,10 @@ async function discoverConsensusByHints(
     precomputedScore?: number
   ): void => {
     const normIsbn = normalizeToIsbn13(meta.isbn);
-    if (!normIsbn) return;
+    if (!normIsbn || !isFrancophoneBookIsbn13(normIsbn)) return;
 
     const score = typeof precomputedScore === 'number' ? precomputedScore : scoreHintMatch(meta, hints);
+    if (score <= 0) return;
     const workKey = computeWorkKey(meta, hints.volumeNumber);
 
     if (workKey) {
@@ -483,16 +488,22 @@ async function discoverConsensusByHints(
   const isMetaIntegral = (m: ExternalBookMetadata): boolean =>
     Boolean(
       m.isIntegral ||
-        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
+        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale?\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
           `${m.title || ''} ${m.collection || ''}`
         )
     );
 
   const seenEditionSlots = new Set<string>();
   const topAlternatives: PhotoResolutionOption[] = [];
+  const topAnchorText = `${top.bucket.bestMeta.series || ''} ${top.bucket.bestMeta.title || ''}`.trim();
+  const minAlternativeScore = Math.max(DOUBT_MIN_SCORE_THRESHOLD - 4, top.finalScore - 36);
+
   for (const entry of ranked) {
-    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 4) break;
     const isInt = isMetaIntegral(entry.bucket.bestMeta);
+    const candText = `${entry.bucket.bestMeta.series || ''} ${entry.bucket.bestMeta.title || ''}`.trim();
+    const isSameFamilyIntegral = isInt && hasTextTokenOverlap(candText, topAnchorText);
+    if (entry.finalScore < minAlternativeScore && !isSameFamilyIntegral) continue;
+    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 4) break;
     const wk = entry.bucket.workKey || `isbn:${entry.bucket.isbn13}`;
     const slotKey = `${wk}|${isInt ? 'INT' : 'UNIT'}|${normalizeTextKey(entry.bucket.bestMeta.publisher || '')}`;
     if (seenEditionSlots.has(slotKey) && topAlternatives.length >= 2) continue;

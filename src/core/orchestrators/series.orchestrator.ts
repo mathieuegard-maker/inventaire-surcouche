@@ -154,6 +154,38 @@ export const seriesOrchestrator = {
       registerKeys(clone, clone);
     }
 
+    // 2C. Propagation de possession depuis les Intégrales possédées vers les tomes unitaires inclus
+    const ownedIntegralByVol = new Map<string, { integralBookId: string; title: string; isbn13: string }>();
+    for (const tome of mergedTomes) {
+      if (tome.isIntegral && tome.ownershipStatus === 'owned') {
+        const incVols = tome.integralMetadata?.includedVolumeNumbers || [];
+        for (const rawV of incVols) {
+          const normV = normalizeSeriesNumber(String(rawV));
+          if (normV) {
+            ownedIntegralByVol.set(normV, {
+              integralBookId: tome.bookId || tome.uri,
+              title: tome.title,
+              isbn13: tome.isbn13 || ''
+            });
+          }
+        }
+      }
+    }
+    if (ownedIntegralByVol.size > 0) {
+      for (const tome of mergedTomes) {
+        if (tome.isIntegral || tome.ownershipStatus === 'owned') continue;
+        const normV = tome.seriesNumber ? normalizeSeriesNumber(tome.seriesNumber) : '';
+        const covering = normV ? ownedIntegralByVol.get(normV) : undefined;
+        if (covering) {
+          tome.ownershipStatus = 'owned';
+          const existingParents = tome.parentIntegrals || [];
+          if (!existingParents.some((p) => p.integralBookId === covering.integralBookId)) {
+            tome.parentIntegrals = [...existingParents, covering];
+          }
+        }
+      }
+    }
+
     // 3. Tri numérique robuste (Tomes numérotés 1, 2... puis Hors-Séries HS1, HS2... puis Intégrales / non-numérotés)
     const getSortWeight = (vol?: string): number => {
       if (!vol) return 9999;

@@ -1,7 +1,7 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-18T16:35+01:00`
-* **Branche active :** `feat/architecture-v4` (dernier commit applicatif : `e425074`)
+* **Dernière mise à jour :** `2026-11-21T10:57+01:00`
+* **Branche active :** `feat/architecture-v4`
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
 
@@ -64,14 +64,22 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 3. **Ne jamais laisser un squelette C5 périmé piéger la Couche 2** : si un ISBN pointe vers un squelette `enrichment_queue` non enrichi (`status != 'done'`) ou si l’utilisateur change le format (`UserIngestHint.isIntegral`), forcer Couche 3→4 et migrer les liaisons `v4_library_books` (`replaceSkeletonBookId`).
 4. **Ne jamais dédupliquer `catalog_entities` (`work`) avec `OR` entre `normalized_label` et `series_number`** (Test #2 : fusionnait *Culottées* T1/T2 et toutes les éditions d’*Aya* sur le même `work_uri`).
 5. **Toujours synchroniser `db.cache_books` ET `db.inventory`/`db.wishlist` lors d’un ajout V4** : appeler `databaseService.addRegistryEntry(...)`, sinon `CollectionView` + `syncOrchestrator` considèrent le registre vide et réinitialisent `ownershipStatus = 'none'`.
-6. **Priorité stricte InterMarc BnF :** `460/461` > `245$p/$u` > `290` > `410/295` en filtrant explicitement les collections poche (`Folio`, `J'ai Lu`, etc.), et fusion des alias de séries par `stripEditorialCollectionSuffixes`.
+6. **Priorité stricte InterMarc BnF :** `460/461` > `245$p/$u` > `290` > `410/295` en filtrant les collections poche (`Folio`, `J'ai Lu`, etc.), et fusion des alias de séries par `stripEditorialCollectionSuffixes` (incluant `Les aventures de Tintin reporter` → `tintin`).
+7. **Filtrage strict Livres Imprimés FR dans Canal 3 & Couche 3 (Test #3, 2026-11-21) :**
+   * Ajouter systématiquement `(bib.doctype all "a")` dans les requêtes SRU BnF (titre/série/auteur/sœurs) et rejeter `245$d` non-livre (`Images animées`, `Enregistrement sonore`, `DVD`, `Blu-ray`...) ainsi que les codes-barres EAN non-livres (`3607...`, `00289...`, `40351...`).
+   * Ne conserver que les ISBN-13 francophones (`9782...`, `97910...`) et EAN presse FR (`330`, `378`, `977`) dans le Canal 3 afin d'écarter les éditions étrangères (`97884` ES, `97890` NL, `9783` DE, `9798` KDP) qui polluaient *Aya de Yopougon* et *Dayak*.
+   * Ne **jamais** appliquer `JUNK_SERIES_REGEX` dans `parseIntermarcRecord` lorsque `includeIntegrals: true` (ce bug supprimait toutes les Intégrales FR BnF !).
+   * Dans `scoreHintMatch`, ne jamais attribuer le bonus de numéro de tome (`+42`) ni le bonus d'édition sans ancrage sémantique réel sur le titre, la série ou l'auteur (évite *Chihayafuru #44* pour *Boule & Bill #44* ou *Ao Ashi #28* pour *Les Schtroumpfs #28*).
+   * En Couche 3 (`api_bnf_sisters`), lorsqu'un tome ancre est numéroté (`1`, `2`...) et porte un titre générique identique à la série (*Culottées*, *Aya de Yopougon*), rejeter les notices sœurs sans numéro de tome (évite la contamination croisée d'ISBN entre T1 et T2).
+   * Retirer les modèles Gemini obsolètes renvoyant HTTP 404 (`gemini-3-flash`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`) de `PREFERRED_GEMINI_MODELS` pour ne pas gaspiller la moitié des tentatives OCR Vision.
+   * Permettre la saisie explicite des **tomes inclus** (`UserIngestHint.includedVolumeNumbers`) dans `PhotoItemDetailModal.vue` lorsqu'une Intégrale est sélectionnée, propager ces tomes en Couche 4 (`integral_metadata_json`), et marquer les tomes couverts comme possédés dans `series.orchestrator.ts`.
 
 ---
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Correctifs post-Test #2 déployés sur Cloudflare Pages (`e425074`), CRON déployé, D1 nettoyée à blanc (`books=0`, `3` comptes utilisateurs conservés), `DB_RESET_TOKEN` passé à `reset_2026_11_18_v4_clean_v18`. **163/163 tests Vitest au vert.**
-* **Prochaine étape immédiate :** Effectuer le **Test #3 terrain** (vérifier ajout complet Photo IA pré-cochés + *Aya* Intégrales + non-régression Davodeau + UX `Rafale`/`Scan simple`/`/scan`).
+* **État actuel :** Correctifs post-Test #3 implémentés et vérifiés (filtrage strict livres FR `bib.doctype all "a"` + `245$d` + ISBN FR, conservation des Intégrales FR BnF, garde anti-hors-sujet `scoreHintMatch`, anti-contamination `Culottées` T1/T2, fusion `Tintin reporter`, retrait des modèles Gemini 404, sous-vue `PhotoItemDetailModal.vue` avec photo d'étagère + couverture agrandie + zoom plein écran + saisie des tomes inclus d'Intégrale + couverture de possession en `SeriesView`).
+* **Prochaine étape immédiate :** Déployer sur Cloudflare Pages + CRON et effectuer le **Test #4 terrain** (vérifier *Aya de Yopougon* Intégrales FR + tomes inclus, *Boule & Bill* / *Schtroumpfs* / *La mort de Staline* sans DVD ni mangas parasites, et nouvelle modale d'arbitrage).
 * **Chantiers ultérieurs envisagés :** activation R2 (`biblio-covers-webp`) si stockage externe des WebP souhaité ; migration éventuelle vers serveur local Mac (SQLite/Postgres + Cloudflare Tunnel) une fois le pipeline validé sur tests réels.
 
 ---

@@ -14,10 +14,7 @@ export function computeMonthlyAiQuota(userCount: number): number {
 export const PREFERRED_GEMINI_MODELS = [
   'gemini-3.5-flash-lite',
   'gemini-3.5-flash',
-  'gemini-3.8-flash',
-  'gemini-3-flash',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite'
+  'gemini-3.8-flash'
 ];
 
 /**

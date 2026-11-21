@@ -13,7 +13,9 @@ import {
   parseSeriesFromString,
   parseSeriesFromTitle,
   parseMarcFields,
-  parseIntermarcRecord
+  parseIntermarcRecord,
+  scoreHintMatch,
+  isFrancophoneBookIsbn13
 } from './bnf.resolver';
 
 describe('BNF Resolver & Parsers', () => {
@@ -527,6 +529,83 @@ describe('BNF Resolver & Parsers', () => {
       expect(parsed?.series).toBe('Les aventures de Tintin');
       expect(parsed?.seriesNumber).toBe('11');
       expect(parsed?.isbn).toBe('9782203001107');
+    });
+
+    it('doit conserver les Intégrales FR BnF quand includeIntegrals=true (ex: Aya de Yopougon Intégrale 1)', () => {
+      const ayaIntXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">140515s 2014                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782070658787</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Abouet</mxc:subfield><mxc:subfield code="m">Marguerite</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Aya de Yopougon</mxc:subfield>
+            <mxc:subfield code="d">Texte imprimé</mxc:subfield>
+            <mxc:subfield code="e">intégrale</mxc:subfield>
+            <mxc:subfield code="h">1</mxc:subfield>
+          </mxc:datafield>
+          <mxc:datafield tag="460"><mxc:subfield code="t">Aya de Yopougon</mxc:subfield></mxc:datafield>
+        </mxc:record>`;
+
+      expect(parseIntermarcRecord(ayaIntXml, { includeIntegrals: false })).toBeNull();
+      const kept = parseIntermarcRecord(ayaIntXml, { includeIntegrals: true });
+      expect(kept).not.toBeNull();
+      expect(kept?.isbn).toBe('9782070658787');
+      expect(kept?.title).toContain('Intégrale 1');
+      expect(kept?.isIntegral).toBe(true);
+    });
+
+    it('doit rejeter les DVD / Blu-ray / CD Audio dans parseIntermarcRecord (245$d et EAN non-livre)', () => {
+      const dvdXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">180515s 2018                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">3607483250686</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">La mort de Staline</mxc:subfield>
+            <mxc:subfield code="d">Images animées</mxc:subfield>
+          </mxc:datafield>
+        </mxc:record>`;
+      const cdXml = `
+        <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+          <mxc:controlfield tag="008">180515s 2018                 frfre     d  001 </mxc:controlfield>
+          <mxc:datafield tag="038"><mxc:subfield code="a">9782205063509</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245">
+            <mxc:subfield code="a">Siegfried</mxc:subfield>
+            <mxc:subfield code="d">Enregistrement sonore</mxc:subfield>
+          </mxc:datafield>
+        </mxc:record>`;
+
+      expect(parseIntermarcRecord(dvdXml, { includeIntegrals: true })).toBeNull();
+      expect(parseIntermarcRecord(cdXml, { includeIntegrals: true })).toBeNull();
+    });
+
+    it('doit filtrer les ISBN étrangers et noter 0 un manga non lié partageant uniquement le n° de tome', () => {
+      expect(isFrancophoneBookIsbn13('9782070658787')).toBe(true);
+      expect(isFrancophoneBookIsbn13('9791032700013')).toBe(true);
+      expect(isFrancophoneBookIsbn13('3780833208992')).toBe(true);
+      expect(isFrancophoneBookIsbn13('9788467928914')).toBe(false); // Espagnol
+      expect(isFrancophoneBookIsbn13('9789069691329')).toBe(false); // Néerlandais
+      expect(isFrancophoneBookIsbn13('3607483250686')).toBe(false); // DVD
+
+      const unrelatedMangaScore = scoreHintMatch(
+        {
+          isbn: '9782811664510',
+          title: 'Chihayafuru',
+          series: 'Chihayafuru',
+          seriesNumber: '44',
+          authors: ['Yuki Suetsugu'],
+          publisher: 'Pika',
+          publishDate: '2023',
+          _lang: 'fre',
+          _hasPrimaryIsbn: true
+        },
+        {
+          title: 'Boule et Bill',
+          series: 'Boule et Bill',
+          volumeNumber: '44',
+          author: 'Cazenove'
+        }
+      );
+      expect(unrelatedMangaScore).toBe(0);
     });
   });
 });

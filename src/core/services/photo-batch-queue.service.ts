@@ -316,14 +316,15 @@ export const photoBatchQueueService = {
       if (job.status !== 'done' || !job.result) continue;
 
       for (const item of job.result.detectedItems) {
-        if (item.status === 'resolved') {
-          if (item.isbn13 && seenSureIsbns.has(item.isbn13)) continue;
-          if (item.isbn13) seenSureIsbns.add(item.isbn13);
-          sureItems.push(item);
-        } else if (item.status === 'doubt') {
-          doubtItems.push(item);
+        const taggedItem: ResolvedPhotoItem = { ...item, sourceJobId: item.sourceJobId ?? job.id };
+        if (taggedItem.status === 'resolved') {
+          if (taggedItem.isbn13 && seenSureIsbns.has(taggedItem.isbn13)) continue;
+          if (taggedItem.isbn13) seenSureIsbns.add(taggedItem.isbn13);
+          sureItems.push(taggedItem);
+        } else if (taggedItem.status === 'doubt') {
+          doubtItems.push(taggedItem);
         } else {
-          unresolvedItems.push(item);
+          unresolvedItems.push(taggedItem);
         }
       }
 

@@ -150,11 +150,11 @@ export const onRequest = async (context: {
             const cleanPublisher = publisher ? cleanTerm(publisher) : '';
             const field = queryMode === 'anywhere' ? 'bib.anywhere' : 'bib.title';
 
-            const clauses = [`(${field} all "${cleanTitle}")`];
+            const clauses = [`(${field} all "${cleanTitle}")`, `(bib.doctype all "a")`];
             if (cleanAuthor) clauses.push(`(bib.author all "${cleanAuthor}")`);
             if (cleanPublisher) clauses.push(`(bib.publisher all "${cleanPublisher}")`);
 
-            const cql = clauses.length === 1 ? clauses[0].slice(1, -1) : clauses.join(' and ');
+            const cql = clauses.join(' and ');
             const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 25, 1), 100);
             const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
             const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
@@ -170,8 +170,8 @@ export const onRequest = async (context: {
             const cleanSeries = series.replace(/["()]/g, ' ').trim();
             const cleanAuthor = author ? author.replace(/["()]/g, ' ').trim() : '';
             const cql = cleanAuthor
-              ? `(bib.title all "${cleanSeries}") and (bib.author all "${cleanAuthor}")`
-              : `bib.title all "${cleanSeries}"`;
+              ? `(bib.title all "${cleanSeries}") and (bib.author all "${cleanAuthor}") and (bib.doctype all "a")`
+              : `(bib.title all "${cleanSeries}") and (bib.doctype all "a")`;
             const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 50, 1), 100);
             const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
             const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
@@ -187,7 +187,7 @@ export const onRequest = async (context: {
             const cleanAuthor = author.replace(/["()]/g, ' ').replace(/\s+/g, ' ').trim();
             const maxRec = Math.min(Math.max(Number(url.searchParams.get('maxRecords')) || 50, 1), 100);
             const startRec = Math.max(Number(url.searchParams.get('startRecord')) || 1, 1);
-            const cql = `bib.author all "${cleanAuthor}"`;
+            const cql = `(bib.author all "${cleanAuthor}") and (bib.doctype all "a")`;
             const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=${recordSchema}&maximumRecords=${maxRec}&startRecord=${startRec}`;
             const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
             const bnfText = await bnfRes.text();

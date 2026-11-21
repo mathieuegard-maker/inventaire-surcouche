@@ -6,6 +6,34 @@ import { getLevenshteinDistance } from '../utils/string.util';
 
 const JUNK_SERIES_REGEX = /\b(intégrale|coffret|box\s*set|pack|compilation)\b|tomes?\s*\d+\s*[-–à]\s*\d+|vols?\s*\d+\s*[-–à]\s*\d+/i;
 
+const NON_BOOK_MARC_TYPE_RE =
+  /\b(images?\s+anim[ée]es?|enregistrement\s+sonore|ressource\s+[ée]lectronique|document\s+[ée]lectronique|musique\s+imprim[ée]e|musique|image\s+fixe|objet|dvd|blu-?ray|cd-?rom|vid[ée]o|audio)\b/i;
+
+/**
+ * Vérifie qu'un identifiant EAN-13 correspond bien à un livre imprimé (ISBN 978/979)
+ * ou à un fascicule/presse FR (330/378/977) — exclut les codes-barres DVD/CD/Blu-ray (3607, 00289, 40351...).
+ */
+export function isBookOrPressEan13(rawIsbn?: string): boolean {
+  const clean = (rawIsbn || '').replace(/[^0-9]/g, '');
+  if (clean.length !== 13) return false;
+  return /^(978|979|330|378|977)/.test(clean);
+}
+
+/**
+ * Vérifie qu'un ISBN-13 / EAN-13 appartient à la zone francophone (978-2, 979-10)
+ * ou à la presse FR (330, 378, 977). Écarte les éditions étrangères (978-84 ES, 978-90 NL, 978-3 DE, 978-0/1 EN, 979-8 KDP...).
+ */
+export function isFrancophoneBookIsbn13(rawIsbn?: string): boolean {
+  const clean = (rawIsbn || '').replace(/[^0-9]/g, '');
+  if (clean.length !== 13) return false;
+  return /^(9782|97910|330|378|977)/.test(clean);
+}
+
+export function isNonBookMarcType(docTypeRaw?: string): boolean {
+  if (!docTypeRaw) return false;
+  return NON_BOOK_MARC_TYPE_RE.test(docTypeRaw);
+}
+
 export function normalizeTextKey(value: string): string {
   return (value || '')
     .normalize('NFD')
@@ -93,7 +121,54 @@ export function scoreHintMatch(
   const candSeriesNorm = normalizeTextKey(cand.series || '');
   const combinedCandText = `${cand.series || ''} ${cand.title || ''}`.trim();
 
-  // 1. Numéro de tome
+  // 1. Titre & série (calculé AVANT le bonus de tome pour éviter qu'un manga non lié #44 score sur le seul numéro !)
+  let textMatchScore = 0;
+  if (hintMainTitleNorm) {
+    if (candTitleNorm === hintMainTitleNorm || candTitleNorm === hintTitleNorm) textMatchScore += 42;
+    else if (candTitleNorm.includes(hintMainTitleNorm) || hintMainTitleNorm.includes(candTitleNorm)) textMatchScore += 30;
+    else textMatchScore += Math.round(tokenOverlapRatio(hints.title || '', combinedCandText) * 32);
+  }
+
+  if (hintSeriesNorm) {
+    if (candSeriesNorm === hintSeriesNorm) textMatchScore += 32;
+    else if (candSeriesNorm.includes(hintSeriesNorm) || candTitleNorm.includes(hintSeriesNorm)) textMatchScore += 22;
+    else textMatchScore += Math.round(tokenOverlapRatio(hints.series || '', combinedCandText) * 22);
+  }
+  score += textMatchScore;
+
+  // 2. Auteur & dessinateur (pénalité modérée si désaccord, pour rattraper les mauvais auteurs lus par l'IA)
+  let authorMatchScore = 0;
+  const hintPeople = [hints.author, hints.illustrator].filter((v) => v && v.trim()).join(' ');
+  if (hintPeople && cand.authors.length > 0) {
+    const candAuthorsJoined = cand.authors.join(' ');
+    const ratio = Math.max(
+      hints.author ? tokenOverlapRatio(hints.author, candAuthorsJoined) : 0,
+      hints.illustrator ? tokenOverlapRatio(hints.illustrator, candAuthorsJoined) : 0
+    );
+    if (ratio >= 0.5) authorMatchScore = 24;
+    else if (ratio > 0) authorMatchScore = 12;
+    else authorMatchScore = -8;
+    score += authorMatchScore;
+  }
+
+  // 3. Recoupement avec le texte brut intégral lu sur la tranche
+  let rawSpineScore = 0;
+  if (hints.rawSpineText?.trim()) {
+    const candAllText = `${combinedCandText} ${cand.authors.join(' ')} ${cand.publisher || ''}`;
+    const rawRatio = tokenOverlapRatio(hints.rawSpineText, candAllText);
+    rawSpineScore = Math.round(rawRatio * 18);
+    score += rawSpineScore;
+  }
+
+  // Garde anti-hors-sujet : si un titre/série était demandé mais qu'AUCUN token de titre, série ni auteur ne correspond,
+  // ne JAMAIS attribuer le bonus de numéro de tome ni le bonus d'édition (évite Chihayafuru #44 pour Boule & Bill #44).
+  const hasAnyTitleOrSeriesHint = Boolean(hintMainTitleNorm || hintSeriesNorm);
+  const hasSemanticAnchor = textMatchScore > 0 || authorMatchScore > 0 || rawSpineScore >= 6;
+  if (hasAnyTitleOrSeriesHint && !hasSemanticAnchor) {
+    return 0;
+  }
+
+  // 4. Numéro de tome (uniquement si un ancrage sémantique titre/série/auteur est confirmé)
   const hintVol = normalizeSeriesNumber(hints.volumeNumber);
   if (hintVol) {
     const candVol = normalizeSeriesNumber(cand.seriesNumber);
@@ -110,44 +185,11 @@ export function scoreHintMatch(
     }
   }
 
-  // 2. Titre & série
-  if (hintMainTitleNorm) {
-    if (candTitleNorm === hintMainTitleNorm || candTitleNorm === hintTitleNorm) score += 42;
-    else if (candTitleNorm.includes(hintMainTitleNorm) || hintMainTitleNorm.includes(candTitleNorm)) score += 30;
-    else score += Math.round(tokenOverlapRatio(hints.title || '', combinedCandText) * 32);
-  }
-
-  if (hintSeriesNorm) {
-    if (candSeriesNorm === hintSeriesNorm) score += 32;
-    else if (candSeriesNorm.includes(hintSeriesNorm) || candTitleNorm.includes(hintSeriesNorm)) score += 22;
-    else score += Math.round(tokenOverlapRatio(hints.series || '', combinedCandText) * 22);
-  }
-
-  // 3. Auteur & dessinateur (pénalité modérée si désaccord, pour rattraper les mauvais auteurs lus par l'IA)
-  const hintPeople = [hints.author, hints.illustrator].filter((v) => v && v.trim()).join(' ');
-  if (hintPeople && cand.authors.length > 0) {
-    const candAuthorsJoined = cand.authors.join(' ');
-    const ratio = Math.max(
-      hints.author ? tokenOverlapRatio(hints.author, candAuthorsJoined) : 0,
-      hints.illustrator ? tokenOverlapRatio(hints.illustrator, candAuthorsJoined) : 0
-    );
-    if (ratio >= 0.5) score += 24;
-    else if (ratio > 0) score += 12;
-    else score -= 8;
-  }
-
-  // 4. Éditeur & collection
+  // 5. Éditeur & collection
   const hintPublisherJoined = [hints.publisher, hints.collection].filter(Boolean).join(' ');
   if (hintPublisherJoined.trim() && cand.publisher) {
     const ratio = tokenOverlapRatio(hintPublisherJoined, cand.publisher);
     if (ratio > 0) score += 12;
-  }
-
-  // 5. Recoupement avec le texte brut intégral lu sur la tranche
-  if (hints.rawSpineText?.trim()) {
-    const candAllText = `${combinedCandText} ${cand.authors.join(' ')} ${cand.publisher || ''}`;
-    const rawRatio = tokenOverlapRatio(hints.rawSpineText, candAllText);
-    score += Math.round(rawRatio * 18);
   }
 
   // 6. Qualité et récence de l'édition ("meilleure édition, la dernière")
@@ -472,9 +514,13 @@ export function parseIntermarcRecord(
   if (!rawIsbn) return null;
   const cleanIsbn = isbnUtil.normalize(rawIsbn);
   const isbn = cleanIsbn.length === 10 ? isbnUtil.toIsbn13(cleanIsbn) : cleanIsbn;
+  // Rejeter les codes-barres commerciaux non-livres (DVD 3607..., CD Audio 00289..., DVD DE 40351...)
+  if (!isBookOrPressEan13(isbn)) return null;
 
-  // 2. Titre & filtre anti-compilation / double-album (gère aussi 245$a série + 245$n tome + 245$p titre d'album)
+  // 2. Titre & filtre anti-non-livre (245$d = Images animées, Enregistrement sonore, DVD, etc.)
   const f245 = fields.find(f => f.tag === '245');
+  const rawD245 = f245 ? getSubfield(f245, 'd') : undefined;
+  if (isNonBookMarcType(rawD245)) return null;
   const rawA245 = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
   const rawP245 = f245 ? cleanTitle(getSubfield(f245, 'p') || '') : '';
   const rawE245 = f245 ? cleanTitle(getSubfield(f245, 'e') || '') : '';
@@ -550,7 +596,7 @@ export function parseIntermarcRecord(
     titleParse.seriesNumber;
   const seriesNumber = normalizeSeriesNumber(rawSeriesNum) || undefined;
 
-  if (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series))) {
+  if (!options?.includeIntegrals && (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series)))) {
     return null;
   }
 
@@ -1108,6 +1154,7 @@ export const bnfResolver = {
           const parsed = parseIntermarcRecord(recXml, { includeIntegrals: true });
           if (!parsed) continue;
           if (parsed._lang && parsed._lang !== 'fre') continue;
+          if (!isFrancophoneBookIsbn13(parsed.isbn)) continue;
 
           const score = scoreHintMatch(parsed, hints);
           if (score < 26) continue;
