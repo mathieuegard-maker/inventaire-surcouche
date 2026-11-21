@@ -23,8 +23,10 @@ import { imageUtil } from '../../core/utils/image.util';
 import {
   formatV4StatusNotice,
   ingestIsbnsViaV4,
+  resolveHintsViaV4Backend,
   v4BookRecordToHumanizedBook
 } from '../../core/services/v4-client.service';
+import type { Canal3ResolutionOption } from '../../core/services/canal3-resolver.service';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 import { pendingScansStore } from '../../state/pendingScans';
 import { scanDraftStore, sortItemsByShelfOrder } from '../../state/scanDraft';
@@ -43,7 +45,7 @@ const activeMode = computed(() => scannerState.activeMode.value);
 
 const syncModeFromRoute = () => {
   const qMode = route.query.mode;
-  if (qMode === 'photo' || qMode === 'burst' || qMode === 'simple') {
+  if (qMode === 'photo' || qMode === 'burst' || qMode === 'simple' || qMode === 'search') {
     scannerState.activeMode.value = qMode;
   } else if (!scannerState.activeMode.value) {
     scannerState.activeMode.value = 'photo';
@@ -852,15 +854,252 @@ async function clearPhotoQueueAndForm() {
   await photoBatchQueueService.clearAllJobs();
   scanDraftStore.clearAll();
 }
+
+// ============================================================================
+// ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CHAMPS
+// ============================================================================
+interface TextSearchResultItem {
+  isbn13: string;
+  title: string;
+  authors: string[];
+  series?: string;
+  seriesNumber?: string;
+  publisher?: string;
+  edition?: string;
+  publishDate?: string;
+  coverUrl?: string;
+  localStatus?: 'owned' | 'wish' | 'none';
+  localUri?: string;
+}
+
+const textSearchForm = ref({
+  title: '',
+  series: '',
+  volumeNumber: '',
+  author: '',
+  edition: '',
+  publisher: '',
+  isbn: ''
+});
+const textSearchBusy = ref(false);
+const textSearchError = ref('');
+const textSearchFeedback = ref('');
+const textSearchDone = ref(false);
+const textSearchResults = ref<TextSearchResultItem[]>([]);
+const textSearchActionBusyIsbn = ref<string | null>(null);
+
+const hasTextSearchCriteria = computed(() => {
+  const f = textSearchForm.value;
+  return Boolean(
+    f.title.trim() ||
+      f.series.trim() ||
+      f.volumeNumber.trim() ||
+      f.author.trim() ||
+      f.edition.trim() ||
+      f.publisher.trim() ||
+      f.isbn.trim()
+  );
+});
+
+const resetTextSearchForm = () => {
+  textSearchForm.value = {
+    title: '',
+    series: '',
+    volumeNumber: '',
+    author: '',
+    edition: '',
+    publisher: '',
+    isbn: ''
+  };
+  textSearchResults.value = [];
+  textSearchError.value = '';
+  textSearchFeedback.value = '';
+  textSearchDone.value = false;
+};
+
+const hydrateLocalStatusForResults = async (items: TextSearchResultItem[]) => {
+  for (const item of items) {
+    if (!item.isbn13) continue;
+    const cached = await databaseService.getBookFromCache(`isbn:${item.isbn13}`).catch(() => null);
+    if (cached) {
+      item.localStatus = cached.ownershipStatus;
+      item.localUri = cached.uri;
+    }
+  }
+};
+
+const handleMultiFieldSearch = async () => {
+  if (!hasTextSearchCriteria.value || textSearchBusy.value) return;
+  textSearchBusy.value = true;
+  textSearchError.value = '';
+  textSearchFeedback.value = '';
+  textSearchDone.value = false;
+  textSearchResults.value = [];
+
+  try {
+    const f = textSearchForm.value;
+    const cleanedIsbn = f.isbn.trim() ? isbnUtil.normalize(f.isbn.trim()) : '';
+
+    if (cleanedIsbn && isbnUtil.isValidFormat(cleanedIsbn)) {
+      const isbn13 = cleanedIsbn.length === 10 ? isbnUtil.toIsbn13(cleanedIsbn) : cleanedIsbn;
+      const res = await searchService.searchByIsbn(isbn13);
+      if ((res as any)?.isOfflineUnavailable) {
+        pendingScansStore.addPendingScan(isbn13);
+        textSearchError.value = `Hors réseau : l'ISBN ${isbn13} a été mémorisé pour consultation ultérieure.`;
+        return;
+      }
+      if (res?.mainBook) {
+        const b = res.mainBook;
+        textSearchResults.value = [
+          {
+            isbn13: b.isbn13 || isbn13,
+            title: b.title,
+            authors: b.authors || [],
+            series: b.series,
+            seriesNumber: b.seriesNumber,
+            publisher: b.publisher,
+            edition: b.collection,
+            publishDate: b.publishDate,
+            coverUrl: b.localCover || b.coverUrl,
+            localStatus: b.ownershipStatus,
+            localUri: b.uri
+          }
+        ];
+      }
+      textSearchDone.value = true;
+      return;
+    }
+
+    const resolved = await resolveHintsViaV4Backend({
+      hints: {
+        title: f.title.trim() || undefined,
+        series: f.series.trim() || undefined,
+        volumeNumber: f.volumeNumber.trim() || undefined,
+        author: f.author.trim() || undefined,
+        collection: f.edition.trim() || undefined,
+        publisher: f.publisher.trim() || undefined
+      },
+      sourceChannel: 'canal_3_text_search',
+      skipLocalD1: false
+    });
+
+    if (!resolved) {
+      textSearchError.value = 'Service de recherche temporairement indisponible.';
+      return;
+    }
+
+    const seen = new Set<string>();
+    const items: TextSearchResultItem[] = [];
+    const pushOption = (opt: Canal3ResolutionOption) => {
+      const code = String(opt.isbn13 || '').trim();
+      if (!code || seen.has(code)) return;
+      seen.add(code);
+      items.push({
+        isbn13: code,
+        title: opt.meta?.title || 'Titre inconnu',
+        authors: opt.meta?.authors || [],
+        series: opt.meta?.series,
+        seriesNumber: opt.meta?.seriesNumber,
+        publisher: opt.meta?.publisher,
+        edition: opt.meta?.collection,
+        publishDate: opt.meta?.publishDate,
+        coverUrl: opt.meta?.coverUrl
+      });
+    };
+
+    if (resolved.isbn13 && resolved.meta) {
+      pushOption({
+        isbn13: resolved.isbn13,
+        meta: resolved.meta,
+        sourcesCount: resolved.sourcesCount || 1,
+        confidenceScore: 100
+      });
+    }
+    for (const alt of resolved.alternatives || []) {
+      pushOption(alt);
+    }
+
+    await hydrateLocalStatusForResults(items);
+    textSearchResults.value = items;
+    textSearchDone.value = true;
+  } catch (e: unknown) {
+    textSearchError.value = e instanceof Error ? e.message : 'Erreur lors de la recherche.';
+  } finally {
+    textSearchBusy.value = false;
+  }
+};
+
+const handleTextResultOpen = async (item: TextSearchResultItem) => {
+  if (item.localUri) {
+    saveBookNavigationOrder([item.localUri], 'direct');
+    await router.push(`/book/${encodeURIComponent(item.localUri)}`);
+    return;
+  }
+  textSearchActionBusyIsbn.value = item.isbn13;
+  textSearchError.value = '';
+  try {
+    const res = await searchService.searchByIsbn(item.isbn13);
+    if (res?.mainBook?.uri) {
+      saveBookNavigationOrder([res.mainBook.uri], 'direct');
+      await router.push(`/book/${encodeURIComponent(res.mainBook.uri)}`);
+    } else {
+      textSearchError.value = 'Impossible d’ouvrir la fiche de cet ouvrage.';
+    }
+  } finally {
+    textSearchActionBusyIsbn.value = null;
+  }
+};
+
+const handleTextResultAdd = async (item: TextSearchResultItem, action: 'owned' | 'wishlist') => {
+  textSearchActionBusyIsbn.value = item.isbn13;
+  textSearchError.value = '';
+  textSearchFeedback.value = '';
+  try {
+    const batch = await ingestIsbnsViaV4([item.isbn13], {
+      sourceChannel: 'canal_3_text_search',
+      action,
+      hints: {
+        [item.isbn13]: {
+          title: item.title,
+          series: item.series,
+          volumeNumber: item.seriesNumber,
+          coverUrl: item.coverUrl
+        }
+      }
+    });
+    const first = batch?.results?.[0];
+    if (first?.book) {
+      const status = action === 'owned' ? 'owned' : 'wish';
+      const humanized = v4BookRecordToHumanizedBook(first.book, status);
+      await databaseService.saveBookToCache(humanized);
+      await databaseService.addRegistryEntry(action === 'owned' ? 'inventory' : 'wishlist', humanized.uri);
+      item.localStatus = status;
+      item.localUri = humanized.uri;
+      const notice = formatV4StatusNotice(first);
+      textSearchFeedback.value =
+        notice ||
+        (action === 'owned'
+          ? `« ${item.title} » ajouté à votre collection.`
+          : `« ${item.title} » ajouté à votre wishlist.`);
+      scannerState.notifyCatalogChanged();
+    } else {
+      textSearchError.value = 'Échec de l’enregistrement sur le serveur.';
+    }
+  } catch (e: unknown) {
+    textSearchError.value = e instanceof Error ? e.message : 'Erreur lors de l’ajout.';
+  } finally {
+    textSearchActionBusyIsbn.value = null;
+  }
+};
 </script>
 
 <template>
   <div class="view-container scan-view">
     <BaseHeader />
-    <BaseTitle text="Scanner &amp; Acquisitions" level="h2" />
+    <BaseTitle text="Recherche &amp; Acquisitions" level="h2" />
 
-    <!-- Sélecteur des 3 modes de numérisation côte à côte -->
-    <div class="scan-mode-tabs" role="tablist" aria-label="Mode d'acquisition">
+    <!-- Sélecteur des 4 modes de recherche et numérisation côte à côte -->
+    <div class="scan-mode-tabs" role="tablist" aria-label="Mode de recherche et d'acquisition">
       <button
         type="button"
         role="tab"
@@ -892,6 +1131,16 @@ async function clearPhotoQueueAndForm() {
         @click="selectTab('simple')"
       >
         <span>Scan simple</span>
+      </button>
+      <button
+        type="button"
+        role="tab"
+        :aria-selected="activeMode === 'search'"
+        class="scan-tab-btn"
+        :class="{ active: activeMode === 'search' }"
+        @click="selectTab('search')"
+      >
+        <span>Recherche textuelle</span>
       </button>
     </div>
 
@@ -1333,6 +1582,172 @@ async function clearPhotoQueueAndForm() {
         <div v-if="manualLookupError" class="error-banner">{{ manualLookupError }}</div>
       </div>
     </section>
+
+    <!-- ================================================================ -->
+    <!-- ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CHAMPS                      -->
+    <!-- ================================================================ -->
+    <section v-if="activeMode === 'search'" class="scan-section">
+      <form class="scan-card text-search-card" @submit.prevent="handleMultiFieldSearch">
+        <p class="simple-hint">
+          Renseignez un ou plusieurs champs pour rechercher un ouvrage (BnF &amp; catalogue) :
+        </p>
+
+        <div class="text-search-grid">
+          <label class="ts-field">
+            <span>Nom / Titre</span>
+            <input
+              v-model="textSearchForm.title"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: Le Secret de la Licorne"
+            />
+          </label>
+          <label class="ts-field">
+            <span>Série</span>
+            <input
+              v-model="textSearchForm.series"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: Les Aventures de Tintin"
+            />
+          </label>
+          <label class="ts-field">
+            <span>N° de tome</span>
+            <input
+              v-model="textSearchForm.volumeNumber"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: 11"
+            />
+          </label>
+          <label class="ts-field">
+            <span>Auteur</span>
+            <input
+              v-model="textSearchForm.author"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: Hergé"
+            />
+          </label>
+          <label class="ts-field">
+            <span>Édition / Collection</span>
+            <input
+              v-model="textSearchForm.edition"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: Édition collector, Intégrale..."
+            />
+          </label>
+          <label class="ts-field">
+            <span>Éditeur</span>
+            <input
+              v-model="textSearchForm.publisher"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: Casterman, Dargaud..."
+            />
+          </label>
+          <label class="ts-field ts-field-full">
+            <span>ISBN</span>
+            <input
+              v-model="textSearchForm.isbn"
+              type="text"
+              class="cand-input"
+              placeholder="Ex: 9782203001107"
+            />
+          </label>
+        </div>
+
+        <div class="ts-actions-row">
+          <button
+            type="submit"
+            class="wireframe-btn primary"
+            :disabled="textSearchBusy || !hasTextSearchCriteria"
+          >
+            {{ textSearchBusy ? 'Recherche en cours...' : 'Rechercher' }}
+          </button>
+          <button
+            type="button"
+            class="wireframe-btn"
+            :disabled="textSearchBusy"
+            @click="resetTextSearchForm"
+          >
+            Effacer
+          </button>
+        </div>
+
+        <div v-if="textSearchError" class="error-banner">{{ textSearchError }}</div>
+        <div v-if="textSearchFeedback" class="ts-feedback-banner">{{ textSearchFeedback }}</div>
+      </form>
+
+      <div v-if="textSearchDone && textSearchResults.length === 0" class="scan-card">
+        <p class="simple-hint">
+          Aucun résultat trouvé pour ces critères. Essayez de simplifier le titre ou de retirer un filtre.
+        </p>
+      </div>
+
+      <div v-if="textSearchResults.length > 0" class="ts-results-list">
+        <article
+          v-for="item in textSearchResults"
+          :key="item.isbn13"
+          class="scan-card ts-result-card"
+        >
+          <div class="ts-result-cover">
+            <img v-if="item.coverUrl" :src="item.coverUrl" :alt="item.title" loading="lazy" />
+            <div v-else class="ts-cover-placeholder">📚</div>
+          </div>
+
+          <div class="ts-result-body">
+            <div v-if="item.series || item.seriesNumber" class="ts-result-series">
+              {{ item.series }}<span v-if="item.seriesNumber"> · T.{{ item.seriesNumber }}</span>
+            </div>
+            <h4 class="ts-result-title">{{ item.title }}</h4>
+            <div v-if="item.authors?.length" class="ts-result-meta">
+              {{ item.authors.join(', ') }}
+            </div>
+            <div class="ts-result-meta">
+              <span v-if="item.publisher">{{ item.publisher }}</span>
+              <span v-if="item.edition"> · {{ item.edition }}</span>
+              <span v-if="item.publishDate"> ({{ item.publishDate }})</span>
+              <span> · ISBN {{ item.isbn13 }}</span>
+            </div>
+
+            <div class="ts-result-actions">
+              <button
+                type="button"
+                class="wireframe-btn"
+                :disabled="textSearchActionBusyIsbn === item.isbn13"
+                @click="handleTextResultOpen(item)"
+              >
+                Voir la fiche
+              </button>
+              <button
+                v-if="item.localStatus !== 'owned'"
+                type="button"
+                class="wireframe-btn primary"
+                :disabled="textSearchActionBusyIsbn === item.isbn13"
+                @click="handleTextResultAdd(item, 'owned')"
+              >
+                + Collection
+              </button>
+              <span v-else class="ts-status-pill owned">Dans ma collection</span>
+              <button
+                v-if="item.localStatus !== 'owned' && item.localStatus !== 'wish'"
+                type="button"
+                class="wireframe-btn"
+                :disabled="textSearchActionBusyIsbn === item.isbn13"
+                @click="handleTextResultAdd(item, 'wishlist')"
+              >
+                + Wishlist
+              </button>
+              <span v-else-if="item.localStatus === 'wish'" class="ts-status-pill wish">
+                Dans la wishlist
+              </span>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -1345,9 +1760,15 @@ async function clearPhotoQueueAndForm() {
 
 .scan-mode-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.4rem;
   margin-bottom: 1rem;
+}
+
+@media (max-width: 600px) {
+  .scan-mode-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .scan-tab-btn {
@@ -1922,5 +2343,135 @@ async function clearPhotoQueueAndForm() {
   to {
     transform: rotate(360deg);
   }
+}
+
+.text-search-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+@media (max-width: 600px) {
+  .text-search-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ts-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #334155;
+}
+
+.ts-field-full {
+  grid-column: 1 / -1;
+}
+
+.ts-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+}
+
+.ts-feedback-banner {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.ts-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ts-result-card {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+}
+
+.ts-result-cover {
+  width: 68px;
+  flex-shrink: 0;
+}
+
+.ts-result-cover img {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.ts-cover-placeholder {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f1f5f9;
+  border-radius: 6px;
+  font-size: 1.4rem;
+}
+
+.ts-result-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ts-result-series {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #2563eb;
+}
+
+.ts-result-title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.ts-result-meta {
+  font-size: 0.8rem;
+  color: #475569;
+}
+
+.ts-result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.4rem;
+}
+
+.ts-status-pill {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+}
+
+.ts-status-pill.owned {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.ts-status-pill.wish {
+  background: #fef3c7;
+  color: #92400e;
 }
 </style>

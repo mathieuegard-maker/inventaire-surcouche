@@ -68,7 +68,7 @@ const toggleScan = () => {
         @click="toggleScan"
         :class="{ 'btn-scan-active': $route.name === 'ScanView' }"
       >
-        SCANNER
+        RECHERCHE
       </button>
     </div>
 
@@ -85,7 +85,7 @@ const toggleScan = () => {
           @click="toggleScan"
           :class="{ 'btn-scan-active': $route.name === 'ScanView' }"
         >
-          SCANNER
+          RECHERCHE
         </button>
       </div>
 

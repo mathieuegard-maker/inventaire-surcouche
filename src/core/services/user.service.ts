@@ -29,7 +29,9 @@ export interface SharedLibraryItem {
   sort_order?: number | null;
   image_url?: string | null;
   main_category?: string | null;
+  wished_by_name?: string | null;
   is_lent?: number | boolean;
+  borrower_name?: string | null;
 }
 
 export interface PublicSharePayload {

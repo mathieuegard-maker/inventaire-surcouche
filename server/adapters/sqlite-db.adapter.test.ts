@@ -6,6 +6,8 @@ import {
   checkBookIndexLayer2,
   consolidateBookLayer4,
   getV4SeriesBooks,
+  linkBookToLibrary,
+  syncV4LibraryBooks,
   updateV4BookMetadata
 } from '../../src/core/services/v4-pipeline.service';
 import { FsCoverBucketAdapter } from './fs-cover-bucket.adapter';
@@ -103,6 +105,55 @@ describe('Self-hosted adapters (SQLite + FS Cover Bucket)', () => {
         expect(seriesRes.books).toHaveLength(1);
         expect(seriesRes.books[0].ownershipStatus).toBe('owned');
         expect(seriesRes.books[0].book.canonicalTitle).toBe('Astérix le Gaulois (Édition Perso)');
+
+        // Migration 0013 : suivi du membre du foyer ayant ajouté un livre à la wishlist
+        await db
+          .prepare(
+            'INSERT INTO users (id, email, password_hash, display_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'
+          )
+          .bind('u2', 'alice@mathieuegardtest.fr', 'hash', 'Alice', now, now)
+          .run();
+        const wishedBook = await consolidateBookLayer4(
+          db,
+          {
+            anchorIsbn13: '9782012101340',
+            anchorTitle: 'La Serpe d’or',
+            language: 'fre',
+            sisterEditions: [
+              {
+                source: 'bnf',
+                isbn13: '9782012101340',
+                title: 'La Serpe d’or',
+                seriesRaw: 'Astérix',
+                volumeNumber: '2',
+                language: 'fre'
+              }
+            ],
+            seriesCandidates: [
+              { source: 'bnf', rawName: 'Astérix', coreKey: 'asterix', cleanDisplay: 'Astérix', weight: 4 }
+            ],
+            authors: ['René Goscinny'],
+            illustrators: [],
+            scriptwriters: [],
+            rawSubjects: ['BD'],
+            rawTitles: ['La Serpe d’or'],
+            sourcesHit: ['bnf']
+          },
+          { sourceChannel: 'canal_3_text_search', libraryId: 'lib_1', action: 'preview' }
+        );
+        await linkBookToLibrary(db, {
+          libraryId: 'lib_1',
+          bookId: wishedBook.id,
+          isOwned: false,
+          isWished: true,
+          wishedByUserId: 'u2',
+          sourceChannel: 'canal_3_text_search'
+        });
+        const syncRes = await syncV4LibraryBooks(db, { libraryId: 'lib_1' });
+        const syncedWish = syncRes.books.find((item) => item.book.id === wishedBook.id);
+        expect(syncedWish?.ownershipStatus).toBe('wish');
+        expect(syncedWish?.book.wishedByUserId).toBe('u2');
+        expect(syncedWish?.book.wishedByName).toBe('Alice');
       } finally {
         vi.unstubAllGlobals();
       }

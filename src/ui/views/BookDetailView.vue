@@ -24,6 +24,7 @@ import { wishlistService } from '../../core/services/wishlist.service';
 import { checkLocalIntegralConflict } from '../../core/services/v4-client.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { connectionState } from '../../state/connection';
+import { sessionStore } from '../../state/session';
 import { pendingScansStore } from '../../state/pendingScans';
 import {
   getSavedBookNavigationOrigin,
@@ -473,6 +474,7 @@ const handleAddInventory = async () => {
   successMessage.value = '';
   try {
     book.value.ownershipStatus = 'owned';
+    book.value.wishedByName = undefined;
     seriesTomes.value = seriesTomes.value.map((t) =>
       t.uri === book.value?.uri ? { ...t, ownershipStatus: 'owned' } : t
     );
@@ -489,6 +491,7 @@ const handleAddWishlist = async () => {
   successMessage.value = '';
   try {
     book.value.ownershipStatus = 'wish';
+    book.value.wishedByName = sessionStore.state.user?.displayName || undefined;
     successMessage.value = TEXTS.scanner?.addWishlistSuccess || "Ajouté à la wishlist";
     await queueService.enqueueAction('ADD_WISHLIST', book.value.uri);
   } catch (error) {
@@ -588,7 +591,9 @@ const confirmDelete = async () => {
           {{ 
             isLent ? `${TEXTS.bookStatus?.lent || 'Prêté'} à ${book.loan?.friendName}` : 
             (book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
-            (book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : TEXTS.bookStatus?.none)) 
+            (book.ownershipStatus === 'wish'
+              ? (book.wishedByName ? `${TEXTS.bookStatus?.wish || 'Souhaité'} · Ajouté par ${book.wishedByName}` : TEXTS.bookStatus?.wish)
+              : TEXTS.bookStatus?.none)) 
           }}
         </span>
       </div>

@@ -68,6 +68,8 @@ export function v4BookRecordToHumanizedBook(
     ...(rec.selectedCoverUrl?.startsWith('data:image/') ? { localCover: rec.selectedCoverUrl } : {}),
     coverFallbackUrls: fallbackCovers,
     ownershipStatus,
+    ...(rec.wishedByUserId ? { wishedByUserId: rec.wishedByUserId } : {}),
+    ...(rec.wishedByName ? { wishedByName: rec.wishedByName } : {}),
     updatedAt: Date.now()
   };
 }

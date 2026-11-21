@@ -124,6 +124,8 @@ export interface V4BookRecord {
   mainCategory: string;
   subgenres: string[];
   legacyEntityUri?: string | null;
+  wishedByUserId?: string | null;
+  wishedByName?: string | null;
   updatedAt: string;
 }
 

@@ -992,19 +992,26 @@ export async function linkBookToLibrary(
     legacyEntityUri?: string | null;
     isOwned: boolean;
     isWished: boolean;
+    wishedByUserId?: string | null;
     sourceChannel?: string;
     coverUrl?: string | null;
   }
 ): Promise<void> {
   const now = new Date().toISOString();
+  const effectiveWishedBy = params.isWished && !params.isOwned ? params.wishedByUserId || null : null;
   await db
     .prepare(
       `INSERT INTO v4_library_books
-        (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, added_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (library_id, book_id, is_owned, is_wished, wished_by_user_id, source_channel, selected_cover_url, added_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(library_id, book_id) DO UPDATE SET
          is_owned = MAX(v4_library_books.is_owned, excluded.is_owned),
          is_wished = CASE WHEN excluded.is_owned = 1 THEN 0 ELSE excluded.is_wished END,
+         wished_by_user_id = CASE
+           WHEN excluded.is_owned = 1 THEN NULL
+           WHEN excluded.is_wished = 1 THEN COALESCE(excluded.wished_by_user_id, v4_library_books.wished_by_user_id)
+           ELSE NULL
+         END,
          selected_cover_url = COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url),
          updated_at = excluded.updated_at`
     )
@@ -1013,6 +1020,7 @@ export async function linkBookToLibrary(
       params.bookId,
       params.isOwned ? 1 : 0,
       params.isWished ? 1 : 0,
+      effectiveWishedBy,
       params.sourceChannel || null,
       params.coverUrl || null,
       now,
@@ -1032,17 +1040,18 @@ export async function linkBookToLibrary(
 
       if (existingLegacy?.id) {
         await db
-          .prepare('UPDATE library_items SET ownership_status = ?, updated_at = ? WHERE id = ?')
-          .bind(legacyStatus, now, existingLegacy.id)
+          .prepare('UPDATE library_items SET ownership_status = ?, added_by_user_id = COALESCE(?, added_by_user_id), updated_at = ? WHERE id = ?')
+          .bind(legacyStatus, effectiveWishedBy, now, existingLegacy.id)
           .run();
       } else {
         const itemId = `itm_${params.libraryId}_${params.bookId}`.replace(/[^a-zA-Z0-9_-]/g, '_');
         await db
           .prepare(
-            `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, acquired_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, added_by_user_id, acquired_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                ownership_status = excluded.ownership_status,
+               added_by_user_id = COALESCE(excluded.added_by_user_id, library_items.added_by_user_id),
                deleted_at = NULL,
                updated_at = excluded.updated_at`
           )
@@ -1052,6 +1061,7 @@ export async function linkBookToLibrary(
             params.legacyEntityUri,
             params.legacyEntityUri,
             legacyStatus,
+            effectiveWishedBy,
             params.isOwned ? now : null,
             now,
             now

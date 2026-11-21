@@ -3,12 +3,9 @@ import { ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
 import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
-import { searchService } from '../../core/orchestrators/search.orchestrator';
-import { isbnUtil } from '../../core/utils/isbn.util';
 import { imageUtil } from '../../core/utils/image.util';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
-import SmartSearchBar from '../components/SmartSearchBar.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
@@ -20,7 +17,6 @@ import type { HumanizedBook } from '../../core/types';
 
 const router = useRouter();
 
-const searchQuery = ref('');
 const errorMessage = ref<string | null>(null);
 const offlineNoticeMessage = ref<string | null>(null);
 const pendingScans = pendingScansStore.pendingScans;
@@ -31,33 +27,6 @@ const previewCollection = ref<HumanizedBook[]>([]);
 const previewWishlist = ref<HumanizedBook[]>([]);
 const previewLoans = ref<HumanizedBook[]>([]);
 const counts = ref({ owned: 0, wishlist: 0, loans: 0 });
-
-const handleSearch = async (isbn: string) => {
-  if (!isbn) return;
-  errorMessage.value = null;
-  offlineNoticeMessage.value = null;
-  try {
-    const cleanedIsbn = isbnUtil.normalize(isbn);
-    const response = await searchService.searchByIsbn(cleanedIsbn);
-    if ((response as any)?.isOfflineUnavailable || (!response && isOffline.value)) {
-      pendingScansStore.addPendingScan(cleanedIsbn);
-      offlineNoticeMessage.value = `Pas de réseau actuellement : ce livre n'est pas encore dans votre base locale. Le code-barres (${cleanedIsbn}) a été mémorisé ci-dessous pour pouvoir consulter sa fiche dès le retour du réseau.`;
-      return;
-    }
-    if (response) {
-      if ('isUnknown' in response && (response as any).isUnknown) {
-        router.push({ name: 'BookCreateUnknown', query: { isbn: (response as any).isbn } });
-      } else if (response.mainBook?.uri) {
-        saveBookNavigationOrder([response.mainBook.uri], 'direct');
-        router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
-      }
-    } else {
-      errorMessage.value = TEXTS.scanner.notFound;
-    }
-  } catch {
-    errorMessage.value = TEXTS.scanner.errorGeneral;
-  }
-};
 
 const openPendingScan = (isbn: string) => {
   if (isOffline.value) {
@@ -75,10 +44,6 @@ const formatScanTime = (ts: number) =>
     hour: '2-digit',
     minute: '2-digit'
   });
-
-const handleKeywordsSearch = (query: string) => {
-  router.push({ name: 'SearchResultView', query: { q: query } });
-};
 
 const loadDashboardData = async () => {
   try {
@@ -145,12 +110,6 @@ watch(
     <BaseHeader />
 
     <BaseTitle :text="TEXTS.home.title" level="h2" />
-
-    <SmartSearchBar
-      v-model="searchQuery"
-      @isbn-detected="handleSearch"
-      @keywords-detected="handleKeywordsSearch"
-    />
 
     <div v-if="offlineNoticeMessage" class="offline-info-banner">
       {{ offlineNoticeMessage }}

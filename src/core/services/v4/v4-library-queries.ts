@@ -50,12 +50,14 @@ export async function syncV4LibraryBooks(
   const serverTime = new Date().toISOString();
   const since = params.since?.trim() || null;
 
-  // 1. Récupérer tous les liens bibliothèque de l'utilisateur (avec ses surcharges privées)
+  // 1. Récupérer tous les liens bibliothèque de l'utilisateur (avec ses surcharges privées et l'auteur du souhait)
   const linkRows = await db
     .prepare(
-      `SELECT book_id, is_owned, is_wished, selected_cover_url, custom_overrides_json, updated_at
-       FROM v4_library_books
-       WHERE library_id = ?`
+      `SELECT lb.book_id, lb.is_owned, lb.is_wished, lb.selected_cover_url, lb.custom_overrides_json,
+              lb.wished_by_user_id, u.display_name AS wished_by_name, lb.updated_at
+       FROM v4_library_books lb
+       LEFT JOIN users u ON u.id = lb.wished_by_user_id
+       WHERE lb.library_id = ?`
     )
     .bind(params.libraryId)
     .all<{
@@ -64,6 +66,8 @@ export async function syncV4LibraryBooks(
       is_wished: number;
       selected_cover_url?: string | null;
       custom_overrides_json?: string | null;
+      wished_by_user_id?: string | null;
+      wished_by_name?: string | null;
       updated_at: string;
     }>();
 
@@ -73,6 +77,8 @@ export async function syncV4LibraryBooks(
       status: 'owned' | 'wish' | 'none';
       selectedCoverUrl?: string | null;
       customOverridesJson?: string | null;
+      wishedByUserId?: string | null;
+      wishedByName?: string | null;
       updatedAt: string;
     }
   >();
@@ -83,6 +89,8 @@ export async function syncV4LibraryBooks(
       status,
       selectedCoverUrl: row.selected_cover_url ?? null,
       customOverridesJson: row.custom_overrides_json ?? null,
+      wishedByUserId: status === 'wish' ? (row.wished_by_user_id ?? null) : null,
+      wishedByName: status === 'wish' ? (row.wished_by_name ?? null) : null,
       updatedAt: String(row.updated_at || '')
     });
   }
@@ -117,6 +125,8 @@ export async function syncV4LibraryBooks(
       link?.selectedCoverUrl,
       link?.customOverridesJson
     );
+    if (link?.wishedByUserId) book.wishedByUserId = link.wishedByUserId;
+    if (link?.wishedByName) book.wishedByName = link.wishedByName;
     const maxUpdatedAt = link && link.updatedAt > book.updatedAt ? link.updatedAt : book.updatedAt;
     if (since && maxUpdatedAt && maxUpdatedAt <= since) {
       continue;

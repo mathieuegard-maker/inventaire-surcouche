@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T21:28+01:00`
+* **Dernière mise à jour :** `2026-11-21T22:22+01:00`
 * **Branche active :** `feat/self-hosted-server` (issue de `main` après merge de `feat/architecture-v4`)
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -124,12 +124,16 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
       * `canal3-consensus.ts` : moteur unique de consensus multi-sources (`rankCanal3Consensus`) partagé entre `canal3-resolver.service.ts` (serveur) et `photo-book-resolution.service.ts` (repli client), supprimant ~350 lignes dupliquées.
     * **Suppression du cas particulier en dur :** retrait de `tintin reporter` dans `series-matcher.util.ts` au profit du marqueur éditorial générique `reporter`.
     * **Découpage modulaire du monolithe V4 (4 126 → 56 lignes) :** séparation de `v4-pipeline.service.ts` en 6 modules acycliques sous `src/core/services/v4/` (`v4-shared.ts`, `v4-layer2-index.ts`, `v4-layer3-discovery.ts`, `v4-layer4-consolidation.ts`, `v4-layer5-orchestrator.ts`, `v4-library-queries.ts`) avec ré-export complet depuis `v4-pipeline.service.ts`.
+14. **Partage Foyer/Amis complet (Wishlist + Prêtés + Auteur du souhait) & Refonte Navigation `RECHERCHE` 4 onglets (2026-11-21) :**
+    * **Migration `0013_v4_wishlist_added_by.sql` :** ajout de `wished_by_user_id` (`v4_library_books`) et `added_by_user_id` (`library_items`) pour tracer quel membre du foyer a ajouté un ouvrage à la wishlist (renseigné par `linkBookToLibrary`, `lists-add-elements` et `syncV4LibraryBookFlag`, puis joint avec `users.display_name` dans `syncV4LibraryBooks` et `public-share-get`).
+    * **Wishlist & Prêtés dans le partage (`d1-gateway-actions.service.ts` + `SharedLibraryBrowser.vue` + `WishlistView` / `BookDetailView` / `BookMiniCard`) :** correction de `lists-get` (`UNION` V2 + V4 `is_wished = 1`), correction du matching `loans` sur les livres V4 (`v4:...`, `book:...`, `itm_...`, `isbn:...` via `book_isbn_index`), ajout du compteur et de l’onglet filtre `Prêtés` dans `SharedLibraryBrowser.vue`, et affichage du badge `Wishlist · <Prénom>` / `Prêté à <Emprunteur>`.
+    * **Navigation `RECHERCHE` & 4ᵉ onglet `Recherche textuelle` (`BaseHeader.vue`, `DashboardView.vue`, `scanner.ts`, `ScanView.vue`) :** renommage du bouton global `SCANNER` → `RECHERCHE`, suppression de `SmartSearchBar` sur l’accueil, et ajout du 4ᵉ onglet `Recherche textuelle` multi-critères (Nom/Titre, Série, N° de tome, Auteur, Édition/Collection, Éditeur, ISBN) s’appuyant sur `resolveHintsViaV4Backend` (Canal 3) et `searchService.searchByIsbn` avec ajout direct Collection / Wishlist ou ouverture de fiche.
 
 ---
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Application déployée en production auto-hébergée sur `https://biblio.mathieuegardtest.fr` (Dell OptiPlex 3060 Micro Debian 13, Docker `docker-compose.tunnel.yml` sur `127.0.0.1:8082:3000`, SQLite WAL + couvertures disque `/data`, CRON interne actif, sauvegardes quotidiennes 03h00) ; validation complète verte (`npx tsc --noEmit`, `npm run typecheck:server`, `npx vitest run` : **38/38 fichiers, 188/188 tests**). Compte admin `MATHIEU EGARD` (`usr_57b9be14614d4e78`) activé sur le serveur.
+* **État actuel :** Application déployée en production auto-hébergée sur `https://biblio.mathieuegardtest.fr` (Dell OptiPlex 3060 Micro Debian 13, Docker `docker-compose.tunnel.yml` sur `127.0.0.1:8082:3000`, SQLite WAL + couvertures disque `/data`, 13 migrations `0001`–`0013`, CRON interne actif, sauvegardes quotidiennes 03h00). Compte admin `MATHIEU EGARD` (`usr_57b9be14614d4e78`) activé sur le serveur.
 * **Prochaine étape immédiate :** Renseigner `GEMINI_API_KEY` (et `RESEND_API_KEY` / `VAPID_PRIVATE_JWK` si souhaités) dans `/srv/docker/inventaire-surcouche/.env` sur le serveur, puis tests terrain en production sur `biblio.mathieuegardtest.fr`.
 * **Chantiers ultérieurs envisagés :** auto-promotion admin du 1er utilisateur créé sur base vierge, et poursuite du nettoyage/allègement des gros composants Vue (`ScanView.vue`, `PhotoItemDetailModal.vue`).
 

@@ -125,7 +125,7 @@ const handleZoneClick = () => {
         {{ 
           book.loan ? TEXTS.bookStatus?.lent || 'Prêté' :
           book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
-          book.ownershipStatus === 'wish' ? TEXTS.bookStatus?.wish : 
+          book.ownershipStatus === 'wish' ? (book.wishedByName ? `Souhaité · ${book.wishedByName}` : TEXTS.bookStatus?.wish) : 
           TEXTS.bookStatus?.none 
         }}
       </span>

@@ -105,7 +105,7 @@ async function syncV4LibraryBookFlag(
   db: DatabaseBinding,
   libraryId: string,
   entityUri: string,
-  opts: { isOwned?: number; isWished?: number; now: string }
+  opts: { isOwned?: number; isWished?: number; userId?: string | null; now: string }
 ): Promise<void> {
   if (!libraryId || !entityUri) return;
   try {
@@ -124,16 +124,23 @@ async function syncV4LibraryBookFlag(
 
     for (const b of bookRows.results || []) {
       if (opts.isOwned === 1 || opts.isWished === 1) {
+        const wishedBy = opts.isOwned === 1 ? null : (opts.isWished === 1 ? (opts.userId || null) : null);
         await db
           .prepare(
-            `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, selected_cover_url, added_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, wished_by_user_id, selected_cover_url, added_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(library_id, book_id) DO UPDATE SET
                is_owned = CASE WHEN ? IS NOT NULL THEN ? ELSE v4_library_books.is_owned END,
                is_wished = CASE
                  WHEN COALESCE(?, v4_library_books.is_owned) = 1 THEN 0
                  WHEN ? IS NOT NULL THEN ?
                  ELSE v4_library_books.is_wished
+               END,
+               wished_by_user_id = CASE
+                 WHEN COALESCE(?, v4_library_books.is_owned) = 1 THEN NULL
+                 WHEN ? = 1 THEN COALESCE(?, v4_library_books.wished_by_user_id)
+                 WHEN ? = 0 THEN NULL
+                 ELSE v4_library_books.wished_by_user_id
                END,
                updated_at = excluded.updated_at`
           )
@@ -142,6 +149,7 @@ async function syncV4LibraryBookFlag(
             b.id,
             opts.isOwned === 1 ? 1 : 0,
             opts.isOwned === 1 ? 0 : (opts.isWished === 1 ? 1 : 0),
+            wishedBy,
             b.selected_cover_url || null,
             opts.now,
             opts.now,
@@ -149,6 +157,10 @@ async function syncV4LibraryBookFlag(
             opts.isOwned ?? null,
             opts.isOwned ?? null,
             opts.isWished ?? null,
+            opts.isWished ?? null,
+            opts.isOwned ?? null,
+            opts.isWished ?? null,
+            wishedBy,
             opts.isWished ?? null
           )
           .run();
@@ -161,7 +173,7 @@ async function syncV4LibraryBookFlag(
         }
         if (opts.isWished === 0) {
           await db
-            .prepare('UPDATE v4_library_books SET is_wished = 0, updated_at = ? WHERE library_id = ? AND book_id = ?')
+            .prepare('UPDATE v4_library_books SET is_wished = 0, wished_by_user_id = NULL, updated_at = ? WHERE library_id = ? AND book_id = ?')
             .bind(opts.now, libraryId, b.id)
             .run();
         }
@@ -1421,9 +1433,39 @@ export async function handleD1GatewayAction(
                   COALESCE(b.volume_number, 1000) as sort_order,
                   COALESCE(lb.selected_cover_url, b.selected_cover_url) as image_url,
                   b.main_category,
-                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_id = lb.library_id AND ln.library_item_id = b.legacy_entity_uri AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent
+                  CASE WHEN lb.is_wished = 1 THEN u.display_name ELSE NULL END as wished_by_name,
+                  (SELECT COUNT(*) FROM loans ln
+                   WHERE ln.library_id = lb.library_id
+                     AND ln.returned_at IS NULL
+                     AND ln.deleted_at IS NULL
+                     AND (
+                       ln.library_item_id IN (b.legacy_entity_uri, 'v4:' || b.id, 'book:' || b.id, 'itm_' || lb.library_id || '_' || b.id)
+                       OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND ln.library_item_id = 'isbn:' || bi.isbn13)
+                       OR ln.library_item_id IN (
+                         SELECT li2.id FROM library_items li2
+                         WHERE li2.library_id = lb.library_id AND li2.deleted_at IS NULL
+                           AND (li2.edition_id = b.legacy_entity_uri OR li2.work_id = b.legacy_entity_uri)
+                       )
+                     )
+                  ) as is_lent,
+                  (SELECT ln.borrower_name FROM loans ln
+                   WHERE ln.library_id = lb.library_id
+                     AND ln.returned_at IS NULL
+                     AND ln.deleted_at IS NULL
+                     AND (
+                       ln.library_item_id IN (b.legacy_entity_uri, 'v4:' || b.id, 'book:' || b.id, 'itm_' || lb.library_id || '_' || b.id)
+                       OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND ln.library_item_id = 'isbn:' || bi.isbn13)
+                       OR ln.library_item_id IN (
+                         SELECT li2.id FROM library_items li2
+                         WHERE li2.library_id = lb.library_id AND li2.deleted_at IS NULL
+                           AND (li2.edition_id = b.legacy_entity_uri OR li2.work_id = b.legacy_entity_uri)
+                       )
+                     )
+                   ORDER BY ln.loaned_at DESC LIMIT 1
+                  ) as borrower_name
            FROM v4_library_books lb
            JOIN books b ON b.id = lb.book_id
+           LEFT JOIN users u ON u.id = lb.wished_by_user_id
            WHERE lb.library_id = ? AND (lb.is_owned = 1 OR lb.is_wished = 1)
            ORDER BY COALESCE(b.series_name, b.canonical_title) ASC, COALESCE(b.volume_number, 1000) ASC, b.canonical_title ASC`
         )
@@ -1436,10 +1478,13 @@ export async function handleD1GatewayAction(
           `SELECT li.edition_id, li.work_id, li.ownership_status, li.location,
                   ce.label as title, ce.series_uri, se.label as series_name,
                   ce.series_number, ce.sort_order, ce.image_url, ce.main_category,
-                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent
+                  CASE WHEN li.ownership_status = 'wishlist' THEN u.display_name ELSE NULL END as wished_by_name,
+                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent,
+                  (SELECT ln.borrower_name FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL ORDER BY ln.loaned_at DESC LIMIT 1) as borrower_name
            FROM library_items li
            LEFT JOIN catalog_entities ce ON ce.uri = COALESCE(li.edition_id, li.work_id)
            LEFT JOIN catalog_entities se ON se.uri = ce.series_uri
+           LEFT JOIN users u ON u.id = li.added_by_user_id
            WHERE li.library_id = ? AND li.deleted_at IS NULL
            ORDER BY COALESCE(se.label, ce.label) ASC, ce.sort_order ASC, ce.label ASC`
         )
@@ -1763,9 +1808,16 @@ export async function handleD1GatewayAction(
       const libraryId = listId.startsWith('wish_') ? listId.slice(5) : listId || 'lib_default';
       const rows = await db
         .prepare(
-          "SELECT DISTINCT COALESCE(edition_id, work_id) as uri FROM library_items WHERE library_id = ? AND ownership_status = 'wishlist' AND deleted_at IS NULL"
+          `SELECT DISTINCT COALESCE(edition_id, work_id) as uri
+           FROM library_items
+           WHERE library_id = ? AND ownership_status = 'wishlist' AND deleted_at IS NULL
+           UNION
+           SELECT DISTINCT COALESCE(b.legacy_entity_uri, 'v4:' || b.id) as uri
+           FROM v4_library_books lb
+           JOIN books b ON b.id = lb.book_id
+           WHERE lb.library_id = ? AND lb.is_wished = 1`
         )
-        .bind(libraryId)
+        .bind(libraryId, libraryId)
         .all<{ uri: string }>();
 
       const elements = (rows.results || []).map((r) => ({ uri: r.uri, element: r.uri }));
@@ -1792,12 +1844,16 @@ export async function handleD1GatewayAction(
         const itemId = `wishitm_${crypto.randomUUID().replace(/-/g, '').slice(0, 14)}`;
         await db
           .prepare(
-            `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, 'wishlist', ?, ?)`
+            `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, added_by_user_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'wishlist', ?, ?, ?)`
           )
-          .bind(itemId, libraryId, entityUri, entityUri, now, now)
+          .bind(itemId, libraryId, entityUri, entityUri, auth?.userId || null, now, now)
           .run();
-        await syncV4LibraryBookFlag(db, libraryId, entityUri, { isWished: 1, now });
+        await syncV4LibraryBookFlag(db, libraryId, entityUri, {
+          isWished: 1,
+          userId: auth?.userId || null,
+          now
+        });
       }
       return jsonResp({ ok: true });
     }

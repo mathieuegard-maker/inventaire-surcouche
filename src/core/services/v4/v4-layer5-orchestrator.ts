@@ -659,6 +659,7 @@ export async function runV4IngestionPipeline(
           legacyEntityUri: resolvedL2.book.legacyEntityUri,
           isOwned: params.action === 'owned',
           isWished: params.action === 'wishlist',
+          wishedByUserId: params.action === 'wishlist' ? params.userId || null : null,
           sourceChannel: params.sourceChannel,
           coverUrl: resolvedL2.book.selectedCoverUrl
         });
@@ -760,6 +761,7 @@ export async function runV4IngestionPipeline(
         legacyEntityUri: consolidated.legacyEntityUri,
         isOwned: params.action === 'owned',
         isWished: params.action === 'wishlist',
+        wishedByUserId: params.action === 'wishlist' ? params.userId || null : null,
         sourceChannel: params.sourceChannel,
         coverUrl: consolidated.selectedCoverUrl
       });

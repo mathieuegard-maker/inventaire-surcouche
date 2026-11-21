@@ -16,6 +16,10 @@
             <span class="counter-val">{{ wishlistCount }}</span>
             <span class="counter-lbl">Wishlist</span>
           </div>
+          <div class="counter-box lent">
+            <span class="counter-val">{{ lentCount }}</span>
+            <span class="counter-lbl">Prêtés</span>
+          </div>
         </div>
       </div>
     </div>
@@ -42,6 +46,13 @@
           @click="ownershipFilter = 'wishlist'"
         >
           Wishlist ({{ wishlistCount }})
+        </button>
+        <button
+          type="button"
+          :class="['filter-tab', { active: ownershipFilter === 'lent' }]"
+          @click="ownershipFilter = 'lent'"
+        >
+          Prêtés ({{ lentCount }})
         </button>
       </div>
 
@@ -89,8 +100,12 @@
           <h3 class="book-title">{{ item.title || 'Titre inconnu' }}</h3>
 
           <div class="status-row">
-            <span v-if="item.ownership_status === 'wishlist'" class="status-pill wish">Wishlist</span>
-            <span v-else-if="Boolean(item.is_lent)" class="status-pill lent">Déjà prêté</span>
+            <span v-if="item.ownership_status === 'wishlist'" class="status-pill wish">
+              {{ item.wished_by_name ? `Wishlist · ${item.wished_by_name}` : 'Wishlist' }}
+            </span>
+            <span v-else-if="Boolean(item.is_lent)" class="status-pill lent">
+              {{ item.borrower_name ? `Prêté à ${item.borrower_name}` : 'Déjà prêté' }}
+            </span>
             <span v-else class="status-pill avail">Disponible</span>
           </div>
         </div>
@@ -113,12 +128,13 @@ const props = withDefaults(
   }
 );
 
-const ownershipFilter = ref<'all' | 'owned' | 'wishlist'>('all');
+const ownershipFilter = ref<'all' | 'owned' | 'wishlist' | 'lent'>('all');
 const searchQuery = ref('');
 const categoryFilter = ref('all');
 
 const ownedCount = computed(() => props.library.items.filter((i) => i.ownership_status !== 'wishlist').length);
 const wishlistCount = computed(() => props.library.items.filter((i) => i.ownership_status === 'wishlist').length);
+const lentCount = computed(() => props.library.items.filter((i) => i.ownership_status !== 'wishlist' && Boolean(i.is_lent)).length);
 
 const categories = computed(() => {
   const set = new Set<string>();
@@ -133,6 +149,7 @@ const filteredItems = computed(() => {
   return props.library.items.filter((item) => {
     if (ownershipFilter.value === 'owned' && item.ownership_status === 'wishlist') return false;
     if (ownershipFilter.value === 'wishlist' && item.ownership_status !== 'wishlist') return false;
+    if (ownershipFilter.value === 'lent' && (item.ownership_status === 'wishlist' || !item.is_lent)) return false;
     if (categoryFilter.value !== 'all' && item.main_category !== categoryFilter.value) return false;
     if (q) {
       const title = (item.title || '').toLowerCase();

@@ -17,7 +17,7 @@ import { connectionState } from './connection';
 import { pendingScansStore } from './pendingScans';
 import type { HumanizedBook } from '../core/types';
 
-export type ScannerMode = 'simple' | 'burst' | 'photo';
+export type ScannerMode = 'simple' | 'burst' | 'photo' | 'search';
 
 const isCameraModalOpen = ref(false);
 const isScanningActive = isCameraModalOpen;
@@ -75,7 +75,7 @@ export const scannerState = {
       await router.push({ name: 'ScanView', query: { mode } });
     }
 
-    if (mode === 'photo' || !options?.openCamera) {
+    if (mode === 'photo' || mode === 'search' || !options?.openCamera) {
       isSearching.value = false;
       isCameraModalOpen.value = false;
       await barcodeIsbnProvider.stopScanner().catch(() => {});
