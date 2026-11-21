@@ -46,6 +46,17 @@ const backendEnv: AppBackendEnv = {
 const app = new Hono();
 const startedAt = Date.now();
 
+app.use('*', async (c, next) => {
+  await next();
+  c.header('X-Content-Type-Options', 'nosniff');
+  c.header('X-Frame-Options', 'DENY');
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
+  c.header('Permissions-Policy', 'camera=(self), microphone=(), geolocation=()');
+  if (c.req.header('x-forwarded-proto') === 'https' || process.env.NODE_ENV === 'production') {
+    c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
+});
+
 app.get('/health', (c) =>
   c.json({
     ok: true,
@@ -84,6 +95,21 @@ app.use('/sw.js', async (c, next) => {
   await next();
   if (c.res.status === 200) {
     c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+});
+
+app.use('/sw-push.js', async (c, next) => {
+  await next();
+  if (c.res.status === 200) {
+    c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+});
+
+app.use('/manifest.webmanifest', async (c, next) => {
+  await next();
+  if (c.res.status === 200) {
+    c.header('Content-Type', 'application/manifest+json; charset=utf-8');
+    c.header('Cache-Control', 'no-cache');
   }
 });
 

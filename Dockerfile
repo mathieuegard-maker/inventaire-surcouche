@@ -12,7 +12,7 @@ RUN npm ci
 
 COPY . .
 RUN npm run build
-RUN npm prune --omit=dev
+RUN npm prune --omit=dev && npm install --no-save tsx
 
 # Stage 2 : Image runtime Debian légère (sans outils de compilation)
 FROM node:22-bookworm-slim AS runtime
@@ -38,10 +38,14 @@ COPY --from=builder /app/server ./server
 COPY --from=builder /app/src/core ./src/core
 COPY --from=builder /app/src/state ./src/state
 
+RUN chown -R node:node /app /data
+
 EXPOSE 3000
 VOLUME ["/data"]
+
+USER node
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-CMD ["npx", "tsx", "server/index.ts"]
+CMD ["./node_modules/.bin/tsx", "server/index.ts"]

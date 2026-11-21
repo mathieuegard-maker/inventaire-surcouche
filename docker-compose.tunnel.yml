@@ -1,0 +1,24 @@
+services:
+  biblio-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: biblio-collection-app
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      CRON_ENABLED: "true"
+      CRON_INTERVAL_MINUTES: "60"
+    ports:
+      - "127.0.0.1:${BIBLIO_TUNNEL_PORT:-8082}:3000"
+    volumes:
+      - ./data:/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
