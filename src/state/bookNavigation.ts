@@ -6,13 +6,24 @@ import { getOrCreateViewState } from './viewState';
 const STORAGE_KEY = 'biblio_book_nav_order';
 const ORIGIN_STORAGE_KEY = 'biblio_book_nav_origin';
 
-function getVolumeSortWeight(vol?: string): number {
+function getBookSeriesSortWeight(book: HumanizedBook): number {
+  const vol = book.seriesNumber;
+  if (book.isIntegral) {
+    const incFirst = book.integralMetadata?.includedVolumeNumbers?.[0];
+    if (incFirst && /^\d+$/.test(String(incFirst))) return 7000 + parseInt(String(incFirst), 10);
+    const intMatch = /(\d+)/.exec(vol || book.title || '');
+    return 7000 + (intMatch ? parseInt(intMatch[1], 10) : 99);
+  }
+  if (book.isHorsSerie) {
+    const hsMatch = /(\d+)/.exec(book.horsSerieLabel || vol || '');
+    return 5000 + (hsMatch ? parseInt(hsMatch[1], 10) : 99);
+  }
   if (!vol) return 9999;
   const trimmed = vol.trim();
   const numMatch = /^(\d+(?:\.\d+)?)/.exec(trimmed);
   if (numMatch) return parseFloat(numMatch[1]);
   const intMatch = /^int(?:\.|[ée]grale)?\s*(?:t\.?\s*)?(\d+)/i.exec(trimmed);
-  if (intMatch) return parseFloat(intMatch[1]) - 0.1;
+  if (intMatch) return 7000 + parseFloat(intMatch[1]);
   const hsMatch = /hs\s*(\d+)?/i.exec(trimmed);
   if (hsMatch) return 5000 + (hsMatch[1] ? parseInt(hsMatch[1], 10) : 0);
   return 8000;
@@ -20,7 +31,7 @@ function getVolumeSortWeight(vol?: string): number {
 
 export function sortSeriesTomes(tomes: HumanizedBook[]): HumanizedBook[] {
   return [...tomes].sort((a, b) => {
-    const diff = getVolumeSortWeight(a.seriesNumber) - getVolumeSortWeight(b.seriesNumber);
+    const diff = getBookSeriesSortWeight(a) - getBookSeriesSortWeight(b);
     return diff !== 0 ? diff : (a.title || '').localeCompare(b.title || '', 'fr');
   });
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
 import { useModalScrollable } from '../composables/useModalScrollable';
@@ -33,6 +33,18 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [props.show, sel
 onMounted(async () => {
   await loadLocalSeries();
 });
+
+watch(
+  () => props.show,
+  async (visible) => {
+    if (visible) {
+      errorMsg.value = '';
+      volumeLabelInput.value = props.initialVolumeLabel || '';
+      mergeEntireSourceSeries.value = Boolean(props.currentSeriesId) && props.singleBook !== true;
+      await loadLocalSeries();
+    }
+  }
+);
 
 async function loadLocalSeries() {
   const allBooks = await databaseService.getAllCachedBooks();
@@ -96,7 +108,10 @@ async function handleConfirmMerge() {
       })
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Erreur lors du regroupement sur le serveur.');
+    }
     const finalSeriesId = data.seriesId || targetId || `inv:serie:${Date.now()}`;
     const finalSeriesName = data.seriesTitle || targetTitle;
 
@@ -171,7 +186,7 @@ async function handleConfirmMerge() {
         </label>
       </div>
 
-      <div v-if="bookUris.length === 1" class="form-group">
+      <div v-if="singleBook !== false && bookUris.length === 1" class="form-group">
         <label>2. Type de tome dans la série :</label>
         <select v-model="volumeType" class="input-control">
           <option value="standard">Tome numéroté classique (T.1, T.2...)</option>

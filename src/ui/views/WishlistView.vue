@@ -42,10 +42,13 @@ const pageSize = ref(pageState.pageSize);
 const searchQuery = ref(pageState.searchQuery);
 
 const displayedWishBooks = ref<HumanizedBook[]>([]);
+const filteredWishList = ref<HumanizedBook[]>([]);
 
 const isAllSelected = computed(() => {
-  const targets = filteredBooks.value;
-  return targets.length > 0 && selectedIds.value.length === targets.length;
+  const targets = filteredWishList.value.length > 0 || searchQuery.value.trim()
+    ? filteredWishList.value
+    : filteredBooks.value;
+  return targets.length > 0 && targets.every((b) => selectedIds.value.includes(b.uri));
 });
 
 watch(selectedGenre, (newGenre) => {
@@ -192,7 +195,10 @@ const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = filteredBooks.value.map(b => b.uri);
+    const targets = filteredWishList.value.length > 0 || searchQuery.value.trim()
+      ? filteredWishList.value
+      : filteredBooks.value;
+    selectedIds.value = targets.map(b => b.uri);
   }
 };
 
@@ -267,7 +273,7 @@ const resetFilters = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
-        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'wishlist')"
+        @update:filteredItems="(val) => { filteredWishList = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'wishlist'); }"
         @update:processedItems="(val) => displayedWishBooks = val"
       >
         <div class="main-content-wrapper">

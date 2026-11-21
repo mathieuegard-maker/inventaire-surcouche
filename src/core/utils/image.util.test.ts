@@ -97,7 +97,7 @@ describe('Image Utility', () => {
       expect(step1).toBe(true);
       expect(exhausted).toBe(false);
       expect(fakeImg.src).toBe(
-        '/api/gateway?action=image-proxy&url=https%3A%2F%2Fgood.example%2Fb.jpg'
+        '/api/gateway?action=image-proxy&url=https%3A%2F%2Fgood.example%2Fb.jpg&isbn=9782203001107'
       );
 
       // Tant qu'il reste les repli CDN ISBN, bascule dessus avant d'épuiser

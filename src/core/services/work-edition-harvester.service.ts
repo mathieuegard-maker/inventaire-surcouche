@@ -1,7 +1,7 @@
 // src/core/services/work-edition-harvester.service.ts
 // Moissonnage multi-éditions en arrière-plan pour rattacher tous les ISBN connus d'une Œuvre.
 
-import { bnfResolver, normalizeTextKey } from '../resolvers/bnf.resolver';
+import { bnfResolver, isFrancophoneBookIsbn13, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { isbnUtil } from '../utils/isbn.util';
 
 export interface HarvestWorkEditionsResult {
@@ -10,16 +10,19 @@ export interface HarvestWorkEditionsResult {
   fallbackCoverUrl?: string;
 }
 
-function addNormalizedIsbn(target: Set<string>, raw?: string): void {
+function addNormalizedIsbn(target: Set<string>, raw?: string, requireFrancophone = false): void {
   if (!raw) return;
   const norm = isbnUtil.normalize(raw);
-  if (!norm) return;
+  if (!norm || !isbnUtil.isValidFormat(norm)) return;
   if (norm.length === 13) {
-    target.add(norm);
+    if (!requireFrancophone || isFrancophoneBookIsbn13(norm)) {
+      target.add(norm);
+    }
   } else if (norm.length === 10) {
-    target.add(norm);
     const isbn13 = isbnUtil.toIsbn13(norm);
-    if (isbn13) target.add(isbn13);
+    if (isbn13 && (!requireFrancophone || isFrancophoneBookIsbn13(isbn13))) {
+      target.add(isbn13);
+    }
   }
 }
 
@@ -73,9 +76,10 @@ export const workEditionHarvesterService = {
     let fallbackCoverUrl: string | undefined;
     if (bnfRes.status === 'fulfilled' && Array.isArray(bnfRes.value)) {
       for (const cand of bnfRes.value.slice(0, 12)) {
+        if ((cand.meta as any).isIntegral || (cand.meta as any)._isIntegral) continue;
         const candTitleNorm = normalizeTextKey(cand.meta.title || '');
-        if (candTitleNorm === normTargetTitle || candTitleNorm.startsWith(`${normTargetTitle} `)) {
-          addNormalizedIsbn(isbns, cand.meta.isbn);
+        if (candTitleNorm === normTargetTitle) {
+          addNormalizedIsbn(isbns, cand.meta.isbn, true);
           if (!fallbackCoverUrl && cand.meta.coverUrl) {
             fallbackCoverUrl = cand.meta.coverUrl;
           }
@@ -92,7 +96,7 @@ export const workEditionHarvesterService = {
           fallbackCoverUrl = `https://covers.openlibrary.org/b/id/${doc.cover_i}-L.jpg`;
         }
         for (const rawIsbn of (doc.isbn || []).slice(0, 40)) {
-          addNormalizedIsbn(isbns, rawIsbn);
+          addNormalizedIsbn(isbns, rawIsbn, true);
         }
       }
     }

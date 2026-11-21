@@ -12,7 +12,7 @@ const SERIES_CACHE_TTL_MS = 10 * 60 * 1000;
  * Collections/rééditions secondaires dont la numérotation interne diverge fréquemment
  * de l'ordre officiel de la série (ex: Fac-similés, Archives Tintin, Le Soir, France Loisirs, Atlas...).
  */
-const DIVERGENT_NUMBERING_EDITION_REGEX =
+export const DIVERGENT_NUMBERING_EDITION_REGEX =
   /\b(fac[- ]?simil[ée]?s?|archives?|france\s+loisirs|le\s+soir|atlas|hachette\s+collections?|club|collector|reporter|chronologique|poche|d[ée]couverte|s[ée]lection|hors[- ]commerce)\b/i;
 
 export interface CanonicalVolumeEntry {
@@ -66,6 +66,11 @@ export function normalizeWorkTitleForSeriesMatch(rawTitle: string, seriesName?: 
  * Retourne `false` si l'un des titres est générique (identique au nom de série, ex: "Culottées", "Boule & Bill")
  * ou si les deux titres sont des variantes du même album ("Temple du soleil" vs "Le temple du soleil").
  */
+function extractNumberSequence(str: string): string {
+  const nums = str.match(/\d+/g);
+  return nums ? nums.map((n) => String(parseInt(n, 10))).join(',') : '';
+}
+
 export function areDistinctSeriesWorkTitles(
   titleA?: string | null,
   titleB?: string | null,
@@ -74,6 +79,12 @@ export function areDistinctSeriesWorkTitles(
   const normA = normalizeWorkTitleForSeriesMatch(titleA || '', seriesName || undefined);
   const normB = normalizeWorkTitleForSeriesMatch(titleB || '', seriesName || undefined);
   if (!normA || !normB) return false;
+
+  // Si les deux titres contiennent des séquences numériques différentes (ex: "Persepolis 1" vs "Persepolis 3", "Intégrale 1" vs "Intégrale 2"),
+  // ils désignent impérativement deux ouvrages distincts !
+  const numsA = extractNumberSequence(normA);
+  const numsB = extractNumberSequence(normB);
+  if (numsA && numsB && numsA !== numsB) return true;
 
   const normSeries = seriesName ? normalizeWorkTitleForSeriesMatch(seriesName) : '';
   const isGenericA = normA.length < 4 || (normSeries.length >= 3 && (normA === normSeries || normSeries.includes(normA)));
@@ -142,22 +153,28 @@ export function lookupVolumeInCanonicalIndex(
   const entries = Object.values(index.volumesByNormTitle);
   if (entries.length === 0) return null;
 
+  const normSeries = normalizeWorkTitleForSeriesMatch(params.seriesName || index.canonicalSeriesName || '');
   for (const rawTitle of params.titles) {
     const norm = normalizeWorkTitleForSeriesMatch(rawTitle, params.seriesName || index.canonicalSeriesName);
     if (!norm || norm.length < 3) continue;
+    if (normSeries && norm === normSeries) continue;
     if (index.volumesByNormTitle[norm]) {
       return index.volumesByNormTitle[norm];
     }
-    // Match proche (Levenshtein <= 2 ou inclusion sur titre significatif)
-    const fuzzy = entries.find(
-      (e) =>
-        e.normalizedTitle.length >= 5 &&
-        norm.length >= 5 &&
-        (e.normalizedTitle === norm ||
-          e.normalizedTitle.includes(norm) ||
-          norm.includes(e.normalizedTitle) ||
-          getLevenshteinDistance(e.normalizedTitle, norm) <= 2)
-    );
+    const normNums = extractNumberSequence(norm);
+    // Match proche uniquement si aucune divergence numérique et hors titre générique
+    const fuzzy = entries.find((e) => {
+      if (e.normalizedTitle.length < 5 || norm.length < 5) return false;
+      if (normSeries && (e.normalizedTitle === normSeries || e.normalizedTitle.startsWith(`${normSeries} `))) return false;
+      const eNums = extractNumberSequence(e.normalizedTitle);
+      if ((normNums || eNums) && normNums !== eNums) return false;
+      return (
+        e.normalizedTitle === norm ||
+        e.normalizedTitle.includes(norm) ||
+        norm.includes(e.normalizedTitle) ||
+        getLevenshteinDistance(e.normalizedTitle, norm) <= 2
+      );
+    });
     if (fuzzy) return fuzzy;
   }
 
@@ -241,8 +258,8 @@ export function resolveCanonicalVolumeNumber(params: {
 export async function fetchCanonicalSeriesIndex(
   wikidataSeriesQid?: string | null
 ): Promise<CanonicalSeriesIndex | null> {
-  const qid = (wikidataSeriesQid || '').trim().replace(/^wd:/i, '');
-  if (!/^Q\d+$/i.test(qid)) return null;
+  const qid = (wikidataSeriesQid || '').trim().replace(/^wd:/i, '').toUpperCase();
+  if (!/^Q\d+$/.test(qid)) return null;
 
   const cached = canonicalSeriesCache.get(qid);
   if (cached && Date.now() - cached.fetchedAt < SERIES_CACHE_TTL_MS) {
@@ -252,45 +269,39 @@ export async function fetchCanonicalSeriesIndex(
   const volumesByQid: Record<string, CanonicalVolumeEntry> = {};
   const volumesByNormTitle: Record<string, CanonicalVolumeEntry> = {};
   let canonicalSeriesName: string | undefined;
+  const rawBindings: Array<{ volNum: number; label: string; workQid?: string }> = [];
 
-  const registerEntry = (entry: CanonicalVolumeEntry) => {
-    if (entry.volumeNumber <= 0 || entry.volumeNumber > 500) return;
-    if (entry.wikidataWorkQid && !volumesByQid[entry.wikidataWorkQid]) {
-      volumesByQid[entry.wikidataWorkQid] = entry;
-    }
-    if (entry.normalizedTitle && !volumesByNormTitle[entry.normalizedTitle]) {
-      volumesByNormTitle[entry.normalizedTitle] = entry;
-    }
-  };
-
-  // 1. Récupérer le label canonique FR de la série (+ éventuels P527)
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    try {
-      const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(qid)}&props=labels|claims&languages=fr|en&format=json`;
-      const res = await fetch(url, {
-        headers: { 'User-Agent': USER_AGENT_BASE },
-        signal: controller.signal
-      });
-      if (res.ok) {
-        const json = (await res.json()) as any;
-        const sEnt = json?.entities?.[qid];
-        const frLabel = sEnt?.labels?.fr?.value || sEnt?.labels?.en?.value;
-        if (typeof frLabel === 'string' && frLabel.trim()) {
-          canonicalSeriesName = frLabel.trim();
+  await Promise.all([
+    // 1. Récupérer le label canonique FR de la série
+    (async () => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2500);
+        try {
+          const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(qid)}&props=labels|claims&languages=fr|en&format=json`;
+          const res = await fetch(url, {
+            headers: { 'User-Agent': USER_AGENT_BASE },
+            signal: controller.signal
+          });
+          if (res.ok) {
+            const json = (await res.json()) as any;
+            const sEnt = json?.entities?.[qid];
+            const frLabel = sEnt?.labels?.fr?.value || sEnt?.labels?.en?.value;
+            if (typeof frLabel === 'string' && frLabel.trim()) {
+              canonicalSeriesName = frLabel.trim();
+            }
+          }
+        } finally {
+          clearTimeout(timer);
         }
+      } catch {
+        // Non-bloquant
       }
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    // Non-bloquant
-  }
-
-  // 2. Requête SPARQL ciblée sur la série pour obtenir l'ordre officiel (pq:P1545 ou wdt:P1545) de tous les albums
-  try {
-    const sparql = `
+    })(),
+    // 2. Requête SPARQL ciblée en parallèle pour obtenir l'ordre officiel (pq:P1545 ou wdt:P1545)
+    (async () => {
+      try {
+        const sparql = `
 SELECT ?work ?workLabel ?ordinal WHERE {
   ?work p:P179 ?stmt .
   ?stmt ps:P179 wd:${qid} .
@@ -302,50 +313,65 @@ SELECT ?work ?workLabel ?ordinal WHERE {
 }
 LIMIT 120`.trim();
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3000);
-    try {
-      const sparqlUrl = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
-      const res = await fetch(sparqlUrl, {
-        headers: {
-          'User-Agent': USER_AGENT_BASE,
-          Accept: 'application/sparql-results+json'
-        },
-        signal: controller.signal
-      });
-      if (res.ok) {
-        const data = (await res.json()) as any;
-        const bindings = Array.isArray(data?.results?.bindings) ? data.results.bindings : [];
-        for (const row of bindings) {
-          const rawOrd = row?.ordinal?.value;
-          const normOrd = rawOrd ? normalizeSeriesNumber(String(rawOrd)) : '';
-          if (!normOrd || !/^\d+$/.test(normOrd)) continue;
-          const volNum = parseInt(normOrd, 10);
-          const rawWorkUri = String(row?.work?.value || '');
-          const workQid = /Q\d+$/.exec(rawWorkUri)?.[0];
-          const label = String(row?.workLabel?.value || '').trim();
-          if (!label || /^Q\d+$/.test(label)) continue;
-          registerEntry({
-            volumeNumber: volNum,
-            title: label,
-            normalizedTitle: normalizeWorkTitleForSeriesMatch(label, canonicalSeriesName),
-            wikidataWorkQid: workQid
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3000);
+        try {
+          const sparqlUrl = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
+          const res = await fetch(sparqlUrl, {
+            headers: {
+              'User-Agent': USER_AGENT_BASE,
+              Accept: 'application/sparql-results+json'
+            },
+            signal: controller.signal
           });
+          if (res.ok) {
+            const data = (await res.json()) as any;
+            const bindings = Array.isArray(data?.results?.bindings) ? data.results.bindings : [];
+            for (const row of bindings) {
+              const rawOrd = row?.ordinal?.value;
+              const normOrd = rawOrd ? normalizeSeriesNumber(String(rawOrd)) : '';
+              if (!normOrd || !/^\d+$/.test(normOrd)) continue;
+              const volNum = parseInt(normOrd, 10);
+              const rawWorkUri = String(row?.work?.value || '');
+              const workQid = /Q\d+$/i.exec(rawWorkUri)?.[0]?.toUpperCase();
+              const label = String(row?.workLabel?.value || '').trim();
+              if (!label || /^Q\d+$/i.test(label)) continue;
+              rawBindings.push({ volNum, label, workQid });
+            }
+          }
+        } finally {
+          clearTimeout(timer);
         }
+      } catch {
+        // Non-bloquant
       }
-    } finally {
-      clearTimeout(timer);
+    })()
+  ]);
+
+  for (const item of rawBindings) {
+    if (item.volNum <= 0 || item.volNum > 500) continue;
+    const entry: CanonicalVolumeEntry = {
+      volumeNumber: item.volNum,
+      title: item.label,
+      normalizedTitle: normalizeWorkTitleForSeriesMatch(item.label, canonicalSeriesName),
+      wikidataWorkQid: item.workQid
+    };
+    if (entry.wikidataWorkQid && !volumesByQid[entry.wikidataWorkQid]) {
+      volumesByQid[entry.wikidataWorkQid] = entry;
     }
-  } catch {
-    // Non-bloquant si SPARQL indisponible ou lent
+    if (entry.normalizedTitle && !volumesByNormTitle[entry.normalizedTitle]) {
+      volumesByNormTitle[entry.normalizedTitle] = entry;
+    }
   }
 
+  const hasUsefulData = Boolean(canonicalSeriesName || Object.keys(volumesByNormTitle).length > 0);
   const index: CanonicalSeriesIndex = {
     wikidataSeriesQid: qid,
     canonicalSeriesName,
     volumesByQid,
     volumesByNormTitle,
-    fetchedAt: Date.now()
+    // Si échec réseau complet, ne mettre en cache que 15 secondes au lieu de 10 minutes
+    fetchedAt: hasUsefulData ? Date.now() : Date.now() - SERIES_CACHE_TTL_MS + 15000
   };
   canonicalSeriesCache.set(qid, index);
   return index;

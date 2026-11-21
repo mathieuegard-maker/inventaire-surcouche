@@ -104,8 +104,18 @@ export const seriesOrchestrator = {
 
     const mergedTomes: HumanizedBook[] = [];
     const seenWorkKeys = new Map<string, HumanizedBook>();
+    const getIntegralDedupKey = (b: HumanizedBook): string => {
+      const incVols = (b.integralMetadata?.includedVolumeNumbers || []).join('-');
+      const normNum = b.seriesNumber ? normalizeSeriesNumber(b.seriesNumber) : '';
+      const normTitle = b.title ? normalizeTextKey(b.title) : '';
+      return `int:${incVols || normNum || normTitle || b.uri}`;
+    };
     const registerKeys = (b: HumanizedBook, target: HumanizedBook) => {
       if (b.workUri) seenWorkKeys.set(`work:${b.workUri}`, target);
+      if (b.isIntegral) {
+        seenWorkKeys.set(getIntegralDedupKey(b), target);
+        return;
+      }
       const normNum = b.seriesNumber ? normalizeSeriesNumber(b.seriesNumber) : '';
       if (normNum) seenWorkKeys.set(`num:${normNum}`, target);
       const normTitle = b.title ? normalizeTextKey(b.title) : '';
@@ -116,8 +126,9 @@ export const seriesOrchestrator = {
     };
 
     for (const tome of sortedForDedup) {
-      const normNum = tome.seriesNumber ? normalizeSeriesNumber(tome.seriesNumber) : '';
+      const normNum = !tome.isIntegral && tome.seriesNumber ? normalizeSeriesNumber(tome.seriesNumber) : '';
       const normTitle = tome.title ? normalizeTextKey(tome.title) : '';
+      const intMatch = tome.isIntegral ? seenWorkKeys.get(getIntegralDedupKey(tome)) : undefined;
       const titleMatch =
         normTitle.length >= 3 && !normNum && !tome.isIntegral
           ? seenWorkKeys.get(`title:${normTitle}`)
@@ -125,11 +136,14 @@ export const seriesOrchestrator = {
       const numCandidate = normNum ? seenWorkKeys.get(`num:${normNum}`) : undefined;
       const safeNumMatch =
         numCandidate &&
+        !numCandidate.isIntegral &&
+        !tome.isIntegral &&
         !areDistinctSeriesWorkTitles(numCandidate.title, tome.title, seriesName || numCandidate.series || tome.series)
           ? numCandidate
           : undefined;
       const existing =
         (tome.workUri ? seenWorkKeys.get(`work:${tome.workUri}`) : undefined) ||
+        intMatch ||
         safeNumMatch ||
         titleMatch;
 

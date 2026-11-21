@@ -66,6 +66,12 @@ export const connectionService = {
         if (lastUserUri && lastUserUri !== profile.uri && typeof databaseService?.clearAllBookData === 'function') {
           console.log('[CONNECTION SERVICE] Changement de compte détecté : purge du cache local précédent...');
           await databaseService.clearAllBookData().catch(() => {});
+          localStorage.removeItem('biblio_v4_last_sync_at');
+          localStorage.removeItem('biblio_scan_photo_draft_v1');
+          localStorage.removeItem('biblio_catalog_sync_version');
+          loanService.invalidateInventoryCache();
+          loanService.shelfId = null;
+          wishlistService.wishlistId = null;
         }
         localStorage.setItem('biblio_last_user_uri', profile.uri);
       }
@@ -171,7 +177,13 @@ export const connectionService = {
     }
     if (typeof localStorage !== 'undefined') {
       localStorage.removeItem('biblio_last_user_uri');
+      localStorage.removeItem('biblio_v4_last_sync_at');
+      localStorage.removeItem('biblio_scan_photo_draft_v1');
+      localStorage.removeItem('biblio_catalog_sync_version');
     }
+    loanService.invalidateInventoryCache();
+    loanService.shelfId = null;
+    wishlistService.wishlistId = null;
     this.isInitialized = false;
     this.userUri = null;
     scannerState.notifyCatalogChanged();

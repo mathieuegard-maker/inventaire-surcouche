@@ -161,7 +161,7 @@ export async function queryPipelineLogs(
   }
   if (options.q?.trim()) {
     const q = `%${options.q.trim().toLowerCase()}%`;
-    conditions.push('(LOWER(trace_id) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(COALESCE(payload_json, "")) LIKE ?)');
+    conditions.push("(LOWER(trace_id) LIKE ? OR LOWER(summary) LIKE ? OR LOWER(COALESCE(payload_json, '')) LIKE ?)");
     bindings.push(q, q, q);
   }
 

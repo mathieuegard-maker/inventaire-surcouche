@@ -123,6 +123,11 @@ export const bookSemanticOrchestrator = {
   ): Promise<HumanizedBook> {
     console.log(`[BOOK SEMANTIC ORCHESTRATOR] Démarrage du patch de modification sémantique pour : ${originalBook.title}`);
 
+    const hasSeriesNameChanged =
+      (updatedData.series || '').trim().toLowerCase() !== (originalBook.series || '').trim().toLowerCase();
+    const effectiveSeriesId =
+      resolvedSeriesUri ?? (updatedData.series ? (!hasSeriesNameChanged ? originalBook.seriesId : undefined) : null);
+
     // 1. Synchronisation distante V2 (catalog_entities) + V4 (books & v4_library_books)
     const [res, v4Updated] = await Promise.all([
       inventaireSyncService.patchBookOnInventaire(
@@ -138,7 +143,7 @@ export const bookSemanticOrchestrator = {
         title: updatedData.title,
         authors: updatedData.authors,
         series: updatedData.series,
-        seriesId: resolvedSeriesUri ?? (updatedData.series ? originalBook.seriesId : null),
+        seriesId: effectiveSeriesId,
         seriesNumber: updatedData.seriesNumber,
         publisher: updatedData.publisher,
         publishDate: updatedData.publishDate,

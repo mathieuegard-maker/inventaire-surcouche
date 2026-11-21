@@ -103,6 +103,11 @@ export function sortItemsByShelfOrder(items: ResolvedPhotoItem[]): void {
   });
 }
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', persistDraftNow);
+  window.addEventListener('beforeunload', persistDraftNow);
+}
+
 export const scanDraftStore = {
   resolvedDetectedItems,
   doubtItems,
@@ -111,6 +116,7 @@ export const scanDraftStore = {
   detectedSeriesNames,
   expandedSeriesKeys,
   handledSourceIds,
+  flushNow: persistDraftNow,
 
   markSourceIdHandled(id?: string | null) {
     if (!id) return;

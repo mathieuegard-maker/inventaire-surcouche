@@ -57,10 +57,11 @@ export const syncOrchestrator = {
   async hydrateSeriesInBackground(seriesId: string, onProgress?: (current: number, total: number) => void): Promise<void> {
     console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
-      // 0. Voie V4 pure prioritaire : lecture directe des tomes consolidés (`books` + `v4_library_books`) sans V2 legacy
+      // 0. Voie V4 pure prioritaire : lecture directe des tomes consolidés (`books` + `v4_library_books` + expansion C5 auto)
       const v4Series = await fetchV4SeriesBooksToIndexedDb(seriesId).catch(() => null);
-      if (v4Series && v4Series.count > 0) {
+      if (v4Series && v4Series.count > 1) {
         onProgress?.(v4Series.count, v4Series.count);
+        scannerState.notifyCatalogChanged();
         console.log(`[BACKGROUND] ✅ Série ${seriesId} hydratée via V4 pure (${v4Series.count} tomes).`);
         return;
       }
@@ -125,7 +126,7 @@ export const syncOrchestrator = {
     activeHydrationPromise = (async () => {
     console.group("[HYDRATATION] Démarrage de la tâche de fond (V2.1)");
     try {
-      const DB_RESET_TOKEN = 'reset_2026_11_21_v4_clean_v21';
+      const DB_RESET_TOKEN = 'reset_2026_11_21_v4_clean_v22';
       if (
         typeof localStorage !== 'undefined' &&
         localStorage.getItem('biblio_db_reset_token') !== DB_RESET_TOKEN &&
@@ -177,6 +178,8 @@ export const syncOrchestrator = {
 
       const needsBookRefresh = (livre: any): boolean => {
         if (!livre?.uri?.startsWith('isbn:')) return false;
+        // Ne jamais écraser par le pipeline V2 legacy un livre déjà consolidé en V4 ou édité par l'utilisateur !
+        if (livre.bookId || livre.isLocallyEdited) return false;
         if (needsGlobalCatalogRefresh) return true;
         if (livre.coverUrl && livre.coverUrl.includes('idArk=')) return true;
         if (livre.series && livre.series.includes('|')) return true;
@@ -261,9 +264,10 @@ export const syncOrchestrator = {
 
       // 7. Aspiration préventive des séries (Sagas)
       console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
+      const latestBooksForSeries = await databaseService.getAllBooksFromCache();
       const seriesIds = new Set<string>();
       
-      for (const book of localBooks) {
+      for (const book of latestBooksForSeries) {
         if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
           seriesIds.add(book.seriesId);
         }

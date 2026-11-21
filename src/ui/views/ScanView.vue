@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { scannerState, type ScannerMode } from '../../state/scanner';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
@@ -54,6 +54,12 @@ watch(() => route.query.mode, syncModeFromRoute, { immediate: true });
 onMounted(() => {
   syncModeFromRoute();
   refreshServerVisionStatus();
+});
+
+onBeforeUnmount(() => {
+  if (scannerState.isScanningActive.value) {
+    scannerState.stopScan();
+  }
 });
 
 const selectTab = async (mode: ScannerMode) => {
@@ -421,6 +427,9 @@ function applyEditionChoice(item: ResolvedPhotoItem, selectedIsbn: string) {
   item.series = opt.series || item.series;
   item.seriesNumber = opt.isIntegral ? undefined : opt.seriesNumber || item.seriesNumber;
   item.isIntegral = Boolean(opt.isIntegral);
+  if (opt.isIntegral && (opt as any).includedVolumeNumbers?.length) {
+    item.includedVolumeNumbers = (opt as any).includedVolumeNumbers;
+  }
   item.selected = true;
 }
 
@@ -500,18 +509,22 @@ async function retryUnresolvedItem(item: ResolvedPhotoItem) {
   retryingItemId.value = item.id;
   try {
     const resolved = await photoBookResolutionService.resolveSingleCandidate(item.rawCandidate, 'retry');
+    resolved.sourceJobId = item.sourceJobId;
     if (resolved.status === 'unresolved') {
       item.failureReason = resolved.failureReason || 'Toujours introuvable sur la BnF / Google Books.';
       return;
     }
+    scanDraftStore.markSourceIdHandled(item.id);
     unresolvedItems.value = unresolvedItems.value.filter((u) => u.id !== item.id);
     if (resolved.status === 'doubt') {
       doubtItems.value.push(resolved);
+      sortItemsByShelfOrder(doubtItems.value);
       return;
     }
     const alreadyExists = resolved.isbn13 && resolvedDetectedItems.value.some((d) => d.isbn13 === resolved.isbn13);
     if (!alreadyExists) {
       resolvedDetectedItems.value.push(resolved);
+      sortItemsByShelfOrder(resolvedDetectedItems.value);
     }
   } finally {
     retryingItemId.value = null;
@@ -1223,7 +1236,7 @@ async function clearPhotoQueueAndForm() {
 
       <LendModal
         :show="showBurstLendModal"
-        :count="selectedBurstBooks.length"
+        :bookCount="selectedBurstBooks.length"
         @close="showBurstLendModal = false"
         @confirm="confirmBurstGroupLend"
       />

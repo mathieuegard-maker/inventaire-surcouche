@@ -217,8 +217,15 @@ function normalizeIsbnToken(raw?: string): string {
 }
 
 function normalizeVolNum(raw?: string): string {
-  const m = (raw || '').match(/\d+/);
-  return m ? String(parseInt(m[0], 10)) : (raw || '').trim().toLowerCase();
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+  if (/^(?:int\.?|int[ée]grale)/i.test(trimmed)) return `int:${trimmed.toLowerCase()}`;
+  const hsMatch = /^hs\s*(\d+)?$/i.exec(trimmed);
+  if (hsMatch) return `hs:${hsMatch[1] ? parseInt(hsMatch[1], 10) : 0}`;
+  const clean = trimmed.replace(/^(?:tome|t\.|vol\.?|n°|no\.?)\s*/i, '').trim();
+  const numMatch = /^0*(\d+(?:\.\d+)?)$/.exec(clean);
+  if (numMatch) return numMatch[1];
+  return trimmed.toLowerCase();
 }
 
 /**
@@ -269,12 +276,23 @@ export function findMatchingOwnedWork(params: {
     if (byWork) return { book: byWork, matchReason: 'work_uri' };
   }
 
-  // 3. Correspondance par titre d'œuvre normalisé + auteur
+  // 3. Correspondance par titre d'œuvre normalisé + auteur (uniquement si pas de conflit de numéro de tome)
   const normTitle = params.candidateTitle ? normalizeTextKey(params.candidateTitle) : '';
+  const candVolNorm = normalizeVolNum(params.candidateSeriesNumber);
   if (normTitle.length >= 3) {
-    const byTitle = pool.find(
-      (b) => b.title && normalizeTextKey(b.title) === normTitle && hasAuthorOverlap(params.candidateAuthors, b.authors)
-    );
+    const byTitle = pool.find((b) => {
+      if (!b.title || normalizeTextKey(b.title) !== normTitle) return false;
+      if (!hasAuthorOverlap(params.candidateAuthors, b.authors)) return false;
+      const bVolNorm = normalizeVolNum(b.seriesNumber);
+      // Ne jamais confondre Culottées T.1 et Culottées T.2 (ou un tome numéroté et une intégrale)
+      if (candVolNorm && bVolNorm && candVolNorm !== bVolNorm) return false;
+      if ((candVolNorm && !bVolNorm) || (!candVolNorm && bVolNorm)) {
+        const bSeriesNorm = b.series ? normalizeTextKey(b.series) : '';
+        const candSeriesNorm = params.candidateSeries ? normalizeTextKey(params.candidateSeries) : '';
+        if (normTitle === bSeriesNorm || normTitle === candSeriesNorm) return false;
+      }
+      return true;
+    });
     if (byTitle) return { book: byTitle, matchReason: 'title_author' };
   }
 

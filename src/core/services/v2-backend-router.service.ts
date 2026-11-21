@@ -74,15 +74,27 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
       if (!env.COVERS_BUCKET) {
         return jsonResponse({ error: 'Bucket R2 non configuré' }, 503);
       }
+      if (env.DB) {
+        const auth = await resolveAuthSession(env.DB, request, null);
+        if (!auth) {
+          return jsonResponse({ error: 'Authentification requise' }, 401);
+        }
+      }
       const key = decodeURIComponent(path.slice('covers/'.length));
-      const contentType = request.headers.get('Content-Type') || 'image/webp';
+      if (!/^covers\/(isbn|url)\/[a-zA-Z0-9_-]+$/.test(key)) {
+        return jsonResponse({ error: 'Clé de couverture invalide' }, 400);
+      }
+      const rawContentType = (request.headers.get('Content-Type') || 'image/webp').split(';')[0].trim().toLowerCase();
+      if (!/^image\/(webp|jpeg|png|gif|avif)$/.test(rawContentType)) {
+        return jsonResponse({ error: 'Format image raster requis (webp, jpeg, png)' }, 400);
+      }
       const buffer = await request.arrayBuffer();
       if (buffer.byteLength > 500 * 1024) {
         return jsonResponse({ error: 'Image trop volumineuse (max 500 Ko après compression WebP)' }, 413);
       }
       await env.COVERS_BUCKET.put(key, buffer, {
         httpMetadata: {
-          contentType,
+          contentType: rawContentType,
           cacheControl: 'public, max-age=31536000, immutable'
         }
       });
@@ -97,6 +109,10 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
       const payload = (await request.json()) as SyncDeltaRequest;
       if (!payload.libraryId) {
         return jsonResponse({ error: 'libraryId requis' }, 400);
+      }
+      const auth = await resolveAuthSession(env.DB, request, payload.libraryId);
+      if (!auth || auth.libraryId !== payload.libraryId) {
+        return jsonResponse({ error: 'Authentification requise' }, 401);
       }
 
       const now = new Date().toISOString();

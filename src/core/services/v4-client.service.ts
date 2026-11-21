@@ -159,16 +159,27 @@ export function checkLocalIntegralConflict(
 
   if (book.isIntegral && book.integralMetadata) {
     const targetIds = new Set(book.integralMetadata.includedWorkIds || []);
-    const targetVols = new Set(book.integralMetadata.includedVolumeNumbers || []);
+    const targetVols = new Set(
+      (book.integralMetadata.includedVolumeNumbers || [])
+        .map((v) => normalizeSeriesNumber(String(v)))
+        .filter(Boolean)
+    );
+    const normBookSeries = book.series ? normalizeTextKey(book.series) : '';
+    const seenWorkKeys = new Set<string>();
     for (const ob of ownedBooks) {
-      const idMatch = ob.bookId && targetIds.has(ob.bookId);
-      const volMatch =
-        book.seriesId &&
-        ob.seriesId === book.seriesId &&
-        ob.seriesNumber &&
-        targetVols.has(ob.seriesNumber);
+      if (ob.isIntegral) continue;
+      const idMatch = Boolean(ob.bookId && targetIds.has(ob.bookId));
+      const sameSeries =
+        (book.seriesId && ob.seriesId && ob.seriesId === book.seriesId) ||
+        (normBookSeries && ob.series && normalizeTextKey(ob.series) === normBookSeries);
+      const obVol = ob.seriesNumber ? normalizeSeriesNumber(ob.seriesNumber) : '';
+      const volMatch = Boolean(sameSeries && obVol && targetVols.has(obVol));
       if (idMatch || volMatch) {
-        includedOwnedWorkIds.push(ob.bookId || ob.uri);
+        const key = ob.bookId || ob.uri;
+        if (!seenWorkKeys.has(key)) {
+          seenWorkKeys.add(key);
+          includedOwnedWorkIds.push(key);
+        }
       }
     }
     if (includedOwnedWorkIds.length > 0) {
@@ -219,6 +230,28 @@ export async function pushClientPipelineLogs(params: {
   } catch {
     // Non-bloquant
   }
+}
+
+async function saveV4BookPreservingLocalCover(humanized: HumanizedBook): Promise<void> {
+  if (typeof databaseService.saveBookToCache !== 'function') {
+    if (typeof databaseService.indexBookIsbns === 'function') {
+      await databaseService.indexBookIsbns(humanized).catch(() => {});
+    }
+    return;
+  }
+  const existing =
+    typeof databaseService.getBookFromCache === 'function'
+      ? await databaseService.getBookFromCache(humanized.uri).catch(() => undefined)
+      : undefined;
+  if (existing) {
+    if (existing.localCover && (!humanized.coverUrl || existing.coverUrl === humanized.coverUrl)) {
+      humanized.localCover = existing.localCover;
+    }
+    if (existing.loan && humanized.ownershipStatus === 'owned') {
+      humanized.loan = existing.loan;
+    }
+  }
+  await databaseService.saveBookToCache(humanized).catch(() => {});
 }
 
 export async function ingestIsbnsViaV4(params: {
@@ -282,22 +315,17 @@ export async function ingestIsbnsViaV4(params: {
       // Synchroniser immédiatement chaque livre consolidé dans IndexedDB (cache_books + registres inventory/wishlist)
       for (const r of data.results) {
         if (!r.book) continue;
-        const isIndirectlyOwned =
-          r.layer2Status === 'INCLUDED_IN_INTEGRAL' || r.layer2Status === 'FULL_INTEGRAL_OWNED';
-        const targetStatus: 'owned' | 'wish' | 'none' =
-          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED' || isIndirectlyOwned
-            ? 'owned'
-            : params.action === 'wishlist'
-              ? 'wish'
-              : 'none';
+        const isDirectlyOwned =
+          params.action === 'owned' || r.layer2Status === 'ALREADY_OWNED';
+        const targetStatus: 'owned' | 'wish' | 'none' = isDirectlyOwned
+          ? 'owned'
+          : params.action === 'wishlist'
+            ? 'wish'
+            : 'none';
         const humanized = v4BookRecordToHumanizedBook(r.book, targetStatus);
-        if (typeof databaseService.saveBookToCache === 'function') {
-          await databaseService.saveBookToCache(humanized).catch(() => {});
-        } else if (typeof databaseService.indexBookIsbns === 'function') {
-          await databaseService.indexBookIsbns(humanized).catch(() => {});
-        }
+        await saveV4BookPreservingLocalCover(humanized);
         if (typeof databaseService.addRegistryEntry === 'function') {
-          if (targetStatus === 'owned' && !isIndirectlyOwned) {
+          if (targetStatus === 'owned') {
             await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
             await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
           } else if (targetStatus === 'wish') {
@@ -387,12 +415,16 @@ export async function syncV4BooksToIndexedDb(forceFull = false): Promise<{ synce
     for (const item of data.books) {
       if (!item?.book) continue;
       const humanized = v4BookRecordToHumanizedBook(item.book, item.ownershipStatus);
-      await databaseService.saveBookToCache(humanized).catch(() => {});
+      await saveV4BookPreservingLocalCover(humanized);
       if (item.ownershipStatus === 'owned') {
         await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
         await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
       } else if (item.ownershipStatus === 'wish') {
         await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('inventory', humanized.uri).catch(() => {});
+      } else {
+        await databaseService.removeRegistryEntry?.('inventory', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
       }
       syncedCount++;
     }
@@ -425,11 +457,16 @@ export async function fetchV4SeriesBooksToIndexedDb(seriesId: string): Promise<{
     for (const item of data.books) {
       if (!item?.book) continue;
       const humanized = v4BookRecordToHumanizedBook(item.book, item.ownershipStatus);
-      await databaseService.saveBookToCache(humanized).catch(() => {});
+      await saveV4BookPreservingLocalCover(humanized);
       if (item.ownershipStatus === 'owned') {
         await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
       } else if (item.ownershipStatus === 'wish') {
         await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('inventory', humanized.uri).catch(() => {});
+      } else {
+        await databaseService.removeRegistryEntry?.('inventory', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
       }
     }
     return { count: data.books.length };

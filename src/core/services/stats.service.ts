@@ -177,7 +177,16 @@ export const statsService = {
     const loans = await databaseService.getAllLoans();
     const allBooks = await databaseService.getAllCachedBooks();
 
-    const totalOwned = inventoryEntries.length;
+    const ownedUris = new Set(inventoryEntries.map((e) => e.uri));
+    const ownedBookMap = new Map<string, (typeof allBooks)[0]>();
+    for (const b of allBooks) {
+      if (b.ownershipStatus === 'owned' || ownedUris.has(b.uri) || (b.workUri && ownedUris.has(b.workUri))) {
+        const key = b.bookId || b.workUri || b.uri;
+        if (!ownedBookMap.has(key)) ownedBookMap.set(key, b);
+      }
+    }
+    const ownedBooks = Array.from(ownedBookMap.values());
+    const totalOwned = Math.max(inventoryEntries.length, ownedBooks.length);
     const totalLoans = loans.length;
 
     // 2. Déduplication canonique de la wishlist (évite double comptage work + edition)
@@ -185,15 +194,21 @@ export const statsService = {
     const distinctWishKeys = new Set<string>();
     for (const entry of wishlistEntries) {
       const cached = cachedByUri.get(entry.uri);
-      distinctWishKeys.add(cached?.workUri || entry.uri);
+      distinctWishKeys.add(cached?.bookId || cached?.workUri || entry.uri);
+    }
+    for (const b of allBooks) {
+      if (b.ownershipStatus === 'wish') {
+        distinctWishKeys.add(b.bookId || b.workUri || b.uri);
+      }
     }
     const totalWishlist = distinctWishKeys.size;
 
-    // 2. Nombre de sagas commencées
-    // On matche les livres en cache qui appartiennent réellement à l'inventaire actuel
-    const ownedUris = new Set(inventoryEntries.map(e => e.uri));
-    const ownedBooks = allBooks.filter(b => ownedUris.has(b.uri) || (b.workUri && ownedUris.has(b.workUri)));
-    const uniqueSeriesIds = new Set(ownedBooks.map(b => b.seriesId).filter(Boolean));
+    // 2b. Nombre de sagas commencées
+    const uniqueSeriesIds = new Set(
+      ownedBooks
+        .map((b) => b.seriesId || (b.series?.trim() ? b.series.trim().toLowerCase() : ''))
+        .filter(Boolean)
+    );
     const totalSeries = uniqueSeriesIds.size;
 
     // 3. Taux de prêt en pourcentage

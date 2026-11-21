@@ -44,6 +44,14 @@ async function releaseWakeLock(): Promise<void> {
   }
 }
 
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && isProcessing.value) {
+      void acquireWakeLock();
+    }
+  });
+}
+
 async function refreshJobs(): Promise<void> {
   jobs.value = await databaseService.getPhotoScanJobs();
 }

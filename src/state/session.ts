@@ -1,4 +1,6 @@
 // src/state/session.ts
+import { reactive } from 'vue';
+
 export interface SessionUser {
   uri: string;
   username: string;
@@ -12,9 +14,9 @@ export interface SessionUser {
 }
 
 export const sessionStore = {
-  state: {
+  state: reactive({
     user: null as SessionUser | null,
-  },
+  }),
 
   setUser(data: any) {
     const u = data.user || data;

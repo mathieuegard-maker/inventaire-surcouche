@@ -95,6 +95,82 @@ function extractShareToken(raw: string): string {
   return (match ? match[1] : trimmed).toUpperCase();
 }
 
+/**
+ * Synchronise le statut de possession / souhait d'un livre dans `v4_library_books`
+ * lorsqu'une action V2 (`inventory-add`, `inventory-bulk`, `inventory-delete`, `lists-add-elements`, `lists-remove-elements`)
+ * est appelée sur une URI d'entité (`isbn:...` ou `inv:...`).
+ */
+async function syncV4LibraryBookFlag(
+  db: DatabaseBinding,
+  libraryId: string,
+  entityUri: string,
+  opts: { isOwned?: number; isWished?: number; now: string }
+): Promise<void> {
+  if (!libraryId || !entityUri) return;
+  try {
+    const rawIsbn = entityUri.startsWith('isbn:') ? isbnUtil.normalize(entityUri.slice(5)) : '';
+    const isbn13 = rawIsbn.length === 10 ? isbnUtil.toIsbn13(rawIsbn) : rawIsbn;
+    const bookRows = await db
+      .prepare(
+        isbn13
+          ? `SELECT id, selected_cover_url FROM books WHERE legacy_entity_uri = ?
+             UNION
+             SELECT b.id, b.selected_cover_url FROM book_isbn_index bi JOIN books b ON b.id = bi.book_id WHERE bi.isbn13 = ?`
+          : 'SELECT id, selected_cover_url FROM books WHERE legacy_entity_uri = ?'
+      )
+      .bind(...(isbn13 ? [entityUri, isbn13] : [entityUri]))
+      .all<{ id: string; selected_cover_url: string | null }>();
+
+    for (const b of bookRows.results || []) {
+      if (opts.isOwned === 1 || opts.isWished === 1) {
+        await db
+          .prepare(
+            `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, selected_cover_url, added_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(library_id, book_id) DO UPDATE SET
+               is_owned = CASE WHEN ? IS NOT NULL THEN ? ELSE v4_library_books.is_owned END,
+               is_wished = CASE
+                 WHEN COALESCE(?, v4_library_books.is_owned) = 1 THEN 0
+                 WHEN ? IS NOT NULL THEN ?
+                 ELSE v4_library_books.is_wished
+               END,
+               updated_at = excluded.updated_at`
+          )
+          .bind(
+            libraryId,
+            b.id,
+            opts.isOwned === 1 ? 1 : 0,
+            opts.isOwned === 1 ? 0 : (opts.isWished === 1 ? 1 : 0),
+            b.selected_cover_url || null,
+            opts.now,
+            opts.now,
+            opts.isOwned ?? null,
+            opts.isOwned ?? null,
+            opts.isOwned ?? null,
+            opts.isWished ?? null,
+            opts.isWished ?? null
+          )
+          .run();
+      } else {
+        if (opts.isOwned === 0) {
+          await db
+            .prepare('UPDATE v4_library_books SET is_owned = 0, updated_at = ? WHERE library_id = ? AND book_id = ?')
+            .bind(opts.now, libraryId, b.id)
+            .run();
+        }
+        if (opts.isWished === 0) {
+          await db
+            .prepare('UPDATE v4_library_books SET is_wished = 0, updated_at = ? WHERE library_id = ? AND book_id = ?')
+            .bind(opts.now, libraryId, b.id)
+            .run();
+        }
+      }
+    }
+  } catch {
+    // Non-bloquant si tables V4 absentes dans un test unitaire isolé
+  }
+}
+
 async function addFriendConnectionForUser(
   db: DatabaseBinding,
   userId: string,
@@ -495,7 +571,7 @@ export async function handleD1GatewayAction(
       }
 
       const code = generateNumericCode(6);
-      const tokenHash = await sha256Hex(`biblio_reset_v2:${code}`);
+      const tokenHash = await sha256Hex(`biblio_reset_v2:${userRow.id}:${code}`);
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
       await db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(userRow.id).run();
@@ -568,7 +644,7 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Compte introuvable.' }, 404);
       }
 
-      const tokenHash = await sha256Hex(`biblio_reset_v2:${code}`);
+      const tokenHash = await sha256Hex(`biblio_reset_v2:${userRow.id}:${code}`);
       const tokenRow = await db
         .prepare(
           'SELECT token_hash, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ? AND user_id = ? LIMIT 1'
@@ -1295,17 +1371,13 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Code famille introuvable ou expiré.' }, 404);
       }
 
-      // Bascule l'utilisateur sur la bibliothèque partagée
-      await db
-        .prepare('DELETE FROM library_members WHERE user_id = ?')
-        .bind(auth.userId)
-        .run();
-      await db
-        .prepare(
-          'INSERT INTO library_members (library_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
-        )
-        .bind(tokenRow.library_id, auth.userId, tokenRow.target_role || 'editor', now)
-        .run();
+      // Bascule l'utilisateur sur la bibliothèque partagée de manière atomique
+      await db.batch([
+        db.prepare('DELETE FROM library_members WHERE user_id = ?').bind(auth.userId),
+        db
+          .prepare('INSERT INTO library_members (library_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
+          .bind(tokenRow.library_id, auth.userId, tokenRow.target_role || 'editor', now)
+      ]);
 
       const tokens = await getOrCreateShareTokens(db, tokenRow.library_id, auth.userId);
       return jsonResp({
@@ -1327,14 +1399,38 @@ export async function handleD1GatewayAction(
            FROM share_tokens s
            JOIN libraries l ON l.id = s.library_id
            LEFT JOIN users u ON u.id = l.owner_user_id
-           WHERE UPPER(s.token) = ? LIMIT 1`
+           WHERE UPPER(s.token) = ? AND s.token_type = 'public_collection_readonly'
+           LIMIT 1`
         )
         .bind(shareToken)
         .first<{ library_id: string; token_type: string; token: string; library_name: string; owner_name: string | null }>();
 
       if (!tokenRow) return jsonResp({ error: 'Lien de partage invalide' }, 404);
 
-      const items = await db
+      const v4Items = await db
+        .prepare(
+          `SELECT COALESCE(b.legacy_entity_uri, 'v4:' || b.id) as edition_id,
+                  COALESCE(b.legacy_entity_uri, 'v4:' || b.id) as work_id,
+                  CASE WHEN lb.is_owned = 1 THEN 'owned' ELSE 'wishlist' END as ownership_status,
+                  NULL as location,
+                  b.canonical_title as title,
+                  b.series_id as series_uri,
+                  b.series_name,
+                  b.volume_label as series_number,
+                  COALESCE(b.volume_number, 1000) as sort_order,
+                  COALESCE(lb.selected_cover_url, b.selected_cover_url) as image_url,
+                  b.main_category,
+                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_id = lb.library_id AND ln.library_item_id = b.legacy_entity_uri AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent
+           FROM v4_library_books lb
+           JOIN books b ON b.id = lb.book_id
+           WHERE lb.library_id = ? AND (lb.is_owned = 1 OR lb.is_wished = 1)
+           ORDER BY COALESCE(b.series_name, b.canonical_title) ASC, COALESCE(b.volume_number, 1000) ASC, b.canonical_title ASC`
+        )
+        .bind(tokenRow.library_id)
+        .all<Record<string, any>>()
+        .catch(() => ({ results: [] as Record<string, any>[] }));
+
+      const legacyItems = await db
         .prepare(
           `SELECT li.edition_id, li.work_id, li.ownership_status, li.location,
                   ce.label as title, ce.series_uri, se.label as series_name,
@@ -1347,15 +1443,23 @@ export async function handleD1GatewayAction(
            ORDER BY COALESCE(se.label, ce.label) ASC, ce.sort_order ASC, ce.label ASC`
         )
         .bind(tokenRow.library_id)
-        .all();
+        .all<Record<string, any>>();
+
+      const combinedItems: Record<string, any>[] = [];
+      const seenUris = new Set<string>();
+      for (const item of [...(v4Items.results || []), ...(legacyItems.results || [])]) {
+        const key = String(item.edition_id || item.work_id || item.title || '');
+        if (!key || seenUris.has(key)) continue;
+        seenUris.add(key);
+        combinedItems.push(item);
+      }
 
       return jsonResp({
-        libraryId: tokenRow.library_id,
         libraryName: tokenRow.library_name,
         ownerName: tokenRow.owner_name || tokenRow.library_name,
         token: tokenRow.token,
         tokenType: tokenRow.token_type,
-        items: items.results || []
+        items: combinedItems
       });
     }
 
@@ -1370,8 +1474,14 @@ export async function handleD1GatewayAction(
                   u.display_name as ownerName,
                   fc.share_token as shareToken,
                   fc.created_at as createdAt,
-                  (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'owned' AND li.deleted_at IS NULL) as ownedCount,
-                  (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'wishlist' AND li.deleted_at IS NULL) as wishlistCount
+                  MAX(
+                    (SELECT COUNT(*) FROM v4_library_books lb WHERE lb.library_id = fc.target_library_id AND lb.is_owned = 1),
+                    (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'owned' AND li.deleted_at IS NULL)
+                  ) as ownedCount,
+                  MAX(
+                    (SELECT COUNT(*) FROM v4_library_books lb WHERE lb.library_id = fc.target_library_id AND lb.is_wished = 1 AND lb.is_owned = 0),
+                    (SELECT COUNT(*) FROM library_items li WHERE li.library_id = fc.target_library_id AND li.ownership_status = 'wishlist' AND li.deleted_at IS NULL)
+                  ) as wishlistCount
            FROM friend_connections fc
            JOIN libraries l ON l.id = fc.target_library_id
            LEFT JOIN users u ON u.id = l.owner_user_id
@@ -1535,6 +1645,7 @@ export async function handleD1GatewayAction(
           .bind(itemId, libraryId, entityUri, entityUri, now, now, now)
           .run();
       }
+      await syncV4LibraryBookFlag(db, libraryId, entityUri, { isOwned: 1, isWished: 0, now });
 
       return jsonResp({ item: { _id: itemId, entity: entityUri }, _id: itemId });
     }
@@ -1559,6 +1670,7 @@ export async function handleD1GatewayAction(
 
         if (existing?.id) {
           addedItems.push({ uri: entityUri, itemId: existing.id });
+          await syncV4LibraryBookFlag(db, libraryId, entityUri, { isOwned: 1, isWished: 0, now });
           continue;
         }
 
@@ -1570,6 +1682,7 @@ export async function handleD1GatewayAction(
           )
           .bind(itemId, libraryId, entityUri, entityUri, now, now, now)
           .run();
+        await syncV4LibraryBookFlag(db, libraryId, entityUri, { isOwned: 1, isWished: 0, now });
         addedItems.push({ uri: entityUri, itemId });
       }
 
@@ -1586,30 +1699,42 @@ export async function handleD1GatewayAction(
       const libraryId = auth?.libraryId || 'lib_default';
       const ids: string[] = Array.isArray(body?.ids) ? body.ids : [];
       const uris: string[] = Array.isArray(body?.uris) ? body.uris : [];
+      const allUrisToUnsync = new Set<string>(uris.map((u) => String(u || '').trim()).filter(Boolean));
 
       for (const id of ids) {
-        await db
-          .prepare('DELETE FROM library_items WHERE id = ? AND library_id = ?')
+        const existingItem = await db
+          .prepare('SELECT edition_id, work_id FROM library_items WHERE id = ? AND library_id = ? LIMIT 1')
           .bind(id, libraryId)
-          .run();
-      }
-      for (const u of uris) {
+          .first<{ edition_id: string | null; work_id: string | null }>();
+        if (existingItem?.edition_id) allUrisToUnsync.add(existingItem.edition_id);
+        if (existingItem?.work_id) allUrisToUnsync.add(existingItem.work_id);
+
         await db
-          .prepare(
-            'DELETE FROM library_items WHERE library_id = ? AND (edition_id = ? OR work_id = ?)'
-          )
-          .bind(libraryId, u, u)
-          .run();
-        const rawIsbn = u.startsWith('isbn:') ? u.slice(5) : '';
-        await db
-          .prepare(
-            rawIsbn
-              ? 'UPDATE v4_library_books SET is_owned = 0, updated_at = ? WHERE library_id = ? AND book_id IN (SELECT id FROM books WHERE legacy_entity_uri = ? UNION SELECT book_id FROM book_isbn_index WHERE isbn13 = ?)'
-              : 'UPDATE v4_library_books SET is_owned = 0, updated_at = ? WHERE library_id = ? AND book_id IN (SELECT id FROM books WHERE legacy_entity_uri = ?)'
-          )
-          .bind(...(rawIsbn ? [now, libraryId, u, rawIsbn] : [now, libraryId, u]))
+          .prepare("UPDATE loans SET returned_at = COALESCE(returned_at, ?), deleted_at = ?, updated_at = ? WHERE library_id = ? AND library_item_id = ?")
+          .bind(now, now, now, libraryId, id)
           .run()
           .catch(() => {});
+
+        await db
+          .prepare("UPDATE library_items SET deleted_at = ?, updated_at = ? WHERE id = ? AND library_id = ?")
+          .bind(now, now, id, libraryId)
+          .run();
+      }
+      for (const u of allUrisToUnsync) {
+        await db
+          .prepare(
+            "UPDATE library_items SET deleted_at = ?, updated_at = ? WHERE library_id = ? AND ownership_status = 'owned' AND (edition_id = ? OR work_id = ?)"
+          )
+          .bind(now, now, libraryId, u, u)
+          .run();
+        await db
+          .prepare(
+            "UPDATE loans SET returned_at = COALESCE(returned_at, ?), deleted_at = ?, updated_at = ? WHERE library_id = ? AND library_item_id = ?"
+          )
+          .bind(now, now, now, libraryId, u)
+          .run()
+          .catch(() => {});
+        await syncV4LibraryBookFlag(db, libraryId, u, { isOwned: 0, now });
       }
       return jsonResp({ ok: true });
     }
@@ -1648,12 +1773,11 @@ export async function handleD1GatewayAction(
 
     case 'lists-add-elements': {
       const listId = String(body?.id || '');
-      const auth = await resolveAuthSession(db, request, null);
+      const auth = await resolveAuthSession(db, request, body?.userUri || null);
       const libraryId =
-        (listId.startsWith('wish_') ? listId.slice(5) : '') || auth?.libraryId || 'lib_default';
+        auth?.libraryId || (listId.startsWith('wish_') ? listId.slice(5) : '') || 'lib_default';
       const uris: string[] = Array.isArray(body?.uris) ? body.uris : [];
 
-      await db.prepare('PRAGMA foreign_keys = OFF').run();
       for (const u of uris) {
         const entityUri = String(u || '').trim();
         if (!entityUri) continue;
@@ -1672,24 +1796,28 @@ export async function handleD1GatewayAction(
           )
           .bind(itemId, libraryId, entityUri, entityUri, now, now)
           .run();
+        await syncV4LibraryBookFlag(db, libraryId, entityUri, { isWished: 1, now });
       }
       return jsonResp({ ok: true });
     }
 
     case 'lists-remove-elements': {
       const listId = String(body?.id || '');
-      const auth = await resolveAuthSession(db, request, null);
+      const auth = await resolveAuthSession(db, request, body?.userUri || null);
       const libraryId =
-        (listId.startsWith('wish_') ? listId.slice(5) : '') || auth?.libraryId || 'lib_default';
+        auth?.libraryId || (listId.startsWith('wish_') ? listId.slice(5) : '') || 'lib_default';
       const uris: string[] = Array.isArray(body?.uris) ? body.uris : [];
 
       for (const u of uris) {
+        const entityUri = String(u || '').trim();
+        if (!entityUri) continue;
         await db
           .prepare(
-            "DELETE FROM library_items WHERE library_id = ? AND ownership_status = 'wishlist' AND (edition_id = ? OR work_id = ?)"
+            "UPDATE library_items SET deleted_at = ?, updated_at = ? WHERE library_id = ? AND ownership_status = 'wishlist' AND (edition_id = ? OR work_id = ?)"
           )
-          .bind(libraryId, u, u)
+          .bind(now, now, libraryId, entityUri, entityUri)
           .run();
+        await syncV4LibraryBookFlag(db, libraryId, entityUri, { isWished: 0, now });
       }
       return jsonResp({ ok: true });
     }
@@ -1699,7 +1827,7 @@ export async function handleD1GatewayAction(
     // ========================================================================
     case 'shelves': {
       const subPath = url.searchParams.get('path') || '';
-      const ownersParam = url.searchParams.get('owners') || '';
+      const ownersParam = url.searchParams.get('owners') || body?.userUri || '';
       const auth = await resolveAuthSession(db, request, ownersParam);
       const libraryId =
         auth?.libraryId ||
@@ -1709,7 +1837,7 @@ export async function handleD1GatewayAction(
       if (subPath === 'by-owners') {
         const rows = await db
           .prepare(
-            'SELECT id, library_item_id, borrower_name, loaned_at, notes FROM loans WHERE library_id = ? AND returned_at IS NULL AND deleted_at IS NULL'
+            "SELECT id, library_item_id, borrower_name, loaned_at, notes FROM loans WHERE library_id = ? AND library_item_id != '' AND returned_at IS NULL AND deleted_at IS NULL"
           )
           .bind(libraryId)
           .all<{
@@ -1737,8 +1865,8 @@ export async function handleD1GatewayAction(
         const shelves: Record<string, any> = {};
         for (const id of ids) {
           const r = await db
-            .prepare('SELECT id, library_item_id, borrower_name, loaned_at, notes FROM loans WHERE id = ? LIMIT 1')
-            .bind(id)
+            .prepare('SELECT id, library_item_id, borrower_name, loaned_at, notes FROM loans WHERE id = ? AND library_id = ? LIMIT 1')
+            .bind(id, libraryId)
             .first<{
               id: string;
               library_item_id: string;
@@ -1751,7 +1879,7 @@ export async function handleD1GatewayAction(
               _id: r.id,
               name: `Prêts - ${r.borrower_name}`,
               description: r.notes || String(new Date(r.loaned_at).getTime()),
-              items: [r.library_item_id]
+              items: r.library_item_id ? [r.library_item_id] : []
             };
           }
         }
@@ -1763,18 +1891,9 @@ export async function handleD1GatewayAction(
         const borrowerName = rawName.replace(/^Prêts?\s*[-:]?\s*/i, '').trim();
         const effectiveBorrower = borrowerName || 'Inconnu';
         const description = String(body?.description || Date.now());
-        const items: string[] = Array.isArray(body?.items) ? body.items : [];
+        const items: string[] = Array.isArray(body?.items) ? body.items.map(String).filter(Boolean) : [];
         const itemRef = items[0] || '';
         const loanId = `loan_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-
-        await db.prepare('PRAGMA foreign_keys = OFF').run();
-        await db
-          .prepare(
-            `INSERT INTO loans (id, library_id, library_item_id, borrower_name, loaned_at, notes, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-          )
-          .bind(loanId, libraryId, itemRef, effectiveBorrower, now, description, now, now)
-          .run();
 
         // N'enregistre le contact que s'il s'agit d'un vrai nom (pas d'un libellé générique)
         if (
@@ -1792,6 +1911,14 @@ export async function handleD1GatewayAction(
             .run();
         }
 
+        await db
+          .prepare(
+            `INSERT INTO loans (id, library_id, library_item_id, borrower_name, loaned_at, notes, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(loanId, libraryId, itemRef, effectiveBorrower, now, description, now, now)
+          .run();
+
         return jsonResp({
           shelf: { _id: loanId, name: `Prêts - ${effectiveBorrower}`, description, items }
         });
@@ -1799,22 +1926,45 @@ export async function handleD1GatewayAction(
 
       if (subPath === 'add-items') {
         const loanId = String(body?.id || '');
-        const items: string[] = Array.isArray(body?.items) ? body.items : [];
+        const items: string[] = Array.isArray(body?.items) ? body.items.map(String).filter(Boolean) : [];
         if (loanId && items[0]) {
-          await db
-            .prepare('UPDATE loans SET library_item_id = ?, updated_at = ? WHERE id = ?')
-            .bind(items[0], now, loanId)
-            .run();
+          const existingLoan = await db
+            .prepare('SELECT library_item_id, borrower_name, notes FROM loans WHERE id = ? AND library_id = ? LIMIT 1')
+            .bind(loanId, libraryId)
+            .first<{ library_item_id: string | null; borrower_name: string; notes: string | null }>();
+          if (existingLoan && (!existingLoan.library_item_id || existingLoan.library_item_id === items[0])) {
+            await db
+              .prepare('UPDATE loans SET library_item_id = ?, updated_at = ? WHERE id = ? AND library_id = ?')
+              .bind(items[0], now, loanId, libraryId)
+              .run();
+          } else if (existingLoan) {
+            // Un livre était déjà rattaché à cette étagère de prêt : créer un nouveau prêt sans écraser le précédent !
+            const newLoanId = `loan_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+            await db
+              .prepare(
+                `INSERT INTO loans (id, library_id, library_item_id, borrower_name, loaned_at, notes, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+              )
+              .bind(newLoanId, libraryId, items[0], existingLoan.borrower_name, now, existingLoan.notes || String(Date.now()), now, now)
+              .run();
+          }
         }
         return jsonResp({ ok: true });
       }
 
       if (subPath === 'remove-items' || subPath === 'delete') {
         const loanId = String(body?.id || (Array.isArray(body?.ids) ? body.ids[0] : '') || '');
+        const items: string[] = Array.isArray(body?.items) ? body.items.map(String).filter(Boolean) : [];
         if (loanId) {
           await db
-            .prepare('UPDATE loans SET returned_at = ?, updated_at = ? WHERE id = ?')
-            .bind(now, now, loanId)
+            .prepare('UPDATE loans SET returned_at = ?, updated_at = ? WHERE id = ? AND library_id = ?')
+            .bind(now, now, loanId, libraryId)
+            .run();
+        }
+        if (items[0]) {
+          await db
+            .prepare('UPDATE loans SET returned_at = ?, updated_at = ? WHERE library_id = ? AND library_item_id = ? AND returned_at IS NULL')
+            .bind(now, now, libraryId, items[0])
             .run();
         }
         return jsonResp({ ok: true });
@@ -1827,6 +1977,10 @@ export async function handleD1GatewayAction(
     // 5. CATALOGUE COMMUN, ENTITÉS, RECHERCHE & SÉRIES DANS D1
     // ========================================================================
     case 'rehydrate-catalog': {
+      const admin = await requireAdmin(db, request);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
       const offset = Number(url.searchParams.get('offset') || 0);
       const limit = Number(url.searchParams.get('limit') || 6);
       const result = await rehydrateAllCatalogEntitiesInD1(db, { offset, limit });
@@ -2025,6 +2179,7 @@ export async function handleD1GatewayAction(
     case 'entities-update-claim': {
       const uri = String(body?.uri || '').trim();
       const property = String(body?.property || '').trim();
+      const oldValue = body?.['old-value'] !== undefined ? body['old-value'] : body?.oldValue;
       const newValue = body?.['new-value'] !== undefined ? body['new-value'] : body?.newValue;
       if (!uri || !property) return jsonResp({ error: 'uri et property requis' }, 400);
 
@@ -2037,10 +2192,27 @@ export async function handleD1GatewayAction(
 
       const entityObj = JSON.parse(row.entity_json);
       entityObj.claims = entityObj.claims || {};
+      const existingArr: unknown[] = Array.isArray(entityObj.claims[property]) ? [...entityObj.claims[property]] : [];
       if (newValue === null || newValue === undefined || newValue === '') {
-        delete entityObj.claims[property];
+        if (oldValue !== null && oldValue !== undefined && oldValue !== '') {
+          const filtered = existingArr.filter((v) => String(v) !== String(oldValue));
+          if (filtered.length > 0) entityObj.claims[property] = filtered;
+          else delete entityObj.claims[property];
+        } else {
+          delete entityObj.claims[property];
+        }
+      } else if (Array.isArray(newValue)) {
+        entityObj.claims[property] = newValue;
+      } else if (oldValue !== null && oldValue !== undefined && oldValue !== '') {
+        const idx = existingArr.findIndex((v) => String(v) === String(oldValue));
+        if (idx >= 0) existingArr[idx] = newValue;
+        else if (!existingArr.includes(newValue)) existingArr.push(newValue);
+        entityObj.claims[property] = existingArr;
+      } else if (property === 'wdt:P50') {
+        if (!existingArr.includes(newValue)) existingArr.push(newValue);
+        entityObj.claims[property] = existingArr;
       } else {
-        entityObj.claims[property] = Array.isArray(newValue) ? newValue : [newValue];
+        entityObj.claims[property] = [newValue];
       }
 
       const seriesUri =
@@ -2555,41 +2727,76 @@ export async function handleD1GatewayAction(
 
       // Synchronisation bidirectionnelle avec les tables V4 (`v4_series` + `books`) sans jamais fusionner ni supprimer deux tomes
       try {
-        const cleanCoreKey = normalizeTextKey(finalSeriesLabel.replace(/^(?:la\s+)?collection\s+/i, ''));
-        if (finalSeriesLabel) {
+        const cleanCoreKey = normalizeTextKey(finalSeriesLabel.replace(/^(?:la\s+)?collection\s+/i, '')) || finalSeriesUri;
+        let v4SeriesRow = await db
+          .prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? OR normalized_core_key = ? LIMIT 1')
+          .bind(finalSeriesUri, cleanCoreKey)
+          .first<{ id: string; canonical_name: string }>();
+        if (!v4SeriesRow && finalSeriesLabel) {
           await db
             .prepare(
               `INSERT OR IGNORE INTO v4_series (id, canonical_name, normalized_core_key, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?)`
             )
-            .bind(finalSeriesUri, finalSeriesLabel, cleanCoreKey || finalSeriesUri, now, now)
+            .bind(finalSeriesUri, finalSeriesLabel, cleanCoreKey, now, now)
             .run();
+          v4SeriesRow = await db
+            .prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? OR normalized_core_key = ? LIMIT 1')
+            .bind(finalSeriesUri, cleanCoreKey)
+            .first<{ id: string; canonical_name: string }>();
         }
-        if (sourceSeriesId && sourceSeriesId !== finalSeriesUri) {
+        const effectiveV4SeriesId = v4SeriesRow?.id || finalSeriesUri;
+        const effectiveV4SeriesName = v4SeriesRow?.canonical_name || finalSeriesLabel;
+
+        if (sourceSeriesId && sourceSeriesId !== effectiveV4SeriesId) {
           await db
             .prepare('UPDATE books SET series_id = ?, series_name = ?, updated_at = ? WHERE series_id = ?')
-            .bind(finalSeriesUri, finalSeriesLabel, now, sourceSeriesId)
+            .bind(effectiveV4SeriesId, effectiveV4SeriesName, now, sourceSeriesId)
             .run();
         }
         for (const bUri of bookUris) {
           const cleanIsbn = bUri.startsWith('isbn:') ? bUri.slice(5) : '';
+          const isNumericVol = Boolean(customVolumeLabel && /^\d+$/.test(customVolumeLabel));
+          const parsedVolNum = isNumericVol ? parseInt(customVolumeLabel!, 10) : null;
+          const isExplicitNonNumericVol = Boolean(customVolumeLabel && !isNumericVol);
           await db
             .prepare(
               `UPDATE books
                SET series_id = ?,
                    series_name = ?,
                    volume_label = COALESCE(?, volume_label),
-                   volume_number = COALESCE(?, volume_number),
-                   is_hors_serie = CASE WHEN ? IS NOT NULL THEN 0 ELSE is_hors_serie END,
+                   volume_number = CASE
+                     WHEN ? = 1 THEN ?
+                     WHEN ? = 1 THEN NULL
+                     ELSE volume_number
+                   END,
+                   is_hors_serie = CASE
+                     WHEN is_integral = 1 THEN 0
+                     WHEN ? = 1 THEN 0
+                     WHEN ? = 1 THEN 1
+                     ELSE is_hors_serie
+                   END,
+                   hors_serie_label = CASE
+                     WHEN is_integral = 1 THEN NULL
+                     WHEN ? = 1 THEN NULL
+                     WHEN ? = 1 THEN ?
+                     ELSE hors_serie_label
+                   END,
                    updated_at = ?
                WHERE legacy_entity_uri = ? OR (? != '' AND known_isbns_json LIKE ?)`
             )
             .bind(
-              finalSeriesUri,
-              finalSeriesLabel,
+              effectiveV4SeriesId,
+              effectiveV4SeriesName,
               customVolumeLabel || null,
-              customVolumeLabel && /^\d+$/.test(customVolumeLabel) ? parseInt(customVolumeLabel, 10) : null,
-              customVolumeLabel && /^\d+$/.test(customVolumeLabel) ? 1 : null,
+              isNumericVol ? 1 : 0,
+              parsedVolNum,
+              isExplicitNonNumericVol ? 1 : 0,
+              isNumericVol ? 1 : 0,
+              isExplicitNonNumericVol ? 1 : 0,
+              isNumericVol ? 1 : 0,
+              isExplicitNonNumericVol ? 1 : 0,
+              customVolumeLabel || null,
               now,
               bUri,
               cleanIsbn,
@@ -2601,7 +2808,7 @@ export async function handleD1GatewayAction(
           .prepare(
             'UPDATE v4_series SET known_volumes_count = (SELECT COUNT(*) FROM books WHERE series_id = ?), updated_at = ? WHERE id = ?'
           )
-          .bind(finalSeriesUri, now, finalSeriesUri)
+          .bind(effectiveV4SeriesId, now, effectiveV4SeriesId)
           .run();
       } catch {
         // Non-bloquant si tables V4 absentes dans un contexte de test partiel

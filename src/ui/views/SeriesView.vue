@@ -32,11 +32,12 @@ const isLoading = ref(true);
 const showLendModal = ref(false);
 const showMergeSeriesModal = ref(false);
 const displayedTomes = ref<HumanizedBook[]>([]);
+const filteredTomes = ref<HumanizedBook[]>([]);
 
 // Stockage du titre résolu (pour éviter wd:Q...)
 const resolvedSeriesTitle = ref<string | null>(null);
 
-const progressState = seriesOrchestrator.getProgress(seriesId.value);
+const progressState = computed(() => seriesOrchestrator.getProgress(seriesId.value).value);
 const progressPercentage = computed(() => {
   if (!progressState.value.total) return 0;
   return Math.round((progressState.value.current / progressState.value.total) * 100);
@@ -89,6 +90,11 @@ watch(
   () => seriesId.value,
   async (newId) => {
     if (!newId) return;
+    resolvedSeriesTitle.value = null;
+    selectedIds.value = [];
+    seriesTomes.value = [];
+    displayedTomes.value = [];
+    filteredTomes.value = [];
     await loadLocalData();
     seriesOrchestrator.startBackgroundHydration(newId);
   }
@@ -111,7 +117,10 @@ watch(
 // ... (Garder les méthodes existantes: handleToggleAll, dispatchBatchAction, confirmGroupLend, handleBackToCollection, isAllSelected, etc.)
 // Note : J'ai omis le code répétitif pour la concision, mais tu conserves tes méthodes existantes ici.
 
-const isAllSelected = computed(() => seriesTomes.value.length > 0 && selectedIds.value.length === seriesTomes.value.length);
+const isAllSelected = computed(() => {
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  return targets.length > 0 && targets.every((tome) => selectedIds.value.includes(tome.uri));
+});
 const selectedBooks = computed(() => seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri)));
 const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
 const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
@@ -130,7 +139,8 @@ const batchContext = computed(() => {
 });
 
 const handleToggleAll = (checked: boolean) => {
-  selectedIds.value = checked ? seriesTomes.value.map(item => item.uri) : [];
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  selectedIds.value = checked ? targets.map(item => item.uri) : [];
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
@@ -240,7 +250,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
           :selectAllValue="isAllSelected"
           :selectedCount="selectedIds.length"
           @update:selectAllValue="handleToggleAll"
-          @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'series')"
+          @update:filteredItems="(val) => { filteredTomes = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'series'); }"
           @update:processedItems="(val) => displayedTomes = val"
         >
           <div v-if="displayedTomes.length === 0">

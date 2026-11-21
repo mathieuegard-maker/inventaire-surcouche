@@ -170,9 +170,13 @@ export const scannerState = {
   async handleBurstDetection(response: any, scannedIsbn: string) {
     if (!scannedIsbn) return;
 
-    // Éviter d'empiler deux fois le même ISBN dans la liste courante
+    // Éviter d'empiler deux fois le même ISBN ou la même œuvre dans la liste courante
     const alreadyInList = burstBooks.value.some(
-      (b) => b.isbn13 === scannedIsbn || b.isbn10 === scannedIsbn || b.uri === `isbn:${scannedIsbn}`
+      (b) =>
+        b.isbn13 === scannedIsbn ||
+        b.isbn10 === scannedIsbn ||
+        b.uri === `isbn:${scannedIsbn}` ||
+        b.knownIsbns?.includes(scannedIsbn)
     );
     if (alreadyInList) {
       playScanBeep('duplicate');

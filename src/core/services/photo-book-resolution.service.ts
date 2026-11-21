@@ -262,11 +262,23 @@ async function tryResolveFromLocalOrServerCatalog(cand: RecognizedBookCandidate)
       const qs = new URLSearchParams();
       if (cand.title) qs.set('title', cand.title);
       if (cand.series) qs.set('series', cand.series);
-      if (cand.volumeNumber) qs.set('vol', cand.volumeNumber);
+      if (cand.volumeNumber) qs.set('volumeNumber', cand.volumeNumber);
       if (cand.author) qs.set('author', cand.author);
       const res = await fetch(`/api/v2/books/search-local?${qs.toString()}`).catch(() => null);
       if (res && res.ok) {
         const data = (await res.json().catch(() => null)) as {
+          hits?: Array<{
+            isbn13?: string;
+            knownIsbns?: string[];
+            title?: string;
+            authors?: string[];
+            seriesName?: string;
+            series?: string;
+            volumeNumber?: number | null;
+            seriesNumber?: string;
+            coverUrl?: string;
+            genres?: string[];
+          }>;
           match?: {
             isbn13?: string;
             knownIsbns?: string[];
@@ -278,18 +290,34 @@ async function tryResolveFromLocalOrServerCatalog(cand: RecognizedBookCandidate)
             genres?: string[];
           };
         } | null;
-        if (data?.match?.isbn13 && matchesBook(data.match)) {
+        const firstHit = data?.hits?.[0];
+        const rawMatch = firstHit
+          ? {
+              isbn13: firstHit.isbn13,
+              knownIsbns: firstHit.knownIsbns,
+              title: firstHit.title,
+              authors: firstHit.authors,
+              series: firstHit.seriesName || firstHit.series,
+              seriesNumber:
+                firstHit.volumeNumber !== null && firstHit.volumeNumber !== undefined
+                  ? String(firstHit.volumeNumber)
+                  : firstHit.seriesNumber,
+              coverUrl: firstHit.coverUrl,
+              genres: firstHit.genres
+            }
+          : data?.match;
+        if (rawMatch?.isbn13 && matchesBook(rawMatch)) {
           return {
-            isbn13: data.match.isbn13,
-            knownIsbns: data.match.knownIsbns,
+            isbn13: rawMatch.isbn13,
+            knownIsbns: rawMatch.knownIsbns,
             meta: {
-              isbn: data.match.isbn13,
-              title: data.match.title || cand.title,
-              authors: data.match.authors || [],
-              coverUrl: data.match.coverUrl,
-              series: data.match.series,
-              seriesNumber: data.match.seriesNumber,
-              genres: data.match.genres || []
+              isbn: rawMatch.isbn13,
+              title: rawMatch.title || cand.title,
+              authors: rawMatch.authors || [],
+              coverUrl: rawMatch.coverUrl,
+              series: rawMatch.series,
+              seriesNumber: rawMatch.seriesNumber,
+              genres: rawMatch.genres || []
             }
           };
         }

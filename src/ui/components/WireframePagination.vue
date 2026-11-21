@@ -103,6 +103,12 @@ watch([internalSearchQuery, internalPageSize], () => {
   internalPage.value = 1;
 });
 
+watch(totalPages, (tp) => {
+  if (internalPage.value > tp) {
+    internalPage.value = Math.max(1, tp);
+  }
+});
+
 // Émission automatique de la liste finale (et de la liste complète filtrée) vers le parent
 watch(filteredItems, (allFiltered) => {
   emit('update:filteredItems', allFiltered);

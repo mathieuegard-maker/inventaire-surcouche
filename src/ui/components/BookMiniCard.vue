@@ -73,6 +73,7 @@ const handleZoneClick = () => {
       <img
         v-if="!coverExhausted && (book.localCover || book.coverUrl || book.isbn13 || book.isbn10)"
         :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
+        :data-cover-isbn="book.isbn13 || book.isbn10"
         :alt="book.title"
         class="row-cover-image"
         @load="onCoverLoad"
@@ -83,7 +84,7 @@ const handleZoneClick = () => {
       </div>
       
       <div v-if="book.seriesNumber" class="volume-number">
-        T.{{ book.seriesNumber }}
+        {{ /^(?:int|hs)\b/i.test(book.seriesNumber.trim()) ? book.seriesNumber : `T.${book.seriesNumber}` }}
       </div>
     </div>
 
@@ -95,7 +96,9 @@ const handleZoneClick = () => {
       </p>
       <p v-else-if="book.series" class="row-series-meta">
         {{ book.series }}
-        <span v-if="book.seriesNumber"> — Tome {{ book.seriesNumber }}</span>
+        <span v-if="book.seriesNumber">
+          — {{ /^(?:int|hs)\b/i.test(book.seriesNumber.trim()) ? book.seriesNumber : `Tome ${book.seriesNumber}` }}
+        </span>
       </p>
       
       <p v-if="book.authors?.length && !book.loan" class="row-authors">

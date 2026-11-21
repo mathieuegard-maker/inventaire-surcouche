@@ -22,7 +22,7 @@ import { imageUtil } from '../../core/utils/image.util';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 import { scannerState } from '../../state/scanner';
 import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
-import { saveBookNavigationOrder, sortBooksByCollectionMode } from '../../state/bookNavigation';
+import { saveBookNavigationOrder, sortBooksByCollectionMode, sortSeriesTomes } from '../../state/bookNavigation';
 
 const router = useRouter();
 const route = useRoute();
@@ -55,11 +55,14 @@ const pageSize = ref(pageState.pageSize);
 const searchQuery = ref(pageState.searchQuery);
 
 const displayedBooks = ref<HumanizedBook[]>([]);
+const filteredCollectionBooks = ref<HumanizedBook[]>([]);
 const displayedSeries = ref<any[]>([]);
 
 const isAllSelected = computed(() => {
-  const targets = currentSortBooks.value;
-  return targets.length > 0 && selectedIds.value.length === targets.length;
+  const targets = filteredCollectionBooks.value.length > 0 || searchQuery.value.trim()
+    ? filteredCollectionBooks.value
+    : currentSortBooks.value;
+  return targets.length > 0 && targets.every((b) => selectedIds.value.includes(b.uri));
 });
 
 // COHÉRENCE ROUTAGE : Met à jour l'URL de manière transparente dès que l'utilisateur change d'onglet
@@ -211,12 +214,12 @@ const seriesGondolas = computed(() => {
   });
 
   const gondolas = Object.values(groups).map(g => {
-    g.tomes.sort((a, b) => parseInt(a.seriesNumber || '999') - parseInt(b.seriesNumber || '999'));
-    const coverBook = g.tomes.find(t => t.localCover || t.coverUrl) || g.tomes[0];
+    const sortedTomes = sortSeriesTomes(g.tomes);
+    const coverBook = sortedTomes.find(t => t.localCover || t.coverUrl) || sortedTomes[0];
     return {
       id: g.id,
       name: g.name,
-      ownedCount: g.tomes.length,
+      ownedCount: sortedTomes.length,
       coverUrl: imageUtil.resolveCoverUrl(coverBook)
     };
   });
@@ -245,7 +248,10 @@ const handleToggleAll = (checked: boolean) => {
   if (!checked) {
     selectedIds.value = [];
   } else {
-    selectedIds.value = currentSortBooks.value.map(b => b.uri);
+    const targets = filteredCollectionBooks.value.length > 0 || searchQuery.value.trim()
+      ? filteredCollectionBooks.value
+      : currentSortBooks.value;
+    selectedIds.value = targets.map(b => b.uri);
   }
 };
 
@@ -363,7 +369,7 @@ const resetSelection = () => {
         v-model:pageSize="pageSize"
         v-model:searchQuery="searchQuery"
         @update:selectAllValue="handleToggleAll"
-        @update:filteredItems="(val) => saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'collection')"
+        @update:filteredItems="(val) => { filteredCollectionBooks = val; saveBookNavigationOrder(val.map((b: HumanizedBook) => b.uri), 'collection'); }"
         @update:processedItems="(val) => displayedBooks = val"
       >
         <div v-if="displayedBooks.length === 0">

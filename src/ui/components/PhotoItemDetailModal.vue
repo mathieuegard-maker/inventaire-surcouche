@@ -273,10 +273,14 @@ const handleOptionTap = (opt: PhotoResolutionOption | null) => {
     localSeries.value = opt.series || localSeries.value;
     localVolume.value = opt.seriesNumber || '';
     localIsIntegral.value = Boolean(opt.isIntegral);
+    if ((opt as any).includedVolumeNumbers?.length) {
+      localIncludedVolumesText.value = (opt as any).includedVolumeNumbers.join(', ');
+    }
     localSelected.value = true;
   } else {
     localSelected.value = false;
   }
+  commitFieldChanges();
 };
 
 const handleSearchBnf = () => {

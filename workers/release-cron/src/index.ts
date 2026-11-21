@@ -26,15 +26,23 @@ export default {
       error: err instanceof Error ? err.message : String(err)
     }));
     const sweepRes = await runCentralizedSeriesReleaseSweep(env.DB, {
-      limit: 5,
+      limit: 4,
       staleDays: 3
-    });
+    }).catch((err) => ({
+      checkedSeries: 0,
+      alertsCreated: 0,
+      error: err instanceof Error ? err.message : String(err)
+    }));
     const silentRes = await runSilentEditionDiscoveryPass(env.DB, 2).catch(() => ({
       checkedBooks: 0,
       newIsbnsIndexed: 0
     }));
-    const digestRes = await runHourlyDigestDispatch(env.DB, env);
-    const purgeRes = await purgeOldPipelineLogs(env.DB);
+    const digestRes = await runHourlyDigestDispatch(env.DB, env).catch((err) => ({
+      evaluatedUsers: 0,
+      notifiedUsers: 0,
+      error: err instanceof Error ? err.message : String(err)
+    }));
+    const purgeRes = await purgeOldPipelineLogs(env.DB).catch(() => ({ deletedCount: 0 }));
 
     tracer.record(
       'CRON',

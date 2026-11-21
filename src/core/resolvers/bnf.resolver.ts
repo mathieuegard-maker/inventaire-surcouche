@@ -3,6 +3,7 @@ import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
 import { getLevenshteinDistance } from '../utils/string.util';
+import { areDistinctSeriesWorkTitles, DIVERGENT_NUMBERING_EDITION_REGEX } from './series-canonical.resolver';
 
 const JUNK_SERIES_REGEX = /\b(intégrale|coffret|box\s*set|pack|compilation)\b|tomes?\s*\d+\s*[-–à]\s*\d+|vols?\s*\d+\s*[-–à]\s*\d+/i;
 
@@ -57,6 +58,12 @@ export function normalizeSeriesNumber(raw?: string): string {
   return numeric;
 }
 
+const STOP_WORDS_FR_EN = new Set([
+  'le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'ou', 'au', 'aux',
+  'en', 'dans', 'sur', 'par', 'pour', 'avec', 'sans', 'sous', 'vers', 'chez',
+  'the', 'of', 'and', 'in', 'to', 'for', 'on', 'with'
+]);
+
 /**
  * Note la qualité et la fraîcheur d'une édition (langue française, ISBN FR, couverture, année récente).
  */
@@ -71,6 +78,12 @@ export function scoreEditionCandidate(
   if (c._hasPrimaryIsbn) score += 6;
   if (c.authors.length > 0) score += 5;
   if (c.publisher) score += 2;
+  if (
+    (c.collection && DIVERGENT_NUMBERING_EDITION_REGEX.test(c.collection)) ||
+    (c.publisher && DIVERGENT_NUMBERING_EDITION_REGEX.test(c.publisher))
+  ) {
+    score -= 18;
+  }
   if (c.publishDate) {
     score += 2;
     const yearNum = parseInt(c.publishDate, 10);
@@ -83,7 +96,9 @@ export function scoreEditionCandidate(
 }
 
 function tokenOverlapRatio(needle: string, haystack: string): number {
-  const needleTokens = normalizeTextKey(needle).split(' ').filter((t) => t.length >= 2);
+  const rawNeedle = normalizeTextKey(needle).split(' ').filter((t) => t.length >= 2);
+  const filteredNeedle = rawNeedle.filter((t) => !STOP_WORDS_FR_EN.has(t));
+  const needleTokens = filteredNeedle.length > 0 ? filteredNeedle : rawNeedle;
   const hayTokens = new Set(normalizeTextKey(haystack).split(' ').filter((t) => t.length >= 2));
   if (needleTokens.length === 0 || hayTokens.size === 0) return 0;
   let hits = 0;
@@ -251,12 +266,20 @@ export function cleanTitle(rawTitle: string): string {
  */
 export function cleanAuthor(rawAuthor: string): string {
   if (!rawAuthor) return '';
-  // 1. Supprime le rôle à la fin (ex: ". Auteur du texte", ". Illustrateur")
-  let cleaned = rawAuthor.replace(/\.\s*[^.]*$/, '').trim();
+  // 1. Supprime uniquement un rôle bibliographique explicite à la fin (ex: ". Auteur du texte", ". Illustrateur")
+  // sans tronquer les noms à initiales tels que "Rowling, J. K." ou "E. P. Jacobs".
+  let cleaned = rawAuthor
+    .replace(
+      /\.\s*(?:auteur(?:\s+du\s+texte|\s+adaptateur)?|illustrateur|dessinateur|sc[ée]nariste|traducteur|coloriste|directeur(?:\s+de\s+publication)?|pr[ée]facier|[ée]diteur(?:\s+scientifique)?|collaborateur|adaptateur|postfacier|photographe|cartographe|compositeur|interpr[èe]te)\b.*$/i,
+      ''
+    )
+    .trim();
   // 2. Supprime les parenthèses de dates (ex: "(1972-....)" ou "(1926-1977)")
   cleaned = cleaned.replace(/\s*\([^)]*\)/g, '').trim();
-  // 3. Supprime tout point ou espace résiduel à la fin
-  cleaned = cleaned.replace(/[.\s]+$/, '').trim();
+  // 3. Supprime tout point ou espace résiduel à la fin (sauf initiale d'une lettre majuscule)
+  if (!/\b[A-Z]\.$/.test(cleaned)) {
+    cleaned = cleaned.replace(/[.\s]+$/, '').trim();
+  }
   // 4. Inverser Nom, Prénom si une virgule est présente
   if (cleaned.includes(',')) {
     const parts = cleaned.split(',');
@@ -345,7 +368,7 @@ export function parseSeriesFromString(text: string): { series?: string; seriesNu
   }
   
   // Parenthèses à la fin : "Thorgal (tome 24)" ou "Thorgal (24)"
-  const parenthesisRegex = /\s*\((?:tome|t\.|volume|vol\.|n°|no\.?|v)?\s*(\d+|[A-Z]+)\)$/i;
+  const parenthesisRegex = /\s*\((?:(?:\b(?:tome|volume|vol|no)(?:\.\s*|\s+)|\bt\.\s*|n°\s*))?(\d+|[IVXLCDM]+)\)$/i;
   const matchParenthesis = content.match(parenthesisRegex);
   if (matchParenthesis) {
     const series = cleanSeriesName(content.replace(parenthesisRegex, ''));
@@ -353,17 +376,17 @@ export function parseSeriesFromString(text: string): { series?: string; seriesNu
     return { series, seriesNumber };
   }
   
-  // Designateur de volume : "Docteur Bonheur, Tome 1"
-  const volumeDesignatorRegex = /(?:[;,.\s]+)?\b(tome|t\.|volume|vol\.|n°|no\.?|v)\b\s*(\d+|[A-Z]+)/i;
+  // Designateur de volume : "Docteur Bonheur, Tome 1" ou "Docteur Bonheur, T. 1"
+  const volumeDesignatorRegex = /(?:[;,.\s]+)?(?:\b(?:tome|volume|vol|no)(?:\.\s*|\s+)|\bt\.\s*|n°\s*)(\d+|[IVXLCDM]+)\b/i;
   const matchDesignator = content.match(volumeDesignatorRegex);
   if (matchDesignator) {
     const series = cleanSeriesName(content.substring(0, matchDesignator.index));
-    const seriesNumber = matchDesignator[2].trim();
+    const seriesNumber = matchDesignator[1].trim();
     return { series, seriesNumber };
   }
   
   // Separateur suivi d'un nombre : "Thorgal ; 24"
-  const numberSeparatorRegex = /[;,]\s*(\d+|[A-Z]+)$/;
+  const numberSeparatorRegex = /[;,]\s*(\d+|[IVXLCDM]+)$/;
   const matchNumberSep = content.match(numberSeparatorRegex);
   if (matchNumberSep) {
     const series = cleanSeriesName(content.substring(0, matchNumberSep.index));
@@ -381,7 +404,7 @@ export function parseSeriesFromTitle(title: string): { title: string; series?: s
   let clean = title.trim();
   
   // Pattern 1: "Tome 1, Le nom de la série"
-  const prefixTomeRegex = /^(?:Tome|T\.|Volume|Vol\.|N°|No\.?)\s*(\d+|[A-Z]+)\s*,\s*(.+)$/i;
+  const prefixTomeRegex = /^(?:\b(?:tome|volume|vol|no)(?:\.\s*|\s+)|\bt\.\s*|n°\s*)(\d+|[IVXLCDM]+)\s*,\s*(.+)$/i;
   const matchPrefix = clean.match(prefixTomeRegex);
   if (matchPrefix) {
     const seriesNumber = matchPrefix[1].trim();
@@ -393,12 +416,12 @@ export function parseSeriesFromTitle(title: string): { title: string; series?: s
     };
   }
   
-  // Pattern 2: "Docteur Bonheur. Tome 1"
-  const suffixTomeRegex = /^(.+?)(?:\s*[\.,\s]\s*)\b(tome|t\.|volume|vol\.|n°|no\.?|v)\b\s*(\d+|[A-Z]+)$/i;
+  // Pattern 2: "Docteur Bonheur. Tome 1" ou "Docteur Bonheur, T. 1"
+  const suffixTomeRegex = /^(.+?)(?:\s*[\.,\s]\s*)(?:\b(?:tome|volume|vol|no)(?:\.\s*|\s+)|\bt\.\s*|n°\s*)(\d+|[IVXLCDM]+)$/i;
   const matchSuffix = clean.match(suffixTomeRegex);
   if (matchSuffix) {
     const series = matchSuffix[1].trim();
-    const seriesNumber = matchSuffix[3].trim();
+    const seriesNumber = matchSuffix[2].trim();
     return {
       title: series,
       series,
@@ -567,43 +590,55 @@ export function parseIntermarcRecord(
 
   // 3. Série & numéro de tome (460 -> 245$p -> 290/410 uniquement si non-collection-poche et n° <= 150)
   let imSeries: string | undefined = inferredSeriesFrom245;
-  let imSeriesNumber: string | undefined = partNumber245;
+  let imSeriesNumber: string | undefined = isDoubleOrIntegral ? undefined : partNumber245;
   let bnfEnsembleId: string | undefined;
-  const f460 = fields.find(f => f.tag === '460' || f.tag === '461');
-  if (f460) {
+  for (const f460 of fields.filter(f => f.tag === '460' || f.tag === '461')) {
     const rawEns = getSubfield(f460, '3') || '';
     const digitsEns = rawEns.replace(/\D/g, '');
-    bnfEnsembleId = digitsEns.length >= 8 ? digitsEns.slice(-8) : (digitsEns || undefined);
-    imSeries = getSubfield(f460, 't') || getSubfield(f460, 'a') || imSeries;
-    imSeriesNumber = getSubfield(f460, 'v') || imSeriesNumber;
-  }
-  if (!imSeries) {
-    const f290 = fields.find(f => f.tag === '290');
-    const v290 = f290 ? getSubfield(f290, 'v') : undefined;
-    const cand290 = f290 ? getSubfield(f290, 'a') || getSubfield(f290, 't') : undefined;
-    if (f290 && cand290 && v290 && !isPaperbackCollectionLabel(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
-      imSeries = cand290;
-      imSeriesNumber = v290;
+    const candEnsId = digitsEns.length >= 8 ? digitsEns.slice(-8) : (digitsEns || undefined);
+    const candSeries460 = getSubfield(f460, 't') || getSubfield(f460, 'a');
+    if (candEnsId && /^[34]\d{6,}$/.test(candEnsId) && !bnfEnsembleId) {
+      bnfEnsembleId = candEnsId;
+    }
+    if (candSeries460 && !isPaperbackCollectionLabel(candSeries460)) {
+      imSeries = candSeries460;
+      imSeriesNumber = getSubfield(f460, 'v') || imSeriesNumber;
+      if (candEnsId && /^[34]\d{6,}$/.test(candEnsId)) bnfEnsembleId = candEnsId;
+      break;
     }
   }
   if (!imSeries) {
-    const f410 = fields.find(f => f.tag === '410');
-    const v410 = f410 ? getSubfield(f410, 'v') : undefined;
-    const cand410 = f410 ? getSubfield(f410, 't') || getSubfield(f410, 'a') : undefined;
-    if (f410 && cand410 && v410 && !isPaperbackCollectionLabel(cand410) && isPlausibleFallbackSeriesNumber(v410)) {
-      imSeries = cand410;
-      imSeriesNumber = v410;
+    for (const f290 of fields.filter(f => f.tag === '290')) {
+      const v290 = getSubfield(f290, 'v');
+      const cand290 = getSubfield(f290, 'a') || getSubfield(f290, 't');
+      if (cand290 && v290 && !isPaperbackCollectionLabel(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
+        imSeries = cand290;
+        imSeriesNumber = v290;
+        break;
+      }
+    }
+  }
+  if (!imSeries) {
+    for (const f410 of fields.filter(f => f.tag === '410')) {
+      const v410 = getSubfield(f410, 'v');
+      const cand410 = getSubfield(f410, 't') || getSubfield(f410, 'a');
+      if (cand410 && v410 && !isPaperbackCollectionLabel(cand410) && isPlausibleFallbackSeriesNumber(v410)) {
+        imSeries = cand410;
+        imSeriesNumber = v410;
+        break;
+      }
     }
   }
 
   const titleParse = parseSeriesFromTitle(rawImTitle);
   const title = titleParse.title || rawImTitle.trim();
   const series = cleanSeriesName(imSeries || titleParse.series || '');
-  const rawSeriesNum =
-    imSeriesNumber ||
-    imVolumeNumber ||
-    (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245) ? rawE245 : undefined) ||
-    titleParse.seriesNumber;
+  const rawSeriesNum = isDoubleOrIntegral
+    ? undefined
+    : (imSeriesNumber ||
+      imVolumeNumber ||
+      (rawE245 && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(rawE245) ? rawE245 : undefined) ||
+      titleParse.seriesNumber);
   const seriesNumber = normalizeSeriesNumber(rawSeriesNum) || undefined;
 
   if (!options?.includeIntegrals && (JUNK_SERIES_REGEX.test(rawImTitle) || (series && JUNK_SERIES_REGEX.test(series)))) {
@@ -648,8 +683,12 @@ export function parseIntermarcRecord(
   const coverId = f950 ? getSubfield(f950, 'a') : undefined;
   const coverUrl = coverId ? `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE` : undefined;
 
+  // En INTERMARC-B BnF (intermarcxchange), le code langue (ex: 'fre') se trouve aux positions 31..34 de la zone 008
   const cf008 = extractControlField(recordXml, '008');
-  const langCode = cf008.length >= 38 ? cf008.substring(35, 38).trim() : '';
+  const lang008 = cf008.length >= 34 ? cf008.substring(31, 34).trim().toLowerCase() : '';
+  const f041 = fields.find(f => f.tag === '041' || f.tag === '101');
+  const langSub = f041 ? (getSubfield(f041, 'a') || '').trim().toLowerCase() : '';
+  const langCode = /^[a-z]{3}$/.test(lang008) ? lang008 : (/^[a-z]{3}$/.test(langSub) ? langSub : '');
 
   return {
     isbn,
@@ -698,14 +737,15 @@ export const bnfResolver = {
         return null;
       }
 
-      // Extraction des métadonnées Dublin Core
-      const rawTitles = extractTagContents(xmlText, 'dc:title');
-      const rawCreators = extractTagContents(xmlText, 'dc:creator');
-      const rawPublishers = extractTagContents(xmlText, 'dc:publisher');
-      const rawDates = extractTagContents(xmlText, 'dc:date');
-      const rawFormats = extractTagContents(xmlText, 'dc:format');
-      const rawRelations = extractTagContents(xmlText, 'dc:relation');
-      const rawDescriptions = extractTagContents(xmlText, 'dc:description');
+      // Extraction des métadonnées Dublin Core de la première notice uniquement
+      const firstDcRecordXml = xmlText.split('<srw:record>')[1] || xmlText;
+      const rawTitles = extractTagContents(firstDcRecordXml, 'dc:title');
+      const rawCreators = extractTagContents(firstDcRecordXml, 'dc:creator');
+      const rawPublishers = extractTagContents(firstDcRecordXml, 'dc:publisher');
+      const rawDates = extractTagContents(firstDcRecordXml, 'dc:date');
+      const rawFormats = extractTagContents(firstDcRecordXml, 'dc:format');
+      const rawRelations = extractTagContents(firstDcRecordXml, 'dc:relation');
+      const rawDescriptions = extractTagContents(firstDcRecordXml, 'dc:description');
 
       if (rawTitles.length === 0) {
         console.warn(`[BNF RESOLVER] Notice BNF présente mais titre introuvable.`);
@@ -722,7 +762,8 @@ export const bnfResolver = {
       try {
         if (imRes && imRes.ok) {
           const imXmlText = await imRes.text();
-          const imFields = parseMarcFields(imXmlText);
+          const firstImRecordXml = imXmlText.split('<srw:record>')[1] || imXmlText;
+          const imFields = parseMarcFields(firstImRecordXml);
 
           // 1. Couverture
           const f950 = imFields.find(f => f.tag === '950');
@@ -934,14 +975,28 @@ export const bnfResolver = {
       }
 
       // Regrouper les rééditions d'un même tome (par numéro de tome, sinon par titre normalisé)
+      // tout en séparant deux albums distincts qui partageraient accidentellement le même numéro (ex: réédition Le Soir / Archives).
       const byVolumeKey = new Map<string, Array<ExternalBookMetadata & { _lang?: string; _hasPrimaryIsbn?: boolean }>>();
       for (const cand of candidates) {
-        const volKey = cand.seriesNumber
+        const baseKey = cand.seriesNumber
           ? `num:${normalizeSeriesNumber(cand.seriesNumber)}`
           : `title:${normalizeTextKey(cand.title)}`;
-        const list = byVolumeKey.get(volKey) || [];
-        list.push(cand);
-        byVolumeKey.set(volKey, list);
+        const existingGroup = byVolumeKey.get(baseKey);
+        if (
+          existingGroup &&
+          existingGroup.length > 0 &&
+          cand.seriesNumber &&
+          areDistinctSeriesWorkTitles(existingGroup[0].title, cand.title, cleanTargetSeries)
+        ) {
+          const altKey = `${baseKey}::${normalizeTextKey(cand.title)}`;
+          const altList = byVolumeKey.get(altKey) || [];
+          altList.push(cand);
+          byVolumeKey.set(altKey, altList);
+        } else {
+          const list = existingGroup || [];
+          list.push(cand);
+          byVolumeKey.set(baseKey, list);
+        }
       }
 
       const elected: ExternalBookMetadata[] = [];

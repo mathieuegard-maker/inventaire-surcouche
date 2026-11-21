@@ -70,7 +70,8 @@ function loadLocalReadingMeta(uri: string) {
     const raw = localStorage.getItem(`biblio_reading_${uri}`);
     if (raw) {
       const parsed = JSON.parse(raw);
-      readingStatus.value = parsed.status || 'none';
+      const st = parsed.status || 'none';
+      readingStatus.value = st === 'unread' ? 'to_read' : st;
       readingRating.value = Number(parsed.rating) || 0;
     } else {
       readingStatus.value = 'none';
@@ -529,10 +530,11 @@ const confirmDelete = async () => {
 
     <BaseLoading v-if="isLoading" />
 
-    <BaseBanner v-else-if="errorMsg" type="error" :message="errorMsg" />
+    <template v-else>
+      <BaseBanner v-if="errorMsg" type="error" :message="errorMsg" />
 
-    <div v-else-if="book" class="result-card success">
-      <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
+      <div v-if="book" class="result-card success">
+        <BaseBanner v-if="successMessage" type="success" :message="successMessage" />
       <div
         v-if="integralNotice"
         style="background:#fef3c7;color:#92400e;border:1px solid #f59e0b;border-radius:8px;padding:0.75rem 0.95rem;margin-bottom:0.85rem;font-weight:600;"
@@ -570,6 +572,7 @@ const confirmDelete = async () => {
             <img
               v-else
               :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
+              :data-cover-isbn="book.isbn13 || book.isbn10"
               :alt="book.title"
               class="book-cover-image"
               @error="onDetailCoverError"
@@ -597,7 +600,9 @@ const confirmDelete = async () => {
             <p class="book-meta-item">
               <strong>{{ TEXTS.bookCard.series }} :</strong>
               {{ book.series }}
-              <span v-if="book.seriesNumber"> (Tome {{ book.seriesNumber }})</span>
+              <span v-if="book.seriesNumber">
+                ({{ /^(?:int|hs)\b/i.test(book.seriesNumber.trim()) ? book.seriesNumber : `Tome ${book.seriesNumber}` }})
+              </span>
               <span class="saga-sep"> — </span>
               <button type="button" class="discreet-saga-link" @click="navigateToSeries">
                 Voir toute la saga{{ seriesTomes.length > 0 ? ` (${seriesTomes.length} tomes)` : '' }}
@@ -642,7 +647,7 @@ const confirmDelete = async () => {
               <strong>Lecture :</strong>
               <select v-model="readingStatus" @change="saveLocalReadingMeta" class="discreet-meta-select">
                 <option value="none">Non renseigné</option>
-                <option value="unread">Non lu (À lire)</option>
+                <option value="to_read">Non lu (À lire)</option>
                 <option value="reading">En cours</option>
                 <option value="read">Lu</option>
                 <option value="abandoned">Abandonné</option>
@@ -688,6 +693,7 @@ const confirmDelete = async () => {
         </div>
       </div>
     </div>
+    </template>
 
     <LendModal
       :show="showLendModal"

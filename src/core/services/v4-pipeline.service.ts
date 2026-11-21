@@ -11,6 +11,7 @@ import {
   cleanSeriesName,
   cleanTitle,
   isBookOrPressEan13,
+  isFrancophoneBookIsbn13,
   isNonBookMarcType,
   normalizeSeriesNumber,
   normalizeTextKey,
@@ -49,6 +50,69 @@ export function tripGoogleBooksCircuit(ms = GOOGLE_BOOKS_COOLDOWN_MS): void {
 
 export function resetGoogleBooksCircuit(): void {
   googleBooksCooldownUntil = 0;
+}
+
+/**
+ * Exécute un fetch() portable avec AbortController (timeout) et 1 retry automatique
+ * sur erreur réseau ou HTTP 525 / 502 / 503 / 504 (fréquent sur le handshake SSL Cloudflare <-> BnF SRU).
+ */
+export async function fetchWithTimeoutAndRetry(
+  url: string,
+  options?: {
+    timeoutMs?: number;
+    retriesOn5xx?: number;
+    headers?: Record<string, string>;
+  }
+): Promise<Response> {
+  const timeoutMs = options?.timeoutMs ?? 4500;
+  const maxRetries = options?.retriesOn5xx ?? 1;
+  const headers = { 'User-Agent': USER_AGENT_BASE, ...(options?.headers || {}) };
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(timer);
+      if ((res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        continue;
+      }
+      return res;
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+        continue;
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Network timeout or error');
+}
+
+/**
+ * Extrait proprement le nom de famille d'un auteur pour une requête CQL `bib.author` BnF,
+ * qu'il soit au format "Prénom Nom" ("René Goscinny", "J. K. Rowling") ou "Nom, Prénom" ("Goscinny, René").
+ */
+export function extractAuthorLastNameForBnfCql(rawAuthor?: string): string {
+  if (!rawAuthor) return '';
+  const cleaned = rawAuthor
+    .replace(/\s*\([^)]*\)/g, '')
+    .replace(/["()]/g, ' ')
+    .trim();
+  if (!cleaned) return '';
+  if (cleaned.includes(',')) {
+    const beforeComma = cleaned.split(',')[0].trim();
+    const parts = beforeComma.split(/\s+/).filter(Boolean);
+    return parts[parts.length - 1] || beforeComma;
+  }
+  const words = cleaned
+    .split(/\s+/)
+    .map((w) => w.replace(/^[.'’]+|[.'’]+$/g, ''))
+    .filter((w) => w.replace(/[^a-zA-ZÀ-ÿ]/g, '').length >= 2);
+  return words.length > 0 ? words[words.length - 1] : '';
 }
 
 export type SourceChannel =
@@ -350,6 +414,11 @@ export interface LocalSearchHit {
   source: 'server_d1';
 }
 
+const CANAL3_STOP_WORDS = new Set([
+  'le', 'la', 'les', 'de', 'du', 'des', 'un', 'une', 'et', 'ou', 'au', 'aux',
+  'en', 'dans', 'sur', 'par', 'pour', 'avec', 'the', 'of', 'and', 'tome', 'vol', 'volume'
+]);
+
 export async function searchLocalBooksForCanal3(
   db: DatabaseBinding,
   params: {
@@ -370,39 +439,43 @@ export async function searchLocalBooksForCanal3(
 
   if (!qNorm && !titleNorm && !seriesNorm && !authorNorm) return [];
 
-  const tokens = Array.from(
+  const rawTokens = Array.from(
     new Set(
       `${qNorm} ${titleNorm} ${seriesNorm}`
         .split(/\s+/)
-        .filter((t) => t.length >= 3)
+        .filter((t) => t.length >= 2)
     )
-  ).slice(0, 4);
+  );
+  const nonStopTokens = rawTokens.filter((t) => t.length >= 3 && !CANAL3_STOP_WORDS.has(t));
+  const tokens = (nonStopTokens.length > 0 ? nonStopTokens : rawTokens.filter((t) => t.length >= 2)).slice(0, 4);
 
   if (tokens.length === 0 && !Number.isFinite(volNum)) return [];
 
-  // Pré-filtrage SQL léger sur les tokens + volume
+  // Pré-filtrage SQL léger sur les tokens (accent-insensible via normalized_title & v4_series.normalized_core_key) + volume
   const whereClauses: string[] = [];
   const bindings: unknown[] = [];
 
   if (tokens.length > 0) {
     const tokenConds = tokens.map(
-      () => "(normalized_title LIKE ? OR LOWER(COALESCE(series_name, '')) LIKE ? OR LOWER(authors_json) LIKE ?)"
+      () =>
+        "(b.normalized_title LIKE ? OR LOWER(COALESCE(b.series_name, '')) LIKE ? OR LOWER(COALESCE(vs.normalized_core_key, '')) LIKE ? OR LOWER(b.authors_json) LIKE ?)"
     );
     whereClauses.push(`(${tokenConds.join(' OR ')})`);
     for (const tok of tokens) {
       const pattern = `%${tok}%`;
-      bindings.push(pattern, pattern, pattern);
+      bindings.push(pattern, pattern, pattern, pattern);
     }
   }
   if (Number.isFinite(volNum)) {
-    whereClauses.push('(volume_number = ? OR volume_number IS NULL)');
+    whereClauses.push('(b.volume_number = ? OR b.volume_number IS NULL)');
     bindings.push(volNum);
   }
 
   const sql = `
-    SELECT * FROM books
+    SELECT b.* FROM books b
+    LEFT JOIN v4_series vs ON vs.id = b.series_id
     ${whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : ''}
-    ORDER BY updated_at DESC
+    ORDER BY b.updated_at DESC
     LIMIT 60
   `;
   const rows = await db.prepare(sql).bind(...bindings).all<Record<string, any>>();
@@ -413,40 +486,41 @@ export async function searchLocalBooksForCanal3(
     const primaryIsbn = book.knownIsbns[0] || book.editionsCatalog[0]?.isbn13 || '';
     if (!primaryIsbn) continue;
 
-    let score = 0;
+    let textScore = 0;
     const bTitleNorm = book.normalizedTitle || normalizeTextKey(book.canonicalTitle);
     const bSeriesNorm = normalizeTextKey(book.seriesName || '');
     const bAuthorNorm = normalizeTextKey(book.authors.join(' '));
 
     if (titleNorm) {
-      if (bTitleNorm === titleNorm) score += 60;
-      else if (bTitleNorm.includes(titleNorm) || titleNorm.includes(bTitleNorm)) score += 35;
-      else if (titleNorm.length >= 5 && getLevenshteinDistance(bTitleNorm, titleNorm) <= 2) score += 30;
+      if (bTitleNorm === titleNorm) textScore += 60;
+      else if (bTitleNorm.includes(titleNorm) || titleNorm.includes(bTitleNorm)) textScore += 35;
+      else if (titleNorm.length >= 5 && getLevenshteinDistance(bTitleNorm, titleNorm) <= 2) textScore += 30;
     }
 
     if (seriesNorm) {
       const queryCore = stripEditorialCollectionSuffixes(seriesNorm).coreKey;
       const bookCore = stripEditorialCollectionSuffixes(book.seriesName || '').coreKey;
-      if (bookCore && queryCore && bookCore === queryCore) score += 50;
-      else if (bSeriesNorm && (bSeriesNorm.includes(seriesNorm) || seriesNorm.includes(bSeriesNorm))) score += 30;
+      if (bookCore && queryCore && bookCore === queryCore) textScore += 50;
+      else if (bSeriesNorm && (bSeriesNorm.includes(seriesNorm) || seriesNorm.includes(bSeriesNorm))) textScore += 30;
     }
 
     if (qNorm && !titleNorm && !seriesNorm) {
-      if (bTitleNorm === qNorm || bSeriesNorm === qNorm) score += 55;
-      else if (bTitleNorm.includes(qNorm) || bSeriesNorm.includes(qNorm)) score += 32;
-    }
-
-    if (Number.isFinite(volNum)) {
-      if (book.volumeNumber === volNum) score += 45;
-      else if (book.volumeNumber !== null && book.volumeNumber !== undefined && book.volumeNumber !== volNum) score -= 50;
+      if (bTitleNorm === qNorm || bSeriesNorm === qNorm) textScore += 55;
+      else if (bTitleNorm.includes(qNorm) || bSeriesNorm.includes(qNorm)) textScore += 32;
     }
 
     if (authorNorm && bAuthorNorm) {
       const authTokens = authorNorm.split(/\s+/).filter((t) => t.length >= 3);
-      if (authTokens.some((t) => bAuthorNorm.includes(t))) score += 25;
+      if (authTokens.some((t) => bAuthorNorm.includes(t))) textScore += 25;
     }
 
-    if (score >= 45) {
+    let score = textScore;
+    if (Number.isFinite(volNum)) {
+      if (book.volumeNumber === volNum && textScore > 0) score += 45;
+      else if (book.volumeNumber !== null && book.volumeNumber !== undefined && book.volumeNumber !== volNum) score -= 50;
+    }
+
+    if (score >= 45 && textScore > 0) {
       hits.push({
         bookId: book.id,
         isbn13: primaryIsbn,
@@ -735,6 +809,7 @@ function extractMarcRecordMetadata(
   if (!fields.length) return null;
 
   let isbn13 = fallbackIsbn || '';
+  let hasPrimaryIsbn = false;
   let title = '';
   let series245 = '';
   let vol245 = '';
@@ -758,17 +833,28 @@ function extractMarcRecordMetadata(
   let explicitIntegralTag245 = false;
   let integralOrd245 = '';
 
+  // En INTERMARC-B BnF (intermarcxchange), le code langue (ex: 'fre') se trouve aux positions 31..34 de la zone 008
+  const cf008Match = /<(?:[\w-]+:)?controlfield\s+[^>]*tag="008"[^>]*>([^<]*)<\/(?:[\w-]+:)?controlfield>/i.exec(recXml);
+  const cf008 = cf008Match ? cf008Match[1] : '';
+  if (cf008.length >= 34) {
+    const lang008 = cf008.substring(31, 34).trim().toLowerCase();
+    if (/^[a-z]{3}$/.test(lang008)) language = lang008;
+  }
+
   for (const f of fields) {
     const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
     if (f.tag === '020' || f.tag === '038') {
       const rawIsbn = isbnUtil.normalize(getSf('a'));
       const conv = rawIsbn.length === 10 ? isbnUtil.toIsbn13(rawIsbn) : rawIsbn;
       if (isbnUtil.isValidBookBarcode(conv) && isBookOrPressEan13(conv)) {
-        isbn13 = conv;
+        if (!hasPrimaryIsbn || f.tag === '038') {
+          isbn13 = conv;
+          hasPrimaryIsbn = true;
+        }
       }
-    } else if (f.tag === '101') {
-      const lang = getSf('a').toLowerCase();
-      if (lang) language = lang;
+    } else if (f.tag === '041' || f.tag === '101') {
+      const lang = getSf('a').trim().toLowerCase();
+      if (/^[a-z]{3}$/.test(lang) && !language) language = lang;
     } else if (f.tag === '950') {
       const coverId = getSf('a');
       if (coverId) {
@@ -788,14 +874,16 @@ function extractMarcRecordMetadata(
       const u = getSf('u');
       if (b) secondTitleHint = b;
       const integralSource245 = `${e} ${b} ${i}`.trim();
-      if (/\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus|compil)\b/i.test(integralSource245)) {
+      if (/\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus|compil)\b/i.test(integralSource245) && !/\b(?:texte|version)\s+int[ée]grale?\b/i.test(integralSource245)) {
         explicitIntegralTag245 = true;
         integralOrd245 = normalizeSeriesNumber(h || u || n || '');
       }
       if (p && a) {
         series245 = series245 || cleanSeriesName(a);
         title = p;
-        if (n || u) vol245 = vol245 || normalizeSeriesNumber(n || u);
+        if (n || u || (!explicitIntegralTag245 && h)) {
+          vol245 = vol245 || normalizeSeriesNumber(n || u || h);
+        }
       } else {
         title = title || a;
         if (explicitIntegralTag245 && title && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(title)) {
@@ -804,7 +892,9 @@ function extractMarcRecordMetadata(
               ? `${title} — Intégrale ${integralOrd245}`
               : `${title} — Intégrale`;
         }
-        if (u) vol245 = vol245 || normalizeSeriesNumber(u);
+        if (u || n || (!explicitIntegralTag245 && h)) {
+          vol245 = vol245 || normalizeSeriesNumber(u || n || h);
+        }
         if (e && /^(?:(?:tome|vol\.?|volume|épisode|n°)\s*\d+|\d{1,3})$/i.test(e.trim())) {
           vol245 = vol245 || normalizeSeriesNumber(e);
         }
@@ -812,14 +902,16 @@ function extractMarcRecordMetadata(
     } else if (f.tag === '460' || f.tag === '461') {
       const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
       const sVol = normalizeSeriesNumber(getSf('v'));
-      const sEnsId = getSf('3').replace(/\D/g, '');
-      if (sTitle && sVol && !series460) {
+      const rawDigitsEns = getSf('3').replace(/\D/g, '');
+      const sEnsId = rawDigitsEns.length >= 8 ? rawDigitsEns.slice(-8) : rawDigitsEns;
+      const validBibEnsId = /^[34]\d{6,}$/.test(sEnsId) ? sEnsId : '';
+      if (sTitle && sVol && !series460 && !isEditorialPaperbackCollectionName(sTitle)) {
         series460 = sTitle;
         vol460 = sVol;
-        if (sEnsId) ensId460 = sEnsId;
-      } else if (sTitle && !unnumberedEns) {
+        if (validBibEnsId) ensId460 = validBibEnsId;
+      } else if (sTitle && !unnumberedEns && !isEditorialPaperbackCollectionName(sTitle)) {
         unnumberedEns = sTitle;
-        if (sEnsId) unnumberedEnsId = sEnsId;
+        if (validBibEnsId) unnumberedEnsId = validBibEnsId;
       }
     } else if (f.tag === '290') {
       const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
@@ -896,13 +988,17 @@ function extractMarcRecordMetadata(
     Boolean(secondTitleHint && /\b(tomes?|albums?|int[ée]grale)\b/i.test(secondTitleHint)) ||
     isIntegralCandidateTitleOrPages(`${title} ${secondTitleHint}`, pageCount, Boolean(seriesRaw));
 
+  if (isDualPages && secondTitleHint && !title.includes(secondTitleHint)) {
+    title = `${title} / ${secondTitleHint}`;
+  }
+
   return {
     source: 'bnf',
     isbn13: isbn13 || undefined,
     title,
     seriesRaw: seriesRaw || undefined,
     collectionRaw: collectionRaw || undefined,
-    volumeNumber: volumeNumber || undefined,
+    volumeNumber: _isIntegral ? undefined : (volumeNumber || undefined),
     publisher: publisher || undefined,
     publishDate: publishDate || undefined,
     pageCount,
@@ -930,7 +1026,7 @@ export async function discoverMultiSourceLayer3(
   const fetchTrackedText = async (url: string) => {
     const t0 = Date.now();
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4500, retriesOn5xx: 1 });
       const text = r.ok ? await r.text() : await r.text().catch(() => '');
       return { ok: r.ok, status: r.status, ms: Date.now() - t0, data: r.ok ? text : '', err: r.ok ? undefined : text.slice(0, 180) };
     } catch (e: unknown) {
@@ -940,7 +1036,7 @@ export async function discoverMultiSourceLayer3(
   const fetchTrackedJson = async (url: string) => {
     const t0 = Date.now();
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4500, retriesOn5xx: 0 });
       if (!r.ok) {
         const txt = await r.text().catch(() => '');
         return { ok: false, status: r.status, ms: Date.now() - t0, data: null as any, err: txt.slice(0, 180) };
@@ -1342,12 +1438,12 @@ export async function discoverMultiSourceLayer3(
       (async () => {
         const s0 = Date.now();
         try {
-          const firstAuthorLast = authors[0] ? authors[0].split(/[,\s]+/)[0].replace(/["()]/g, '') : '';
+          const firstAuthorLast = extractAuthorLastNameForBnfCql(authors[0]);
           const cql = firstAuthorLast
             ? `(bib.title all "${searchTitleClean}") and (bib.author all "${firstAuthorLast}") and (bib.doctype all "a")`
             : `(bib.title all "${searchTitleClean}") and (bib.doctype all "a")`;
           const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=12&startRecord=1`;
-          const res = await fetch(sruUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+          const res = await fetchWithTimeoutAndRetry(sruUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
           if (!res.ok) {
             tracer?.record(
               'C3',
@@ -1369,6 +1465,7 @@ export async function discoverMultiSourceLayer3(
           for (const rec of recs) {
             const cand = extractMarcRecordMetadata(rec);
             if (!cand || !isStrictFrenchLanguage(cand.language)) continue;
+            if (cand.isbn13 && !isFrancophoneBookIsbn13(cand.isbn13)) continue;
             const candTitleClean = parseSeriesFromTitle(cand.title).title || cand.title;
             const normCandTitle = normalizeTextKey(candTitleClean);
             const titleSimilar =
@@ -1385,14 +1482,15 @@ export async function discoverMultiSourceLayer3(
               continue;
             }
             // Si le tome ancre est numéroté mais la notice sœur n'a PAS de numéro ET porte un titre générique identique à la série
-            // (ex: "Culottées", "Aya de Yopougon", "Mattéo"), ne pas l'absorber (évite la contamination T1 <-> T2).
+            // (ex: "Culottées", "Aya de Yopougon", "Mattéo"), ou inversement si l'ancre n'a pas de numéro mais la sœur en a un sur titre générique,
+            // ne pas l'absorber (évite la contamination T1 <-> T2).
             const candSeriesCore = cand.seriesRaw ? stripEditorialCollectionSuffixes(cand.seriesRaw).coreKey : '';
             const normCandCore = stripEditorialCollectionSuffixes(candTitleClean).coreKey;
             const anchorSeriesCore = seriesCandidates[0]?.coreKey || '';
             const isGenericSeriesTitle =
               (candSeriesCore && normCandCore === candSeriesCore) ||
               (anchorSeriesCore && normCandCore === anchorSeriesCore);
-            if (effectiveAnchorVol && !candVol && isGenericSeriesTitle) {
+            if (isGenericSeriesTitle && ((effectiveAnchorVol && !candVol) || (!effectiveAnchorVol && candVol))) {
               rejectedDiffVol++;
               continue;
             }
@@ -1488,12 +1586,16 @@ export async function discoverMultiSourceLayer3(
               const sJson = (await wdSeriesRes.json()) as any;
               const sEnt = sJson?.entities?.[p179Id];
               const sLabel = sEnt?.labels?.fr?.value || sEnt?.labels?.en?.value;
-              const sBnfId = sEnt?.claims?.P268?.[0]?.mainsnak?.datavalue?.value;
+              const rawBnfP268 = sEnt?.claims?.P268?.[0]?.mainsnak?.datavalue?.value;
+              const cleanBnfP268 = rawBnfP268 ? String(rawBnfP268).replace(/\D/g, '') : '';
+              // Attention : P268 sur Wikidata est le plus souvent un identifiant d'AUTORITÉ BnF (commençant par 1, ex: 14573759 pour Astérix)
+              // et NON une notice bibliographique d'ensemble 460$3 (commençant par 3 ou 4). Ne l'enregistrer en ensembleId que si c'est une notice biblio !
+              const validBibEnsId = /^[34]\d{6,}$/.test(cleanBnfP268) ? cleanBnfP268 : undefined;
               if (sLabel) {
                 wdSeriesLabel = String(sLabel);
                 registerSeriesVote('wikidata_p179', wdSeriesLabel, 3, {
                   wikidataQid: p179Id,
-                  ensembleId: sBnfId ? String(sBnfId).replace(/\D/g, '') : undefined
+                  ensembleId: validBibEnsId
                 });
               }
             }
@@ -1582,17 +1684,18 @@ export function detectIntegralAndIncludedVolumes(payload: StagingPayload): {
 } {
   const allTexts = [payload.anchorTitle, ...payload.rawTitles];
   const combined = allTexts.join(' | ');
+  const combinedWithoutTexteIntegral = combined.replace(/\b(?:texte|version)\s+int[ée]grale?\b/gi, ' ');
   const desc = payload.description || '';
 
-  // 1. Détection explicite d'intégrale / coffret / omnibus / plage de tomes
+  // 1. Détection explicite d'intégrale / coffret / omnibus / plage de tomes (hors mention "texte intégral")
   const hasExplicitIntegralKeyword = /(?:l['’]?\s*int[ée]grale|\bint[ée]grale?\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\bdouble\s+album\b|\b2\s+en\s+1\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
-    combined
+    combinedWithoutTexteIntegral
   );
 
   const nums = new Set<string>(payload.includedVolumeNumbersHint || []);
-  for (const srcText of [combined, desc]) {
-    const rangeMatch = /(?:tomes?|volumes?|vol\.?|albums?)\s*[:.]?\s*(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(srcText)
-      || (srcText === combined ? /\b(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(srcText) : null);
+  for (const srcText of [combinedWithoutTexteIntegral, desc]) {
+    // Exiger un mot-clé de volume/tome/intégrale avant la plage numérique pour ne jamais confondre un titre historique ("14-18", "39-45") avec une intégrale !
+    const rangeMatch = /(?:tomes?|volumes?|vol\.?|albums?|int[ée]grale|coffret)\s*[:.n°#]?\s*(\d{1,2})\s*(?:[àa]|-|au)\s*(\d{1,2})\b/i.exec(srcText);
     if (rangeMatch) {
       const startN = parseInt(rangeMatch[1], 10);
       const endN = parseInt(rangeMatch[2], 10);
@@ -1877,7 +1980,11 @@ export async function consolidateBookLayer4(
         .prepare(
           `INSERT INTO v4_series
             (id, canonical_name, normalized_core_key, aliases_json, primary_authors_json, wikidata_qid, bnf_ensemble_ids_json, is_complete_expanded, known_volumes_count, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+           ON CONFLICT(normalized_core_key) DO UPDATE SET
+             canonical_name = excluded.canonical_name,
+             wikidata_qid = COALESCE(v4_series.wikidata_qid, excluded.wikidata_qid),
+             updated_at = excluded.updated_at`
         )
         .bind(
           seriesId,
@@ -1891,6 +1998,11 @@ export async function consolidateBookLayer4(
           now
         )
         .run();
+      const confirmedSeries = await db
+        .prepare('SELECT id FROM v4_series WHERE normalized_core_key = ? LIMIT 1')
+        .bind(electedSeries.coreKey)
+        .first<{ id: string }>();
+      if (confirmedSeries?.id) seriesId = String(confirmedSeries.id);
     }
   }
 
@@ -1937,9 +2049,15 @@ export async function consolidateBookLayer4(
     }
   }
 
-  const isExplicitHs = /\b(hors[- ]s[ée]rie|sp[ée]cial|hs\b|coulisses|making[- ]of|tome\s*0\b)/i.test(
-    payload.rawTitles.join(' ')
-  );
+  const hasAuthoritativeVolume =
+    Boolean(userHint?.volumeNumber?.trim()) ||
+    resolvedVolume.source === 'wikidata_series_index' ||
+    resolvedVolume.source === 'weighted_vote';
+  const isExplicitHs =
+    !hasAuthoritativeVolume &&
+    /\b(hors[- ]s[ée]rie|n°\s*sp[ée]cial|num[ée]ro\s+sp[ée]cial|hs\b|making[- ]of|artbook|tome\s*0\b)/i.test(
+      payload.rawTitles.join(' ')
+    );
   let volumeNumber: number | null =
     !integralCheck.isIntegral && !isExplicitHs && inheritedVolStr ? parseInt(inheritedVolStr, 10) : null;
   if (volumeNumber !== null && (!Number.isFinite(volumeNumber) || volumeNumber <= 0)) {
@@ -2307,7 +2425,26 @@ export async function consolidateBookLayer4(
            integral_metadata_json, parent_integrals_json, authors_json, language,
            known_isbns_json, editions_catalog_json, selected_cover_url, main_category,
            subgenres_json, legacy_entity_uri, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fr', ?, ?, ?, ?, ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'fr', ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(work_canonical_id) DO UPDATE SET
+           canonical_title = excluded.canonical_title,
+           normalized_title = excluded.normalized_title,
+           series_id = COALESCE(excluded.series_id, books.series_id),
+           series_name = COALESCE(excluded.series_name, books.series_name),
+           volume_number = COALESCE(excluded.volume_number, books.volume_number),
+           volume_label = COALESCE(excluded.volume_label, books.volume_label),
+           is_hors_serie = excluded.is_hors_serie,
+           hors_serie_label = excluded.hors_serie_label,
+           is_integral = excluded.is_integral,
+           integral_metadata_json = excluded.integral_metadata_json,
+           parent_integrals_json = excluded.parent_integrals_json,
+           authors_json = excluded.authors_json,
+           known_isbns_json = excluded.known_isbns_json,
+           editions_catalog_json = excluded.editions_catalog_json,
+           selected_cover_url = COALESCE(excluded.selected_cover_url, books.selected_cover_url),
+           main_category = excluded.main_category,
+           subgenres_json = excluded.subgenres_json,
+           updated_at = excluded.updated_at`
       )
       .bind(
         bookId,
@@ -2334,6 +2471,11 @@ export async function consolidateBookLayer4(
         now
       )
       .run();
+    const confirmedBook = await db
+      .prepare('SELECT id FROM books WHERE work_canonical_id = ? LIMIT 1')
+      .bind(workCanonicalId)
+      .first<{ id: string }>();
+    if (confirmedBook?.id) bookId = String(confirmedBook.id);
   }
 
   // Indexation O(1) de TOUS les ISBN FR sœurs vers `book_id`
@@ -2349,38 +2491,58 @@ export async function consolidateBookLayer4(
   if (idxStmts.length > 0) await db.batch(idxStmts);
 
   // Si ce livre remplace un squelette C5 périmé ou changé de format, migrer les liaisons bibliothèque pour ne jamais perdre l'utilisateur
+  // GARDE CRITIQUE V4-01 : ne jamais supprimer `replaceSkeletonBookId` s'il s'agit d'un autre tome déjà consolidé/possédé ayant un titre distinct !
   if (options.replaceSkeletonBookId && options.replaceSkeletonBookId !== bookId) {
     try {
-      const oldLinks = await db
-        .prepare('SELECT library_id, is_owned, is_wished, source_channel, added_at FROM v4_library_books WHERE book_id = ?')
+      const oldBookRow = await db
+        .prepare('SELECT id, canonical_title, known_isbns_json FROM books WHERE id = ? LIMIT 1')
         .bind(options.replaceSkeletonBookId)
-        .all<{ library_id: string; is_owned: number; is_wished: number; source_channel: string | null; added_at: string }>();
-      for (const oldLink of oldLinks.results || []) {
+        .first<{ id: string; canonical_title: string; known_isbns_json: string }>();
+      const oldIsbns = safeJsonParse<string[]>(oldBookRow?.known_isbns_json, []);
+      const isDistinctConsolidatedWork =
+        oldBookRow &&
+        areDistinctSeriesWorkTitles(oldBookRow.canonical_title, canonicalTitle, seriesName) &&
+        oldIsbns.some((i) => i !== payload.anchorIsbn13);
+
+      if (isDistinctConsolidatedWork) {
+        // Ne détacher que l'ISBN courant sans détruire l'autre tome !
+        const remainingIsbns = oldIsbns.filter((i) => !finalKnownIsbns.includes(i));
         await db
-          .prepare(
-            `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, added_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(library_id, book_id) DO UPDATE SET
-               is_owned = MAX(v4_library_books.is_owned, excluded.is_owned),
-               is_wished = MAX(v4_library_books.is_wished, excluded.is_wished),
-               selected_cover_url = COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url),
-               updated_at = excluded.updated_at`
-          )
-          .bind(
-            oldLink.library_id,
-            bookId,
-            oldLink.is_owned,
-            oldLink.is_wished,
-            oldLink.source_channel || options.sourceChannel,
-            effectiveCover,
-            oldLink.added_at || now,
-            now
-          )
+          .prepare('UPDATE books SET known_isbns_json = ?, updated_at = ? WHERE id = ?')
+          .bind(JSON.stringify(remainingIsbns), now, options.replaceSkeletonBookId)
           .run();
+      } else {
+        const oldLinks = await db
+          .prepare('SELECT library_id, is_owned, is_wished, source_channel, added_at FROM v4_library_books WHERE book_id = ?')
+          .bind(options.replaceSkeletonBookId)
+          .all<{ library_id: string; is_owned: number; is_wished: number; source_channel: string | null; added_at: string }>();
+        for (const oldLink of oldLinks.results || []) {
+          await db
+            .prepare(
+              `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, added_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(library_id, book_id) DO UPDATE SET
+                 is_owned = MAX(v4_library_books.is_owned, excluded.is_owned),
+                 is_wished = MAX(v4_library_books.is_wished, excluded.is_wished),
+                 selected_cover_url = COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url),
+                 updated_at = excluded.updated_at`
+            )
+            .bind(
+              oldLink.library_id,
+              bookId,
+              oldLink.is_owned,
+              oldLink.is_wished,
+              oldLink.source_channel || options.sourceChannel,
+              effectiveCover,
+              oldLink.added_at || now,
+              now
+            )
+            .run();
+        }
+        await db.prepare('DELETE FROM v4_library_books WHERE book_id = ?').bind(options.replaceSkeletonBookId).run();
+        await db.prepare('UPDATE book_isbn_index SET book_id = ?, is_integral = ? WHERE book_id = ?').bind(bookId, integralCheck.isIntegral ? 1 : 0, options.replaceSkeletonBookId).run();
+        await db.prepare('DELETE FROM books WHERE id = ?').bind(options.replaceSkeletonBookId).run();
       }
-      await db.prepare('DELETE FROM v4_library_books WHERE book_id = ?').bind(options.replaceSkeletonBookId).run();
-      await db.prepare('UPDATE book_isbn_index SET book_id = ?, is_integral = ? WHERE book_id = ?').bind(bookId, integralCheck.isIntegral ? 1 : 0, options.replaceSkeletonBookId).run();
-      await db.prepare('DELETE FROM books WHERE id = ?').bind(options.replaceSkeletonBookId).run();
     } catch {
       // Non-bloquant en environnement mock minimal
     }
@@ -2510,7 +2672,11 @@ export async function linkBookToLibrary(
         await db
           .prepare(
             `INSERT INTO library_items (id, library_id, work_id, edition_id, ownership_status, acquired_at, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+               ownership_status = excluded.ownership_status,
+               deleted_at = NULL,
+               updated_at = excluded.updated_at`
           )
           .bind(
             itemId,
@@ -2537,7 +2703,8 @@ export async function linkBookToLibrary(
 export async function enqueueOrExpandSeriesLayer5(
   db: DatabaseBinding,
   book: V4BookRecord,
-  tracer?: PipelineTracer
+  tracer?: PipelineTracer,
+  options?: { force?: boolean }
 ): Promise<number> {
   if (!book.seriesId || !book.seriesName) return 0;
   const start = Date.now();
@@ -2547,51 +2714,137 @@ export async function enqueueOrExpandSeriesLayer5(
     .prepare('SELECT * FROM v4_series WHERE id = ? LIMIT 1')
     .bind(book.seriesId)
     .first<Record<string, any>>();
-  if (!sRow || Number(sRow.is_complete_expanded) === 1) return 0;
+  if (!sRow) return 0;
+  if (!options?.force && Number(sRow.is_complete_expanded) === 1) return 0;
 
-  const ensembleIds = safeJsonParse<string[]>(sRow.bnf_ensemble_ids_json, []);
+  const rawEnsembleIds = safeJsonParse<string[]>(sRow.bnf_ensemble_ids_json, []);
+  // Ne conserver que les notices bibliographiques d'ensemble 460$3 (commençant par 3 ou 4, et non les autorités P268 commençant par 1)
+  const validEnsembleIds = new Set<string>(
+    rawEnsembleIds
+      .map((id) => String(id).replace(/\D/g, ''))
+      .filter((id) => /^[34]\d{6,}$/.test(id))
+  );
   const seriesWdIndex = sRow.wikidata_qid
     ? await fetchCanonicalSeriesIndex(String(sRow.wikidata_qid)).catch(() => null)
     : null;
-  const discoveredSkeleton: Array<{
-    title: string;
-    volumeNumber?: number;
-    isbn13?: string;
-    coverUrl?: string;
-    isIntegral?: boolean;
-  }> = [];
+  const targetCoreKey = String(sRow.normalized_core_key || stripEditorialCollectionSuffixes(book.seriesName).coreKey);
+  const discoveredByWorkKey = new Map<
+    string,
+    {
+      title: string;
+      volumeNumber?: number;
+      isbn13: string;
+      coverUrl?: string;
+      isIntegral?: boolean;
+      score: number;
+    }
+  >();
 
-  // Phase 5A : 1 seule requête ciblée BnF `bib.ens2bib` (très économe en sous-requêtes Cloudflare !)
-  const targetEnsId = ensembleIds[0];
-  if (targetEnsId) {
+  const registerCandidateFromRecord = (rec: string, isFromEns2Bib: boolean) => {
+    const cand = extractMarcRecordMetadata(rec);
+    if (!cand || !cand.isbn13 || !isStrictFrenchLanguage(cand.language)) return;
+    if (!isFrancophoneBookIsbn13(cand.isbn13)) return;
+    if (cand.bnfEnsembleId && /^[34]\d{6,}$/.test(cand.bnfEnsembleId)) {
+      const candCore = cand.seriesRaw ? stripEditorialCollectionSuffixes(cand.seriesRaw).coreKey : '';
+      if (isFromEns2Bib || (candCore && (candCore === targetCoreKey || candCore.includes(targetCoreKey) || targetCoreKey.includes(candCore)))) {
+        validEnsembleIds.add(cand.bnfEnsembleId);
+      }
+    }
+
+    if (!isFromEns2Bib) {
+      const candSeriesCore = cand.seriesRaw ? stripEditorialCollectionSuffixes(cand.seriesRaw).coreKey : '';
+      const candTitleCore = stripEditorialCollectionSuffixes(cand.title).coreKey;
+      const matchesSeries =
+        (candSeriesCore &&
+          (candSeriesCore === targetCoreKey ||
+            candSeriesCore.includes(targetCoreKey) ||
+            targetCoreKey.includes(candSeriesCore) ||
+            (targetCoreKey.length >= 4 && getLevenshteinDistance(candSeriesCore, targetCoreKey) <= 2))) ||
+        (candTitleCore && (candTitleCore === targetCoreKey || candTitleCore.startsWith(`${targetCoreKey} `)));
+      if (!matchesSeries) return;
+    }
+
+    const isIntSkel = Boolean(cand._isIntegral);
+    let cleanSkelTitle = cleanTitle(isIntSkel ? cand.title : parseSeriesFromTitle(cand.title).title || cand.title);
+    if (cleanSkelTitle && book.seriesName && !isIntSkel) {
+      const escapedSeries = book.seriesName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const stripped = cleanSkelTitle.replace(new RegExp(`^${escapedSeries}\\s*[-:–]\\s*`, 'i'), '').trim();
+      if (stripped.length >= 3) cleanSkelTitle = stripped;
+    }
+
+    const resolvedSkelVol = !isIntSkel
+      ? resolveCanonicalVolumeNumber({
+          canonicalSeriesIndex: seriesWdIndex,
+          sisterEditions: [cand],
+          rawTitles: [cleanSkelTitle, cand.title],
+          seriesName: book.seriesName || undefined
+        }).volumeNumber
+      : '';
+    const vNum =
+      !isIntSkel && resolvedSkelVol && /^\d+$/.test(resolvedSkelVol)
+        ? parseInt(resolvedSkelVol, 10)
+        : undefined;
+
+    let candScore = 0;
+    if (cand.coverUrl) candScore += 25;
+    if (cand.isbn13.startsWith('9782') || cand.isbn13.startsWith('97910')) candScore += 15;
+    if (cand.publishDate && /^\d{4}$/.test(cand.publishDate)) {
+      candScore += Math.min(35, Math.max(0, (parseInt(cand.publishDate, 10) - 1950) * 0.4));
+    }
+
+    const baseKey = isIntSkel
+      ? `int:${normalizeTextKey(cleanSkelTitle)}`
+      : vNum !== undefined
+        ? `vol:${vNum}`
+        : `title:${normalizeTextKey(cleanSkelTitle)}`;
+    const existing = discoveredByWorkKey.get(baseKey);
+    if (
+      existing &&
+      vNum !== undefined &&
+      areDistinctSeriesWorkTitles(existing.title, cleanSkelTitle, book.seriesName)
+    ) {
+      const altKey = `${baseKey}:${normalizeTextKey(cleanSkelTitle).slice(0, 32)}`;
+      const altExisting = discoveredByWorkKey.get(altKey);
+      if (!altExisting || candScore > altExisting.score) {
+        discoveredByWorkKey.set(altKey, {
+          title: cleanSkelTitle,
+          volumeNumber: vNum,
+          isbn13: cand.isbn13,
+          coverUrl: cand.coverUrl || altExisting?.coverUrl,
+          isIntegral: isIntSkel,
+          score: candScore
+        });
+      }
+      return;
+    }
+
+    if (!existing || candScore > existing.score) {
+      discoveredByWorkKey.set(baseKey, {
+        title: cleanSkelTitle,
+        volumeNumber: vNum,
+        isbn13: cand.isbn13,
+        coverUrl: cand.coverUrl || existing?.coverUrl,
+        isIntegral: isIntSkel,
+        score: candScore
+      });
+    } else if (!existing.coverUrl && cand.coverUrl) {
+      existing.coverUrl = cand.coverUrl;
+    }
+  };
+
+  // Phase 5A-1 : Requête BnF `bib.ens2bib` si un ensemble bibliographique 460$3 valide est connu
+  if (validEnsembleIds.size > 0) {
     try {
-      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(`bib.ens2bib any "${targetEnsId}"`)}&recordSchema=intermarcxchange&maximumRecords=30&startRecord=1`;
-      const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
+      const ensQuery = Array.from(validEnsembleIds)
+        .slice(0, 4)
+        .map((id) => `bib.ens2bib any "${id}"`)
+        .join(' or ');
+      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(`(${ensQuery}) and (bib.doctype all "a")`)}&recordSchema=intermarcxchange&maximumRecords=45&startRecord=1`;
+      const res = await fetchWithTimeoutAndRetry(bnfUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
       if (res.ok) {
         const xml = await res.text();
         for (const rec of xml.split('<srw:record>').slice(1)) {
-          const cand = extractMarcRecordMetadata(rec);
-          if (!cand || !cand.isbn13 || !isStrictFrenchLanguage(cand.language)) continue;
-          const isIntSkel = Boolean(cand._isIntegral);
-          const cleanSkelTitle = cleanTitle(isIntSkel ? cand.title : parseSeriesFromTitle(cand.title).title || cand.title);
-          const resolvedSkelVol = !isIntSkel
-            ? resolveCanonicalVolumeNumber({
-                canonicalSeriesIndex: seriesWdIndex,
-                sisterEditions: [cand],
-                rawTitles: [cleanSkelTitle, cand.title],
-                seriesName: book.seriesName || undefined
-              }).volumeNumber
-            : '';
-          const vNum = !isIntSkel && resolvedSkelVol && /^\d+$/.test(resolvedSkelVol)
-            ? parseInt(resolvedSkelVol, 10)
-            : undefined;
-          discoveredSkeleton.push({
-            title: cleanSkelTitle,
-            volumeNumber: vNum,
-            isbn13: cand.isbn13,
-            coverUrl: cand.coverUrl,
-            isIntegral: isIntSkel
-          });
+          registerCandidateFromRecord(rec, true);
         }
       }
     } catch {
@@ -2599,6 +2852,60 @@ export async function enqueueOrExpandSeriesLayer5(
     }
   }
 
+  // Phase 5A-2 : Repli automatique par nom de série BnF SRU si `ens2bib` n'était pas renseigné ou a retourné < 3 tomes
+  // (corrige le cas d'Astérix où P268 Wikidata est une notice d'autorité 14573759 et non un 460$3 bibliographique)
+  if (discoveredByWorkKey.size < 3) {
+    const cleanSeriesQuery = book.seriesName.replace(/["()]/g, ' ').trim();
+    const primaryAuthors = safeJsonParse<string[]>(sRow.primary_authors_json, []);
+    const firstAuthorLast = extractAuthorLastNameForBnfCql(book.authors[0] || primaryAuthors[0]);
+    const prevEnsCount = validEnsembleIds.size;
+
+    const runSeriesFallbackCql = async (cql: string) => {
+      try {
+        const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=45&startRecord=1`;
+        const res = await fetchWithTimeoutAndRetry(sruUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
+        if (!res.ok) return;
+        const xml = await res.text();
+        for (const rec of xml.split('<srw:record>').slice(1)) {
+          registerCandidateFromRecord(rec, false);
+        }
+      } catch {
+        // Non-bloquant
+      }
+    };
+
+    if (cleanSeriesQuery.length >= 2) {
+      if (firstAuthorLast) {
+        await runSeriesFallbackCql(
+          `(bib.anywhere all "${cleanSeriesQuery}") and (bib.author all "${firstAuthorLast}") and (bib.doctype all "a")`
+        );
+      }
+      if (discoveredByWorkKey.size < 3) {
+        await runSeriesFallbackCql(`(bib.anywhere all "${cleanSeriesQuery}") and (bib.doctype all "a")`);
+      }
+      // Si la passe de repli a permis de découvrir de vrais 460$3 (ensemble bibliographique), aspirer tous les tomes rattachés !
+      if (validEnsembleIds.size > prevEnsCount && discoveredByWorkKey.size < 18) {
+        try {
+          const ensQuery = Array.from(validEnsembleIds)
+            .slice(0, 4)
+            .map((id) => `bib.ens2bib any "${id}"`)
+            .join(' or ');
+          const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(`(${ensQuery}) and (bib.doctype all "a")`)}&recordSchema=intermarcxchange&maximumRecords=50&startRecord=1`;
+          const res = await fetchWithTimeoutAndRetry(bnfUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
+          if (res.ok) {
+            const xml = await res.text();
+            for (const rec of xml.split('<srw:record>').slice(1)) {
+              registerCandidateFromRecord(rec, true);
+            }
+          }
+        } catch {
+          // Non-bloquant
+        }
+      }
+    }
+  }
+
+  const discoveredSkeleton = Array.from(discoveredByWorkKey.values());
   let queuedCount = 0;
   for (const skel of discoveredSkeleton) {
     if (!skel.isbn13) continue;
@@ -2609,11 +2916,55 @@ export async function enqueueOrExpandSeriesLayer5(
     if (already) continue;
 
     // Squelette léger immédiat dans books + book_isbn_index puis enrichissement complet mis en queue pour le CRON
-    const skelCanonId = skel.isIntegral
+    let skelCanonId = skel.isIntegral
       ? `integral:${sRow.normalized_core_key}:${skel.isbn13}`
       : skel.volumeNumber
         ? `series:${sRow.normalized_core_key}:vol:${skel.volumeNumber}`
         : `work:${normalizeTextKey(skel.title)}:${skel.isbn13}`;
+
+    // Vérifier si un tome existe déjà sur cette clé canonique (ou ce numéro de tome dans la série)
+    let existingWork = await db
+      .prepare('SELECT id, canonical_title, known_isbns_json FROM books WHERE work_canonical_id = ? LIMIT 1')
+      .bind(skelCanonId)
+      .first<{ id: string; canonical_title: string; known_isbns_json: string }>();
+    if (!existingWork && !skel.isIntegral && skel.volumeNumber) {
+      existingWork = await db
+        .prepare('SELECT id, canonical_title, known_isbns_json FROM books WHERE series_id = ? AND volume_number = ? AND is_integral = 0 LIMIT 1')
+        .bind(book.seriesId, skel.volumeNumber)
+        .first<{ id: string; canonical_title: string; known_isbns_json: string }>();
+    }
+
+    if (existingWork) {
+      if (
+        !skel.isIntegral &&
+        areDistinctSeriesWorkTitles(existingWork.canonical_title, skel.title, book.seriesName)
+      ) {
+        // Deux albums distincts portant le même numéro dans des éditions différentes : créer une clé séparée sans écraser le tome existant
+        skelCanonId = `series:${sRow.normalized_core_key}:vol:${skel.volumeNumber}:${normalizeTextKey(skel.title).slice(0, 40)}`;
+        existingWork = await db
+          .prepare('SELECT id, canonical_title, known_isbns_json FROM books WHERE work_canonical_id = ? LIMIT 1')
+          .bind(skelCanonId)
+          .first<{ id: string; canonical_title: string; known_isbns_json: string }>();
+      }
+    }
+
+    if (existingWork?.id) {
+      // Le tome existe déjà dans `books` : indexer cet ISBN supplémentaire sur l'œuvre existante SANS l'envoyer en replaceSkeletonBookId !
+      const prevIsbns = safeJsonParse<string[]>(existingWork.known_isbns_json, []);
+      if (!prevIsbns.includes(skel.isbn13)) {
+        prevIsbns.push(skel.isbn13);
+        await db
+          .prepare('UPDATE books SET known_isbns_json = ?, updated_at = ? WHERE id = ?')
+          .bind(JSON.stringify(prevIsbns), now, existingWork.id)
+          .run();
+      }
+      await db
+        .prepare('INSERT OR IGNORE INTO book_isbn_index (isbn13, book_id, is_integral, created_at) VALUES (?, ?, ?, ?)')
+        .bind(skel.isbn13, existingWork.id, skel.isIntegral ? 1 : 0, now)
+        .run();
+      continue;
+    }
+
     const skelBookId = `bk_${generateTraceId('').replace(/^_/, '')}_${Math.random().toString(36).slice(2, 6)}`;
     const skelVolLabel = skel.isIntegral ? 'Intégrale' : skel.volumeNumber ? String(skel.volumeNumber) : null;
 
@@ -2658,36 +3009,53 @@ export async function enqueueOrExpandSeriesLayer5(
         .bind(skel.isbn13, insertedOrExisting.id, skel.isIntegral ? 1 : 0, now)
         .run();
 
-      await db
-        .prepare(
-          `INSERT INTO enrichment_queue (book_id, isbn13, series_id, priority, status, attempts, created_at, updated_at)
-           VALUES (?, ?, ?, 5, 'pending', 0, ?, ?)
-           ON CONFLICT(isbn13) DO NOTHING`
-        )
-        .bind(insertedOrExisting.id, skel.isbn13, book.seriesId, now, now)
-        .run();
-      queuedCount++;
+      if (insertedOrExisting.id === skelBookId) {
+        await db
+          .prepare(
+            `INSERT INTO enrichment_queue (book_id, isbn13, series_id, priority, status, attempts, created_at, updated_at)
+             VALUES (?, ?, ?, 5, 'pending', 0, ?, ?)
+             ON CONFLICT(isbn13) DO NOTHING`
+          )
+          .bind(insertedOrExisting.id, skel.isbn13, book.seriesId, now, now)
+          .run();
+        queuedCount++;
+      }
     }
   }
+
+  const totalCountRow = await db
+    .prepare('SELECT COUNT(*) AS cnt FROM books WHERE series_id = ?')
+    .bind(book.seriesId)
+    .first<{ cnt: number }>();
+  const finalSeriesCount = Number(totalCountRow?.cnt || 0);
+  const markExpanded = discoveredSkeleton.length > 0 || finalSeriesCount > 1 ? 1 : 0;
 
   await db
     .prepare(
       `UPDATE v4_series
-       SET is_complete_expanded = 1,
-           known_volumes_count = (SELECT COUNT(*) FROM books WHERE series_id = ?),
+       SET is_complete_expanded = ?,
+           bnf_ensemble_ids_json = ?,
+           known_volumes_count = ?,
            series_checked_at = ?,
            updated_at = ?
        WHERE id = ?`
     )
-    .bind(book.seriesId, now, now, book.seriesId)
+    .bind(
+      markExpanded,
+      JSON.stringify(Array.from(validEnsembleIds)),
+      finalSeriesCount,
+      now,
+      now,
+      book.seriesId
+    )
     .run();
 
   tracer?.record(
     'C5',
     'series_skeleton_and_queue',
     'ok',
-    `Squelette série « ${book.seriesName} » : ${discoveredSkeleton.length} tome(s) détecté(s), ${queuedCount} mis en file enrichment_queue`,
-    { seriesId: book.seriesId, discovered: discoveredSkeleton.length, queuedCount },
+    `Squelette série « ${book.seriesName} » : ${discoveredSkeleton.length} tome(s) détecté(s), ${queuedCount} mis en file enrichment_queue (total série: ${finalSeriesCount})`,
+    { seriesId: book.seriesId, discovered: discoveredSkeleton.length, queuedCount, finalSeriesCount },
     Date.now() - start
   );
   return queuedCount;
@@ -2702,6 +3070,18 @@ export async function drainEnrichmentQueueBatch(
   limit = 3
 ): Promise<{ processed: number; succeeded: number; failed: number }> {
   const safeLimit = Math.min(8, Math.max(1, Math.trunc(limit)));
+  const staleCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  await db
+    .prepare(
+      `UPDATE enrichment_queue
+       SET status = CASE WHEN attempts >= 3 THEN 'error' ELSE 'pending' END,
+           last_error = COALESCE(last_error, 'Timeout processing > 15m')
+       WHERE status = 'processing' AND updated_at < ?`
+    )
+    .bind(staleCutoff)
+    .run()
+    .catch(() => {});
+
   const pending = await db
     .prepare(
       `SELECT id, book_id, isbn13, attempts
@@ -2791,24 +3171,35 @@ export async function runSilentEditionDiscoveryPass(
     checkedBooks++;
     const title = String(row.canonical_title || '').replace(/["()]/g, ' ').trim();
     const authors = safeJsonParse<string[]>(row.authors_json, []);
-    const firstAuthorLast = authors[0] ? authors[0].split(/[,\s]+/)[0].replace(/["()]/g, '') : '';
-    if (title.length < 3) continue;
+    const firstAuthorLast = extractAuthorLastNameForBnfCql(authors[0]);
+    if (title.length < 3) {
+      await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run();
+      continue;
+    }
 
     try {
       const cql = firstAuthorLast
-        ? `(bib.title all "${title}") and (bib.author all "${firstAuthorLast}")`
-        : `(bib.title all "${title}")`;
+        ? `(bib.title all "${title}") and (bib.author all "${firstAuthorLast}") and (bib.doctype all "a")`
+        : `(bib.title all "${title}") and (bib.doctype all "a")`;
       const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=10&startRecord=1`;
-      const res = await fetch(sruUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
-      if (!res.ok) continue;
+      const res = await fetchWithTimeoutAndRetry(sruUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
+      if (!res.ok) {
+        await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run();
+        continue;
+      }
       const xml = await res.text();
       const existingIsbns = new Set(safeJsonParse<string[]>(row.known_isbns_json, []));
       const added: string[] = [];
+      const rowIsIntegral = Number(row.is_integral) === 1;
+      const rowVolStr = row.volume_number !== null && row.volume_number !== undefined ? String(row.volume_number) : '';
 
       for (const rec of xml.split('<srw:record>').slice(1)) {
         const cand = extractMarcRecordMetadata(rec);
         if (!cand?.isbn13 || !isStrictFrenchLanguage(cand.language)) continue;
-        if (!isbnUtil.isValidBookBarcode(cand.isbn13) || existingIsbns.has(cand.isbn13)) continue;
+        if (!isbnUtil.isValidBookBarcode(cand.isbn13) || !isFrancophoneBookIsbn13(cand.isbn13) || existingIsbns.has(cand.isbn13)) continue;
+        if (Boolean(cand._isIntegral) !== rowIsIntegral) continue;
+        const candVol = normalizeSeriesNumber(cand.volumeNumber || parseSeriesFromTitle(cand.title).seriesNumber || '');
+        if (rowVolStr && candVol && candVol !== rowVolStr) continue;
         if (normalizeTextKey(cand.title) !== normalizeTextKey(row.canonical_title)) continue;
         existingIsbns.add(cand.isbn13);
         added.push(cand.isbn13);
@@ -2824,7 +3215,7 @@ export async function runSilentEditionDiscoveryPass(
             .prepare(
               'INSERT OR IGNORE INTO book_isbn_index (isbn13, book_id, is_integral, created_at) VALUES (?, ?, ?, ?)'
             )
-            .bind(isbn13, row.id, Number(row.is_integral) === 1 ? 1 : 0, now)
+            .bind(isbn13, row.id, rowIsIntegral ? 1 : 0, now)
         );
         await db.batch(stmts);
         newIsbnsIndexed += added.length;
@@ -2832,7 +3223,7 @@ export async function runSilentEditionDiscoveryPass(
         await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run();
       }
     } catch {
-      // Silencieux : ne bloque jamais le CRON
+      await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run().catch(() => {});
     }
   }
 
@@ -2903,12 +3294,14 @@ export async function runV4IngestionPipeline(
     }
 
     if (resolvedL2 && resolvedL2.book) {
-      // Lier à la bibliothèque si nouvel ajout demandé et pas déjà couvert/possédé
+      // Lier à la bibliothèque si nouvel ajout demandé et pas déjà intégralement couvert/possédé
       if (
         params.libraryId &&
         params.action &&
         params.action !== 'preview' &&
-        (resolvedL2.status === 'LOCAL_UNOWNED' || resolvedL2.status === 'SERVER_CATALOG_HIT')
+        (resolvedL2.status === 'LOCAL_UNOWNED' ||
+          resolvedL2.status === 'SERVER_CATALOG_HIT' ||
+          (params.action === 'owned' && resolvedL2.status === 'PARTIAL_INTEGRAL_OWNED'))
       ) {
         await linkBookToLibrary(db, {
           libraryId: params.libraryId,
@@ -2919,6 +3312,11 @@ export async function runV4IngestionPipeline(
           sourceChannel: params.sourceChannel,
           coverUrl: resolvedL2.book.selectedCoverUrl
         });
+      }
+
+      // Si la série du livre n'a pas encore été étendue en Couche 5, l'étendre même sur un HIT Couche 2 !
+      if (resolvedL2.book.seriesId && subrequestBudgetUsed <= 2) {
+        await enqueueOrExpandSeriesLayer5(db, resolvedL2.book, tracer).catch(() => 0);
       }
 
       results.push({
@@ -2982,25 +3380,46 @@ export async function runV4IngestionPipeline(
       continue;
     }
 
+    // Consolider d'abord en mode preview pour que postCheck puisse détecter INCLUDED_IN_INTEGRAL / PARTIAL_INTEGRAL_OWNED avant liaison bibliothèque
     const consolidated = await consolidateBookLayer4(db, staging, {
       sourceChannel: params.sourceChannel,
       libraryId: params.libraryId,
-      action: params.action,
+      action: 'preview',
       tracer,
       userHint: params.hints?.[activeIsbn13] || rawUserHint,
       replaceSkeletonBookId: staleSkeletonBookId
     });
 
-    // Couche 5 : Squelette rapide + file d'attente (seulement si une seule requête/peu d'ISBN pour garder de la marge)
-    let queuedCount = 0;
-    if (subrequestBudgetUsed <= 2) {
-      queuedCount = await enqueueOrExpandSeriesLayer5(db, consolidated, tracer);
-    }
-
     // Re-vérifier Couche 2 après consolidation pour remonter d'éventuelles détections bidirectionnelles (intégrale trouvée a posteriori)
     const postCheck = params.libraryId
       ? await checkBookIndexLayer2(db, activeIsbn13, params.libraryId)
       : null;
+
+    if (
+      params.libraryId &&
+      params.action &&
+      params.action !== 'preview' &&
+      (!postCheck ||
+        postCheck.status === 'LOCAL_UNOWNED' ||
+        postCheck.status === 'SERVER_CATALOG_HIT' ||
+        (params.action === 'owned' && postCheck.status === 'PARTIAL_INTEGRAL_OWNED'))
+    ) {
+      await linkBookToLibrary(db, {
+        libraryId: params.libraryId,
+        bookId: consolidated.id,
+        legacyEntityUri: consolidated.legacyEntityUri,
+        isOwned: params.action === 'owned',
+        isWished: params.action === 'wishlist',
+        sourceChannel: params.sourceChannel,
+        coverUrl: consolidated.selectedCoverUrl
+      });
+    }
+
+    // Couche 5 : Squelette rapide + file d'attente
+    let queuedCount = 0;
+    if (subrequestBudgetUsed <= 3) {
+      queuedCount = await enqueueOrExpandSeriesLayer5(db, consolidated, tracer);
+    }
 
     results.push({
       inputIsbn: rawInput,
@@ -3081,20 +3500,20 @@ export async function syncV4LibraryBooks(
     statusByBookId.set(String(row.book_id), { status, updatedAt: String(row.updated_at || '') });
   }
 
-  // 2. Récupérer les livres directement liés + tous les livres des séries suivies par l'utilisateur
+  // 2. Récupérer les livres directement liés (possédés/souhaités) + tous les livres des séries suivies par l'utilisateur
   const bookRows = await db
     .prepare(
       `SELECT DISTINCT b.*
        FROM books b
        LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
-       WHERE lb.book_id IS NOT NULL
+       WHERE (lb.book_id IS NOT NULL AND (lb.is_owned = 1 OR lb.is_wished = 1))
           OR (
             b.series_id IS NOT NULL
             AND b.series_id IN (
               SELECT DISTINCT b2.series_id
               FROM books b2
               JOIN v4_library_books lb2 ON lb2.book_id = b2.id
-              WHERE lb2.library_id = ? AND b2.series_id IS NOT NULL
+              WHERE lb2.library_id = ? AND (lb2.is_owned = 1 OR lb2.is_wished = 1) AND b2.series_id IS NOT NULL
             )
           )
        ORDER BY b.updated_at DESC
@@ -3132,22 +3551,60 @@ export async function getV4SeriesBooks(
   params: { seriesId: string; libraryId?: string | null }
 ): Promise<V4SeriesBooksResponse> {
   const sRow = await db
-    .prepare('SELECT id, canonical_name, wikidata_qid, aliases_json FROM v4_series WHERE id = ? LIMIT 1')
+    .prepare('SELECT id, canonical_name, wikidata_qid, aliases_json, is_complete_expanded, primary_authors_json FROM v4_series WHERE id = ? LIMIT 1')
     .bind(params.seriesId)
     .first<Record<string, any>>();
 
-  const bookRows = await db
-    .prepare(
-      `SELECT b.*,
-              COALESCE(lb.is_owned, 0) AS lib_is_owned,
-              COALESCE(lb.is_wished, 0) AS lib_is_wished
-       FROM books b
-       LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
-       WHERE b.series_id = ?
-       ORDER BY b.is_integral ASC, b.is_hors_serie ASC, COALESCE(b.volume_number, 9999) ASC, b.canonical_title ASC`
-    )
-    .bind(params.libraryId || '__none__', params.seriesId)
-    .all<Record<string, any>>();
+  const querySeriesBookRows = () =>
+    db
+      .prepare(
+        `SELECT b.*,
+                COALESCE(lb.is_owned, 0) AS lib_is_owned,
+                COALESCE(lb.is_wished, 0) AS lib_is_wished
+         FROM books b
+         LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
+         WHERE b.series_id = ?
+         ORDER BY b.is_integral ASC, b.is_hors_serie ASC, COALESCE(b.volume_number, 9999) ASC, b.canonical_title ASC`
+      )
+      .bind(params.libraryId || '__none__', params.seriesId)
+      .all<Record<string, any>>();
+
+  let bookRows = await querySeriesBookRows();
+  const initialRows = bookRows.results || [];
+  const unownedCount = initialRows.filter((r) => Number(r.lib_is_owned) === 0 && Number(r.is_integral) === 0).length;
+
+  // Si la série n'a pas encore été étendue (ou si seuls les tomes possédés étaient présents suite à un lot volumineux ou un ancien P268 d'autorité),
+  // lancer immédiatement l'expansion Couche 5 (avec repli SRU série) afin que TOUS les tomes de la collection soient téléchargés !
+  if (sRow && (Number(sRow.is_complete_expanded) === 0 || initialRows.length <= 1 || unownedCount === 0)) {
+    const seedBook: V4BookRecord = initialRows[0]
+      ? mapBookRow(initialRows[0])
+      : {
+          id: `seed_${sRow.id}`,
+          workCanonicalId: `seed:${sRow.id}`,
+          canonicalTitle: String(sRow.canonical_name),
+          normalizedTitle: normalizeTextKey(String(sRow.canonical_name)),
+          seriesId: String(sRow.id),
+          seriesName: String(sRow.canonical_name),
+          volumeNumber: 1,
+          volumeLabel: '1',
+          isHorsSerie: false,
+          horsSerieLabel: null,
+          isIntegral: false,
+          integralMetadata: { includedVolumeNumbers: [], includedWorkIds: [], includedIsbns: [] },
+          parentIntegrals: [],
+          authors: safeJsonParse<string[]>(sRow.primary_authors_json, []),
+          language: 'fr',
+          knownIsbns: [],
+          editionsCatalog: [],
+          selectedCoverUrl: null,
+          mainCategory: 'BD',
+          subgenres: [],
+          legacyEntityUri: null,
+          updatedAt: new Date().toISOString()
+        };
+    await enqueueOrExpandSeriesLayer5(db, seedBook, undefined, { force: true }).catch(() => 0);
+    bookRows = await querySeriesBookRows();
+  }
 
   const items: V4SyncBookItem[] = (bookRows.results || []).map((row) => {
     const ownershipStatus: 'owned' | 'wish' | 'none' =
@@ -3282,15 +3739,20 @@ export async function updateV4BookMetadata(
   }
 
   // Gestion numéro de tome
+  const isRowIntegral = Number(existingRow.is_integral) === 1;
   let nextVolNum: number | null = typeof existingRow.volume_number === 'number' ? existingRow.volume_number : existingRow.volume_number ? Number(existingRow.volume_number) : null;
   let nextVolLabel: string | null = existingRow.volume_label ?? null;
-  let nextIsHs = Number(existingRow.is_hors_serie) === 1 ? 1 : 0;
+  let nextIsHs = isRowIntegral ? 0 : (Number(existingRow.is_hors_serie) === 1 ? 1 : 0);
   if (params.seriesNumber !== undefined) {
     const cleanNum = params.seriesNumber.trim();
     if (!nextSeriesId || !cleanNum) {
       nextVolNum = null;
-      nextVolLabel = Number(existingRow.is_integral) === 1 ? existingRow.volume_label : null;
-      nextIsHs = nextSeriesId && Number(existingRow.is_integral) !== 1 ? 1 : 0;
+      nextVolLabel = isRowIntegral ? existingRow.volume_label : null;
+      nextIsHs = nextSeriesId && !isRowIntegral ? 1 : 0;
+    } else if (isRowIntegral) {
+      nextVolNum = null;
+      nextVolLabel = cleanNum;
+      nextIsHs = 0;
     } else {
       const normNum = normalizeSeriesNumber(cleanNum);
       if (normNum && /^\d+$/.test(normNum)) {
@@ -3351,6 +3813,14 @@ export async function updateV4BookMetadata(
       bookId
     )
     .run();
+
+  if (Array.isArray(params.genres) && params.genres.length > 0 && nextSeriesId) {
+    await db
+      .prepare('UPDATE books SET main_category = ?, subgenres_json = ?, updated_at = ? WHERE series_id = ?')
+      .bind(nextMainCategory, JSON.stringify(nextSubgenres), now, nextSeriesId)
+      .run()
+      .catch(() => {});
+  }
 
   if (params.libraryId) {
     await db

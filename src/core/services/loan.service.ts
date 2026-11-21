@@ -89,7 +89,8 @@ export const loanService = {
     }
 
     if (!itemId) {
-      console.warn(`[LOAN SERVICE] Impossible de trouver l'exemplaire physique pour ${entityUri}`);
+      // Repli V4 : si le livre est géré par `v4_library_books` sans entrée legacy `library_items`, utiliser son URI canonique
+      return entityUri;
     }
 
     return itemId || null;
@@ -101,20 +102,17 @@ export const loanService = {
     
     try {
       const data = await this.safeFetch(`/api/gateway?action=shelves&path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
-      let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
-      let shelf = shelvesArray.find((s: any) => s && s.name === this.shelfName);
-
-      if (!shelf) {
-        const createData = await this.safeFetch('/api/gateway?action=shelves', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: this.shelfName, description: 'Carnet de prêts local Epiqoi' })
-        });
-        shelf = createData.shelf || createData;
+      const shelvesArray = Array.isArray(data.shelves)
+        ? data.shelves
+        : data.shelves
+          ? Object.values(data.shelves)
+          : [];
+      const shelf: any = shelvesArray.find((s: any) => s && (s.name === this.shelfName || String(s.name || '').startsWith('Prêts')));
+      if (shelf) {
+        this.shelfId = shelf._id || shelf.id;
+        return this.shelfId;
       }
-
-      this.shelfId = shelf._id || shelf.id;
-      return this.shelfId;
+      return 'shelf_default';
     } catch (error) {
       console.error("[LOAN SERVICE] Erreur d'initialisation:", error);
       return null;
@@ -126,15 +124,32 @@ export const loanService = {
     this.userUri = userUri;
     
     try {
-      const shelfId = await this.initializeShelf();
-      if (!shelfId) throw new Error("Étagère introuvable.");
+      const data = await this.safeFetch(`/api/gateway?action=shelves&path=by-owners&owners=${encodeURIComponent(this.userUri)}`);
+      const shelvesArray: any[] = Array.isArray(data.shelves)
+        ? data.shelves
+        : data.shelves
+          ? Object.values(data.shelves)
+          : [];
 
-      const data = await this.safeFetch(`/api/gateway?action=shelves&path=by-ids&ids=${encodeURIComponent(shelfId)}&with-items-ids=true`);
-      let shelvesArray = Array.isArray(data.shelves) ? data.shelves : (data.shelves ? Object.values(data.shelves) : (Array.isArray(data) ? data : Object.values(data)));
-      const shelf = shelvesArray.find((s: any) => s && (s._id === shelfId || s.id === shelfId)) || shelvesArray[0];
-
-      const items = shelf?.items || [];
-      const distantItemIds: string[] = items.map((item: any) => item._id || item.id || item).filter(Boolean);
+      const distantLoanByItemId = new Map<string, { shelfId: string; borrowerName: string; loanDate: number }>();
+      for (const s of shelvesArray) {
+        if (!s) continue;
+        const rawName = String(s.name || '');
+        const borrower = rawName.replace(/^Prêts?\s*[-:]?\s*/i, '').trim() || TEXTS.loansView?.unknownFriendWeb || 'Inconnu';
+        const parsedTs = Number(s.description);
+        const loanDate = Number.isFinite(parsedTs) && parsedTs > 1000000000 ? parsedTs : Date.now();
+        for (const rawItem of s.items || []) {
+          const itemId = rawItem?._id || rawItem?.id || rawItem;
+          if (typeof itemId === 'string' && itemId.trim()) {
+            distantLoanByItemId.set(itemId.trim(), {
+              shelfId: s._id || s.id,
+              borrowerName: borrower,
+              loanDate
+            });
+          }
+        }
+      }
+      const distantItemIds = Array.from(distantLoanByItemId.keys());
       const localLoans = await databaseService.getAllLoans();
       
       if (preloadedInventoryItems && preloadedInventoryItems.length > 0) {
@@ -152,7 +167,10 @@ export const loanService = {
       console.log(`[LOAN DEBUG] IDs physiques sur l'étagère :`, distantItemIds);
 
       for (const localLoan of localLoans) {
-        const isStillOnShelf = distantItemIds.includes(localLoan.itemId!) || distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
+        const isStillOnShelf =
+          (localLoan.itemId && distantItemIds.includes(localLoan.itemId)) ||
+          distantItemIds.includes(localLoan.uri) ||
+          distantItemIds.some(dId => inventoryMap[dId] === localLoan.uri);
         
         if (!isStillOnShelf) {
           console.log(`[LOAN SERVICE] Retour détecté pour ${localLoan.uri}. Suppression locale.`);
@@ -161,14 +179,15 @@ export const loanService = {
       }
 
       for (const distantId of distantItemIds) {
-        const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === inventoryMap[distantId]);
+        const entityUri = inventoryMap[distantId] || distantId;
+        const isKnownLocally = localLoans.some(l => l.itemId === distantId || l.uri === entityUri);
         if (!isKnownLocally) {
-          const entityUri = inventoryMap[distantId] || distantId;
+          const meta = distantLoanByItemId.get(distantId);
           console.log(`[LOAN SERVICE] Prêt web détecté (${entityUri}). Ajout local.`);
           await databaseService.saveLoan({
             uri: entityUri,
-            friendName: TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)',
-            loanDate: Date.now(),
+            friendName: meta?.borrowerName || TEXTS.loansView?.unknownFriendWeb || 'Inconnu (Ajout web)',
+            loanDate: meta?.loanDate || Date.now(),
             itemId: distantId
           });
         }
@@ -183,23 +202,27 @@ export const loanService = {
 
   async lend(uri: string, friendName: string): Promise<boolean> {
     try {
-      const shelfId = await this.initializeShelf();
-      if (!shelfId) throw new Error("Étagère non initialisée");
+      const itemId = (await this.getInventoryItemId(uri)) || uri;
+      const loanTimestamp = Date.now();
 
-      // Appelle désormais la méthode optimisée qui pioche dans le cache
-      const itemId = await this.getInventoryItemId(uri);
-      if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
-
-      await this.safeFetch('/api/gateway?action=shelves&path=add-items', {
-        method: 'PUT',
+      const createData = await this.safeFetch('/api/gateway?action=shelves', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: shelfId, items: [itemId] }) 
+        body: JSON.stringify({
+          name: `Prêts - ${friendName.trim()}`,
+          description: String(loanTimestamp),
+          items: [itemId]
+        })
       });
+      const createdShelfId = createData?.shelf?._id || createData?._id;
+      if (createdShelfId) {
+        this.shelfId = createdShelfId;
+      }
 
       await databaseService.saveLoan({ 
         uri, 
-        friendName, 
-        loanDate: Date.now(),
+        friendName: friendName.trim(), 
+        loanDate: loanTimestamp,
         itemId 
       });
 
@@ -213,13 +236,9 @@ export const loanService = {
 
   async returnBook(uri: string): Promise<boolean> {
     try {
-      const shelfId = await this.initializeShelf();
-      if (!shelfId) throw new Error("Étagère non initialisée");
-
+      const shelfId = (await this.initializeShelf()) || 'shelf_default';
       const localLoan = await databaseService.getLoan(uri);
-      // Appelle désormais la méthode optimisée qui pioche dans le cache
-      const itemId = localLoan?.itemId || await this.getInventoryItemId(uri);
-      if (!itemId) throw new Error(`Exemplaire physique introuvable pour ${uri}`);
+      const itemId = localLoan?.itemId || (await this.getInventoryItemId(uri)) || uri;
 
       await this.safeFetch('/api/gateway?action=shelves&path=remove-items', {
         method: 'PUT',

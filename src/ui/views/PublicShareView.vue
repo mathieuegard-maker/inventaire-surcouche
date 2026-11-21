@@ -135,9 +135,14 @@ const dismissVisitorModal = () => {
 const cleanToken = computed(() => String(route.params.token || '').trim());
 const isLoggedIn = computed(() => Boolean(sessionStore.state.user?.uri || sessionStore.getUserUri()));
 const currentUsername = computed(() => sessionStore.state.user?.username || '');
-const isOwnLibrary = computed(
-  () => Boolean(library.value && sessionStore.state.user?.libraryId && library.value.libraryId === sessionStore.state.user.libraryId)
-);
+const isOwnLibrary = computed(() => {
+  const user = sessionStore.state.user;
+  if (!user) return false;
+  if (user.publicReadonlyToken && cleanToken.value.toUpperCase() === user.publicReadonlyToken.toUpperCase()) {
+    return true;
+  }
+  return Boolean(library.value && user.libraryId && library.value.libraryId === user.libraryId);
+});
 const iosHint = computed(() => isIosDevice() && !isAppInstalled.value && !canInstallPwa.value);
 
 const loadShare = async () => {

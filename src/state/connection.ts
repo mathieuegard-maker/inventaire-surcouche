@@ -20,7 +20,7 @@ const startHeartbeat = () => {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 2000);
-      const response = await fetch('/api/gateway?action=user-get', { signal: controller.signal });
+      const response = await fetch('/api/v2/health', { signal: controller.signal });
       clearTimeout(id);
       if (response.ok) {
         setOfflineState(false);
@@ -91,15 +91,15 @@ export async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestI
       signal: controller.signal
     });
     
-    // Si la requête réussit vers notre passerelle locale, on sait qu'on est connecté.
+    // Si la requête réussit vers notre passerelle locale (/api/gateway ou /api/v2/), on sait qu'on est connecté.
     const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input as Request).url);
-    if (urlStr && urlStr.includes('/api/gateway')) {
+    if (urlStr && (urlStr.includes('/api/gateway') || urlStr.includes('/api/v2/'))) {
       setOfflineState(false);
     }
     return response;
   } catch (error: any) {
     const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input as Request).url);
-    const isGateway = urlStr && urlStr.includes('/api/gateway');
+    const isGateway = Boolean(urlStr && (urlStr.includes('/api/gateway') || urlStr.includes('/api/v2/')));
     const browserOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
     const isHardNetworkDrop =
       error?.message?.includes('Failed to fetch') ||

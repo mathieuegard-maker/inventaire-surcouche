@@ -69,7 +69,8 @@ export const imageUtil = {
       add(url);
     }
 
-    const cleanIsbn13 = isbn13 ? isbnUtil.normalize(isbn13) : '';
+    const rawClean = isbn13 ? isbnUtil.normalize(isbn13) : '';
+    const cleanIsbn13 = rawClean.length === 10 ? isbnUtil.toIsbn13(rawClean) : rawClean;
     if (cleanIsbn13.length === 13) {
       const isbn10 = isbnUtil.toIsbn10(cleanIsbn13);
       if (isbn10) {
@@ -129,13 +130,23 @@ export const imageUtil = {
       return false;
     }
 
+    const normIsbn = options.isbn ? isbnUtil.normalize(options.isbn) : '';
+    const isbn13 = normIsbn.length === 10 ? isbnUtil.toIsbn13(normIsbn) : normIsbn;
+    if (isbn13 && imgEl.dataset.coverIsbn && imgEl.dataset.coverIsbn !== isbn13) {
+      delete imgEl.dataset.coverOrigUrl;
+      delete imgEl.dataset.coverTried;
+    }
+    if (isbn13) {
+      imgEl.dataset.coverIsbn = isbn13;
+    }
+
     const currentRaw = this.extractRawUrl(imgEl.getAttribute('src') || imgEl.src);
     if (!imgEl.dataset.coverOrigUrl && currentRaw && !currentRaw.startsWith('data:')) {
       imgEl.dataset.coverOrigUrl = currentRaw;
     }
 
     const initialRaw = imgEl.dataset.coverOrigUrl || '';
-    const candidates = this.buildCoverCandidates(options.isbn, [
+    const candidates = this.buildCoverCandidates(isbn13, [
       ...(initialRaw ? [initialRaw] : []),
       ...(options.fallbackUrls || [])
     ]);
@@ -148,7 +159,7 @@ export const imageUtil = {
     if (nextCandidate) {
       tried.add(nextCandidate);
       imgEl.dataset.coverTried = Array.from(tried).join('|');
-      imgEl.src = this.resolveExternalUrl(nextCandidate);
+      imgEl.src = this.resolveExternalUrl(nextCandidate, isbn13 || undefined);
       return true;
     }
 

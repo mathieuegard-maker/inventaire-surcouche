@@ -6,16 +6,29 @@ export const isbnUtil = {
    */
   normalize(rawIsbn: string): string {
     if (!rawIsbn) return '';
-    return rawIsbn.replace(/[-\s]/g, '');
+    return rawIsbn.replace(/[-\s]/g, '').toUpperCase();
   },
 
   /**
-   * Vérifie si la longueur correspond à un format standard (10 ou 13 chiffres)
-   * Utilise une regex stricte pour bloquer les lettres et caractères spéciaux
+   * Vérifie si la longueur correspond à un format standard (ISBN-10 avec chiffre ou X final, ou ISBN-13)
    */
   isValidFormat(isbn: string): boolean {
     const clean = this.normalize(isbn);
-    return /^(\d{10}|\d{13})$/.test(clean);
+    return /^(\d{9}[\dX]|\d{13})$/.test(clean);
+  },
+
+  /**
+   * Vérifie la clé de contrôle modulo 11 d'un ISBN-10.
+   */
+  isValidIsbn10(isbn10: string): boolean {
+    const clean = this.normalize(isbn10);
+    if (!/^\d{9}[\dX]$/.test(clean)) return false;
+    let sum = 0;
+    for (let i = 0; i < 9; i++) {
+      sum += parseInt(clean[i], 10) * (10 - i);
+    }
+    const check = clean[9] === 'X' ? 10 : parseInt(clean[9], 10);
+    return (sum + check) % 11 === 0;
   },
 
   /**
@@ -39,7 +52,7 @@ export const isbnUtil = {
    */
   toIsbn13(isbn10: string): string {
     const clean = this.normalize(isbn10);
-    if (clean.length !== 10) return clean;
+    if (!/^\d{9}[\dX]$/.test(clean)) return clean;
     const base = '978' + clean.substring(0, 9);
     let sum = 0;
     for (let i = 0; i < 12; i++) {

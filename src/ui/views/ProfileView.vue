@@ -11,6 +11,8 @@ const router = useRouter();
 
 const username = ref(sessionStore.state.user?.username || '');
 const recoveryEmail = ref(sessionStore.state.user?.recoveryEmail || '');
+const initialUsername = ref(username.value);
+const initialRecoveryEmail = ref(recoveryEmail.value);
 const isAdmin = ref(Boolean(sessionStore.state.user?.isAdmin));
 const currentPassword = ref('');
 const newPassword = ref('');
@@ -53,6 +55,8 @@ onMounted(async () => {
     if (profile) {
       username.value = profile.username || '';
       recoveryEmail.value = profile.recoveryEmail || '';
+      initialUsername.value = username.value;
+      initialRecoveryEmail.value = recoveryEmail.value;
       isAdmin.value = Boolean(profile.isAdmin);
     }
     if (prefs) {
@@ -65,9 +69,13 @@ onMounted(async () => {
       vapidPublicKey.value = prefs.vapidPublicKey;
     }
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window) {
-      const reg = await navigator.serviceWorker.ready;
-      const existingSub = await reg.pushManager.getSubscription();
-      hasPushSubscription.value = Boolean(existingSub);
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg?.pushManager) {
+        const existingSub = await reg.pushManager.getSubscription();
+        hasPushSubscription.value = Boolean(existingSub);
+      } else if (prefs) {
+        hasPushSubscription.value = prefs.hasPushSubscription;
+      }
     } else if (prefs) {
       hasPushSubscription.value = prefs.hasPushSubscription;
     }
@@ -95,21 +103,25 @@ const handleSaveNotifs = async () => {
         if (permission !== 'granted') {
           pushWarning = ' (Permission Push refusée sur cet appareil).';
         } else {
-          const reg = await navigator.serviceWorker.ready;
-          let sub = await reg.pushManager.getSubscription();
-          if (!sub) {
-            sub = await reg.pushManager.subscribe({
-              userVisibleOnly: true,
-              applicationServerKey: urlBase64ToUint8Array(vapidPublicKey.value)
-            });
+          const reg = await navigator.serviceWorker.getRegistration();
+          if (!reg?.pushManager) {
+            pushWarning = ' (Service Worker non actif sur cet appareil).';
+          } else {
+            let sub = await reg.pushManager.getSubscription();
+            if (!sub) {
+              sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(vapidPublicKey.value)
+              });
+            }
+            await userService.subscribeWebPush(sub.toJSON());
+            hasPushSubscription.value = true;
           }
-          await userService.subscribeWebPush(sub.toJSON());
-          hasPushSubscription.value = true;
         }
       }
     } else if (digestFrequency.value === 'off' && typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = await reg?.pushManager?.getSubscription();
       if (sub) {
         await userService.unsubscribeWebPush(sub.endpoint);
         await sub.unsubscribe();
@@ -153,11 +165,15 @@ const handleSave = async () => {
     errorMsg.value = "L'adresse e-mail de récupération est obligatoire.";
     return;
   }
+  const sensitiveAccountChange =
+    username.value.trim() !== initialUsername.value.trim() ||
+    recoveryEmail.value.trim().toLowerCase() !== initialRecoveryEmail.value.trim().toLowerCase();
+
+  if ((newPassword.value || sensitiveAccountChange) && !currentPassword.value) {
+    errorMsg.value = 'Veuillez saisir votre mot de passe actuel pour confirmer la modification.';
+    return;
+  }
   if (newPassword.value) {
-    if (!currentPassword.value) {
-      errorMsg.value = 'Veuillez saisir votre mot de passe actuel pour le modifier.';
-      return;
-    }
     if (newPassword.value !== confirmPassword.value) {
       errorMsg.value = 'Les deux nouveaux mots de passe ne correspondent pas.';
       return;
@@ -173,13 +189,11 @@ const handleSave = async () => {
     await userService.updateProfile({
       username: username.value.trim(),
       recoveryEmail: recoveryEmail.value.trim(),
-      ...(newPassword.value
-        ? {
-            currentPassword: currentPassword.value,
-            newPassword: newPassword.value
-          }
-        : {})
+      ...(currentPassword.value ? { currentPassword: currentPassword.value } : {}),
+      ...(newPassword.value ? { newPassword: newPassword.value } : {})
     });
+    initialUsername.value = username.value.trim();
+    initialRecoveryEmail.value = recoveryEmail.value.trim();
     currentPassword.value = '';
     newPassword.value = '';
     confirmPassword.value = '';

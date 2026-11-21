@@ -24,6 +24,7 @@ import {
   isEditorialPaperbackCollectionName,
   stripEditorialCollectionSuffixes
 } from '../utils/series-matcher.util';
+import { areDistinctSeriesWorkTitles } from '../resolvers/series-canonical.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
@@ -202,6 +203,7 @@ export async function resolveAuthSession(
 
   if (token) {
     const tokenHash = await sha256Hex(token);
+    const nowIso = new Date().toISOString();
     const row = await db
       .prepare(
         `SELECT s.user_id, u.display_name, u.email, lm.library_id, lm.role, l.name as library_name
@@ -209,10 +211,10 @@ export async function resolveAuthSession(
          JOIN users u ON u.id = s.user_id
          JOIN library_members lm ON lm.user_id = u.id
          JOIN libraries l ON l.id = lm.library_id
-         WHERE s.token_hash = ?
+         WHERE s.token_hash = ? AND (s.expires_at IS NULL OR s.expires_at > ?)
          LIMIT 1`
       )
-      .bind(tokenHash)
+      .bind(tokenHash, nowIso)
       .first<Record<string, string>>();
 
     if (row && row.library_id) {
@@ -1208,7 +1210,45 @@ export async function upsertCatalogEntity(
   let mergedClaims = { ...params.claims };
   let effectiveLabel = params.label;
   let effectiveNormalizedLabel = normalizedLabel;
-  if (!uri && (params.entityType === 'serie' || params.entityType === 'human' || params.entityType === 'genre' || params.entityType === 'publisher' || params.entityType === 'collection' || params.entityType === 'work') && normalizedLabel) {
+  let existingImageUrl: string | undefined;
+
+  const mergeExistingEntityJson = (entityJsonRaw: string | null | undefined) => {
+    if (!entityJsonRaw) return;
+    try {
+      const parsedExisting = JSON.parse(entityJsonRaw);
+      if (!existingImageUrl && typeof parsedExisting?.image?.url === 'string') {
+        existingImageUrl = parsedExisting.image.url;
+      }
+      if (parsedExisting?.claims && typeof parsedExisting.claims === 'object') {
+        const prevClaims = parsedExisting.claims as Record<string, unknown[]>;
+        mergedClaims = { ...prevClaims, ...params.claims };
+        if (Array.isArray(prevClaims['wdt:P268']) || Array.isArray(params.claims['wdt:P268'])) {
+          mergedClaims['wdt:P268'] = Array.from(
+            new Set([...(prevClaims['wdt:P268'] || []), ...(params.claims['wdt:P268'] || [])])
+          );
+        }
+        if (Array.isArray(prevClaims['invp:knownIsbns']) || Array.isArray(params.claims['invp:knownIsbns'])) {
+          mergedClaims['invp:knownIsbns'] = Array.from(
+            new Set([...(prevClaims['invp:knownIsbns'] || []), ...(params.claims['invp:knownIsbns'] || [])])
+          );
+        }
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  if (uri) {
+    const existingByUri = await db
+      .prepare('SELECT image_url, entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+      .bind(uri)
+      .first<{ image_url: string | null; entity_json: string | null }>()
+      .catch(() => null);
+    if (existingByUri) {
+      if (existingByUri.image_url) existingImageUrl = existingByUri.image_url;
+      mergeExistingEntityJson(existingByUri.entity_json);
+    }
+  } else if ((params.entityType === 'serie' || params.entityType === 'human' || params.entityType === 'genre' || params.entityType === 'publisher' || params.entityType === 'collection' || params.entityType === 'work') && normalizedLabel) {
     let existing =
       params.entityType === 'work'
         ? params.seriesUri && params.seriesNumber
@@ -1230,6 +1270,18 @@ export async function upsertCatalogEntity(
             .prepare('SELECT uri, label, entity_json FROM catalog_entities WHERE entity_type = ? AND normalized_label = ? LIMIT 1')
             .bind(params.entityType, normalizedLabel)
             .first<{ uri: string; label?: string; entity_json: string | null }>();
+
+    // Garde anti-collision de tome dans catalog_entities : ne pas écraser une œuvre de titre distinct
+    if (
+      existing?.uri &&
+      params.entityType === 'work' &&
+      params.seriesUri &&
+      params.seriesNumber &&
+      existing.label &&
+      areDistinctSeriesWorkTitles(existing.label, params.label)
+    ) {
+      existing = null;
+    }
 
     // Déduplication canonique de série côté serveur (ex: "Boule & Bill" == "Boule et Bill", "Astérix, la grande collection" == "Astérix")
     if (!existing?.uri && params.entityType === 'serie') {
@@ -1254,26 +1306,8 @@ export async function upsertCatalogEntity(
 
     if (existing?.uri) {
       uri = existing.uri;
-      if ((params.entityType === 'serie' || params.entityType === 'work') && existing.entity_json) {
-        try {
-          const parsedExisting = JSON.parse(existing.entity_json);
-          if (parsedExisting?.claims && typeof parsedExisting.claims === 'object') {
-            const prevClaims = parsedExisting.claims as Record<string, unknown[]>;
-            mergedClaims = { ...prevClaims, ...params.claims };
-            if (Array.isArray(prevClaims['wdt:P268']) || Array.isArray(params.claims['wdt:P268'])) {
-              mergedClaims['wdt:P268'] = Array.from(
-                new Set([...(prevClaims['wdt:P268'] || []), ...(params.claims['wdt:P268'] || [])])
-              );
-            }
-            if (Array.isArray(prevClaims['invp:knownIsbns']) || Array.isArray(params.claims['invp:knownIsbns'])) {
-              mergedClaims['invp:knownIsbns'] = Array.from(
-                new Set([...(prevClaims['invp:knownIsbns'] || []), ...(params.claims['invp:knownIsbns'] || [])])
-              );
-            }
-          }
-        } catch {
-          // ignore
-        }
+      if (params.entityType === 'serie' || params.entityType === 'work') {
+        mergeExistingEntityJson(existing.entity_json);
       }
     }
   }
@@ -1288,6 +1322,7 @@ export async function upsertCatalogEntity(
       ? parseFloat(params.seriesNumber)
       : 1000.0);
 
+  const effectiveImageUrl = params.imageUrl || existingImageUrl;
   const entityObj: Record<string, unknown> = {
     uri,
     type: params.entityType,
@@ -1295,7 +1330,7 @@ export async function upsertCatalogEntity(
     labels: { fr: effectiveLabel, en: effectiveLabel },
     descriptions: params.descriptions || {},
     claims: mergedClaims,
-    image: params.imageUrl ? { url: params.imageUrl, value: params.imageUrl } : undefined,
+    image: effectiveImageUrl ? { url: effectiveImageUrl, value: effectiveImageUrl } : undefined,
     isbn13: params.isbn13,
     mainCategory: params.mainCategory || 'Autre',
     subgenres: params.subgenres || [],

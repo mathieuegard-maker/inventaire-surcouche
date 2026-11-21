@@ -160,7 +160,12 @@ export const wishlistService = {
          await databaseService.removeRegistryEntry('wishlist', uri);
          const cachedBook = await databaseService.getBookFromCache(uri);
          if (cachedBook) {
-           cachedBook.ownershipStatus = 'none';
+           const hasIsUriInRegistry = typeof databaseService.isUriInRegistry === 'function';
+           const stillOwned = hasIsUriInRegistry
+             ? (await databaseService.isUriInRegistry('inventory', cachedBook.uri)) ||
+               (cachedBook.workUri ? await databaseService.isUriInRegistry('inventory', cachedBook.workUri) : false)
+             : false;
+           cachedBook.ownershipStatus = stillOwned ? 'owned' : 'none';
            await databaseService.saveBookToCache(cachedBook);
          }
       }

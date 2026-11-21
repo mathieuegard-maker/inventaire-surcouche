@@ -197,8 +197,8 @@ const handleJoin = async () => {
         <div v-if="familyMembers.length > 0" class="members-box">
           <span class="members-title">Membres du foyer ({{ familyMembers.length }}) :</span>
           <div class="members-chips">
-            <span v-for="m in familyMembers" :key="m.id" class="member-chip">
-              {{ m.display_name }}
+            <span v-for="m in familyMembers" :key="m.username || (m as any).id" class="member-chip">
+              {{ m.username || (m as any).display_name }}
               <small v-if="m.role === 'owner'">(proprio)</small>
             </span>
           </div>

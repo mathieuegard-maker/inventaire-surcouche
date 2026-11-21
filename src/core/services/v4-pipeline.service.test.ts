@@ -84,7 +84,7 @@ function createInMemoryV4Db(): {
         return null;
       },
       async all<T = Record<string, unknown>>() {
-        if (cleanSql.startsWith('SELECT * FROM books') && cleanSql.includes('LIMIT 60')) {
+        if ((cleanSql.startsWith('SELECT * FROM books') || cleanSql.startsWith('SELECT b.* FROM books b')) && cleanSql.includes('LIMIT 60')) {
           return { results: Array.from(books.values()) as T[], success: true };
         }
         if (cleanSql.startsWith('SELECT id, canonical_title, known_isbns_json, integral_metadata_json FROM books WHERE series_id = ? AND is_integral = 1')) {

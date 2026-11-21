@@ -2,7 +2,9 @@
 import type { ExternalBookMetadata } from '../types';
 import { fetchWithTimeout } from '../../state/connection';
 import { isbnUtil } from '../utils/isbn.util';
-import { cleanSeriesName, normalizeSeriesNumber, parseSeriesFromTitle } from './bnf.resolver';
+import { cleanSeriesName, isFrancophoneBookIsbn13, normalizeSeriesNumber, parseSeriesFromTitle } from './bnf.resolver';
+
+let googleBooksQuotaDisabledUntil = 0;
 
 export interface BookSearchHints {
   title?: string;
@@ -122,10 +124,15 @@ function extractBestIsbnFromVolume(volumeInfo: any): string | null {
 export const googleBooksResolver = {
   async resolve(isbn: string): Promise<ExternalBookMetadata | null> {
     try {
+      if (Date.now() < googleBooksQuotaDisabledUntil) return null;
       console.log(`[GOOGLE BOOKS RESOLVER] Recherche par ISBN : ${isbn}`);
       const gatewayUrl = `/api/gateway?action=google-books&isbn=${encodeURIComponent(isbn)}`;
 
       const res = await fetchWithTimeout(gatewayUrl);
+      if (res.status === 429) {
+        googleBooksQuotaDisabledUntil = Date.now() + 10 * 60 * 1000;
+        return null;
+      }
       if (!res.ok) {
         console.warn(`[GOOGLE BOOKS RESOLVER] Erreur API Google Books (Status ${res.status})`);
         return null;
@@ -152,6 +159,7 @@ export const googleBooksResolver = {
    */
   async searchCandidatesByHints(hints: BookSearchHints, maxCandidates = 10): Promise<ExternalBookMetadata[]> {
     try {
+      if (Date.now() < googleBooksQuotaDisabledUntil) return [];
       const mainText = [hints.series, hints.title, hints.subtitle, hints.volumeNumber]
         .filter(Boolean)
         .join(' ')
@@ -182,6 +190,10 @@ export const googleBooksResolver = {
         const res = await fetchWithTimeout(
           `/api/gateway?action=google-books&q=${encodeURIComponent(q)}&maxResults=${Math.min(Math.max(maxCandidates, 20), 40)}`
         );
+        if (res.status === 429) {
+          googleBooksQuotaDisabledUntil = Date.now() + 10 * 60 * 1000;
+          break;
+        }
         if (!res.ok) continue;
 
         const data = await res.json();
@@ -191,6 +203,7 @@ export const googleBooksResolver = {
           if (!info?.title) continue;
           const isbn13 = extractBestIsbnFromVolume(info);
           if (!isbn13) continue;
+          if (info.language && info.language !== 'fr' && !isFrancophoneBookIsbn13(isbn13)) continue;
 
           let score = 0;
           if (info.language === 'fr') score += 20;
@@ -206,8 +219,11 @@ export const googleBooksResolver = {
           const candTitleLower = String(info.title).toLowerCase();
           if (hints.title && candTitleLower.includes(hints.title.toLowerCase())) score += 20;
           if (hints.series && candTitleLower.includes(hints.series.toLowerCase())) score += 15;
-          if (hints.volumeNumber && new RegExp(`\\b0*${hints.volumeNumber.trim()}\\b`).test(candTitleLower)) {
-            score += 20;
+          if (hints.volumeNumber) {
+            const escapedVol = hints.volumeNumber.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            if (escapedVol && new RegExp(`\\b0*${escapedVol}\\b`, 'i').test(candTitleLower)) {
+              score += 20;
+            }
           }
 
           const existing = byIsbn.get(isbn13);

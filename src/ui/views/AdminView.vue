@@ -2,7 +2,6 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
-import WireframePagination from '../components/WireframePagination.vue';
 import { userService } from '../../core/services/user.service';
 import { imageUtil } from '../../core/utils/image.util';
 
@@ -352,10 +351,12 @@ onMounted(() => {
           <div v-for="item in catalogItems" :key="item.uri" class="catalog-row">
             <img
               v-if="item.image_url"
-              :src="imageUtil.resolveExternalUrl(item.image_url)"
+              :src="imageUtil.resolveExternalUrl(item.image_url, item.uri?.startsWith('isbn:') ? item.uri.slice(5) : undefined)"
+              :data-cover-isbn="item.uri?.startsWith('isbn:') ? item.uri.slice(5) : undefined"
               alt=""
               class="catalog-thumb"
               loading="lazy"
+              @error="imageUtil.handleImageError"
             />
             <div v-else class="catalog-thumb placeholder">?</div>
             <div class="catalog-meta">
@@ -371,12 +372,31 @@ onMounted(() => {
           </div>
         </div>
 
-        <WireframePagination
+        <div
           v-if="catalogTotalPages > 1"
-          :current-page="catalogPage"
-          :total-pages="catalogTotalPages"
-          @update:current-page="(p) => (catalogPage = p)"
-        />
+          class="catalog-pagination-bar"
+          style="display: flex; align-items: center; justify-content: center; gap: 0.75rem; margin-top: 1rem;"
+        >
+          <button
+            type="button"
+            class="wireframe-btn"
+            :disabled="catalogPage <= 1"
+            @click="catalogPage = Math.max(1, catalogPage - 1)"
+          >
+            ‹ Précédent
+          </button>
+          <span style="font-size: 0.85rem; font-weight: 600;">
+            Page {{ catalogPage }} / {{ catalogTotalPages }}
+          </span>
+          <button
+            type="button"
+            class="wireframe-btn"
+            :disabled="catalogPage >= catalogTotalPages"
+            @click="catalogPage = Math.min(catalogTotalPages, catalogPage + 1)"
+          >
+            Suivant ›
+          </button>
+        </div>
       </div>
 
       <!-- TAB 3 : COMPTES & MAINTENANCE -->

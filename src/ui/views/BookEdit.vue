@@ -22,7 +22,7 @@ import type { HumanizedBook } from '../../core/types';
 const route = useRoute();
 const router = useRouter();
 
-const uri = decodeURIComponent(route.params.uri as string);
+const uri = computed(() => decodeURIComponent(route.params.uri as string));
 
 const isLoading = ref(true);
 const loadingStatus = ref("Chargement du livre...");
@@ -146,12 +146,20 @@ watch(seriesInput, (val) => {
 
 const normStr = (v: unknown) => String(v ?? '').trim();
 
-onMounted(async () => {
+const loadBookForEdit = async () => {
+  isLoading.value = true;
+  errorMsg.value = null;
+  successMsg.value = null;
+  originalBook.value = null;
+  extMetadata.value = null;
+  editionExtraCovers.value = [];
+  deduplicatedCovers.value = [];
+  brokenCandidateUrls.value = {};
   try {
     loadingStatus.value = "Chargement des données actuelles...";
-    let currentBook = await databaseService.getBookFromCache(uri);
+    let currentBook = await databaseService.getBookFromCache(uri.value);
     if (!currentBook) {
-      currentBook = await entityResolver.resolvePhysicalEntity(uri);
+      currentBook = await entityResolver.resolvePhysicalEntity(uri.value);
     }
 
     if (!currentBook) {
@@ -251,6 +259,11 @@ onMounted(async () => {
     errorMsg.value = "Une erreur est survenue lors de la récupération des données : " + err.message;
     isLoading.value = false;
   }
+};
+
+onMounted(loadBookForEdit);
+watch(() => route.params.uri, () => {
+  void loadBookForEdit();
 });
 
 const {
@@ -344,7 +357,7 @@ const saveChanges = async () => {
     isLoading.value = false;
 
     setTimeout(() => {
-      router.push(`/book/${encodeURIComponent(uri)}`);
+      router.push(`/book/${encodeURIComponent(uri.value)}`);
     }, 900);
   } catch (err: any) {
     console.error("[BOOK EDIT] Échec de la sauvegarde :", err);
@@ -368,7 +381,7 @@ const saveChanges = async () => {
       <BaseBanner v-if="errorMsg" type="error" :message="errorMsg" />
       <BaseBanner v-if="successMsg" type="success" :message="successMsg" />
 
-      <div v-if="!errorMsg && !successMsg" class="edit-box">
+      <div v-if="originalBook && !successMsg" class="edit-box">
         <div class="edit-form-grid">
           <!-- Titre -->
           <div class="form-group">
@@ -447,9 +460,11 @@ const saveChanges = async () => {
             <div class="cover-url-preview-row">
               <img
                 v-if="coverUrlInput"
-                :src="imageUtil.resolveCoverUrl(coverUrlInput)"
+                :src="imageUtil.resolveCoverUrl(coverUrlInput, originalBook?.isbn13 || originalBook?.isbn10)"
+                :data-cover-isbn="originalBook?.isbn13 || originalBook?.isbn10"
                 alt="Couverture actuelle"
                 class="current-cover-thumb"
+                @error="imageUtil.handleImageError"
               />
               <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px;">
                 <input type="text" v-model="coverUrlInput" placeholder="URL ou image WebP..." class="wireframe-input" />

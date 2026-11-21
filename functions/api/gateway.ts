@@ -10,22 +10,31 @@ import {
   parseCoverDataUrl,
   storeCompressedCover
 } from '../../src/core/services/d1-cover-storage.service';
+import { isbnUtil } from '../../src/core/utils/isbn.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const ALLOWED_RASTER_IMAGE_MIME_RE = /^image\/(jpeg|jpg|png|webp|gif|avif)\b/i;
 
 function isPrivateOrLocalHostname(hostname: string): boolean {
   const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (
+    !lower ||
     lower === 'localhost' ||
     lower.endsWith('.localhost') ||
     lower.endsWith('.local') ||
     lower.endsWith('.internal') ||
     lower === '::1' ||
     lower === '::' ||
+    lower === '0:0:0:0:0:0:0:1' ||
+    lower === '0:0:0:0:0:0:0:0' ||
+    lower.startsWith('::ffff:') ||
     lower.startsWith('fc') ||
     lower.startsWith('fd') ||
-    lower.startsWith('fe80:')
+    lower.startsWith('fe8') ||
+    lower.startsWith('fe9') ||
+    lower.startsWith('fea') ||
+    lower.startsWith('feb')
   ) {
     return true;
   }
@@ -65,7 +74,12 @@ function validateImageProxyUrl(rawUrl: string): URL | null {
 async function resilientFetch(url: string, options?: RequestInit, retries = 3): Promise<Response> {
   for (let i = 0; i < retries; i++) {
     try {
-      return await fetch(url, options);
+      const res = await fetch(url, options);
+      if ((res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && i < retries - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 350 * (i + 1)));
+        continue;
+      }
+      return res;
     } catch (err) {
       if (i === retries - 1) throw err;
       await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
@@ -78,25 +92,38 @@ async function tryDownloadValidCoverImage(
   targetUrl: string,
   timeoutMs = 3500
 ): Promise<{ bytes: Uint8Array; contentType: string; finalUrl: string } | null> {
-  const validated = validateImageProxyUrl(targetUrl);
-  if (!validated) return null;
+  let currentUrl = validateImageProxyUrl(targetUrl);
+  if (!currentUrl) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(validated.toString(), {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
-        Referer: `${validated.protocol}//${validated.host}/`
-      },
-      signal: controller.signal
-    });
-    if (!response.ok) return null;
-    if (response.url && !validateImageProxyUrl(response.url)) return null;
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.toLowerCase().startsWith('image/')) return null;
+    let response: Response | null = null;
+    for (let hop = 0; hop <= 3; hop++) {
+      response = await fetch(currentUrl.toString(), {
+        redirect: 'manual',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/jpeg,image/png,image/gif;q=0.9',
+          'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
+          Referer: `${currentUrl.protocol}//${currentUrl.host}/`
+        },
+        signal: controller.signal
+      });
+      if (response.status >= 300 && response.status < 400) {
+        const loc = response.headers.get('location');
+        if (!loc || hop === 3) return null;
+        const resolvedNext = new URL(loc, currentUrl).toString();
+        const nextValid = validateImageProxyUrl(resolvedNext);
+        if (!nextValid) return null;
+        currentUrl = nextValid;
+        continue;
+      }
+      break;
+    }
+    if (!response || !response.ok) return null;
+    const rawContentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!ALLOWED_RASTER_IMAGE_MIME_RE.test(rawContentType)) return null;
     const arrayBuffer = await response.arrayBuffer();
     // Rejeter les pixels 1x1 / placeholders vides (< 800o) et le placeholder BnF générique (63601o)
     if (arrayBuffer.byteLength < 800 || arrayBuffer.byteLength === 63601 || arrayBuffer.byteLength > MAX_IMAGE_BYTES) {
@@ -104,8 +131,8 @@ async function tryDownloadValidCoverImage(
     }
     return {
       bytes: new Uint8Array(arrayBuffer),
-      contentType,
-      finalUrl: validated.toString()
+      contentType: rawContentType === 'image/jpg' ? 'image/jpeg' : rawContentType,
+      finalUrl: currentUrl.toString()
     };
   } catch {
     return null;
@@ -117,12 +144,13 @@ async function tryDownloadValidCoverImage(
 async function resolveFallbackCoverBytesByIsbn(
   rawIsbn: string
 ): Promise<{ bytes: Uint8Array; contentType: string; sourceUrl: string } | null> {
-  const cleanIsbn = rawIsbn.replace(/[^0-9Xx]/g, '').trim();
+  const norm = isbnUtil.normalize(rawIsbn);
+  const cleanIsbn = norm.length === 10 ? isbnUtil.toIsbn13(norm) : norm;
   if (cleanIsbn.length !== 13) return null;
 
   const candidateUrls: string[] = [];
 
-  // 1. Découverte parallèle rapide : Inventaire.io (image) + BnF SRU (ARK -> couverture BnF)
+  // 1. Découverte parallèle rapide : Inventaire.io (image) + BnF SRU InterMarc (950$a idImage + idArk)
   const [invUrls, bnfUrls] = await Promise.all([
     (async (): Promise<string[]> => {
       const controller = new AbortController();
@@ -134,7 +162,7 @@ async function resolveFallbackCoverBytesByIsbn(
         );
         if (!res.ok) return [];
         const data = (await res.json()) as any;
-        const ent = data?.entities?.[`isbn:${cleanIsbn}`];
+        const ent = data?.entities?.[`isbn:${cleanIsbn}`] || Object.values(data?.entities || {})[0];
         const rawImg = ent?.image?.url;
         if (typeof rawImg === 'string' && rawImg.trim()) {
           const filename = rawImg.split('/').pop();
@@ -149,20 +177,32 @@ async function resolveFallbackCoverBytesByIsbn(
     })(),
     (async (): Promise<string[]> => {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2400);
+      const timer = setTimeout(() => controller.abort(), 2600);
       try {
         const cql = `bib.anywhere all "${cleanIsbn}"`;
         const res = await fetch(
-          `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=dublincore&maximumRecords=2`,
+          `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=2`,
           { headers: { 'User-Agent': USER_AGENT_BASE }, signal: controller.signal }
         );
         if (!res.ok) return [];
         const xml = await res.text();
+        const foundUrls: string[] = [];
+        const tag950Match = /<[^:>]*:datafield[^>]*tag="950"[^>]*>([\s\S]*?)<\/[^:>]*:datafield>/i.exec(xml);
+        if (tag950Match) {
+          const sfAMatch = /<[^:>]*:subfield[^>]*code="a"[^>]*>([^<]+)<\/[^:>]*:subfield>/i.exec(tag950Match[1]);
+          if (sfAMatch?.[1]?.trim()) {
+            foundUrls.push(
+              `https://catalogue.bnf.fr/couverture?idImage=${encodeURIComponent(sfAMatch[1].trim())}&couverture=1&appName=NE`
+            );
+          }
+        }
         const arkMatch = /ark:\/12148\/cb[0-9a-z]+/i.exec(xml);
         if (arkMatch?.[0]) {
-          return [`https://catalogue.bnf.fr/couverture?appName=NE&idArk=${encodeURIComponent(arkMatch[0])}&couverture=1`];
+          foundUrls.push(
+            `https://catalogue.bnf.fr/couverture?appName=NE&idArk=${encodeURIComponent(arkMatch[0])}&couverture=1`
+          );
         }
-        return [];
+        return foundUrls;
       } catch {
         return [];
       } finally {
@@ -394,12 +434,15 @@ export const onRequest = async (context: {
             headers: {
               'Content-Type': stored.contentType,
               'Cache-Control': 'public, max-age=31536000, immutable',
+              'X-Content-Type-Options': 'nosniff',
+              'Content-Security-Policy': "default-src 'none'; sandbox",
               'X-Cover-Cache': `${stored.storage.toUpperCase()}-HIT`
             }
           });
         }
 
         let resolvedImg: { bytes: Uint8Array; contentType: string; sourceUrl: string } | null = null;
+        let fetchedFromExplicitUrl = false;
 
         if (trimmedUrl) {
           const validatedUrl = validateImageProxyUrl(trimmedUrl);
@@ -409,10 +452,11 @@ export const onRequest = async (context: {
           const direct = await tryDownloadValidCoverImage(validatedUrl.toString(), 4500);
           if (direct) {
             resolvedImg = { bytes: direct.bytes, contentType: direct.contentType, sourceUrl: direct.finalUrl };
+            fetchedFromExplicitUrl = true;
           }
         }
 
-        // 2. Fallback serveur intelligent par ISBN (D1 cache par ISBN -> BnF ARK couverture -> Inventaire.io -> OpenLibrary)
+        // 2. Fallback serveur intelligent par ISBN (D1 cache par ISBN -> BnF 950$a/ARK -> Inventaire.io -> OpenLibrary)
         if (!resolvedImg && isbnParam) {
           const storedByIsbn = await getStoredCover(env, { isbn: isbnParam });
           if (storedByIsbn) {
@@ -421,6 +465,8 @@ export const onRequest = async (context: {
               headers: {
                 'Content-Type': storedByIsbn.contentType,
                 'Cache-Control': 'public, max-age=31536000, immutable',
+                'X-Content-Type-Options': 'nosniff',
+                'Content-Security-Policy': "default-src 'none'; sandbox",
                 'X-Cover-Cache': `${storedByIsbn.storage.toUpperCase()}-ISBN-HIT`
               }
             });
@@ -433,11 +479,14 @@ export const onRequest = async (context: {
         }
 
         // 3. Mise en cache read-through asynchrone vers R2 / D1 pour résister à l'extinction future du CDN source
+        // Attention : si une URL explicite a été demandée (ex: prévisualisation d'alternatives dans BookEdit.vue),
+        // ne pas écraser la clé primaire `covers/isbn/<isbn13>` !
         const persistTask = storeCompressedCover(env, {
           isbn: isbnParam,
-          url: resolvedImg.sourceUrl,
+          url: trimmedUrl || resolvedImg.sourceUrl,
           contentType: resolvedImg.contentType,
-          bytes: resolvedImg.bytes
+          bytes: resolvedImg.bytes,
+          overwriteIsbnKey: !fetchedFromExplicitUrl
         });
         if (typeof context.waitUntil === 'function') {
           context.waitUntil(persistTask);
@@ -450,6 +499,8 @@ export const onRequest = async (context: {
           headers: {
             'Content-Type': resolvedImg.contentType,
             'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
             'X-Cover-Cache': 'MISS'
           }
         });

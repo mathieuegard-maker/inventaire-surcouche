@@ -22,6 +22,8 @@ import { isbnUtil } from '../utils/isbn.util';
 import { stripEditorialCollectionSuffixes } from '../utils/series-matcher.util';
 import { PipelineTracer } from './pipeline-logger.service';
 import {
+  extractAuthorLastNameForBnfCql,
+  fetchWithTimeoutAndRetry,
   isGoogleBooksCircuitOpen,
   searchLocalBooksForCanal3,
   tripGoogleBooksCircuit,
@@ -81,32 +83,32 @@ function hasTextTokenOverlap(a?: string, b?: string): boolean {
 }
 
 function buildWorkKey(meta: ExternalBookMetadata): string {
+  const isInt = isMetaIntegral(meta);
   const normSeries = meta.series ? stripEditorialCollectionSuffixes(meta.series).coreKey : '';
   const normVol = normalizeSeriesNumber(meta.seriesNumber);
-  if (normSeries && normVol) return `series:${normSeries}#${normVol}`;
   const normTitle = normalizeTextKey(meta.title || '');
+  if (isInt) {
+    return `integral:${normSeries || normTitle}:${normVol || normTitle}`;
+  }
+  if (normSeries && normVol) return `series:${normSeries}#${normVol}`;
   const normAuthor = meta.authors?.[0] ? normalizeTextKey(meta.authors[0]).split(' ')[0] : '';
   return normTitle ? `title:${normTitle}|${normAuthor}` : '';
 }
 
 function isMetaIntegral(m: ExternalBookMetadata): boolean {
+  const combined = `${m.title || ''} ${m.collection || ''}`.replace(/\b(?:texte|version)\s+int[ée]grale?\b/gi, ' ');
   return Boolean(
     m.isIntegral ||
       /(?:l['’]?\s*int[ée]grale|\bint[ée]grale?\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
-        `${m.title || ''} ${m.collection || ''}`
+        combined
       )
   );
 }
 
 async function fetchBnfByCql(cql: string, maxRecords = 18): Promise<ExternalBookMetadata[]> {
   const url = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=${maxRecords}&startRecord=1`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5500);
   try {
-    const res = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT_BASE },
-      signal: controller.signal
-    });
+    const res = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4800, retriesOn5xx: 1 });
     if (!res.ok) return [];
     const xml = await res.text();
     const records = xml.split('<srw:record>').slice(1);
@@ -122,8 +124,6 @@ async function fetchBnfByCql(cql: string, maxRecords = 18): Promise<ExternalBook
     return out;
   } catch {
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -132,17 +132,20 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
   const title = cleanTerm(hints.title);
   const series = cleanTerm(hints.series);
   const vol = normalizeSeriesNumber(hints.volumeNumber);
-  const authorLast = cleanTerm(hints.author)?.split(/[,\s]+/)[0] || '';
+  const authorLast = extractAuthorLastNameForBnfCql(hints.author || hints.illustrator);
 
   const queries: string[] = [];
   if (title && authorLast) {
     queries.push(`(bib.title all "${title}") and (bib.author all "${authorLast}") and (bib.doctype all "a")`);
   }
   if (series && vol) {
+    const combinedSeriesTitle = title && normalizeTextKey(title) !== normalizeTextKey(series)
+      ? `${series} ${title} ${vol}`
+      : `${series} ${vol}`;
     queries.push(
       authorLast
-        ? `(bib.anywhere all "${series} ${vol}") and (bib.author all "${authorLast}") and (bib.doctype all "a")`
-        : `(bib.anywhere all "${series} ${vol}") and (bib.doctype all "a")`
+        ? `(bib.anywhere all "${combinedSeriesTitle}") and (bib.author all "${authorLast}") and (bib.doctype all "a")`
+        : `(bib.anywhere all "${combinedSeriesTitle}") and (bib.doctype all "a")`
     );
   } else if (title && vol && !series) {
     queries.push(`(bib.anywhere all "${title} ${vol}") and (bib.doctype all "a")`);
@@ -154,12 +157,31 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
   const primaryResults = await Promise.all(queries.slice(0, 2).map((cql) => fetchBnfByCql(cql, 18)));
   let merged = primaryResults.flat();
 
-  // Repli sans contrainte d'auteur si trop peu de résultats
+  // Repli sans contrainte d'auteur (et en conservant titre + série) si trop peu de résultats
   if (merged.length < 2 && (title || series)) {
-    const fallbackTerm = [series || title, vol].filter(Boolean).join(' ').trim();
-    const fallbackCql = `(bib.anywhere all "${fallbackTerm}") and (bib.doctype all "a")`;
-    const fallback = await fetchBnfByCql(fallbackCql, 18);
-    merged = [...merged, ...fallback];
+    const distinctParts: string[] = [];
+    if (series) distinctParts.push(series);
+    if (title && normalizeTextKey(title) !== normalizeTextKey(series)) distinctParts.push(title);
+    if (vol) distinctParts.push(vol);
+    const fallbackTerm = distinctParts.join(' ').trim();
+    if (fallbackTerm) {
+      const fallbackCql = `(bib.anywhere all "${fallbackTerm}") and (bib.doctype all "a")`;
+      const fallback = await fetchBnfByCql(fallbackCql, 18);
+      merged = [...merged, ...fallback];
+    }
+    // Second repli sur les mots significatifs >= 4 lettres si l'OCR contenait un mot parasite
+    if (merged.length === 0 && (title || series)) {
+      const sigWords = `${series} ${title}`
+        .split(/\s+/)
+        .map((w) => w.replace(/[^a-zA-ZÀ-ÿ0-9]/g, ''))
+        .filter((w) => w.length >= 4)
+        .slice(0, 3);
+      if (sigWords.length >= 1) {
+        const relaxedTerm = [...sigWords, vol].filter(Boolean).join(' ').trim();
+        const relaxed = await fetchBnfByCql(`(bib.anywhere all "${relaxedTerm}") and (bib.doctype all "a")`, 15);
+        merged = [...merged, ...relaxed];
+      }
+    }
   }
 
   // Déduplication par ISBN-13
@@ -466,7 +488,20 @@ export async function resolveBookHintsCanal3(
     if (alternatives.length >= 5) break;
   }
 
-  const secondDistinct = alternatives.find((alt, idx) => idx > 0 && alt.isbn13 !== top.bucket.isbn13);
+  const topIsInt = isMetaIntegral(top.bucket.bestMeta);
+  const secondDistinct = alternatives.find((alt, idx) => {
+    if (idx === 0 || alt.isbn13 === top.bucket.isbn13) return false;
+    if (Boolean(alt.isIntegral) !== topIsInt) return true;
+    const altWk = buildWorkKey({
+      isbn: alt.isbn13,
+      title: alt.title,
+      authors: alt.authors,
+      series: alt.series,
+      seriesNumber: alt.seriesNumber,
+      isIntegral: alt.isIntegral
+    });
+    return !top.bucket.workKey || altWk !== top.bucket.workKey;
+  });
   const hasCompetingWork =
     Boolean(secondDistinct) &&
     top.effectiveSources < 2 &&

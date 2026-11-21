@@ -2,6 +2,7 @@
 import Dexie, { type Table } from 'dexie';
 import type { HumanizedBook, LoanRecord, RegistryEntry, QueueActionPayload } from '../types';
 import type { PhotoBatchResolutionResult } from '../services/photo-book-resolution.service';
+import { isbnUtil } from '../utils/isbn.util';
 
 /**
  * Supprime récursivement les Proxies réactifs Vue et champs non clonables
@@ -173,17 +174,18 @@ export const databaseService = {
   },
 
   async getBookByIsbn(isbn: string): Promise<HumanizedBook | undefined> {
-    const clean = (isbn || '').replace(/[^0-9Xx]/g, '').toUpperCase();
-    if (clean.length === 13) {
-      const indexed = await db.book_isbn_index.get(clean).catch(() => undefined);
+    const clean = isbnUtil.normalize(isbn || '');
+    const isbn13 = clean.length === 10 ? isbnUtil.toIsbn13(clean) : clean;
+    if (isbn13.length === 13) {
+      const indexed = await db.book_isbn_index.get(isbn13).catch(() => undefined);
       if (indexed?.bookUri) {
         const hit = await db.cache_books.get(indexed.bookUri);
         if (hit) return hit;
       }
     }
     return await db.cache_books
-      .where('isbn13').equals(isbn)
-      .or('isbn10').equals(isbn)
+      .where('isbn13').equals(isbn13 || clean)
+      .or('isbn10').equals(clean)
       .first();
   },
 
@@ -240,7 +242,12 @@ export const databaseService = {
   // --- GESTION DES REGISTRES (Listes légères) ---
   
   async addRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string, itemId?: string): Promise<void> {
-    await db[tableName].put({ uri, addedAt: Date.now(), itemId });
+    const existing = await db[tableName].get(uri).catch(() => undefined);
+    await db[tableName].put({
+      uri,
+      addedAt: existing?.addedAt || Date.now(),
+      itemId: itemId || existing?.itemId
+    });
   },
 
   async removeRegistryEntry(tableName: 'inventory' | 'wishlist', uri: string): Promise<void> {
@@ -265,15 +272,26 @@ export const databaseService = {
     return await db[tableName].toArray();
   },
 
-  // CORRECTION : Encapsulation dans une transaction atomique "rw" (Read/Write)
+  // CORRECTION : Encapsulation dans une transaction atomique "rw" (Read/Write) en préservant addedAt et itemId
   async syncRegistry(tableName: 'inventory' | 'wishlist', items: (string | { uri: string, itemId?: string })[]): Promise<void> {
     await db.transaction('rw', db[tableName], async () => {
+      const existingRows = await db[tableName].toArray();
+      const existingByUri = new Map<string, RegistryEntry>();
+      for (const r of existingRows) {
+        if (r?.uri) existingByUri.set(r.uri, r);
+      }
       await db[tableName].clear();
       const entries: RegistryEntry[] = items.map((item) => {
         if (typeof item === 'string') {
-          return { uri: item, addedAt: Date.now() };
+          const prev = existingByUri.get(item);
+          return { uri: item, addedAt: prev?.addedAt || Date.now(), itemId: prev?.itemId };
         } else {
-          return { uri: item.uri, addedAt: Date.now(), itemId: item.itemId };
+          const prev = existingByUri.get(item.uri);
+          return {
+            uri: item.uri,
+            addedAt: prev?.addedAt || Date.now(),
+            itemId: item.itemId || prev?.itemId
+          };
         }
       });
       await db[tableName].bulkPut(entries);
@@ -328,6 +346,7 @@ export const databaseService = {
 
   async deleteBookFromCache(uri: string): Promise<void> {
     await db.cache_books.delete(uri);
+    await db.book_isbn_index.where('bookUri').equals(uri).delete().catch(() => {});
   },
 
   /**
@@ -336,9 +355,9 @@ export const databaseService = {
    */
   async replaceBookUri(oldUri: string, newBook: HumanizedBook): Promise<HumanizedBook> {
     const plainNew: HumanizedBook = JSON.parse(JSON.stringify(newBook));
-    return await db.transaction(
+    const mergedResult = await db.transaction(
       'rw',
-      [db.cache_books, db.inventory, db.wishlist, db.loans, db.pending_actions],
+      [db.cache_books, db.inventory, db.wishlist, db.loans, db.pending_actions, db.book_isbn_index],
       async () => {
         const oldBook = oldUri !== plainNew.uri ? await db.cache_books.get(oldUri) : undefined;
         const existingTarget = await db.cache_books.get(plainNew.uri);
@@ -365,6 +384,7 @@ export const databaseService = {
 
         if (oldUri && oldUri !== plainNew.uri) {
           await db.cache_books.delete(oldUri);
+          await db.book_isbn_index.where('bookUri').equals(oldUri).delete();
 
           const oldInv = await db.inventory.get(oldUri);
           if (oldInv) {
@@ -400,6 +420,8 @@ export const databaseService = {
         return merged;
       }
     );
+    await this.indexBookIsbns(mergedResult).catch(() => {});
+    return mergedResult;
   },
 
   async findLocalSeriesMatches(seriesName?: string, seriesId?: string): Promise<HumanizedBook[]> {

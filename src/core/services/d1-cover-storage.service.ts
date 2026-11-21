@@ -174,6 +174,7 @@ export async function storeCompressedCover(
     contentType: string;
     bytes: Uint8Array;
     base64Data?: string;
+    overwriteIsbnKey?: boolean;
   }
 ): Promise<{ ok: boolean; storage?: 'r2' | 'd1'; key?: string; byteSize?: number }> {
   if (!env || params.bytes.byteLength < 100) {
@@ -184,7 +185,8 @@ export async function storeCompressedCover(
     isbn: params.isbn,
     url: params.url
   });
-  const targetKey = primaryKey || urlKey;
+  const allowIsbnKey = params.overwriteIsbnKey !== false;
+  const targetKey = (allowIsbnKey ? primaryKey : undefined) || urlKey || primaryKey;
   if (!targetKey) return { ok: false };
 
   // 1. Écriture prioritaire vers R2 (10 Go gratuits + scalable)
@@ -220,25 +222,28 @@ export async function storeCompressedCover(
     try {
       const b64 = params.base64Data || bytesToBase64(params.bytes);
       const now = new Date().toISOString();
-      await env.DB.prepare(
-        `INSERT INTO catalog_covers (cover_key, isbn13, content_type, image_data, byte_size, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(cover_key) DO UPDATE SET
-           isbn13 = COALESCE(excluded.isbn13, catalog_covers.isbn13),
-           content_type = excluded.content_type,
-           image_data = excluded.image_data,
-           byte_size = excluded.byte_size,
-           updated_at = excluded.updated_at`
-      )
-        .bind(
-          targetKey,
-          cleanIsbn13 || null,
-          params.contentType,
-          b64,
-          params.bytes.byteLength,
-          now
+      const keysToWrite = Array.from(new Set([targetKey, ...(urlKey ? [urlKey] : [])]));
+      for (const k of keysToWrite) {
+        await env.DB.prepare(
+          `INSERT INTO catalog_covers (cover_key, isbn13, content_type, image_data, byte_size, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(cover_key) DO UPDATE SET
+             isbn13 = COALESCE(excluded.isbn13, catalog_covers.isbn13),
+             content_type = excluded.content_type,
+             image_data = excluded.image_data,
+             byte_size = excluded.byte_size,
+             updated_at = excluded.updated_at`
         )
-        .run();
+          .bind(
+            k,
+            k === primaryKey ? (cleanIsbn13 || null) : null,
+            params.contentType,
+            b64,
+            params.bytes.byteLength,
+            now
+          )
+          .run();
+      }
 
       return {
         ok: true,

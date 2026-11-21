@@ -222,13 +222,27 @@ const friendTokenFromUrl = computed(() => {
 
 const showIosTip = computed(() => isIosDevice() && !isAppInstalled.value && !canInstallPwa.value);
 
-watch(inviteCodeFromUrl, (val) => {
-  if (val) syncFamily.value = true;
-});
+watch(
+  inviteCodeFromUrl,
+  (val) => {
+    if (val) {
+      syncFamily.value = true;
+      if (authMode.value === 'login') authMode.value = 'register';
+    }
+  },
+  { immediate: true }
+);
 
-watch(friendTokenFromUrl, (val) => {
-  if (val) followFriend.value = true;
-});
+watch(
+  friendTokenFromUrl,
+  (val) => {
+    if (val) {
+      followFriend.value = true;
+      if (authMode.value === 'login') authMode.value = 'register';
+    }
+  },
+  { immediate: true }
+);
 
 const handleInstallPwa = async () => {
   await promptPwaInstall();

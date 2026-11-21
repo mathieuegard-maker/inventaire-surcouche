@@ -96,7 +96,7 @@ function electBestEdition(
   interface EditionScore {
     uri: string;
     score: number;
-    isNative: boolean;
+    hasIsbn: boolean;
   }
 
   // Calcul des scores de distance de Levenshtein pour tous les candidats restants
@@ -104,24 +104,26 @@ function electBestEdition(
     const edData = editionDataMap[edUri];
     const edLabel = extractEntityTitle(edData);
     const score = getLevenshteinDistance(workLabel, edLabel);
+    const hasIsbn =
+      edUri.startsWith('isbn:') ||
+      Boolean(edData?.claims?.['wdt:P212']?.[0] || edData?.claims?.['P212']?.[0] || edData?.claims?.['wdt:P957']?.[0]);
     return {
       uri: edUri,
       score,
-      isNative: edUri.startsWith('inv:')
+      hasIsbn
     };
   });
 
   // Tri par pertinence textuelle pure (ascendant)
   scoredEditions.sort((a, b) => a.score - b.score);
 
-  // Algorithme de la petite boucle : on cherche la première édition native 'inv:' disponible dans l'ordre de pertinence
+  // On privilégie la meilleure édition disposant d'un ISBN-13 / ISBN-10 valide
   for (const candidate of scoredEditions) {
-    if (candidate.isNative) {
+    if (candidate.hasIsbn) {
       return candidate.uri;
     }
   }
 
-  // Si aucune édition native 'inv:' n'a été trouvée, on se replie sur le vainqueur textuel absolu
   return scoredEditions[0]?.uri || workUri;
 }
 

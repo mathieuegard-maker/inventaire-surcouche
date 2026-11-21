@@ -43,11 +43,16 @@ export const entityHumanizer = {
 
           for (const [uri, entity] of Object.entries(entities)) {
             const e = entity as any;
+            if (!e) {
+              dictionary[uri] = uri;
+              continue;
+            }
+            const pickLabel = (lbl: any): string => (typeof lbl === 'string' ? lbl : (lbl?.value || ''));
             // Élection de la langue adaptative avec replis sécurisés
-            if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
-            else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
-            else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
-            else if (e.label) dictionary[uri] = e.label;
+            if (e.labels && pickLabel(e.labels[browserLang])) dictionary[uri] = pickLabel(e.labels[browserLang]);
+            else if (e.labels && pickLabel(e.labels.fr)) dictionary[uri] = pickLabel(e.labels.fr);
+            else if (e.labels && pickLabel(e.labels.en)) dictionary[uri] = pickLabel(e.labels.en);
+            else if (pickLabel(e.label)) dictionary[uri] = pickLabel(e.label);
             else dictionary[uri] = uri;
           }
         }
@@ -108,7 +113,7 @@ export const entityHumanizer = {
     const allIds = new Set<string>();
     
     const checkAndAdd = (val: string | undefined) => {
-      if (val && val.startsWith('wd:')) {
+      if (val && (val.startsWith('wd:') || val.startsWith('inv:'))) {
         allIds.add(val);
       }
     };
@@ -116,7 +121,7 @@ export const entityHumanizer = {
     const checkAndAddArray = (arr: string[] | undefined) => {
       if (arr) {
         arr.forEach(val => {
-          if (val && val.startsWith('wd:')) {
+          if (val && (val.startsWith('wd:') || val.startsWith('inv:'))) {
             allIds.add(val);
           }
         });
@@ -147,10 +152,12 @@ export const entityHumanizer = {
 
         for (const [uri, entity] of Object.entries(entities)) {
           const e = entity as any;
-          if (e.labels && e.labels[browserLang]) dictionary[uri] = e.labels[browserLang];
-          else if (e.labels && e.labels.fr) dictionary[uri] = e.labels.fr;
-          else if (e.labels && e.labels.en) dictionary[uri] = e.labels.en;
-          else if (e.label) dictionary[uri] = e.label;
+          if (!e) continue;
+          const pickLabel = (lbl: any): string => (typeof lbl === 'string' ? lbl : (lbl?.value || ''));
+          if (e.labels && pickLabel(e.labels[browserLang])) dictionary[uri] = pickLabel(e.labels[browserLang]);
+          else if (e.labels && pickLabel(e.labels.fr)) dictionary[uri] = pickLabel(e.labels.fr);
+          else if (e.labels && pickLabel(e.labels.en)) dictionary[uri] = pickLabel(e.labels.en);
+          else if (pickLabel(e.label)) dictionary[uri] = pickLabel(e.label);
         }
       }
 

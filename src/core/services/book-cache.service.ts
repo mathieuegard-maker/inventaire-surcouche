@@ -53,15 +53,32 @@ export const bookCacheService = {
       }
 
       const coverChanged = existingBook && existingBook.coverUrl !== book.coverUrl;
-      if (existingBook && existingBook.localCover && !coverChanged) {
+      if (book.coverUrl?.startsWith('data:image/')) {
+        book.localCover = book.coverUrl;
+      } else if (existingBook && existingBook.localCover && !coverChanged) {
         book.localCover = existingBook.localCover;
-      } else if (coverChanged) {
+      } else if (coverChanged && !book.localCover?.startsWith('data:image/')) {
         book.localCover = undefined;
       }
 
-      // 2. Mise à jour de l'état de possession si demandé
+      // Préserver les champs V4 consolidés s'ils existaient déjà en cache
+      if (existingBook) {
+        if (!book.bookId && existingBook.bookId) book.bookId = existingBook.bookId;
+        if (!book.knownIsbns?.length && existingBook.knownIsbns?.length) book.knownIsbns = existingBook.knownIsbns;
+        if (!book.editionsCatalog?.length && existingBook.editionsCatalog?.length) book.editionsCatalog = existingBook.editionsCatalog;
+        if (book.isHorsSerie === undefined && existingBook.isHorsSerie !== undefined) book.isHorsSerie = existingBook.isHorsSerie;
+        if (!book.horsSerieLabel && existingBook.horsSerieLabel) book.horsSerieLabel = existingBook.horsSerieLabel;
+        if (book.isIntegral === undefined && existingBook.isIntegral !== undefined) book.isIntegral = existingBook.isIntegral;
+        if (!book.integralMetadata && existingBook.integralMetadata) book.integralMetadata = existingBook.integralMetadata;
+        if (!book.parentIntegrals?.length && existingBook.parentIntegrals?.length) book.parentIntegrals = existingBook.parentIntegrals;
+        if (!book.loan && existingBook.loan) book.loan = existingBook.loan;
+      }
+
+      // 2. Mise à jour de l'état de possession si demandé (ou préservation du statut existant)
       if (targetStatus) {
         book.ownershipStatus = targetStatus;
+      } else if (existingBook?.ownershipStatus && (!book.ownershipStatus || book.ownershipStatus === 'none')) {
+        book.ownershipStatus = existingBook.ownershipStatus;
       }
 
       // 3. Sauvegarde principale avec repli CDN ISBN pré-calculé
