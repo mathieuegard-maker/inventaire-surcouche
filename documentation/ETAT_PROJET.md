@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T11:45+01:00`
+* **Dernière mise à jour :** `2026-11-21T12:26+01:00`
 * **Branche active :** `feat/architecture-v4`
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -83,8 +83,8 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Correctifs post-Test #3 implémentés et vérifiés (filtrage strict livres FR `bib.doctype all "a"` + `245$d` + ISBN FR, conservation des Intégrales FR BnF, garde anti-hors-sujet `scoreHintMatch`, anti-contamination `Culottées` T1/T2, fusion `Tintin reporter`, retrait des modèles Gemini 404, sous-vue `PhotoItemDetailModal.vue` avec photo d'étagère + couverture agrandie + zoom plein écran + saisie des tomes inclus d'Intégrale + couverture de possession en `SeriesView`).
-* **Prochaine étape immédiate :** Déployer sur Cloudflare Pages + CRON et effectuer le **Test #4 terrain** (vérifier *Aya de Yopougon* Intégrales FR + tomes inclus, *Boule & Bill* / *Schtroumpfs* / *La mort de Staline* sans DVD ni mangas parasites, et nouvelle modale d'arbitrage).
+* **État actuel :** Assainissement architectural V4 complété : (1) Canal 3 rapatrié côté Back-End portable via `src/core/services/canal3-resolver.service.ts` et `POST /api/v2/books/resolve-hints` (1 seul appel réseau Front → Back avec Passe 1 D1 → Passe 2 multi-source) ; (2) Synchro différentielle et lecture séries V4 pures via `GET /api/v2/books/sync` et `GET /api/v2/books/series/:seriesId` branchées en priorité dans `sync.orchestrator.ts` ; (3) Circuit-breaker Google Books (15 min sur HTTP 429) dans `v4-pipeline.service.ts` et `canal3-resolver.service.ts` ; (4) Résolveur canonique de séries Wikidata (`series-canonical.resolver.ts`), fallback serveur `image-proxy` par ISBN (BnF ARK → Inventaire.io → OpenLibrary → cache D1), brouillon persistant `/scan` (`scanDraft.ts`), ordre photo strict, zoom interactif, labels BnF et `CollectionSubNav.vue`.
+* **Prochaine étape immédiate :** Tests terrain complets sur la base vierge (v21) pour valider la chaîne 100 % V4 de bout en bout.
 * **Chantiers ultérieurs envisagés :** activation R2 (`biblio-covers-webp`) si stockage externe des WebP souhaité ; migration éventuelle vers serveur local Mac (SQLite/Postgres + Cloudflare Tunnel) une fois le pipeline validé sur tests réels.
 
 ---

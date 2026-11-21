@@ -13,8 +13,12 @@ import type {
   Layer2Status,
   SourceChannel,
   UserIngestHint,
-  V4BookRecord
+  V4BookRecord,
+  V4SeriesBooksResponse,
+  V4SyncResponse
 } from './v4-pipeline.service';
+import type { Canal3ResolveResponse } from './canal3-resolver.service';
+import type { BnfHintQuery } from '../resolvers/bnf.resolver';
 
 export function v4BookRecordToHumanizedBook(
   rec: V4BookRecord,
@@ -279,5 +283,118 @@ export async function ingestIsbnsViaV4(params: {
           results: allResults
         }
       : null;
+  }
+}
+
+const V4_LAST_SYNC_KEY = 'biblio_v4_last_sync_at';
+
+/**
+ * Appelle le service Back-End utilitaire Canal 3 (`POST /api/v2/books/resolve-hints`).
+ * Retourne `null` si hors-ligne ou si l'endpoint n'est pas joignable (permettant le repli client).
+ */
+export async function resolveHintsViaV4Backend(params: {
+  hints: BnfHintQuery;
+  aiConfidence?: 'high' | 'medium' | 'low';
+  sourceChannel?: SourceChannel;
+  skipLocalD1?: boolean;
+}): Promise<Canal3ResolveResponse | null> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    const res = await fetchWithTimeout('/api/v2/books/resolve-hints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 16000,
+      body: JSON.stringify({
+        hints: params.hints,
+        aiConfidence: params.aiConfidence,
+        source_channel: params.sourceChannel || 'canal_4_ai_photo',
+        userUri: savedUri,
+        skipLocalD1: params.skipLocalD1
+      })
+    });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as Canal3ResolveResponse;
+    if (!data || typeof data !== 'object' || !Array.isArray(data.alternatives)) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Synchronisation différentielle V4 pure (`GET /api/v2/books/sync`) :
+ * hydrate IndexedDB (`cache_books`, `book_isbn_index`, registres `inventory`/`wishlist`)
+ * directement depuis les tables V4 (`books`, `v4_library_books`).
+ */
+export async function syncV4BooksToIndexedDb(forceFull = false): Promise<{ syncedCount: number } | null> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    const lastSync =
+      !forceFull && typeof localStorage !== 'undefined' ? localStorage.getItem(V4_LAST_SYNC_KEY) : null;
+    const qs = new URLSearchParams();
+    if (lastSync) qs.set('since', lastSync);
+    if (savedUri) qs.set('userUri', savedUri);
+
+    const res = await fetchWithTimeout(`/api/v2/books/sync${qs.toString() ? `?${qs.toString()}` : ''}`, {
+      timeout: 12000
+    });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as V4SyncResponse;
+    if (!data || !Array.isArray(data.books)) return null;
+
+    let syncedCount = 0;
+    for (const item of data.books) {
+      if (!item?.book) continue;
+      const humanized = v4BookRecordToHumanizedBook(item.book, item.ownershipStatus);
+      await databaseService.saveBookToCache(humanized).catch(() => {});
+      if (item.ownershipStatus === 'owned') {
+        await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
+        await databaseService.removeRegistryEntry?.('wishlist', humanized.uri).catch(() => {});
+      } else if (item.ownershipStatus === 'wish') {
+        await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+      }
+      syncedCount++;
+    }
+
+    if (data.serverTime && typeof localStorage !== 'undefined') {
+      localStorage.setItem(V4_LAST_SYNC_KEY, data.serverTime);
+    }
+    return { syncedCount };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Hydrate directement tous les tomes V4 consolidés d'une série (`GET /api/v2/books/series/:seriesId`)
+ * dans IndexedDB sans passer par l'ancien endpoint V2 `series-list`.
+ */
+export async function fetchV4SeriesBooksToIndexedDb(seriesId: string): Promise<{ count: number } | null> {
+  if (!seriesId || connectionState.isOffline.value || typeof fetch !== 'function') return null;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/v2/books/series/${encodeURIComponent(seriesId)}${qs}`, {
+      timeout: 10000
+    });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as V4SeriesBooksResponse;
+    if (!data || !Array.isArray(data.books)) return null;
+
+    for (const item of data.books) {
+      if (!item?.book) continue;
+      const humanized = v4BookRecordToHumanizedBook(item.book, item.ownershipStatus);
+      await databaseService.saveBookToCache(humanized).catch(() => {});
+      if (item.ownershipStatus === 'owned') {
+        await databaseService.addRegistryEntry('inventory', humanized.uri).catch(() => {});
+      } else if (item.ownershipStatus === 'wish') {
+        await databaseService.addRegistryEntry('wishlist', humanized.uri).catch(() => {});
+      }
+    }
+    return { count: data.books.length };
+  } catch {
+    return null;
   }
 }

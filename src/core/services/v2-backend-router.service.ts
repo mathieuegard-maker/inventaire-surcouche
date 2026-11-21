@@ -10,11 +10,14 @@ import type { SyncDeltaRequest, SyncDeltaResponse } from '../domain/v2.types';
 import { resolveAuthSession } from './d1-gateway.service';
 import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './pipeline-logger.service';
 import {
+  getV4SeriesBooks,
   runV4IngestionPipeline,
   searchLocalBooksForCanal3,
+  syncV4LibraryBooks,
   type SourceChannel,
   type UserIngestHint
 } from './v4-pipeline.service';
+import { resolveBookHintsCanal3 } from './canal3-resolver.service';
 
 function jsonResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
@@ -198,6 +201,81 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         hints: payload.hints && typeof payload.hints === 'object' ? payload.hints : undefined
       });
       return jsonResponse(result);
+    }
+
+    // 6B. Canal 3 Back-End : Résolution Texte / OCR -> ISBN-13 FR + alternatives d'éditions (Passe 1 D1 -> Passe 2 multi-sources)
+    if (path === 'books/resolve-hints' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        hints?: {
+          title?: string;
+          subtitle?: string;
+          series?: string;
+          volumeNumber?: string;
+          author?: string;
+          illustrator?: string;
+          publisher?: string;
+          collection?: string;
+          rawSpineText?: string;
+        };
+        aiConfidence?: 'high' | 'medium' | 'low';
+        source_channel?: SourceChannel;
+        userUri?: string;
+        skipLocalD1?: boolean;
+      };
+      if (!payload.hints || typeof payload.hints !== 'object') {
+        return jsonResponse({ error: 'Objet hints requis' }, 400);
+      }
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      const resolved = await resolveBookHintsCanal3(env.DB, payload.hints, {
+        aiConfidence: payload.aiConfidence,
+        sourceChannel: payload.source_channel || 'canal_4_ai_photo',
+        userId: auth?.userId || null,
+        skipLocalD1: Boolean(payload.skipLocalD1)
+      });
+      return jsonResponse(resolved);
+    }
+
+    // 6C. Synchro différentielle V4 pure (books + v4_library_books + tomes des séries suivies)
+    if (path === 'books/sync' && method === 'GET') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const userUriParam = url.searchParams.get('userUri');
+      const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      if (!auth?.libraryId) {
+        return jsonResponse({ error: 'Authentification requise' }, 401);
+      }
+      const since = url.searchParams.get('since');
+      const syncData = await syncV4LibraryBooks(env.DB, {
+        libraryId: auth.libraryId,
+        since
+      });
+      return jsonResponse(syncData);
+    }
+
+    // 6D. Lecture V4 pure d'une série (tous les tomes consolidés de `books` sans passer par V2 catalog_entities)
+    if (path.startsWith('books/series/') && method === 'GET') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const seriesId = decodeURIComponent(path.slice('books/series/'.length)).trim();
+      if (!seriesId) {
+        return jsonResponse({ error: 'Identifiant de série requis' }, 400);
+      }
+      const userUriParam = url.searchParams.get('userUri');
+      const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      const seriesData = await getV4SeriesBooks(env.DB, {
+        seriesId,
+        libraryId: auth?.libraryId || null
+      });
+      return jsonResponse(seriesData);
     }
 
     // 7. Observabilité V4 : Enregistrement des logs détaillés d'appels API émis par Couche 1 / Canal 3 côté client

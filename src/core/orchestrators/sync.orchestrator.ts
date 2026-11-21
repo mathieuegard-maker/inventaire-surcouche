@@ -4,6 +4,7 @@ import { entityResolver } from '../resolvers/entity.resolver';
 import { seriesResolver } from '../resolvers/series.resolver';
 import { workUriResolver } from '../resolvers/workUri.resolver';
 import { bookCacheService } from '../services/book-cache.service';
+import { fetchV4SeriesBooksToIndexedDb, syncV4BooksToIndexedDb } from '../services/v4-client.service';
 import { scannerState } from '../../state/scanner';
 
 let activeHydrationPromise: Promise<void> | null = null;
@@ -56,8 +57,15 @@ export const syncOrchestrator = {
   async hydrateSeriesInBackground(seriesId: string, onProgress?: (current: number, total: number) => void): Promise<void> {
     console.log(`[BACKGROUND] Amorçage du pré-chargement sécurisé en arrière-plan pour la série ${seriesId}...`);
     try {
-      // 1. DRESSER LE BOUCLIER LOCAL
-      // On récupère instantanément ce qu'on a déjà pour cette série dans Dexie
+      // 0. Voie V4 pure prioritaire : lecture directe des tomes consolidés (`books` + `v4_library_books`) sans V2 legacy
+      const v4Series = await fetchV4SeriesBooksToIndexedDb(seriesId).catch(() => null);
+      if (v4Series && v4Series.count > 0) {
+        onProgress?.(v4Series.count, v4Series.count);
+        console.log(`[BACKGROUND] ✅ Série ${seriesId} hydratée via V4 pure (${v4Series.count} tomes).`);
+        return;
+      }
+
+      // 1. Repli V2 (si série historique absente de `v4_series` / `books`)
       const localTomes = await databaseService.getBooksBySeriesId(seriesId);
       
       // On crée un Set ultra-rapide contenant les URIs d'OEUVRES (wd:) déjà possédées
@@ -127,7 +135,15 @@ export const syncOrchestrator = {
         await databaseService.clearAllBookData();
         localStorage.removeItem('biblio_catalog_sync_version');
         localStorage.removeItem('biblio_scan_photo_draft_v1');
+        localStorage.removeItem('biblio_v4_last_sync_at');
         localStorage.setItem('biblio_db_reset_token', DB_RESET_TOKEN);
+      }
+
+      // 0. Synchronisation différentielle V4 pure (books + v4_library_books + tomes des séries suivies)
+      const v4Sync = await syncV4BooksToIndexedDb().catch(() => null);
+      if (v4Sync && v4Sync.syncedCount > 0) {
+        console.log(`[HYDRATATION] ✅ Synchro différentielle V4 : ${v4Sync.syncedCount} fiche(s) synchronisée(s).`);
+        scannerState.lastUpdatedTick.value++;
       }
 
       // 1. Collecte des URIs Registres

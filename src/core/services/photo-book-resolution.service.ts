@@ -22,7 +22,7 @@ import {
 } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
-import { pushClientPipelineLogs } from './v4-client.service';
+import { pushClientPipelineLogs, resolveHintsViaV4Backend } from './v4-client.service';
 
 export interface PhotoResolutionOption {
   isbn13: string;
@@ -646,17 +646,34 @@ export const photoBookResolutionService = {
           hintMatchMeta = localOrD1.meta;
           sourcesCount = 1;
         } else {
-          const consensus = await discoverConsensusByHints(
-            buildHintQuery(cand),
-            cand.confidence,
-            onExternalLookup
-          );
-          isbn13 = consensus.isbn13;
-          knownIsbns = consensus.knownIsbns;
-          hintMatchMeta = consensus.meta;
-          sourcesCount = consensus.sourcesCount;
-          isDoubt = consensus.isDoubt;
-          alternatives = consensus.alternatives;
+          // Voie V4 Back-End prioritaire : délégation Canal 3 -> POST /api/v2/books/resolve-hints (1 seul appel réseau)
+          onExternalLookup?.(1);
+          const backendRes = await resolveHintsViaV4Backend({
+            hints: buildHintQuery(cand),
+            aiConfidence: cand.confidence,
+            sourceChannel: 'canal_4_ai_photo'
+          });
+          if (backendRes) {
+            isbn13 = backendRes.isbn13;
+            knownIsbns = backendRes.knownIsbns;
+            hintMatchMeta = backendRes.meta;
+            sourcesCount = backendRes.sourcesCount;
+            isDoubt = backendRes.isDoubt;
+            alternatives = backendRes.alternatives;
+          } else {
+            // Repli client uniquement si l'endpoint serveur est indisponible (ou en test unitaire isolé)
+            const consensus = await discoverConsensusByHints(
+              buildHintQuery(cand),
+              cand.confidence,
+              onExternalLookup
+            );
+            isbn13 = consensus.isbn13;
+            knownIsbns = consensus.knownIsbns;
+            hintMatchMeta = consensus.meta;
+            sourcesCount = consensus.sourcesCount;
+            isDoubt = consensus.isDoubt;
+            alternatives = consensus.alternatives;
+          }
         }
       }
 

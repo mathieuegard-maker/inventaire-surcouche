@@ -35,6 +35,22 @@ import { generateTraceId, PipelineTracer } from './pipeline-logger.service';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/4.0 (mathieu.egard@gmail.com)';
 
+// Circuit-breaker mémoire Google Books (évite les 100 % HTTP 429 sur IP partagée Cloudflare)
+const GOOGLE_BOOKS_COOLDOWN_MS = 15 * 60 * 1000;
+let googleBooksCooldownUntil = 0;
+
+export function isGoogleBooksCircuitOpen(): boolean {
+  return Date.now() < googleBooksCooldownUntil;
+}
+
+export function tripGoogleBooksCircuit(ms = GOOGLE_BOOKS_COOLDOWN_MS): void {
+  googleBooksCooldownUntil = Date.now() + ms;
+}
+
+export function resetGoogleBooksCircuit(): void {
+  googleBooksCooldownUntil = 0;
+}
+
 export type SourceChannel =
   | 'canal_1_barcode'
   | 'canal_2_manual_isbn'
@@ -936,12 +952,18 @@ export async function discoverMultiSourceLayer3(
     }
   };
 
+  const gbCircuitOpen = isGoogleBooksCircuitOpen();
   const [bnfRes, gbRes, olRes, invRes] = await Promise.all([
     fetchTrackedText(bnfAnchorUrl),
-    fetchTrackedJson(gbUrl),
+    gbCircuitOpen
+      ? Promise.resolve({ ok: false, status: 429, ms: 0, data: null as any, err: 'circuit-breaker cooldown' })
+      : fetchTrackedJson(gbUrl),
     fetchTrackedJson(olUrl),
     fetchTrackedJson(invUrl)
   ]);
+  if (!gbCircuitOpen && gbRes.status === 429) {
+    tripGoogleBooksCircuit();
+  }
 
   const sisterEditions: SisterEditionCandidate[] = [];
   const seriesCandidates: SeriesVoteCandidate[] = [];
@@ -1230,14 +1252,18 @@ export async function discoverMultiSourceLayer3(
       }
     }
   }
-  tracer?.record(
-    'C3',
-    'api_google_books',
-    gbRes.ok ? (gbSummary.length ? 'ok' : 'warn') : 'error',
-    `Google Books (${isbn13}) HTTP ${gbRes.status} (${gbRes.ms}ms) -> ${gbSummary.length} résultat(s)`,
-    { request: { url: gbUrl }, status: gbRes.status, results: gbSummary, error: gbRes.err },
-    gbRes.ms
-  );
+  if (!gbCircuitOpen) {
+    tracer?.record(
+      'C3',
+      'api_google_books',
+      gbRes.ok ? (gbSummary.length ? 'ok' : 'warn') : gbRes.status === 429 ? 'warn' : 'error',
+      gbRes.status === 429
+        ? `Google Books (${isbn13}) HTTP 429 -> circuit-breaker activé 15 min`
+        : `Google Books (${isbn13}) HTTP ${gbRes.status} (${gbRes.ms}ms) -> ${gbSummary.length} résultat(s)`,
+      { request: { url: gbUrl }, status: gbRes.status, results: gbSummary, error: gbRes.err },
+      gbRes.ms
+    );
+  }
 
   // 4. OpenLibrary
   let olSummary: Record<string, unknown> | null = null;
@@ -2999,5 +3025,148 @@ export async function runV4IngestionPipeline(
     traceId: tracer.traceId,
     sourceChannel: params.sourceChannel,
     results
+  };
+}
+
+// ============================================================================
+// SYNCHRONISATION DIFFÉRENTIELLE & LECTURE V4 PURE (books + v4_series + v4_library_books)
+// ============================================================================
+
+export interface V4SyncBookItem {
+  book: V4BookRecord;
+  ownershipStatus: 'owned' | 'wish' | 'none';
+}
+
+export interface V4SyncResponse {
+  books: V4SyncBookItem[];
+  serverTime: string;
+}
+
+export interface V4SeriesBooksResponse {
+  series: {
+    id: string;
+    canonicalName: string;
+    wikidataQid?: string | null;
+    aliases: string[];
+  } | null;
+  books: V4SyncBookItem[];
+}
+
+/**
+ * Retourne les fiches Livre consolidées V4 liées à la bibliothèque de l'utilisateur
+ * (livres possédés, wishlist, ET tous les autres tomes des séries suivies),
+ * avec filtrage différentiel optionnel par `since` (ISO-8601).
+ */
+export async function syncV4LibraryBooks(
+  db: DatabaseBinding,
+  params: { libraryId: string; since?: string | null }
+): Promise<V4SyncResponse> {
+  const serverTime = new Date().toISOString();
+  const since = params.since?.trim() || null;
+
+  // 1. Récupérer tous les liens bibliothèque de l'utilisateur
+  const linkRows = await db
+    .prepare(
+      `SELECT book_id, is_owned, is_wished, updated_at
+       FROM v4_library_books
+       WHERE library_id = ?`
+    )
+    .bind(params.libraryId)
+    .all<{ book_id: string; is_owned: number; is_wished: number; updated_at: string }>();
+
+  const statusByBookId = new Map<string, { status: 'owned' | 'wish' | 'none'; updatedAt: string }>();
+  for (const row of linkRows.results || []) {
+    const status: 'owned' | 'wish' | 'none' =
+      Number(row.is_owned) === 1 ? 'owned' : Number(row.is_wished) === 1 ? 'wish' : 'none';
+    statusByBookId.set(String(row.book_id), { status, updatedAt: String(row.updated_at || '') });
+  }
+
+  // 2. Récupérer les livres directement liés + tous les livres des séries suivies par l'utilisateur
+  const bookRows = await db
+    .prepare(
+      `SELECT DISTINCT b.*
+       FROM books b
+       LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
+       WHERE lb.book_id IS NOT NULL
+          OR (
+            b.series_id IS NOT NULL
+            AND b.series_id IN (
+              SELECT DISTINCT b2.series_id
+              FROM books b2
+              JOIN v4_library_books lb2 ON lb2.book_id = b2.id
+              WHERE lb2.library_id = ? AND b2.series_id IS NOT NULL
+            )
+          )
+       ORDER BY b.updated_at DESC
+       LIMIT 600`
+    )
+    .bind(params.libraryId, params.libraryId)
+    .all<Record<string, any>>();
+
+  const items: V4SyncBookItem[] = [];
+  for (const row of bookRows.results || []) {
+    const book = mapBookRow(row);
+    const link = statusByBookId.get(book.id);
+    const maxUpdatedAt = link && link.updatedAt > book.updatedAt ? link.updatedAt : book.updatedAt;
+    if (since && maxUpdatedAt && maxUpdatedAt <= since) {
+      continue;
+    }
+    items.push({
+      book,
+      ownershipStatus: link?.status || 'none'
+    });
+  }
+
+  return {
+    books: items,
+    serverTime
+  };
+}
+
+/**
+ * Retourne directement tous les tomes V4 consolidés d'une série (`books` + statut de possession),
+ * sans passer par l'ancien modèle V2 `catalog_entities` / `series-list`.
+ */
+export async function getV4SeriesBooks(
+  db: DatabaseBinding,
+  params: { seriesId: string; libraryId?: string | null }
+): Promise<V4SeriesBooksResponse> {
+  const sRow = await db
+    .prepare('SELECT id, canonical_name, wikidata_qid, aliases_json FROM v4_series WHERE id = ? LIMIT 1')
+    .bind(params.seriesId)
+    .first<Record<string, any>>();
+
+  const bookRows = await db
+    .prepare(
+      `SELECT b.*,
+              COALESCE(lb.is_owned, 0) AS lib_is_owned,
+              COALESCE(lb.is_wished, 0) AS lib_is_wished
+       FROM books b
+       LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
+       WHERE b.series_id = ?
+       ORDER BY b.is_integral ASC, b.is_hors_serie ASC, COALESCE(b.volume_number, 9999) ASC, b.canonical_title ASC`
+    )
+    .bind(params.libraryId || '__none__', params.seriesId)
+    .all<Record<string, any>>();
+
+  const items: V4SyncBookItem[] = (bookRows.results || []).map((row) => {
+    const ownershipStatus: 'owned' | 'wish' | 'none' =
+      Number(row.lib_is_owned) === 1 ? 'owned' : Number(row.lib_is_wished) === 1 ? 'wish' : 'none';
+    return {
+      book: mapBookRow(row),
+      ownershipStatus
+    };
+  });
+
+  return {
+    series: sRow
+      ? {
+          id: String(sRow.id),
+          canonicalName: String(sRow.canonical_name),
+          wikidataQid: sRow.wikidata_qid ?? null,
+          aliases: safeJsonParse<string[]>(sRow.aliases_json, [])
+        }
+      : null,
+    books: items
   };
 }
