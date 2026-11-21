@@ -2,6 +2,8 @@
 import { ref, onMounted, watch } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
+import { sessionStore } from '../../state/session';
+import { scannerState } from '../../state/scanner';
 import { useModalScrollable } from '../composables/useModalScrollable';
 
 const props = defineProps<{
@@ -89,10 +91,12 @@ async function handleConfirmMerge() {
     }
 
     const allowVolEdit = props.singleBook === true || props.bookUris.length === 1;
+    const savedUserUri = sessionStore.getUserUri() || undefined;
     const res = await fetchWithTimeout('/api/gateway?action=series-merge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        userUri: savedUserUri,
         targetSeriesId: targetId || undefined,
         targetSeriesTitle: targetTitle || undefined,
         sourceSeriesId:
@@ -131,11 +135,15 @@ async function handleConfirmMerge() {
         if (props.bookUris.length === 1) {
           b.seriesNumber = finalVolLabel || undefined;
         }
+        if (Array.isArray(b.hiddenSeriesIds)) {
+          b.hiddenSeriesIds = b.hiddenSeriesIds.filter((sid) => sid !== finalSeriesId);
+        }
         b.isLocallyEdited = true;
-        await databaseService.saveBookToCache(b);
+        await databaseService.saveBookToCache(JSON.parse(JSON.stringify(b)));
       }
     }
 
+    scannerState.notifyCatalogChanged();
     emit('merged', { seriesId: finalSeriesId, seriesTitle: finalSeriesName });
     emit('close');
   } catch (err: unknown) {

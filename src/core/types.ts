@@ -71,6 +71,7 @@ export interface HumanizedBook extends BaseBook {
   series?: string;
   seriesId?: string;
   seriesNumber?: string;
+  hiddenSeriesIds?: string[];
   genres: string[];
   collection?: string;
   coverFallbackUrls?: string[];

@@ -21,6 +21,7 @@ export type ScannerMode = 'simple' | 'burst' | 'photo';
 
 const isCameraModalOpen = ref(false);
 const isScanningActive = isCameraModalOpen;
+const isIsbnPickerMode = ref(false);
 const isSearching = ref(false);
 const isSimpleResolving = ref(false);
 const simpleResolvingIsbn = ref<string | null>(null);
@@ -32,6 +33,7 @@ const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate' } | nu
 const lastUpdatedTick = ref<number>(Date.now());
 let activeRouter: Router | null = null;
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
+let isbnPickerCallback: ((isbn: string) => void) | null = null;
 
 function triggerBurstFeedback(status: 'success' | 'duplicate') {
   burstFlashEvent.value = { id: Date.now(), status };
@@ -44,6 +46,7 @@ function triggerBurstFeedback(status: 'success' | 'duplicate') {
 export const scannerState = {
   isCameraModalOpen,
   isScanningActive,
+  isIsbnPickerMode,
   isSearching,
   isSimpleResolving,
   simpleResolvingIsbn,
@@ -331,10 +334,55 @@ export const scannerState = {
     }
   },
 
+  async openIsbnPickerModal(onPicked: (isbn: string) => void) {
+    isIsbnPickerMode.value = true;
+    isbnPickerCallback = onPicked;
+    errorMessage.value = null;
+    isSearching.value = false;
+    isCameraModalOpen.value = true;
+
+    setTimeout(async () => {
+      try {
+        await barcodeIsbnProvider.startScanner(
+          'global-barcode-scanner-viewport',
+          () => {},
+          (errorMsg) => {
+            isSearching.value = false;
+            errorMessage.value = errorMsg;
+          },
+          () => {
+            isSearching.value = true;
+          },
+          {
+            continuous: false,
+            skipLookup: true,
+            onBarcodeDetected: (isbn) => {
+              playScanBeep('success');
+              const cb = isbnPickerCallback;
+              isbnPickerCallback = null;
+              isIsbnPickerMode.value = false;
+              isCameraModalOpen.value = false;
+              isSearching.value = false;
+              cb?.(isbn);
+            }
+          }
+        );
+      } catch (err: any) {
+        isCameraModalOpen.value = false;
+        isSearching.value = false;
+        isIsbnPickerMode.value = false;
+        isbnPickerCallback = null;
+        errorMessage.value = err.message || 'Erreur de démarrage du scanner.';
+      }
+    }, 150);
+  },
+
   async stopScan() {
     await barcodeIsbnProvider.stopScanner().catch(() => {});
     isCameraModalOpen.value = false;
     isSearching.value = false;
+    isIsbnPickerMode.value = false;
+    isbnPickerCallback = null;
   },
 
   toggleScan(router: Router, mode?: ScannerMode) {

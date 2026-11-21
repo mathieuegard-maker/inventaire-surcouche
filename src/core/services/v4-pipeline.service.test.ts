@@ -6,6 +6,9 @@ import {
   detectIntegralAndIncludedVolumes,
   discoverMultiSourceLayer3,
   electCanonicalSeriesFromVotes,
+  excludeBookFromSeriesForLibrary,
+  extractMarcRecordMetadata,
+  getV4SeriesBooks,
   normalizeIsbnWithPressFallback,
   searchLocalBooksForCanal3,
   updateV4BookMetadata,
@@ -75,6 +78,9 @@ function createInMemoryV4Db(): {
           }
           return null;
         }
+        if (cleanSql.startsWith('SELECT id, canonical_name, wikidata_qid, aliases_json, is_complete_expanded, primary_authors_json FROM v4_series WHERE id = ?')) {
+          return (series.get(String(args[0])) || null) as T | null;
+        }
         if (cleanSql.startsWith('SELECT * FROM books WHERE work_canonical_id = ?')) {
           for (const b of books.values()) {
             if (b.work_canonical_id === args[0]) return b as T;
@@ -118,6 +124,30 @@ function createInMemoryV4Db(): {
           const res = Array.from(books.values()).filter(
             (b) => b.series_id === args[0] && b.is_integral === 0 && b.is_hors_serie === 0
           );
+          return { results: res as T[], success: true };
+        }
+        if (cleanSql.includes('AS lib_is_owned') && cleanSql.includes('FROM books b')) {
+          const libraryId = String(args[0]);
+          const seriesId = String(args[1]);
+          const likePattern = String(args[3] || '').replace(/%/g, '');
+          const res = Array.from(books.values())
+            .filter((b) => {
+              const lb = libBooks.get(`${libraryId}::${b.id}`);
+              return (
+                b.series_id === seriesId ||
+                (lb && likePattern && String(lb.custom_overrides_json || '').includes(likePattern))
+              );
+            })
+            .map((b) => {
+              const lb = libBooks.get(`${libraryId}::${b.id}`);
+              return {
+                ...b,
+                lib_is_owned: lb ? Number(lb.is_owned) : 0,
+                lib_is_wished: lb ? Number(lb.is_wished) : 0,
+                lib_selected_cover_url: lb?.selected_cover_url ?? null,
+                lib_custom_overrides_json: lb?.custom_overrides_json ?? null
+              };
+            });
           return { results: res as T[], success: true };
         }
         return { results: [], success: true };
@@ -739,5 +769,89 @@ describe('v4-pipeline.service', () => {
     const l2ForA = await checkBookIndexLayer2(db, '9782012101333', 'lib_user_A');
     expect(l2ForA.book?.canonicalTitle).toBe('Astérix (Édition Collector A)');
     expect(l2ForA.book?.selectedCoverUrl).toBe('https://covers.example/custom-A.jpg');
+  });
+
+  it('Option B : excludeBookFromSeriesForLibrary masque un tome non possédé pour le foyer A sans impacter B', async () => {
+    const { db, series } = createInMemoryV4Db();
+    const book10 = await consolidateBookLayer4(
+      db,
+      {
+        anchorIsbn13: '9791026828822',
+        anchorTitle: 'Fables. Tome 7',
+        language: 'fre',
+        sisterEditions: [
+          { source: 'bnf', isbn13: '9791026828822', title: 'Fables. Tome 7', volumeNumber: '7', language: 'fre' }
+        ],
+        seriesCandidates: [
+          { source: 'bnf', rawName: 'Fables', coreKey: 'fables', cleanDisplay: 'Fables', weight: 4 }
+        ],
+        authors: ['Bill Willingham'],
+        illustrators: [],
+        scriptwriters: [],
+        rawSubjects: ['BD'],
+        rawTitles: ['Fables. Tome 7'],
+        sourcesHit: ['bnf']
+      },
+      { sourceChannel: 'canal_1_barcode', libraryId: 'lib_A', action: 'owned' }
+    );
+    const book11 = await consolidateBookLayer4(
+      db,
+      {
+        anchorIsbn13: '9791026815983',
+        anchorTitle: 'La forêt noire',
+        language: 'fre',
+        sisterEditions: [
+          { source: 'bnf', isbn13: '9791026815983', title: 'La forêt noire', volumeNumber: '11', language: 'fre' }
+        ],
+        seriesCandidates: [
+          { source: 'bnf', rawName: 'Fables', coreKey: 'fables', cleanDisplay: 'Fables', weight: 4 }
+        ],
+        authors: ['Bill Willingham'],
+        illustrators: [],
+        scriptwriters: [],
+        rawSubjects: ['BD'],
+        rawTitles: ['La forêt noire'],
+        sourcesHit: ['bnf']
+      },
+      { sourceChannel: 'canal_1_barcode', libraryId: 'lib_A', action: 'preview' }
+    );
+
+    const seriesId = book10.seriesId!;
+    const seriesRow = series.get(seriesId);
+    if (seriesRow) seriesRow.is_complete_expanded = 1;
+
+    await excludeBookFromSeriesForLibrary(db, {
+      libraryId: 'lib_A',
+      seriesId,
+      bookId: book11.id
+    });
+
+    const viewForA = await getV4SeriesBooks(db, { seriesId, libraryId: 'lib_A' });
+    expect(viewForA.books.map((i) => i.book.id)).toEqual([book10.id]);
+
+    const viewForB = await getV4SeriesBooks(db, { seriesId, libraryId: 'lib_B' });
+    expect(viewForB.books.map((i) => i.book.id)).toEqual([book10.id, book11.id]);
+  });
+
+  it("extractMarcRecordMetadata extrait le sous-titre 245$i et le tome 245$h quand 245$a répète la série (Animal Jack T.7)", () => {
+    const xml = `
+      <record xmlns="http://catalogue.bnf.fr/namespaces/InterXMarc">
+        <controlfield tag="008">990101s2022    fr             fre          </controlfield>
+        <datafield tag="020"><subfield code="a">979-10-34768-73-8</subfield></datafield>
+        <datafield tag="245">
+          <subfield code="a">Animal Jack</subfield>
+          <subfield code="h">7</subfield>
+          <subfield code="i">Un tout petit mondes</subfield>
+        </datafield>
+        <datafield tag="460"><subfield code="t">Animal Jack</subfield></datafield>
+        <datafield tag="700"><subfield code="a">Kid Toussaint</subfield></datafield>
+      </record>
+    `;
+    const parsed = extractMarcRecordMetadata(xml);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.isbn13).toBe('9791034768738');
+    expect(parsed?.seriesRaw).toBe('Animal Jack');
+    expect(parsed?.volumeNumber).toBe('7');
+    expect(parsed?.title).toBe('Un tout petit mondes');
   });
 });

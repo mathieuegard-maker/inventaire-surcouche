@@ -211,7 +211,8 @@ export const databaseService = {
    * [NOUVEAU V2] Récupère tous les tomes physiques associés à une série
    */
   async getBooksBySeriesId(seriesId: string): Promise<HumanizedBook[]> {
-    return await db.cache_books.where('seriesId').equals(seriesId).toArray();
+    const allForSeries = await db.cache_books.where('seriesId').equals(seriesId).toArray();
+    return allForSeries.filter((b) => !(b.hiddenSeriesIds || []).includes(seriesId));
   },
 
   // --- GESTION DU CACHE (Fiches complètes) ---

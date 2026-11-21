@@ -139,6 +139,7 @@ export interface V4BookRecord {
   seriesName?: string | null;
   volumeNumber?: number | null;
   volumeLabel?: string | null;
+  hiddenSeriesIds?: string[];
   isHorsSerie: boolean;
   horsSerieLabel?: string | null;
   isIntegral: boolean;
@@ -404,6 +405,7 @@ export interface LibraryBookOverrides {
   publicationYear?: string;
   mainCategory?: string;
   subgenres?: string[];
+  hiddenFromSeriesIds?: string[];
 }
 
 /**
@@ -442,6 +444,9 @@ function applyLibraryOverridesToBook(
     ...(ov.isHorsSerie !== undefined ? { isHorsSerie: ov.isHorsSerie } : {}),
     ...(ov.mainCategory !== undefined ? { mainCategory: ov.mainCategory } : {}),
     ...(Array.isArray(ov.subgenres) ? { subgenres: ov.subgenres } : {}),
+    ...(Array.isArray(ov.hiddenFromSeriesIds) && ov.hiddenFromSeriesIds.length > 0
+      ? { hiddenSeriesIds: ov.hiddenFromSeriesIds }
+      : {}),
     editionsCatalog: nextEditions,
     ...(cleanCover ? { selectedCoverUrl: cleanCover } : {})
   };
@@ -865,7 +870,7 @@ function isIntegralCandidateTitleOrPages(
   return slashParts.length >= 2 && (!pageCount || pageCount >= 64);
 }
 
-function extractMarcRecordMetadata(
+export function extractMarcRecordMetadata(
   recXml: string,
   fallbackIsbn?: string
 ): (SisterEditionCandidate & { _isIntegral?: boolean }) | null {
@@ -942,9 +947,10 @@ function extractMarcRecordMetadata(
         explicitIntegralTag245 = true;
         integralOrd245 = normalizeSeriesNumber(h || u || n || '');
       }
-      if (p && a) {
+      if ((p || (i && !explicitIntegralTag245 && normalizeTextKey(i) !== normalizeTextKey(a))) && a) {
+        const subTitle = p || i;
         series245 = series245 || cleanSeriesName(a);
-        title = p;
+        title = subTitle;
         if (n || u || (!explicitIntegralTag245 && h)) {
           vol245 = vol245 || normalizeSeriesNumber(n || u || h);
         }
@@ -2916,9 +2922,11 @@ export async function enqueueOrExpandSeriesLayer5(
     }
   }
 
-  // Phase 5A-2 : Repli automatique par nom de série BnF SRU si `ens2bib` n'était pas renseigné ou a retourné < 3 tomes
-  // (corrige le cas d'Astérix où P268 Wikidata est une notice d'autorité 14573759 et non un 460$3 bibliographique)
-  if (discoveredByWorkKey.size < 3) {
+  // Phase 5A-2 : Repli/complément automatique BnF SRU :
+  // - si `ens2bib` a retourné < 3 tomes (Astérix sans 460$3), requête avec puis sans auteur ;
+  // - ou si < 30 tomes ET auteur connu : passe ciblée `(Série + Auteur)` pour récupérer les tomes récents oubliés du 460$3
+  //   (ex: Animal Jack T.11 « Nuit sans sommeil » catalogué en 295$a / 295$v sans 460$3).
+  if (discoveredByWorkKey.size < 30) {
     const cleanSeriesQuery = book.seriesName.replace(/["()]/g, ' ').trim();
     const primaryAuthors = safeJsonParse<string[]>(sRow.primary_authors_json, []);
     const firstAuthorLast = extractAuthorLastNameForBnfCql(book.authors[0] || primaryAuthors[0]);
@@ -3584,13 +3592,13 @@ export async function syncV4LibraryBooks(
     });
   }
 
-  // 2. Récupérer les livres directement liés (possédés/souhaités) + tous les livres des séries suivies par l'utilisateur
+  // 2. Récupérer les livres directement liés (possédés/souhaités/modifiés en privé) + tous les livres des séries suivies par l'utilisateur
   const bookRows = await db
     .prepare(
       `SELECT DISTINCT b.*
        FROM books b
        LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
-       WHERE (lb.book_id IS NOT NULL AND (lb.is_owned = 1 OR lb.is_wished = 1))
+       WHERE (lb.book_id IS NOT NULL AND (lb.is_owned = 1 OR lb.is_wished = 1 OR lb.custom_overrides_json IS NOT NULL))
           OR (
             b.series_id IS NOT NULL
             AND b.series_id IN (
@@ -3654,9 +3662,10 @@ export async function getV4SeriesBooks(
          FROM books b
          LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
          WHERE b.series_id = ?
+            OR (lb.library_id = ? AND lb.custom_overrides_json LIKE ?)
          ORDER BY b.is_integral ASC, b.is_hors_serie ASC, COALESCE(b.volume_number, 9999) ASC, b.canonical_title ASC`
       )
-      .bind(params.libraryId || '__none__', params.seriesId)
+      .bind(params.libraryId || '__none__', params.seriesId, params.libraryId || '__none__', `%${params.seriesId}%`)
       .all<Record<string, any>>();
 
   let bookRows = await querySeriesBookRows();
@@ -3696,18 +3705,24 @@ export async function getV4SeriesBooks(
     bookRows = await querySeriesBookRows();
   }
 
-  const items: V4SyncBookItem[] = (bookRows.results || []).map((row) => {
-    const ownershipStatus: 'owned' | 'wish' | 'none' =
-      Number(row.lib_is_owned) === 1 ? 'owned' : Number(row.lib_is_wished) === 1 ? 'wish' : 'none';
-    return {
-      book: applyLibraryOverridesToBook(
-        mapBookRow(row),
-        row.lib_selected_cover_url ?? null,
-        row.lib_custom_overrides_json ?? null
-      ),
-      ownershipStatus
-    };
-  });
+  const items: V4SyncBookItem[] = (bookRows.results || [])
+    .map((row) => {
+      const ownershipStatus: 'owned' | 'wish' | 'none' =
+        Number(row.lib_is_owned) === 1 ? 'owned' : Number(row.lib_is_wished) === 1 ? 'wish' : 'none';
+      return {
+        book: applyLibraryOverridesToBook(
+          mapBookRow(row),
+          row.lib_selected_cover_url ?? null,
+          row.lib_custom_overrides_json ?? null
+        ),
+        ownershipStatus
+      };
+    })
+    .filter(
+      (item) =>
+        item.book.seriesId === params.seriesId &&
+        !(item.book.hiddenSeriesIds || []).includes(params.seriesId)
+    );
 
   return {
     series: sRow
@@ -3963,4 +3978,107 @@ export async function updateV4BookMetadata(
   }
 
   return applyLibraryOverridesToBook(baseBook, nextCoverUrl, overridesJson);
+}
+
+/**
+ * Option B : Exclut un tome d'une série uniquement pour le foyer (`v4_library_books`),
+ * sans impacter la série commune des autres utilisateurs.
+ * - Si le tome est non possédé, l'ajoute à `hiddenFromSeriesIds` (disparaît de la série du foyer).
+ * - Si `detachOwned` est vrai (tome possédé/souhaité mal classé), le détache également en one-shot (`seriesId = null`).
+ */
+export async function excludeBookFromSeriesForLibrary(
+  db: DatabaseBinding,
+  params: {
+    libraryId: string;
+    seriesId: string;
+    bookId?: string | null;
+    uri?: string | null;
+    isbn13?: string | null;
+    detachOwned?: boolean;
+  }
+): Promise<V4BookRecord | null> {
+  if (!params.libraryId || !params.seriesId) return null;
+  const now = new Date().toISOString();
+
+  let existingRow: Record<string, any> | null = null;
+  if (params.bookId) {
+    existingRow = await db.prepare('SELECT * FROM books WHERE id = ? LIMIT 1').bind(params.bookId).first();
+  }
+  if (!existingRow && params.uri) {
+    existingRow = await db.prepare('SELECT * FROM books WHERE legacy_entity_uri = ? LIMIT 1').bind(params.uri).first();
+  }
+  const cleanIsbn = params.isbn13
+    ? isbnUtil.normalize(params.isbn13)
+    : params.uri?.startsWith('isbn:')
+      ? isbnUtil.normalize(params.uri.slice(5))
+      : '';
+  if (!existingRow && cleanIsbn) {
+    existingRow = await db
+      .prepare(
+        `SELECT b.*
+         FROM book_isbn_index bi
+         JOIN books b ON b.id = bi.book_id
+         WHERE bi.isbn13 = ?
+         LIMIT 1`
+      )
+      .bind(cleanIsbn)
+      .first();
+  }
+  if (!existingRow) return null;
+
+  const bookId = String(existingRow.id);
+  const baseBook = mapBookRow(existingRow);
+
+  const existingLink = await db
+    .prepare(
+      'SELECT is_owned, is_wished, selected_cover_url, custom_overrides_json FROM v4_library_books WHERE library_id = ? AND book_id = ? LIMIT 1'
+    )
+    .bind(params.libraryId, bookId)
+    .first<{
+      is_owned: number;
+      is_wished: number;
+      selected_cover_url?: string | null;
+      custom_overrides_json?: string | null;
+    }>();
+
+  const currentOv = existingLink?.custom_overrides_json
+    ? safeJsonParse<LibraryBookOverrides>(existingLink.custom_overrides_json, {})
+    : {};
+  const hiddenSet = new Set<string>(currentOv.hiddenFromSeriesIds || []);
+  hiddenSet.add(params.seriesId);
+
+  const nextOv: LibraryBookOverrides = {
+    ...currentOv,
+    hiddenFromSeriesIds: Array.from(hiddenSet)
+  };
+  if (params.detachOwned || (existingLink && (Number(existingLink.is_owned) === 1 || Number(existingLink.is_wished) === 1))) {
+    nextOv.seriesId = null;
+    nextOv.seriesName = null;
+    nextOv.volumeNumber = null;
+    nextOv.volumeLabel = null;
+    nextOv.isHorsSerie = false;
+  }
+
+  const overridesJson = JSON.stringify(nextOv);
+  await db
+    .prepare(
+      `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, custom_overrides_json, added_at, updated_at)
+       VALUES (?, ?, ?, ?, 'manual_edit', ?, ?, ?, ?)
+       ON CONFLICT(library_id, book_id) DO UPDATE SET
+         custom_overrides_json = excluded.custom_overrides_json,
+         updated_at = excluded.updated_at`
+    )
+    .bind(
+      params.libraryId,
+      bookId,
+      existingLink ? Number(existingLink.is_owned) : 0,
+      existingLink ? Number(existingLink.is_wished) : 0,
+      existingLink?.selected_cover_url ?? null,
+      overridesJson,
+      now,
+      now
+    )
+    .run();
+
+  return applyLibraryOverridesToBook(baseBook, existingLink?.selected_cover_url ?? null, overridesJson);
 }

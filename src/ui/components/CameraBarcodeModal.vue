@@ -5,10 +5,11 @@ import { useModalScrollable } from '../composables/useModalScrollable';
 
 const modalCardRef = ref<HTMLElement | null>(null);
 const activeMode = computed(() => scannerState.activeMode.value);
+const isIsbnPickerMode = computed(() => scannerState.isIsbnPickerMode.value);
 const isCameraOpen = computed(() => scannerState.isCameraModalOpen.value);
 const burstCount = computed(() => scannerState.burstBooks.value.length);
 
-const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.value, activeMode.value]);
+const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.value, activeMode.value, isIsbnPickerMode.value]);
 </script>
 
 <template>
@@ -24,7 +25,13 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
       >
         <div class="camera-modal-header">
           <strong>
-            {{ activeMode === 'burst' ? `Scan rafale (${burstCount} livre(s))` : 'Scan code-barres' }}
+            {{
+              isIsbnPickerMode
+                ? 'Scanner le code-barres (ISBN)'
+                : activeMode === 'burst'
+                  ? `Scan rafale (${burstCount} livre(s))`
+                  : 'Scan code-barres'
+            }}
           </strong>
           <button
             type="button"
@@ -38,9 +45,11 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
 
         <p class="camera-hint">
           {{
-            activeMode === 'burst'
-              ? 'Visez les codes-barres à la suite. Cliquez sur Fermer quand vous avez terminé pour afficher la liste des livres scannés sur la page.'
-              : 'Placez le code-barres EAN-13 du livre dans le cadre. Dès la lecture réussie, la fenêtre se ferme et la fiche du livre s’ouvre automatiquement.'
+            isIsbnPickerMode
+              ? 'Visez le code-barres au dos du livre : l’ISBN sera renseigné automatiquement et la recherche BnF se relancera.'
+              : activeMode === 'burst'
+                ? 'Visez les codes-barres à la suite. Cliquez sur Fermer quand vous avez terminé pour afficher la liste des livres scannés sur la page.'
+                : 'Placez le code-barres EAN-13 du livre dans le cadre. Dès la lecture réussie, la fenêtre se ferme et la fiche du livre s’ouvre automatiquement.'
           }}
         </p>
 
@@ -75,7 +84,7 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
 .scanner-modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 2100;
+  z-index: 2350;
   background: rgba(15, 23, 42, 0.72);
   display: flex;
   align-items: center;

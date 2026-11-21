@@ -31,6 +31,8 @@ const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
 const showMergeSeriesModal = ref(false);
+const isExcluding = ref(false);
+const excludeFeedback = ref('');
 const displayedTomes = ref<HumanizedBook[]>([]);
 const filteredTomes = ref<HumanizedBook[]>([]);
 
@@ -196,6 +198,26 @@ const completeMissingSeries = async () => {
   }
 };
 
+const excludeSelectedFromSeries = async () => {
+  if (selectedIds.value.length === 0 || isExcluding.value) return;
+  const targets = selectedBooks.value.slice();
+  if (targets.length === 0) return;
+  isExcluding.value = true;
+  excludeFeedback.value = '';
+  try {
+    await seriesOrchestrator.excludeTomesFromSeries(seriesId.value, targets);
+    const removedSet = new Set(targets.map((t) => t.uri));
+    seriesTomes.value = seriesTomes.value.filter((t) => !removedSet.has(t.uri));
+    selectedIds.value = [];
+    excludeFeedback.value = `${targets.length} tome(s) retiré(s) de cette série pour votre foyer.`;
+  } catch (error) {
+    console.error('[SeriesView] Erreur retrait série :', error);
+    excludeFeedback.value = 'Erreur lors du retrait des tomes de la série.';
+  } finally {
+    isExcluding.value = false;
+  }
+};
+
 const handleBackToCollection = () => router.push({ name: 'CollectionView', query: { mode: fromMode.value } });
 </script>
 
@@ -239,9 +261,25 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
             style="flex: 1; min-width: 180px; background: #eef2ff; font-weight: 700;"
             @click="showMergeSeriesModal = true"
           >
-            Fusionner / Regrouper la série
+            {{ selectedIds.length > 0 ? `Rattacher / Fusionner (${selectedIds.length})` : 'Fusionner / Regrouper la série' }}
+          </button>
+          <button
+            v-if="selectedIds.length > 0"
+            type="button"
+            class="wireframe-btn"
+            :disabled="isExcluding"
+            style="flex: 1; min-width: 200px; background: #fef2f2; color: #b91c1c; border-color: #fca5a5; font-weight: 700;"
+            @click="excludeSelectedFromSeries"
+          >
+            {{ isExcluding ? 'Retrait en cours...' : `Ne fait pas partie de cette série (${selectedIds.length})` }}
           </button>
         </div>
+
+        <BaseBanner
+          v-if="excludeFeedback"
+          :type="excludeFeedback.startsWith('Erreur') ? 'error' : 'info'"
+          :message="excludeFeedback"
+        />
 
         <WireframePagination
           :items="seriesTomes"

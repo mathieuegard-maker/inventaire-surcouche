@@ -49,9 +49,10 @@ export const barcodeIsbnProvider = {
     onResult: (response: SearchResponse | null, rawIsbn?: string) => void,
     onError: (errorMsg: string) => void,
     onScanningReady?: () => void,
-    options?: { continuous?: boolean; onBarcodeDetected?: (isbn: string) => void }
+    options?: { continuous?: boolean; onBarcodeDetected?: (isbn: string) => void; skipLookup?: boolean }
   ): Promise<void> {
     const continuous = Boolean(options?.continuous);
+    const skipLookup = Boolean(options?.skipLookup);
     try {
       if (html5QrcodeInstance && html5QrcodeInstance.isScanning) {
         await this.stopScanner();
@@ -93,6 +94,9 @@ export const barcodeIsbnProvider = {
           if (!continuous) {
             await this.stopScanner();
             options?.onBarcodeDetected?.(cleanIsbn);
+            if (skipLookup) {
+              return;
+            }
           }
 
           try {

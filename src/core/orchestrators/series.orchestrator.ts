@@ -4,6 +4,8 @@ import { databaseService } from '../database/database.service';
 import { normalizeSeriesNumber, normalizeTextKey } from '../resolvers/bnf.resolver';
 import { areDistinctSeriesWorkTitles } from '../resolvers/series-canonical.resolver';
 import { syncOrchestrator } from './sync.orchestrator';
+import { excludeBookFromSeriesViaV4 } from '../services/v4-client.service';
+import { scannerState } from '../../state/scanner';
 import type { SeriesContext, HumanizedBook } from '../types';
 
 export interface HydrationProgress {
@@ -65,7 +67,10 @@ export const seriesOrchestrator = {
     console.group(`[SERIES ORCHESTRATOR] Analyse de la saga : ${seriesId}`);
 
     // 1. Extraction rapide depuis le cache local (Local-First)
-    const tomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
+    const rawTomes: HumanizedBook[] = await databaseService.getBooksBySeriesId(seriesId);
+    const tomes: HumanizedBook[] = rawTomes.filter(
+      (t) => !(t.hiddenSeriesIds || []).includes(seriesId)
+    );
     console.log(`[SERIES ORCHESTRATOR] Tomes trouvés en cache local : ${tomes.length}`);
 
     // 2. Couplage des registres (Inventaire, Wishlist, Prêts)
@@ -235,5 +240,42 @@ export const seriesOrchestrator = {
       ownedCount: ownedCount,
       isComplete: mergedTomes.length > 0 && ownedCount === mergedTomes.length
     };
+  },
+
+  /**
+   * Option B : Marque un ou plusieurs tomes comme n'appartenant pas à cette série pour le foyer courant
+   * (masquage privé dans `v4_library_books` + détachement local IndexedDB sans altérer le catalogue des autres utilisateurs).
+   */
+  async excludeTomesFromSeries(seriesId: string, tomes: HumanizedBook[]): Promise<number> {
+    if (!seriesId || !tomes.length) return 0;
+    let count = 0;
+
+    for (const tome of tomes) {
+      const detachOwned = tome.ownershipStatus !== 'none';
+      await excludeBookFromSeriesViaV4({
+        seriesId,
+        bookId: tome.bookId,
+        uri: tome.uri,
+        isbn13: tome.isbn13,
+        detachOwned
+      }).catch(() => null);
+
+      const hiddenSet = new Set<string>(tome.hiddenSeriesIds || []);
+      hiddenSet.add(seriesId);
+
+      const updatedLocal: HumanizedBook = {
+        ...tome,
+        hiddenSeriesIds: Array.from(hiddenSet),
+        ...(detachOwned ? { seriesId: undefined, series: undefined, seriesNumber: undefined } : {}),
+        isLocallyEdited: true
+      };
+      await databaseService.saveBookToCache(JSON.parse(JSON.stringify(updatedLocal))).catch(() => {});
+      count++;
+    }
+
+    if (count > 0) {
+      scannerState.notifyCatalogChanged();
+    }
+    return count;
   }
 };

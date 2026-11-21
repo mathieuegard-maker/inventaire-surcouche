@@ -10,6 +10,7 @@ import type { SyncDeltaRequest, SyncDeltaResponse } from '../domain/v2.types';
 import { resolveAuthSession } from './d1-gateway.service';
 import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './pipeline-logger.service';
 import {
+  excludeBookFromSeriesForLibrary,
   getV4SeriesBooks,
   runV4IngestionPipeline,
   searchLocalBooksForCanal3,
@@ -337,6 +338,41 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         publishDate: payload.publishDate,
         coverUrl: payload.coverUrl,
         genres: payload.genres
+      });
+      return jsonResponse({ ok: Boolean(updated), book: updated });
+    }
+
+    // 6F. Option B : Exclure / masquer un tome d'une série uniquement pour le foyer courant
+    if (path === 'books/exclude-from-series' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base D1 non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        seriesId?: string;
+        bookId?: string;
+        uri?: string;
+        isbn13?: string;
+        detachOwned?: boolean;
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth?.libraryId) {
+        return jsonResponse({ error: 'Authentification requise' }, 401);
+      }
+      if (!payload.seriesId) {
+        return jsonResponse({ error: 'seriesId requis' }, 400);
+      }
+      const updated = await excludeBookFromSeriesForLibrary(env.DB, {
+        libraryId: auth.libraryId,
+        seriesId: payload.seriesId,
+        bookId: payload.bookId,
+        uri: payload.uri,
+        isbn13: payload.isbn13,
+        detachOwned: Boolean(payload.detachOwned)
       });
       return jsonResponse({ ok: Boolean(updated), book: updated });
     }

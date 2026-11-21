@@ -62,6 +62,7 @@ export function v4BookRecordToHumanizedBook(
     series: rec.seriesName || undefined,
     seriesId: rec.seriesId || undefined,
     seriesNumber: seriesNumberDisplay,
+    ...(rec.hiddenSeriesIds?.length ? { hiddenSeriesIds: rec.hiddenSeriesIds } : {}),
     genres: [rec.mainCategory, ...(rec.subgenres || [])].filter((g) => g && g !== 'Autre'),
     coverUrl: rec.selectedCoverUrl || fallbackCovers[0],
     ...(rec.selectedCoverUrl?.startsWith('data:image/') ? { localCover: rec.selectedCoverUrl } : {}),
@@ -498,6 +499,37 @@ export async function patchV4BookMetadata(params: {
     const savedUri = sessionStore.getUserUri() || undefined;
     const res = await fetchWithTimeout('/api/v2/books/update', {
       method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 12000,
+      body: JSON.stringify({
+        ...params,
+        userUri: savedUri
+      })
+    });
+    if (!res?.ok) return null;
+    const data = (await res.json()) as { ok?: boolean; book?: V4BookRecord | null };
+    return data?.book || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Option B : Exclut / masque un tome d'une série uniquement pour le foyer connecté (`v4_library_books`),
+ * et met à jour le cache local IndexedDB pour disparition immédiate de la vue Série.
+ */
+export async function excludeBookFromSeriesViaV4(params: {
+  seriesId: string;
+  bookId?: string;
+  uri?: string;
+  isbn13?: string;
+  detachOwned?: boolean;
+}): Promise<V4BookRecord | null> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function') return null;
+  try {
+    const savedUri = sessionStore.getUserUri() || undefined;
+    const res = await fetchWithTimeout('/api/v2/books/exclude-from-series', {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       timeout: 12000,
       body: JSON.stringify({

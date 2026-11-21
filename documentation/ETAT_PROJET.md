@@ -61,6 +61,11 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
   1. Rendre `books` **immuable** après la consolidation initiale (1er découvreur) ; enregistrer toutes les éditions ultérieures uniquement comme surcharges privées du foyer (`v4_library_books.selected_cover_url` et `v4_library_books.custom_overrides_json`, migration `0012`) fusionnées à la lecture (`applyLibraryOverridesToBook`).
   2. Mettre en cache les URLs de couvertures découvertes dans `books.editions_catalog_json` (D1) et `coverFallbackUrls` (IndexedDB) : `BookEdit.vue` affiche instantanément la galerie déjà connue sans appel externe, avec un bouton explicite *« Rechercher d’autres couvertures »* (`forceRefresh=1`).
 
+### ADR-08 — Collections à redécoupage éditorial (*Fables Nomad* vs *Vertigo Essentiels*) : repli manuel Option B plutôt que scission automatique des séries (2026-11-21)
+* **Contexte :** Certaines séries rééditées dans une autre maquette éditoriale changent de nombre de tomes (*Fables* en 22 tomes *Vertigo* vs 10 tomes *Urban Comics Nomad*) tout en partageant la même œuvre mère : `api_bnf_sisters` remonte des tomes d'autres découpages (ex. T.11 *La forêt noire*) dans la même série.
+* **Alternatives écartées :** Scinder automatiquement les séries par `460$3`, nom de collection ou pagination. L'audit réel BnF montre qu'Astérix ou Tintin possèdent chacun ~7 `460$3` distincts pour des tomes strictement identiques (Hachette, Dargaud, Albert René, Casterman, Éditions Atlas...) : une scission automatique fragmenterait ces collections standard en sous-séries incomplètes.
+* **Décision :** Conserver le regroupement standard et offrir au foyer une correction chirurgicale isolée en **Option B** (`POST /api/v2/books/exclude-from-series`, stockée dans `v4_library_books.custom_overrides_json.hiddenFromSeriesIds`, + `series-merge` / `BookDetailView` *« Rattacher / Changer de série »*) pour masquer ou déplacer ponctuellement un tome intrus sans affecter le catalogue commun.
+
 ---
 
 ## 3. Règles métier & Pièges critiques découverts en tests réels (À ne jamais réintroduire)
@@ -91,12 +96,18 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
    * **Détection locale & serveur des tomes inclus dans une Intégrale possédée (cas *Papotages / Papong Gold T.3*) :** `checkLocalIntegralConflict` croise `integralMetadata.includedVolumeNumbers`, `includedWorkIds` et le libellé `Int. T.1-3` dans IndexedDB ; `searchService.searchByIsbn` propage `INCLUDED_IN_INTEGRAL` en `isOwned: true` avec bannière explicative dans `BookDetailView.vue` ; et `hydrateV4SeriesToLocal` réconcilie systématiquement les squelettes de série avec les tomes déjà possédés en cache avant d'écrire dans IndexedDB.
    * **Synchronisation bidirectionnelle V4 ↔ V2 & Sécurité :** Synchronisation de `v4_library_books` lors de toutes les actions `inventory-*` et `lists-*`, support V4 dans `public-share-get`, `friends-list` et `series-merge`, garde d'expiration des sessions (`s.expires_at > ?`), durcissement SSRF/XSS de `image-proxy` (liste blanche MIME raster, validation des redirections, `nosniff`, CSP sandbox), et correction des 23 anomalies UX Vue 3 (`AdminView`, `ProfileView`, `BookEdit`, `SeriesView`, `WireframePagination`, `SeriesMergeModal`, `LoansView`, `CollectionView`, `WishlistView`, `AuthorView`, `ScanView`, `PhotoItemDetailModal`, `BookDetailView`, `BookMiniCard`).
 
+10. **Complétude BnF Couche 5, InterMarc `245$i`, Exclusion Option B & UX Correction Photo IA (2026-11-21) :**
+    * **Notices récentes sans `460$3` (cas *Animal Jack* T.11) :** Même lorsque `bib.ens2bib` retourne >= 3 tomes, `enqueueOrExpandSeriesLayer5` complète désormais par une recherche `(Série + Auteur)` tant que `< 30` tomes ont été découverts (en dédupliquant par titre), afin de récupérer les sorties récentes non encore rattachées à l'ensemble BnF.
+    * **Sous-titre en `245$i` (cas *Animal Jack* T.7) :** `extractMarcRecordMetadata` lit `245$i` comme titre d'album lorsque `245$p` est absent et que `245$a` répète simplement le nom de la série (`245$h` portant le n° de tome).
+    * **Exclusion & Rattachement Option B :** `excludeBookFromSeriesForLibrary` (`POST /api/v2/books/exclude-from-series`) et l'action `series-merge` enregistrent retraits et rattachements de série par foyer dans `v4_library_books`, exposés directement dans `SeriesView.vue` et `BookDetailView.vue` (*« Ne fait pas partie de cette série »*, *« Rattacher / Changer de série »*).
+    * **UX Correction manuelle BnF (`PhotoItemDetailModal.vue`) :** Ajout d'un bouton `✕` individuel sur chacun des 5 champs, d'un bouton *« Tout effacer »*, et d'un sélecteur caméra one-shot (`scannerState.openIsbnPickerModal` / `CameraBarcodeModal` en `z-index: 2350`) au clic sur le champ ISBN vide ou son bouton `📷`.
+
 ---
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Audit complet des 77 bugs (Back-End V4, Sécurité/Passerelle D1, Local-First/Orchestrateurs, Front-End Vue 3) intégralement appliqué, vérifié (`tsc --noEmit` 0 erreur, `vitest run` 35/35 fichiers et 171/171 tests verts, `vite build` OK) et bases D1 + PWA (`reset_2026_11_21_v4_clean_v22`) remises à zéro pour la campagne de tests utilisateurs.
-* **Prochaine étape immédiate :** Tests terrain complets sur la base vierge (`v22`) pour valider la chaîne 100 % V4 de bout en bout (y compris l'expansion complète des séries comme *Astérix*, la persistance des modifications de couvertures/métadonnées et la reconnaissance des tomes inclus dans les intégrales).
+* **État actuel :** Correctifs post-test Option B (*Fables Nomad* / *Animal Jack* / UX `PhotoItemDetailModal`) implémentés et vérifiés (`npx tsc --noEmit` 0 erreur, `npx vitest run` 35/35 fichiers et 174/174 tests verts, `npm run build` OK).
+* **Prochaine étape immédiate :** Validation terrain sur les séries déjà acquises (test direct de *« Ne fait pas partie de cette série »* sur *Fables* T.11, test du scan ISBN dans `PhotoItemDetailModal.vue`, et si souhaité nouvelle expansion d'*Animal Jack* après réinitialisation).
 * **Chantiers ultérieurs envisagés :** activation R2 (`biblio-covers-webp`) si stockage externe des WebP souhaité ; migration éventuelle vers serveur local Mac (SQLite/Postgres + Cloudflare Tunnel) une fois le pipeline validé sur tests réels.
 
 ---

@@ -14,6 +14,7 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import LendModal from '../components/LendModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
@@ -40,6 +41,8 @@ const successMessage = ref('');
 const integralNotice = ref('');
 const showLendModal = ref(false);
 const showDeleteModal = ref(false);
+const showSeriesMergeModal = ref(false);
+const isExcludingSeries = ref(false);
 const collectionOrderedUris = ref<string[]>([]);
 const coverExhausted = ref(false);
 
@@ -201,6 +204,43 @@ const loadSeriesContext = async () => {
     seriesTomes.value = sortSeriesTomes(tomes);
   } else {
     seriesTomes.value = [];
+  }
+};
+
+const handleSeriesMerged = async (payload: { seriesId: string; seriesTitle: string }) => {
+  showSeriesMergeModal.value = false;
+  if (!book.value) return;
+  book.value.seriesId = payload.seriesId;
+  book.value.series = payload.seriesTitle;
+  const hidden = new Set(book.value.hiddenSeriesIds || []);
+  hidden.delete(payload.seriesId);
+  book.value.hiddenSeriesIds = Array.from(hidden);
+  successMessage.value = `Rattaché à la série « ${payload.seriesTitle} » ✓`;
+  await loadSeriesContext();
+};
+
+const excludeFromCurrentSeries = async () => {
+  if (!book.value || isExcludingSeries.value) return;
+  const targetSeriesId = book.value.seriesId || book.value.series || '';
+  if (!targetSeriesId) return;
+  isExcludingSeries.value = true;
+  errorMsg.value = '';
+  successMessage.value = '';
+  try {
+    await seriesOrchestrator.excludeTomesFromSeries(targetSeriesId, [book.value]);
+    const hidden = new Set(book.value.hiddenSeriesIds || []);
+    hidden.add(targetSeriesId);
+    book.value.hiddenSeriesIds = Array.from(hidden);
+    book.value.seriesId = undefined;
+    book.value.series = undefined;
+    book.value.seriesNumber = undefined;
+    seriesTomes.value = [];
+    successMessage.value = 'Ce tome a été retiré de cette série pour votre foyer ✓';
+  } catch (e: any) {
+    console.error('[BookDetailView] Erreur retrait de série :', e);
+    errorMsg.value = e?.message || 'Erreur lors du retrait de la série.';
+  } finally {
+    isExcludingSeries.value = false;
   }
 };
 
@@ -681,7 +721,7 @@ const confirmDelete = async () => {
           @return="handleReturn"
           @delete="handleDelete"
         />
-        <div style="margin-top: var(--spacing-sm); width: 100%; display: flex; justify-content: center;">
+        <div style="margin-top: var(--spacing-sm); width: 100%; display: flex; flex-direction: column; gap: 0.5rem;">
           <BaseButton 
             type="primary" 
             style="width: 100%;"
@@ -690,6 +730,27 @@ const confirmDelete = async () => {
           >
             Modifier / Corriger la fiche
           </BaseButton>
+          <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+            <button
+              type="button"
+              class="wireframe-btn"
+              style="flex: 1; min-width: 160px; background: #eef2ff; font-weight: 700;"
+              :disabled="connectionState.isOffline.value"
+              @click="showSeriesMergeModal = true"
+            >
+              Rattacher / Changer de série
+            </button>
+            <button
+              v-if="hasSeries"
+              type="button"
+              class="wireframe-btn"
+              style="flex: 1; min-width: 180px; background: #fef2f2; color: #b91c1c; border-color: #fca5a5; font-weight: 700;"
+              :disabled="isExcludingSeries"
+              @click="excludeFromCurrentSeries"
+            >
+              {{ isExcludingSeries ? 'Retrait en cours...' : 'Ne fait pas partie de cette série' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -700,6 +761,16 @@ const confirmDelete = async () => {
       :bookCount="1"
       @close="showLendModal = false"
       @confirm="confirmLend"
+    />
+
+    <SeriesMergeModal
+      :show="showSeriesMergeModal"
+      :bookUris="book ? [book.uri] : []"
+      :currentSeriesId="book?.seriesId"
+      :currentSeriesTitle="book?.series"
+      :singleBook="true"
+      @close="showSeriesMergeModal = false"
+      @merged="handleSeriesMerged"
     />
 
     <!-- Modal de confirmation de suppression -->

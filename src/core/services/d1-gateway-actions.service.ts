@@ -23,6 +23,7 @@ import {
   upsertCatalogEntity
 } from './d1-gateway.service';
 import { runCentralizedSeriesReleaseSweep } from './series-digest.service';
+import { updateV4BookMetadata } from './v4-pipeline.service';
 
 async function requireAdmin(
   db: DatabaseBinding,
@@ -2634,17 +2635,20 @@ export async function handleD1GatewayAction(
     }
 
     // ========================================================================
-    // 6. RATTACHEMENT HORS-SÉRIE & FUSION DE SÉRIES EN 1 CLIC
+    // 6. RATTACHEMENT HORS-SÉRIE & FUSION DE SÉRIES EN 1 CLIC (OPTION B PAR FOYER)
     // ========================================================================
     case 'series-merge': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth?.libraryId) {
+        return jsonResp({ error: 'Authentification requise' }, 401);
+      }
+
       const targetSeriesTitle = String(body?.targetSeriesTitle || '').trim();
       const targetSeriesIdInput = String(body?.targetSeriesId || '').trim();
       const sourceSeriesId = String(body?.sourceSeriesId || '').trim();
       const bookUris: string[] = Array.isArray(body?.bookUris) ? body.bookUris : [];
       const customVolumeLabel =
         body?.volumeLabel !== undefined ? String(body.volumeLabel).trim() : undefined;
-      const customSortOrder =
-        body?.sortOrder !== undefined ? Number(body.sortOrder) : undefined;
 
       if (!targetSeriesTitle && !targetSeriesIdInput) {
         return jsonResp({ error: 'Série cible requise' }, 400);
@@ -2653,171 +2657,116 @@ export async function handleD1GatewayAction(
       let finalSeriesUri = targetSeriesIdInput;
       let finalSeriesLabel = targetSeriesTitle;
 
-      if (!finalSeriesUri && finalSeriesLabel) {
-        finalSeriesUri = await upsertCatalogEntity(db, {
-          entityType: 'serie',
-          label: finalSeriesLabel,
-          claims: { 'wdt:P31': ['wd:Q277759'] }
-        });
-      } else if (finalSeriesUri && !finalSeriesLabel) {
-        const sRow = await db
-          .prepare('SELECT label FROM catalog_entities WHERE uri = ? LIMIT 1')
-          .bind(finalSeriesUri)
-          .first<{ label: string }>();
-        finalSeriesLabel = sRow?.label || 'Série';
-      }
-
-      // Si on fusionne toute une série source vers la série cible
-      if (sourceSeriesId && sourceSeriesId !== finalSeriesUri) {
-        const sourceWorks = await db
-          .prepare('SELECT uri, entity_json FROM catalog_entities WHERE series_uri = ?')
-          .bind(sourceSeriesId)
-          .all<{ uri: string; entity_json: string }>();
-
-        for (const w of sourceWorks.results || []) {
-          const obj = JSON.parse(w.entity_json);
-          obj.claims = obj.claims || {};
-          obj.claims['wdt:P179'] = [finalSeriesUri];
-          await db
-            .prepare(
-              'UPDATE catalog_entities SET series_uri = ?, entity_json = ?, updated_at = ? WHERE uri = ?'
-            )
-            .bind(finalSeriesUri, JSON.stringify(obj), now, w.uri)
-            .run();
-        }
-      }
-
-      // Rattachement des livres / hors-séries sélectionnés
-      for (const bUri of bookUris) {
-        const row = await db
-          .prepare('SELECT uri, work_uri, series_number, sort_order, entity_json FROM catalog_entities WHERE uri = ? OR work_uri = ?')
-          .bind(bUri, bUri)
-          .all<{
-            uri: string;
-            work_uri: string | null;
-            series_number: string | null;
-            sort_order: number;
-            entity_json: string;
-          }>();
-
-        for (const r of row.results || []) {
-          const obj = JSON.parse(r.entity_json);
-          obj.claims = obj.claims || {};
-          obj.claims['wdt:P179'] = [finalSeriesUri];
-          const volLabel =
-            customVolumeLabel !== undefined ? customVolumeLabel : r.series_number;
-          if (volLabel) {
-            obj.claims['wdt:P1545'] = [volLabel];
-          }
-          const sortVal =
-            customSortOrder !== undefined && !Number.isNaN(customSortOrder)
-              ? customSortOrder
-              : volLabel && /^\d+(\.\d+)?$/.test(volLabel)
-              ? parseFloat(volLabel)
-              : r.sort_order || 999;
-
-          await db
-            .prepare(
-              'UPDATE catalog_entities SET series_uri = ?, series_number = ?, sort_order = ?, entity_json = ?, updated_at = ? WHERE uri = ?'
-            )
-            .bind(finalSeriesUri, volLabel || null, sortVal, JSON.stringify(obj), now, r.uri)
-            .run();
-        }
-      }
-
-      // Synchronisation bidirectionnelle avec les tables V4 (`v4_series` + `books`) sans jamais fusionner ni supprimer deux tomes
+      // 1. Résoudre ou créer la série cible dans V4 (`v4_series`) en priorité
+      let effectiveV4SeriesId = '';
+      let effectiveV4SeriesName = finalSeriesLabel;
       try {
-        const cleanCoreKey = normalizeTextKey(finalSeriesLabel.replace(/^(?:la\s+)?collection\s+/i, '')) || finalSeriesUri;
-        let v4SeriesRow = await db
-          .prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? OR normalized_core_key = ? LIMIT 1')
-          .bind(finalSeriesUri, cleanCoreKey)
-          .first<{ id: string; canonical_name: string }>();
-        if (!v4SeriesRow && finalSeriesLabel) {
-          await db
-            .prepare(
-              `INSERT OR IGNORE INTO v4_series (id, canonical_name, normalized_core_key, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?)`
-            )
-            .bind(finalSeriesUri, finalSeriesLabel, cleanCoreKey, now, now)
-            .run();
-          v4SeriesRow = await db
-            .prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? OR normalized_core_key = ? LIMIT 1')
-            .bind(finalSeriesUri, cleanCoreKey)
+        if (finalSeriesUri) {
+          const existingById = await db
+            .prepare('SELECT id, canonical_name FROM v4_series WHERE id = ? LIMIT 1')
+            .bind(finalSeriesUri)
             .first<{ id: string; canonical_name: string }>();
+          if (existingById) {
+            effectiveV4SeriesId = existingById.id;
+            effectiveV4SeriesName = existingById.canonical_name;
+          }
         }
-        const effectiveV4SeriesId = v4SeriesRow?.id || finalSeriesUri;
-        const effectiveV4SeriesName = v4SeriesRow?.canonical_name || finalSeriesLabel;
-
-        if (sourceSeriesId && sourceSeriesId !== effectiveV4SeriesId) {
-          await db
-            .prepare('UPDATE books SET series_id = ?, series_name = ?, updated_at = ? WHERE series_id = ?')
-            .bind(effectiveV4SeriesId, effectiveV4SeriesName, now, sourceSeriesId)
-            .run();
+        if (!effectiveV4SeriesId && finalSeriesLabel) {
+          const cleanCoreKey = normalizeTextKey(finalSeriesLabel.replace(/^(?:la\s+)?collection\s+/i, ''));
+          let existingByKey = cleanCoreKey
+            ? await db
+                .prepare('SELECT id, canonical_name FROM v4_series WHERE normalized_core_key = ? LIMIT 1')
+                .bind(cleanCoreKey)
+                .first<{ id: string; canonical_name: string }>()
+            : null;
+          if (!existingByKey) {
+            const newId = finalSeriesUri || `ser_${(cleanCoreKey || 'custom').replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
+            await db
+              .prepare(
+                `INSERT OR IGNORE INTO v4_series (id, canonical_name, normalized_core_key, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?)`
+              )
+              .bind(newId, finalSeriesLabel, cleanCoreKey || newId, now, now)
+              .run();
+            existingByKey = { id: newId, canonical_name: finalSeriesLabel };
+          }
+          effectiveV4SeriesId = existingByKey.id;
+          effectiveV4SeriesName = existingByKey.canonical_name;
         }
-        for (const bUri of bookUris) {
-          const cleanIsbn = bUri.startsWith('isbn:') ? bUri.slice(5) : '';
-          const isNumericVol = Boolean(customVolumeLabel && /^\d+$/.test(customVolumeLabel));
-          const parsedVolNum = isNumericVol ? parseInt(customVolumeLabel!, 10) : null;
-          const isExplicitNonNumericVol = Boolean(customVolumeLabel && !isNumericVol);
-          await db
-            .prepare(
-              `UPDATE books
-               SET series_id = ?,
-                   series_name = ?,
-                   volume_label = COALESCE(?, volume_label),
-                   volume_number = CASE
-                     WHEN ? = 1 THEN ?
-                     WHEN ? = 1 THEN NULL
-                     ELSE volume_number
-                   END,
-                   is_hors_serie = CASE
-                     WHEN is_integral = 1 THEN 0
-                     WHEN ? = 1 THEN 0
-                     WHEN ? = 1 THEN 1
-                     ELSE is_hors_serie
-                   END,
-                   hors_serie_label = CASE
-                     WHEN is_integral = 1 THEN NULL
-                     WHEN ? = 1 THEN NULL
-                     WHEN ? = 1 THEN ?
-                     ELSE hors_serie_label
-                   END,
-                   updated_at = ?
-               WHERE legacy_entity_uri = ? OR (? != '' AND known_isbns_json LIKE ?)`
-            )
-            .bind(
-              effectiveV4SeriesId,
-              effectiveV4SeriesName,
-              customVolumeLabel || null,
-              isNumericVol ? 1 : 0,
-              parsedVolNum,
-              isExplicitNonNumericVol ? 1 : 0,
-              isNumericVol ? 1 : 0,
-              isExplicitNonNumericVol ? 1 : 0,
-              isNumericVol ? 1 : 0,
-              isExplicitNonNumericVol ? 1 : 0,
-              customVolumeLabel || null,
-              now,
-              bUri,
-              cleanIsbn,
-              `%${cleanIsbn}%`
-            )
-            .run();
-        }
-        await db
-          .prepare(
-            'UPDATE v4_series SET known_volumes_count = (SELECT COUNT(*) FROM books WHERE series_id = ?), updated_at = ? WHERE id = ?'
-          )
-          .bind(effectiveV4SeriesId, now, effectiveV4SeriesId)
-          .run();
       } catch {
-        // Non-bloquant si tables V4 absentes dans un contexte de test partiel
+        // Non-bloquant si v4_series absent dans un test minimal
+      }
+
+      if (!finalSeriesUri && finalSeriesLabel) {
+        finalSeriesUri =
+          effectiveV4SeriesId ||
+          (await upsertCatalogEntity(db, {
+            entityType: 'serie',
+            label: finalSeriesLabel,
+            claims: { 'wdt:P31': ['wd:Q277759'] }
+          }));
+      } else if (finalSeriesUri && !finalSeriesLabel) {
+        finalSeriesLabel = effectiveV4SeriesName;
+        if (!finalSeriesLabel) {
+          const sRow = await db
+            .prepare('SELECT label FROM catalog_entities WHERE uri = ? LIMIT 1')
+            .bind(finalSeriesUri)
+            .first<{ label: string }>();
+          finalSeriesLabel = sRow?.label || 'Série';
+        }
+      }
+
+      effectiveV4SeriesId = effectiveV4SeriesId || finalSeriesUri;
+      effectiveV4SeriesName = effectiveV4SeriesName || finalSeriesLabel;
+
+      // 2. Option B V4 : Appliquer le rattachement uniquement dans `v4_library_books` pour `auth.libraryId`
+      //    (sans jamais altérer `books` ni écraser les séries d'autres foyers).
+      try {
+        const targetBookIds = new Set<string>();
+        if (sourceSeriesId && sourceSeriesId !== effectiveV4SeriesId) {
+          const sourceV4Rows = await db
+            .prepare(
+              `SELECT b.id
+               FROM books b
+               LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
+               WHERE b.series_id = ?
+                  OR (lb.library_id = ? AND lb.custom_overrides_json LIKE ?)`
+            )
+            .bind(auth.libraryId, sourceSeriesId, auth.libraryId, `%${sourceSeriesId}%`)
+            .all<{ id: string }>();
+          for (const sr of sourceV4Rows.results || []) {
+            if (sr.id) targetBookIds.add(sr.id);
+          }
+        }
+
+        for (const id of targetBookIds) {
+          await updateV4BookMetadata(db, {
+            bookId: id,
+            libraryId: auth.libraryId,
+            series: effectiveV4SeriesName,
+            seriesId: effectiveV4SeriesId
+          });
+        }
+
+        for (const bUri of bookUris) {
+          await updateV4BookMetadata(db, {
+            bookId: bUri.startsWith('bk_') ? bUri : undefined,
+            uri: bUri,
+            isbn13: bUri.startsWith('isbn:') ? bUri.slice(5) : undefined,
+            libraryId: auth.libraryId,
+            series: effectiveV4SeriesName,
+            seriesId: effectiveV4SeriesId,
+            ...(customVolumeLabel !== undefined ? { seriesNumber: customVolumeLabel } : {})
+          });
+        }
+      } catch {
+        // Non-bloquant
       }
 
       return jsonResp({
         ok: true,
-        seriesId: finalSeriesUri,
-        seriesTitle: finalSeriesLabel
+        seriesId: effectiveV4SeriesId,
+        seriesTitle: effectiveV4SeriesName
       });
     }
 

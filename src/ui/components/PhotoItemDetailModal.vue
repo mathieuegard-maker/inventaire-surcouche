@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RecognizedBookCandidate } from '../../core/services/byok-vision.service';
 import type { PhotoResolutionOption, ResolvedPhotoItem } from '../../core/services/photo-book-resolution.service';
 import { imageUtil } from '../../core/utils/image.util';
+import { scannerState } from '../../state/scanner';
 
 const props = defineProps<{
   show: boolean;
@@ -192,6 +193,9 @@ function parseIncludedVolumesInput(raw: string): string[] {
 
 const parsedIncludedVolumes = computed(() => parseIncludedVolumesInput(localIncludedVolumesText.value));
 
+const skipNextEmptyIsbnClick = ref(false);
+const openedScannerFromIsbnClick = ref(false);
+
 watch(
   () => [
     props.show,
@@ -217,6 +221,7 @@ watch(
     zoomedImageUrl.value = null;
     resetZoomTransform();
     exhaustedOptionCovers.value = {};
+    skipNextEmptyIsbnClick.value = false;
   },
   { immediate: true }
 );
@@ -264,6 +269,49 @@ const commitFieldChanges = () => {
     includedVolumeNumbers: localIsIntegral.value ? parsedIncludedVolumes.value : undefined,
     selected: localSelected.value
   });
+};
+
+watch(
+  () => scannerState.isScanning.value,
+  (scanning, wasScanning) => {
+    if (wasScanning && !scanning && openedScannerFromIsbnClick.value) {
+      openedScannerFromIsbnClick.value = false;
+      if (!localIsbn.value.trim()) {
+        // L'utilisateur a refermé la caméra sans scanner : éviter de rouvrir en boucle s'il veut saisir au clavier
+        skipNextEmptyIsbnClick.value = true;
+      }
+    }
+  }
+);
+
+const clearAllManualFields = () => {
+  localTitle.value = '';
+  localSeries.value = '';
+  localVolume.value = '';
+  localAuthor.value = '';
+  localIsbn.value = '';
+  skipNextEmptyIsbnClick.value = false;
+};
+
+const clearIsbnField = () => {
+  localIsbn.value = '';
+  skipNextEmptyIsbnClick.value = false;
+};
+
+const openManualIsbnScanner = () => {
+  openedScannerFromIsbnClick.value = true;
+  skipNextEmptyIsbnClick.value = false;
+  scannerState.openIsbnPickerModal((isbn: string) => {
+    openedScannerFromIsbnClick.value = false;
+    localIsbn.value = isbn;
+    handleSearchBnf();
+  });
+};
+
+const handleIsbnInputClick = () => {
+  if (!localIsbn.value.trim() && !skipNextEmptyIsbnClick.value) {
+    openManualIsbnScanner();
+  }
 };
 
 const handleOptionTap = (opt: PhotoResolutionOption | null) => {
@@ -484,58 +532,139 @@ const handleConfirmClose = () => {
 
           <!-- Recherche / correction manuelle BnF -->
           <div class="manual-block">
-            <button type="button" class="link-toggle-btn" @click="showManualForm = !showManualForm">
-              {{ showManualForm ? '▾ Masquer la recherche manuelle BnF' : '▸ Corriger titre / série / ISBN et relancer la BnF' }}
-            </button>
+            <div class="manual-header-row">
+              <button type="button" class="link-toggle-btn" @click="showManualForm = !showManualForm">
+                {{ showManualForm ? '▾ Masquer la recherche manuelle BnF' : '▸ Corriger titre / série / ISBN et relancer la BnF' }}
+              </button>
+              <button
+                v-if="showManualForm"
+                type="button"
+                class="manual-clear-all-btn"
+                title="Effacer tous les champs de recherche"
+                @click="clearAllManualFields"
+              >
+                Tout effacer
+              </button>
+            </div>
 
             <div v-if="showManualForm" class="manual-grid">
               <div class="manual-field">
                 <label class="manual-field-label" for="manual-title-input">Titre du livre</label>
-                <input
-                  id="manual-title-input"
-                  v-model="localTitle"
-                  placeholder="Ex : Le Lotus bleu"
-                  class="cand-input"
-                />
+                <div class="input-with-actions">
+                  <input
+                    id="manual-title-input"
+                    v-model="localTitle"
+                    placeholder="Ex : Le Lotus bleu"
+                    class="cand-input cand-input--has-clear"
+                  />
+                  <button
+                    v-if="localTitle"
+                    type="button"
+                    class="field-icon-btn"
+                    title="Effacer le titre"
+                    aria-label="Effacer le titre"
+                    @click="localTitle = ''"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
               <div class="manual-two-col">
                 <div class="manual-field">
                   <label class="manual-field-label" for="manual-series-input">Nom de la série</label>
-                  <input
-                    id="manual-series-input"
-                    v-model="localSeries"
-                    placeholder="Ex : Les Aventures de Tintin"
-                    class="cand-input"
-                  />
+                  <div class="input-with-actions">
+                    <input
+                      id="manual-series-input"
+                      v-model="localSeries"
+                      placeholder="Ex : Les Aventures de Tintin"
+                      class="cand-input cand-input--has-clear"
+                    />
+                    <button
+                      v-if="localSeries"
+                      type="button"
+                      class="field-icon-btn"
+                      title="Effacer la série"
+                      aria-label="Effacer la série"
+                      @click="localSeries = ''"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div class="manual-field">
                   <label class="manual-field-label" for="manual-volume-input">N° de tome</label>
-                  <input
-                    id="manual-volume-input"
-                    v-model="localVolume"
-                    placeholder="Ex : 5"
-                    class="cand-input"
-                  />
+                  <div class="input-with-actions">
+                    <input
+                      id="manual-volume-input"
+                      v-model="localVolume"
+                      placeholder="Ex : 5"
+                      class="cand-input cand-input--has-clear"
+                    />
+                    <button
+                      v-if="localVolume"
+                      type="button"
+                      class="field-icon-btn"
+                      title="Effacer le n° de tome"
+                      aria-label="Effacer le n° de tome"
+                      @click="localVolume = ''"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
               </div>
               <div class="manual-two-col">
                 <div class="manual-field">
                   <label class="manual-field-label" for="manual-author-input">Auteur</label>
-                  <input
-                    id="manual-author-input"
-                    v-model="localAuthor"
-                    placeholder="Ex : Hergé"
-                    class="cand-input"
-                  />
+                  <div class="input-with-actions">
+                    <input
+                      id="manual-author-input"
+                      v-model="localAuthor"
+                      placeholder="Ex : Hergé"
+                      class="cand-input cand-input--has-clear"
+                    />
+                    <button
+                      v-if="localAuthor"
+                      type="button"
+                      class="field-icon-btn"
+                      title="Effacer l'auteur"
+                      aria-label="Effacer l'auteur"
+                      @click="localAuthor = ''"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </div>
                 <div class="manual-field">
                   <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel)</label>
-                  <input
-                    id="manual-isbn-input"
-                    v-model="localIsbn"
-                    placeholder="9782..."
-                    class="cand-input"
-                  />
+                  <div class="input-with-actions">
+                    <input
+                      id="manual-isbn-input"
+                      v-model="localIsbn"
+                      :placeholder="!localIsbn && !skipNextEmptyIsbnClick ? 'Cliquer pour scanner...' : '9782...'"
+                      class="cand-input cand-input--isbn"
+                      @click="handleIsbnInputClick"
+                    />
+                    <button
+                      v-if="localIsbn"
+                      type="button"
+                      class="field-icon-btn"
+                      title="Effacer l'ISBN"
+                      aria-label="Effacer l'ISBN"
+                      @click="clearIsbnField"
+                    >
+                      ✕
+                    </button>
+                    <button
+                      type="button"
+                      class="field-icon-btn field-icon-btn--scan"
+                      title="Scanner le code-barres ISBN"
+                      aria-label="Scanner le code-barres ISBN"
+                      @click="openManualIsbnScanner"
+                    >
+                      📷
+                    </button>
+                  </div>
                 </div>
               </div>
               <button
@@ -1130,6 +1259,30 @@ const handleConfirmClose = () => {
   cursor: pointer;
 }
 
+.manual-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.manual-clear-all-btn {
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.22rem 0.55rem;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.manual-clear-all-btn:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
 .manual-grid {
   display: flex;
   flex-direction: column;
@@ -1154,6 +1307,12 @@ const handleConfirmClose = () => {
   gap: 0.5rem;
 }
 
+.input-with-actions {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .cand-input {
   width: 100%;
   box-sizing: border-box;
@@ -1161,6 +1320,52 @@ const handleConfirmClose = () => {
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   font-size: 0.88rem;
+}
+
+.cand-input--has-clear {
+  padding-right: 1.95rem;
+}
+
+.cand-input--isbn {
+  padding-right: 3.45rem;
+}
+
+.field-icon-btn {
+  position: absolute;
+  right: 0.35rem;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: #e2e8f0;
+  color: #475569;
+  border-radius: 50%;
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.field-icon-btn:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.field-icon-btn--scan {
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
+.input-with-actions .field-icon-btn + .field-icon-btn--scan {
+  right: 0.35rem;
+}
+
+.input-with-actions:has(.field-icon-btn--scan) .field-icon-btn:not(.field-icon-btn--scan) {
+  right: 2.05rem;
 }
 
 .warn-hint {
