@@ -8,8 +8,24 @@ import {
   isPlausibleFallbackSeriesNumber
 } from '../utils/editorial-collection.util';
 import { areDistinctSeriesWorkTitles, DIVERGENT_NUMBERING_EDITION_REGEX } from './series-canonical.resolver';
+import {
+  extractBnfCoverId,
+  extractControlField,
+  getSubfield,
+  parseMarcFields,
+  type MarcField,
+  type MarcSubfield
+} from '../bibliographic/intermarc-parser';
 
-export { isEditorialPaperbackCollectionName, isPlausibleFallbackSeriesNumber };
+export {
+  extractBnfCoverId,
+  getSubfield,
+  isEditorialPaperbackCollectionName,
+  isPlausibleFallbackSeriesNumber,
+  parseMarcFields,
+  type MarcField,
+  type MarcSubfield
+};
 
 const JUNK_SERIES_REGEX = /\b(intégrale|coffret|box\s*set|pack|compilation)\b|tomes?\s*\d+\s*[-–à]\s*\d+|vols?\s*\d+\s*[-–à]\s*\d+/i;
 
@@ -246,16 +262,6 @@ export function scoreHintMatch(
   return score;
 }
 
-export interface MarcSubfield {
-  code: string;
-  value: string;
-}
-
-export interface MarcField {
-  tag: string;
-  subfields: MarcSubfield[];
-}
-
 /**
  * Extrait le contenu de toutes les balises ayant le nom spécifié
  */
@@ -454,65 +460,6 @@ export function parseSeriesFromTitle(title: string): { title: string; series?: s
   }
   
   return { title: clean };
-}
-
-/**
- * Parseur d'enregistrements InterMarc XML en champs et sous-zones structurés
- */
-export function parseMarcFields(xml: string): MarcField[] {
-  const fields: MarcField[] = [];
-  const tagRegex = /<[^:>]*:datafield[^>]*tag="(\d+)"[^>]*>([\s\S]*?)<\/[^:>]*:datafield>/g;
-  let match;
-  while ((match = tagRegex.exec(xml)) !== null) {
-    const tag = match[1];
-    const content = match[2];
-    
-    const subfields: MarcSubfield[] = [];
-    const subfieldRegex = /<[^:>]*:subfield[^>]*code="([a-z0-9])"[^>]*>([\s\S]*?)<\/[^:>]*:subfield>/g;
-    let subMatch;
-    while ((subMatch = subfieldRegex.exec(content)) !== null) {
-      subfields.push({
-        code: subMatch[1],
-        value: subMatch[2]
-          .replace(/&amp;/g, '&')
-          .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>')
-          .replace(/&quot;/g, '"')
-          .replace(/&#39;/g, "'")
-          .trim()
-      });
-    }
-    fields.push({ tag, subfields });
-  }
-  return fields;
-}
-
-/**
- * Extrait la valeur d'une sous-zone spécifique d'un champ MARC
- */
-export function getSubfield(field: MarcField, code: string): string | undefined {
-  const sf = field.subfields.find(s => s.code === code);
-  return sf ? sf.value : undefined;
-}
-
-/**
- * Extrait l'identifiant d'image de couverture depuis le XML au format InterMarc
- */
-export function extractBnfCoverId(xml: string): string | null {
-  const tag950Regex = /<[^:>]*:datafield[^>]*tag="950"[^>]*>([\s\S]*?)<\/[^:>]*:datafield>/;
-  const match950 = tag950Regex.exec(xml);
-  if (!match950) return null;
-
-  const content950 = match950[1];
-  const subfieldARegex = /<[^:>]*:subfield[^>]*code="a"[^>]*>([\s\S]*?)<\/[^:>]*:subfield>/;
-  const matchSubfieldA = subfieldARegex.exec(content950);
-  
-  return matchSubfieldA ? matchSubfieldA[1].trim() : null;
-}
-
-function extractControlField(xml: string, tag: string): string {
-  const match = new RegExp(`<[^:>]*:controlfield[^>]*tag="${tag}"[^>]*>([^<]*)<\\/[^:>]*:controlfield>`).exec(xml);
-  return match ? match[1] : '';
 }
 
 export function parseIntermarcRecord(

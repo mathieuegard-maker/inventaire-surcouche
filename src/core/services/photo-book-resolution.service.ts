@@ -2,12 +2,12 @@
 import { databaseService } from '../database/database.service';
 import {
   bnfResolver,
-  isFrancophoneBookIsbn13,
   normalizeSeriesNumber,
   normalizeTextKey,
-  scoreHintMatch,
   type BnfHintQuery
 } from '../resolvers/bnf.resolver';
+import { rankCanal3Consensus, type Canal3RankedOption, type Canal3ScoredInput } from '../bibliographic/canal3-consensus';
+import { hasTextTokenOverlap, isEditorialOrPublisherCollection, isMetaIntegral } from '../bibliographic/work-identity';
 import { googleBooksResolver } from '../resolvers/googlebooks.resolver';
 import { openLibraryResolver } from '../resolvers/openlibrary.resolver';
 import { entityResolver } from '../resolvers/entity.resolver';
@@ -18,29 +18,13 @@ import { imageUtil } from '../utils/image.util';
 import {
   findBestMatchingSeries,
   findMatchingOwnedWork,
-  isEditorialPaperbackCollectionName,
   stripEditorialCollectionSuffixes
 } from '../utils/series-matcher.util';
 import type { RecognizedBookCandidate } from './byok-vision.service';
 import type { ExternalBookMetadata } from '../types';
 import { pushClientPipelineLogs, resolveHintsViaV4Backend } from './v4-client.service';
 
-export interface PhotoResolutionOption {
-  isbn13: string;
-  title: string;
-  authors: string[];
-  publisher?: string;
-  publishDate?: string;
-  pageCount?: number;
-  coverUrl?: string;
-  coverFallbackUrls?: string[];
-  series?: string;
-  seriesNumber?: string;
-  isIntegral?: boolean;
-  includedVolumeNumbers?: string[];
-  score: number;
-  sourcesCount: number;
-}
+export type PhotoResolutionOption = Canal3RankedOption;
 
 export interface ResolvedPhotoItem {
   id: string;
@@ -216,30 +200,12 @@ async function checkOwnershipByIsbn(
   }
 }
 
-type DiscoverySource = 'bnf' | 'google' | 'openlibrary';
-
-interface ConsensusBucket {
-  isbn13: string;
-  bestScore: number;
-  sources: Set<DiscoverySource>;
-  workKey: string;
-  bestMeta: ExternalBookMetadata;
-  fromBnf: boolean;
-}
-
 interface ShelfSeriesNeighbor {
   spineIndex: number;
   series: string;
   author?: string;
   publisher?: string;
 }
-
-const CONSENSUS_SCORE_THRESHOLD = 28;
-const DOUBT_MIN_SCORE_THRESHOLD = 18;
-const DOUBT_COMPETITOR_GAP = 10;
-const MULTI_SOURCE_ISBN_BONUS = 22;
-const MULTI_SOURCE_WORK_BONUS = 14;
-const BNF_AUTHORITY_TIEBREAK = 6;
 
 function buildHintQuery(cand: RecognizedBookCandidate): BnfHintQuery {
   return {
@@ -391,45 +357,6 @@ async function tryResolveFromLocalOrServerCatalog(cand: RecognizedBookCandidate)
   return null;
 }
 
-function extractVolumeFromTitle(title?: string): string {
-  if (!title) return '';
-  const m = title.match(/(?:n°|no|tome|t\.?)\s*(\d+)/i) || title.match(/\s(\d{1,3})$/);
-  return m ? normalizeSeriesNumber(m[1]) : '';
-}
-
-function computeWorkKey(
-  meta: { series?: string; seriesNumber?: string; title?: string },
-  fallbackVolumeNumber?: string
-): string {
-  const seriesCore = meta.series ? stripEditorialCollectionSuffixes(meta.series).coreKey : '';
-  const normNum =
-    (meta.seriesNumber ? normalizeSeriesNumber(meta.seriesNumber) : '') ||
-    extractVolumeFromTitle(meta.title) ||
-    (fallbackVolumeNumber ? normalizeSeriesNumber(fallbackVolumeNumber) : '');
-  const normTitle = meta.title ? normalizeTextKey(meta.title) : '';
-
-  if (seriesCore && normNum) return `series:${seriesCore}#${normNum}`;
-  if (!seriesCore && normNum && normTitle) {
-    const titleCore = stripEditorialCollectionSuffixes(meta.title || '').coreKey;
-    if (titleCore) return `series:${titleCore}#${normNum}`;
-  }
-  if (normTitle && normNum) return `title:${normTitle}#${normNum}`;
-  if (normTitle) return `title:${normTitle}`;
-  return '';
-}
-
-function hasTextTokenOverlap(a?: string, b?: string): boolean {
-  if (!a || !b) return false;
-  const normA = normalizeTextKey(a);
-  const normB = normalizeTextKey(b);
-  if (!normA || !normB) return false;
-  if (normA.includes(normB) || normB.includes(normA)) return true;
-
-  const tokensA = normA.split(/\s+/).filter((t) => t.length >= 3);
-  const tokensB = new Set(normB.split(/\s+/).filter((t) => t.length >= 3));
-  return tokensA.some((t) => tokensB.has(t));
-}
-
 function detectAiCorrection(
   cand: RecognizedBookCandidate,
   resolvedTitle: string,
@@ -475,82 +402,14 @@ async function discoverConsensusByHints(
     openLibraryResolver.searchCandidatesByHints(hints, 8).catch(() => [])
   ]);
 
-  const buckets = new Map<string, ConsensusBucket>();
-  const workKeySources = new Map<string, Set<DiscoverySource>>();
+  const inputs: Canal3ScoredInput[] = [
+    ...bnfMatches.map((entry) => ({ source: 'bnf' as const, meta: entry.meta, precomputedScore: entry.score })),
+    ...gbMatches.map((meta) => ({ source: 'google' as const, meta })),
+    ...olMatches.map((meta) => ({ source: 'openlibrary' as const, meta }))
+  ];
+  const consensus = rankCanal3Consensus({ inputs, hints, aiConfidence });
 
-  const addCandidate = (
-    source: DiscoverySource,
-    meta: ExternalBookMetadata,
-    precomputedScore?: number
-  ): void => {
-    const normIsbn = normalizeToIsbn13(meta.isbn);
-    if (!normIsbn || !isFrancophoneBookIsbn13(normIsbn)) return;
-
-    const score = typeof precomputedScore === 'number' ? precomputedScore : scoreHintMatch(meta, hints);
-    if (score <= 0) return;
-    const workKey = computeWorkKey(meta, hints.volumeNumber);
-
-    if (workKey) {
-      const wkSet = workKeySources.get(workKey) || new Set<DiscoverySource>();
-      wkSet.add(source);
-      workKeySources.set(workKey, wkSet);
-    }
-
-    const existing = buckets.get(normIsbn);
-    if (!existing) {
-      buckets.set(normIsbn, {
-        isbn13: normIsbn,
-        bestScore: score,
-        sources: new Set([source]),
-        workKey,
-        bestMeta: { ...meta, isbn: normIsbn },
-        fromBnf: source === 'bnf'
-      });
-      return;
-    }
-
-    existing.sources.add(source);
-    if (source === 'bnf') {
-      existing.fromBnf = true;
-    }
-    if (score > existing.bestScore || (source === 'bnf' && !existing.fromBnf)) {
-      existing.bestScore = Math.max(existing.bestScore, score);
-      existing.bestMeta = {
-        ...existing.bestMeta,
-        ...meta,
-        isbn: normIsbn,
-        coverUrl: meta.coverUrl || existing.bestMeta.coverUrl
-      };
-    }
-    if (!existing.workKey && workKey) {
-      existing.workKey = workKey;
-    }
-  };
-
-  for (const entry of bnfMatches) {
-    addCandidate('bnf', entry.meta, entry.score);
-  }
-  for (const meta of gbMatches) {
-    addCandidate('google', meta);
-  }
-  for (const meta of olMatches) {
-    addCandidate('openlibrary', meta);
-  }
-
-  const ranked = Array.from(buckets.values())
-    .map((bucket) => {
-      const wkSourceCount = bucket.workKey ? (workKeySources.get(bucket.workKey)?.size ?? 1) : 1;
-      const effectiveSources = Math.max(bucket.sources.size, wkSourceCount);
-      const isbnConsensusBonus = Math.max(0, bucket.sources.size - 1) * MULTI_SOURCE_ISBN_BONUS;
-      const workConsensusBonus = Math.max(0, wkSourceCount - bucket.sources.size) * MULTI_SOURCE_WORK_BONUS;
-      const tieBreak = bucket.fromBnf ? BNF_AUTHORITY_TIEBREAK : 0;
-      const finalScore = bucket.bestScore + isbnConsensusBonus + workConsensusBonus + tieBreak;
-      return { bucket, effectiveSources, finalScore };
-    })
-    .sort((a, b) => b.finalScore - a.finalScore);
-
-  const top = ranked[0];
-  if (!top || top.finalScore < DOUBT_MIN_SCORE_THRESHOLD) {
+  if (!consensus.isbn13 || !consensus.meta) {
     void pushClientPipelineLogs({
       sourceChannel: 'canal_4_ai_photo',
       steps: [
@@ -572,76 +431,24 @@ async function discoverConsensusByHints(
     return { sourcesCount: 0, isDoubt: false, alternatives: [] };
   }
 
-  // Construire jusqu'à 5 options d'édition/format (ex: Tome unitaire vs Intégrale vs réédition)
-  // Règle stricte : ne JAMAIS déduire une Intégrale du seul nombre de pages (>= 180p) pour éviter les faux positifs sur romans graphiques unitaires.
-  const isMetaIntegral = (m: ExternalBookMetadata): boolean =>
-    Boolean(
-      m.isIntegral ||
-        /(?:l['’]?\s*int[ée]grale|\bint[ée]grale?\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
-          `${m.title || ''} ${m.collection || ''}`
-        )
-    );
-
-  const seenEditionSlots = new Set<string>();
-  const topAlternatives: PhotoResolutionOption[] = [];
-  const topAnchorText = `${top.bucket.bestMeta.series || ''} ${top.bucket.bestMeta.title || ''}`.trim();
-  const minAlternativeScore = Math.max(DOUBT_MIN_SCORE_THRESHOLD - 4, top.finalScore - 36);
-
-  for (const entry of ranked) {
-    const isInt = isMetaIntegral(entry.bucket.bestMeta);
-    const candText = `${entry.bucket.bestMeta.series || ''} ${entry.bucket.bestMeta.title || ''}`.trim();
-    const isSameFamilyIntegral = isInt && hasTextTokenOverlap(candText, topAnchorText);
-    if (entry.finalScore < minAlternativeScore && !isSameFamilyIntegral) continue;
-    if (entry.finalScore < DOUBT_MIN_SCORE_THRESHOLD - 4) break;
-    const wk = entry.bucket.workKey || `isbn:${entry.bucket.isbn13}`;
-    const slotKey = `${wk}|${isInt ? 'INT' : 'UNIT'}|${normalizeTextKey(entry.bucket.bestMeta.publisher || '')}`;
-    if (seenEditionSlots.has(slotKey) && topAlternatives.length >= 2) continue;
-    seenEditionSlots.add(slotKey);
-    const altFallbacks = imageUtil.buildCoverCandidates(entry.bucket.isbn13, [
-      entry.bucket.bestMeta.coverUrl,
-      ...(entry.bucket.bestMeta.coverFallbackUrls || [])
-    ]);
-    topAlternatives.push({
-      isbn13: entry.bucket.isbn13,
-      title: entry.bucket.bestMeta.title || hints.title || 'Titre inconnu',
-      authors: entry.bucket.bestMeta.authors || [],
-      publisher: entry.bucket.bestMeta.publisher,
-      publishDate: entry.bucket.bestMeta.publishDate,
-      pageCount: entry.bucket.bestMeta.pageCount,
-      coverUrl: entry.bucket.bestMeta.coverUrl || altFallbacks[0],
-      coverFallbackUrls: altFallbacks,
-      series: entry.bucket.bestMeta.series,
-      seriesNumber: entry.bucket.bestMeta.seriesNumber,
-      isIntegral: isInt,
-      score: entry.finalScore,
-      sourcesCount: entry.effectiveSources
-    });
-    if (topAlternatives.length >= 10) break;
-  }
-
-  // Ne retenir le gap de concurrence que sur des œuvres distinctes (pas deux éditions d'une même œuvre)
-  const secondDistinctWork = topAlternatives.find((alt, idx) => idx > 0 && alt.isbn13 !== top.bucket.isbn13);
-  const hasCompetingWork =
-    Boolean(secondDistinctWork) &&
-    top.effectiveSources < 2 &&
-    top.finalScore - (secondDistinctWork?.score || 0) <= DOUBT_COMPETITOR_GAP;
-  const isBorderlineScore = top.finalScore < CONSENSUS_SCORE_THRESHOLD;
-  const isLowConfidenceSingle = aiConfidence === 'low' && top.effectiveSources < 2;
-
-  const isDoubt = isBorderlineScore || hasCompetingWork || isLowConfidenceSingle;
-
   void pushClientPipelineLogs({
     sourceChannel: 'canal_4_ai_photo',
     steps: [
       {
         layer: 'C3',
         stepName: 'client_hint_lookup',
-        status: isDoubt ? 'warn' : 'ok',
-        summary: `Canal 3 (${hints.title || hints.series || '?'}${hints.volumeNumber ? ` #${hints.volumeNumber}` : ''}) -> ${top.bucket.isbn13} (score ${Math.round(top.finalScore)}, BnF:${bnfMatches.length}/GB:${gbMatches.length}/OL:${olMatches.length})`,
+        status: consensus.isDoubt ? 'warn' : 'ok',
+        summary: `Canal 3 (${hints.title || hints.series || '?'}${hints.volumeNumber ? ` #${hints.volumeNumber}` : ''}) -> ${consensus.isbn13} (score ${Math.round(consensus.topScore)}, BnF:${bnfMatches.length}/GB:${gbMatches.length}/OL:${olMatches.length})`,
         payload: {
           hints,
-          selected: { isbn13: top.bucket.isbn13, title: top.bucket.bestMeta.title, series: top.bucket.bestMeta.series, vol: top.bucket.bestMeta.seriesNumber, score: top.finalScore },
-          alternativesCount: topAlternatives.length,
+          selected: {
+            isbn13: consensus.isbn13,
+            title: consensus.meta.title,
+            series: consensus.meta.series,
+            vol: consensus.meta.seriesNumber,
+            score: consensus.topScore
+          },
+          alternativesCount: consensus.alternatives.length,
           bnfTop: bnfMatches.slice(0, 4).map((m) => ({ isbn: m.meta.isbn, title: m.meta.title, vol: m.meta.seriesNumber, integral: m.meta.isIntegral, score: m.score })),
           gbTop: gbMatches.slice(0, 3).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber })),
           olTop: olMatches.slice(0, 3).map((m) => ({ isbn: m.isbn, title: m.title, vol: m.seriesNumber }))
@@ -651,23 +458,13 @@ async function discoverConsensusByHints(
     ]
   });
 
-  const topWorkIsbns = top.bucket.workKey
-    ? Array.from(
-        new Set(
-          ranked
-            .filter((r) => r.bucket.workKey === top.bucket.workKey)
-            .map((r) => r.bucket.isbn13)
-        )
-      )
-    : [top.bucket.isbn13];
-
   return {
-    isbn13: top.bucket.isbn13,
-    knownIsbns: topWorkIsbns,
-    meta: top.bucket.bestMeta,
-    sourcesCount: top.effectiveSources,
-    isDoubt,
-    alternatives: topAlternatives
+    isbn13: consensus.isbn13,
+    knownIsbns: consensus.knownIsbns,
+    meta: consensus.meta,
+    sourcesCount: consensus.sourcesCount,
+    isDoubt: consensus.isDoubt,
+    alternatives: consensus.alternatives
   };
 }
 
@@ -986,8 +783,10 @@ export const photoBookResolutionService = {
         hintMatchMeta?.series,
         cand.series
       ];
+      const mergedPublisher =
+        externalMeta?.publisher || d1Entity?.publisher || hintMatchMeta?.publisher || cand.publisher;
       const mergedSeries = rawSeriesCandidates.find(
-        (s): s is string => Boolean(s?.trim()) && !isEditorialPaperbackCollectionName(s)
+        (s): s is string => Boolean(s?.trim()) && !isEditorialOrPublisherCollection(s, mergedPublisher)
       );
       const rawSeriesNumCandidates = [
         externalMeta?.seriesNumber,
@@ -1007,12 +806,10 @@ export const photoBookResolutionService = {
       const correctedFromAi = detectAiCorrection(cand, mergedTitle, mergedAuthors);
 
       const hasIntegralOption = alternatives.some((a) => Boolean(a.isIntegral));
-      const isMainIntegral = Boolean(
-        hintMatchMeta?.isIntegral ||
-          /(?:l['’]?\s*int[ée]grale|\bint[ée]grale\b|\bcoffret\b|\bomnibus\b|\bcompil\b|\btomes?\s+\d+\s*(?:[àa]|et|&|-|\/)\s*\d+)/i.test(
-            mergedTitle
-          )
-      );
+      const isMainIntegral = isMetaIntegral({
+        isIntegral: hintMatchMeta?.isIntegral,
+        title: mergedTitle
+      });
 
       return {
         id: uid,

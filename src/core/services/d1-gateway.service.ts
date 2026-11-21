@@ -26,6 +26,7 @@ import {
 } from '../utils/series-matcher.util';
 import { areDistinctSeriesWorkTitles } from '../resolvers/series-canonical.resolver';
 import { getLevenshteinDistance } from '../utils/string.util';
+import { parseMarcFields as parseMarcFieldsFromXml } from '../bibliographic/intermarc-parser';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
 const BROWSER_USER_AGENT =
@@ -275,31 +276,6 @@ interface ExternalResolvedBook {
   coverUrl?: string;
   deweyCode?: string;
   rawSubjects: string[];
-}
-
-function parseMarcFieldsFromXml(xml: string): Array<{ tag: string; subfields: Array<{ code: string; value: string }> }> {
-  const fields: Array<{ tag: string; subfields: Array<{ code: string; value: string }> }> = [];
-  const dfRegex = /<(?:[\w-]+:)?datafield\s+[^>]*tag="(\d+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?datafield>/gi;
-  let dfMatch;
-  while ((dfMatch = dfRegex.exec(xml)) !== null) {
-    const tag = dfMatch[1];
-    const inner = dfMatch[2];
-    const subfields: Array<{ code: string; value: string }> = [];
-    const sfRegex = /<(?:[\w-]+:)?subfield\s+[^>]*code="([^"]+)"[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?subfield>/gi;
-    let sfMatch;
-    while ((sfMatch = sfRegex.exec(inner)) !== null) {
-      const val = sfMatch[2]
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .trim();
-      subfields.push({ code: sfMatch[1], value: val });
-    }
-    fields.push({ tag, subfields });
-  }
-  return fields;
 }
 
 async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolvedBook | null> {
