@@ -94,10 +94,11 @@ export function shouldSendDigestNow(pref: NotificationPrefRow, nowDate: Date): b
 
 export async function runCentralizedSeriesReleaseSweep(
   db: DatabaseBinding,
-  options?: { limit?: number; staleDays?: number }
+  options?: { limit?: number; staleDays?: number; delayMs?: number }
 ): Promise<{ checkedCount: number; alertsCreated: number }> {
-  const limit = Math.min(Math.max(Number(options?.limit ?? 6), 1), 15);
+  const limit = Math.min(Math.max(Number(options?.limit ?? 6), 1), 500);
   const staleDays = Math.min(Math.max(Number(options?.staleDays ?? 3), 1), 30);
+  const delayMs = Math.max(0, Number(options?.delayMs ?? 0));
   const staleCutoff = new Date(Date.now() - staleDays * 24 * 60 * 60 * 1000).toISOString();
   const now = new Date().toISOString();
 
@@ -169,6 +170,9 @@ export async function runCentralizedSeriesReleaseSweep(
       }
     } catch (err) {
       console.warn(`[SERIES SWEEP] Erreur sur ${s.uri}:`, err);
+    }
+    if (delayMs > 0 && checkedCount < (staleSeries.results?.length || 0)) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 

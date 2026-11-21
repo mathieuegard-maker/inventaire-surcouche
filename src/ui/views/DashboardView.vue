@@ -77,14 +77,26 @@ const loadDashboardData = async () => {
     const byRecent = (list: HumanizedBook[]) =>
       [...list]
         .filter((b) => Boolean(b.localCover || b.coverUrl))
-        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+        .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0) || a.title.localeCompare(b.title))
         .slice(0, 5);
 
-    previewCollection.value = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'owned'));
-    previewWishlist.value = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'wish'));
+    const sameUriList = (a: HumanizedBook[], b: HumanizedBook[]) =>
+      a.length === b.length && a.every((item, idx) => item.uri === b[idx]?.uri);
 
+    const nextCollection = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'owned'));
+    const nextWishlist = byRecent(cachedBooks.filter((b) => b.ownershipStatus === 'wish'));
     const loanUris = new Set(loans.map((l) => l.uri));
-    previewLoans.value = byRecent(cachedBooks.filter((b) => loanUris.has(b.uri)));
+    const nextLoans = byRecent(cachedBooks.filter((b) => loanUris.has(b.uri)));
+
+    if (!sameUriList(previewCollection.value, nextCollection)) {
+      previewCollection.value = nextCollection;
+    }
+    if (!sameUriList(previewWishlist.value, nextWishlist)) {
+      previewWishlist.value = nextWishlist;
+    }
+    if (!sameUriList(previewLoans.value, nextLoans)) {
+      previewLoans.value = nextLoans;
+    }
   } catch (e) {
     console.error('Erreur chargement tableau de bord :', e);
   }

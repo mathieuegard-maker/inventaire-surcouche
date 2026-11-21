@@ -500,18 +500,36 @@ export async function drainEnrichmentQueueBatch(
  */
 export async function runSilentEditionDiscoveryPass(
   db: DatabaseBinding,
-  limit = 2
+  limitOrOptions: number | { limit?: number; delayMs?: number; staleDays?: number } = 2
 ): Promise<{ checkedBooks: number; newIsbnsIndexed: number }> {
-  const safeLimit = Math.min(5, Math.max(1, Math.trunc(limit)));
-  const candidates = await db
-    .prepare(
-      `SELECT id, canonical_title, authors_json, known_isbns_json, series_id, volume_number, is_integral
-       FROM books
-       ORDER BY updated_at ASC
-       LIMIT ?`
-    )
-    .bind(safeLimit)
-    .all<Record<string, any>>();
+  const opts = typeof limitOrOptions === 'number' ? { limit: limitOrOptions } : limitOrOptions;
+  const safeLimit = Math.min(500, Math.max(1, Math.trunc(opts.limit ?? 2)));
+  const delayMs = Math.max(0, Math.trunc(opts.delayMs ?? 0));
+  const staleCutoff =
+    typeof opts.staleDays === 'number' && opts.staleDays > 0
+      ? new Date(Date.now() - opts.staleDays * 24 * 60 * 60 * 1000).toISOString()
+      : null;
+
+  const candidates = staleCutoff
+    ? await db
+        .prepare(
+          `SELECT id, canonical_title, authors_json, known_isbns_json, series_id, volume_number, is_integral
+           FROM books
+           WHERE updated_at IS NULL OR updated_at < ?
+           ORDER BY updated_at ASC
+           LIMIT ?`
+        )
+        .bind(staleCutoff, safeLimit)
+        .all<Record<string, any>>()
+    : await db
+        .prepare(
+          `SELECT id, canonical_title, authors_json, known_isbns_json, series_id, volume_number, is_integral
+           FROM books
+           ORDER BY updated_at ASC
+           LIMIT ?`
+        )
+        .bind(safeLimit)
+        .all<Record<string, any>>();
 
   let checkedBooks = 0;
   let newIsbnsIndexed = 0;
@@ -569,11 +587,16 @@ export async function runSilentEditionDiscoveryPass(
         );
         await db.batch(stmts);
         newIsbnsIndexed += added.length;
-      } else {
+      } else if (!staleCutoff) {
         await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run();
       }
     } catch {
-      await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run().catch(() => {});
+      if (!staleCutoff) {
+        await db.prepare('UPDATE books SET updated_at = ? WHERE id = ?').bind(now, row.id).run().catch(() => {});
+      }
+    }
+    if (delayMs > 0 && checkedBooks < (candidates.results?.length || 0)) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
 

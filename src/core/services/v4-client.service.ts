@@ -70,7 +70,7 @@ export function v4BookRecordToHumanizedBook(
     ownershipStatus,
     ...(rec.wishedByUserId ? { wishedByUserId: rec.wishedByUserId } : {}),
     ...(rec.wishedByName ? { wishedByName: rec.wishedByName } : {}),
-    updatedAt: Date.now()
+    updatedAt: rec.updatedAt ? (Date.parse(rec.updatedAt) || Date.now()) : Date.now()
   };
 }
 

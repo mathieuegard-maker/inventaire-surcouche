@@ -137,7 +137,15 @@ const fetchCatalogue = async (silent = false) => {
       }
     }
 
-    allOwnedBooks.value = owned;
+    const buildSig = (list: HumanizedBook[]) =>
+      list
+        .map((b) => `${b.uri}|${b.ownershipStatus}|${b.loan?.friendName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`)
+        .sort()
+        .join('\n');
+
+    if (!silent || buildSig(allOwnedBooks.value) !== buildSig(owned)) {
+      allOwnedBooks.value = owned;
+    }
     if (!silent) {
       selectedIds.value = [];
     }
