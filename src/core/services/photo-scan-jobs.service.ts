@@ -89,7 +89,7 @@ async function runGeminiVisionOcrForJob(
   const currentMonthKey = new Date().toISOString().slice(0, 7);
   const [usageRow, userCountRow] = await Promise.all([
     db
-      .prepare('SELECT total_used, month_key, month_used FROM ai_vision_usage WHERE user_id = ? LIMIT 1')
+      .prepare('SELECT total_used, month_key, month_used FROM user_ai_usage WHERE user_id = ? LIMIT 1')
       .bind(params.userId)
       .first<{ total_used: number; month_key: string; month_used: number }>(),
     db.prepare('SELECT COUNT(*) as cnt FROM users').first<{ cnt: number }>()
@@ -215,7 +215,7 @@ async function runGeminiVisionOcrForJob(
   const now = new Date().toISOString();
   await db
     .prepare(
-      `INSERT INTO ai_vision_usage (user_id, total_used, month_key, month_used, updated_at)
+      `INSERT INTO user_ai_usage (user_id, total_used, month_key, month_used, updated_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET
          total_used = excluded.total_used,

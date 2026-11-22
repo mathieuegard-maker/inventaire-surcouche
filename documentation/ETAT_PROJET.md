@@ -1,6 +1,6 @@
 # État du Projet & Mémoire Architecturale — `inventaire-surcouche` (Biblio Collection PWA)
 
-* **Dernière mise à jour :** `2026-11-21T22:22+01:00`
+* **Dernière mise à jour :** `2026-11-22T11:07+01:00`
 * **Branche active :** `feat/self-hosted-server` (issue de `main` après merge de `feat/architecture-v4`)
 * **Dernier journal versionné :** [`v01_2026-11-18_genese-et-architecture-v4.md`](./historique/v01_2026-11-18_genese-et-architecture-v4.md)
 * **Spécification algorithmique de référence :** [`Architecture_Algorithme_Livres_AntiGravity-v4.md`](./Architecture_Algorithme_Livres_AntiGravity-v4.md)
@@ -16,7 +16,7 @@ Son objectif : gérer une bibliothèque familiale multi-membres (inventaire, wis
 ### Infrastructure déployée (état au 2026-11-21)
 * **Serveur de production :** Dell OptiPlex 3060 Micro (Debian 13 Trixie, headless), dossier `/srv/docker/inventaire-surcouche`, branche `feat/self-hosted-server`.
 * **Exposition publique :** Cloudflare Tunnel (`cloudflared`) routant `https://biblio.mathieuegardtest.fr` → `http://127.0.0.1:8082` → port `3000` du conteneur `biblio-collection-app` (lancé via `docker-compose.tunnel.yml` en non-root `node`, `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit: 512m` ; aucun Caddy/Nginx sur `80/443`, et `127.0.0.1:8081` reste réservé à `effectif_MAR`).
-* **Base de données & Couvertures :** SQLite local WAL `/srv/docker/inventaire-surcouche/data/biblio.sqlite` (12 migrations `0001`–`0012` appliquées automatiquement) + couvertures WebP sur disque `/srv/docker/inventaire-surcouche/data/covers/` montés dans `/data`.
+* **Base de données & Couvertures :** SQLite local WAL `/srv/docker/inventaire-surcouche/data/biblio.sqlite` (14 migrations `0001`–`0014` appliquées automatiquement) + couvertures WebP sur disque `/srv/docker/inventaire-surcouche/data/covers/` montés dans `/data`.
 * **Planificateur CRON :** scheduler interne Node (`server/scheduler.ts`, `CRON_ENABLED=true`) en deux rythmes : passe horaire légère (`drainEnrichmentQueueBatch`, `runHourlyDigestDispatch`, `purgeOldPipelineLogs`) + passe nocturne complète à 02h00 (`runCentralizedSeriesReleaseSweep` et `runSilentEditionDiscoveryPass` jusqu'à 500 entrées/nuit avec pause de 300 ms entre appels BnF).
 * **Sauvegardes automatiques :** `/srv/backups/backup-serveur.sh` chaque nuit à **03h00** (`sqlite3 .backup` à chaud + `.env` + `covers/`) vers Google Drive (`gdrive:Serveur_Backups/daily`, rétention 14j local / 30j Drive).
 * **Déploiement continu manuel :** `git push origin feat/self-hosted-server` puis `ssh serveur "/srv/docker/inventaire-surcouche/deploy.sh"` (ou `ssh serveur-vpn ...` via Tailscale VPN).
@@ -73,6 +73,11 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
 ### ADR-09 — Packaging auto-hébergé Debian + Docker via Cloudflare Tunnel (`feat/self-hosted-server`, 2026-11-21)
 * **Contexte :** Les limites d'usage Cloudflare Workers/D1 (quotas, 50 sous-requêtes, IP partagée) freinent l'exploitation quotidienne. Le serveur personnel Debian 13 (Dell OptiPlex 3060 Micro) héberge déjà `effectif_MAR` sur `127.0.0.1:8081` derrière un Tunnel Cloudflare (`cloudflared`).
 * **Décision :** Conserver la compatibilité Cloudflare intacte tout en ajoutant un runtime autonome Node 22 + Hono + `better-sqlite3` (`server/index.ts`, `server/adapters/sqlite-db.adapter.ts`, `server/adapters/fs-cover-bucket.adapter.ts`, `server/scheduler.ts`), en extrayant `/api/gateway` dans `src/core/services/gateway-router.service.ts`, et en déployant via `docker-compose.tunnel.yml` (`127.0.0.1:8082:3000`, utilisateur non-root `node`, `cap_drop: [ALL]`, `mem_limit: 512m`) + `deploy.sh` + en-têtes sécurité/PWA (`Permissions-Policy: camera=(self)`, `no-cache` sur `sw.js`/`sw-push.js`, `manifest+json`). Référence détaillée : [`RAPPORT_POUR_AGENT_INVENTAIRE.md`](./RAPPORT_POUR_AGENT_INVENTAIRE.md).
+
+### ADR-10 — Traitement serveur en tâche de fond des photos IA avec validation manuelle préservée (`migrations/0014`, 2026-11-22)
+* **Contexte :** Avant l’auto-hébergement, l’analyse photo (OCR Gemini Vision + résolution Canal 3 / BnF) tournait dans le navigateur et imposait à l’utilisateur de garder l’application ouverte.
+* **Décision :** Déporter l’exécution OCR + Canal 3 sur le serveur dans une table dédiée `photo_scan_jobs` (`migrations/0014_photo_scan_jobs.sql`, `src/core/services/photo-scan-jobs.service.ts`, endpoints `/api/v2/photo-jobs*`, reprise automatique au redémarrage dans `server/index.ts`), **strictement cloisonnée par `(user_id, library_id)`**. L’utilisateur peut fermer l’application dès l’envoi de la photo ; à son retour, le client synchronise l’état par polling et conserve intégralement l’étape d’arbitrage/validation manuelle avant ajout à la collection.
+* **Alternatives écartées :** Ajout automatique sans validation humaine (écarté par le chef de projet : le tri manuel des résultats IA/BnF avant ajout en collection reste indispensable pour éviter toute pollution de bibliothèque).
 
 ---
 
@@ -132,14 +137,19 @@ Ces décisions expliquent **pourquoi** le code est structuré ainsi et doivent �
     * **Primitives pures (`src/core/bibliographic/integral.util.ts`) & fonction métier autonome (`src/core/services/integral.service.ts`) :** `parseIncludedVolumeNumbers`, `formatIncludedVolumeNumbers`, `annotateIntegralCoverage` et `transformBookIntegralStatus` (persisté côté serveur via Option B dans `updateV4BookMetadata` / `v4_library_books` sans polluer les autres foyers).
     * **Composant partagé (`IntegralConfigFields.vue`) :** réutilisé dans `PhotoItemDetailModal.vue`, `BookEdit.vue`, `BookDetailView.vue` et les 3 listes de `ScanView.vue` (`Rafale`, `Scan simple`, `Recherche textuelle`).
     * **Clarté visuelle dans les listes (`BookMiniCard.vue`, `series.orchestrator.ts`, `CollectionView.vue`, `WishlistView.vue`, `ScanView.vue`) :** distinction explicite entre possession physique (`Possédé`), l’intégrale elle-même (`Intégrale · T.x-y`) et un tome unitaire couvert par une intégrale possédée (`Dans intégrale` + badge `Inclus dans <Titre>`).
+16. **Chantiers 2, 3, 4 & 5 — Refactoring DRY/KISS/SOLID (Design System, Front-end, Photo IA Serveur & Gateway Modulaire) (2026-11-22) :**
+    * **Chantier 4 (Design System CSS unifié) :** ajout des tokens sémantiques (`--color-status-integral*`, `--color-status-covered*`, `--color-danger*`, `--input-height-compact`) et classes primitives `.ds-panel`, `.ds-badge*`, `.ds-btn*`, `.ds-input`, `.ds-field`, `.ds-toolbar` dans `src/ui/styles/theme.css`, adoptés dans `IntegralConfigFields.vue`, `BookMiniCard.vue` et les sous-composants `/scan`.
+    * **Chantier 3 (Découpage DRY/SOLID de `ScanView.vue`) :** extraction de `src/ui/composables/useBookBatchActions.ts`, `src/ui/components/scan/ScanBookListTab.vue` (partagé entre *Rafale* et *Scan simple*) et `src/ui/components/scan/ScanTextSearchTab.vue`, réduisant `ScanView.vue` d’environ 900 lignes.
+    * **Chantier 2 (Photo IA en tâche de fond côté serveur) :** ajout de `migrations/0014_photo_scan_jobs.sql`, `src/core/services/photo-scan-jobs.service.ts` (OCR Gemini + Canal 3 serveur + suivi de quota `user_ai_usage` + purge des images source), routes `/api/v2/photo-jobs*`, reprise au démarrage dans `server/index.ts`, et synchronisation serveur-d’abord avec polling 3s dans `photo-batch-queue.service.ts` (avec repli client transparent si hors-ligne).
+    * **Chantier 5 (Découpage par domaine du Gateway) :** extraction de ~830 lignes hors de `d1-gateway-actions.service.ts` vers `src/core/services/gateway/` (`gateway-context.ts`, `notifications-actions.ts`, `admin-actions.ts`, `family-share-actions.ts`).
 
 ---
 
 ## 4. Point d’étape courant & Prochaines priorités
 
-* **État actuel :** Application déployée en production auto-hébergée sur `https://biblio.mathieuegardtest.fr` (Dell OptiPlex 3060 Micro Debian 13, Docker `docker-compose.tunnel.yml` sur `127.0.0.1:8082:3000`, SQLite WAL + couvertures disque `/data`, 13 migrations `0001`–`0013`, CRON interne actif, sauvegardes quotidiennes 03h00). Compte admin `MATHIEU EGARD` (`usr_57b9be14614d4e78`) activé sur le serveur.
-* **Prochaine étape immédiate :** Renseigner `GEMINI_API_KEY` (et `RESEND_API_KEY` / `VAPID_PRIVATE_JWK` si souhaités) dans `/srv/docker/inventaire-surcouche/.env` sur le serveur, puis tests terrain en production sur `biblio.mathieuegardtest.fr`.
-* **Chantiers ultérieurs envisagés :** auto-promotion admin du 1er utilisateur créé sur base vierge, et poursuite du nettoyage/allègement des gros composants Vue (`ScanView.vue`, `PhotoItemDetailModal.vue`).
+* **État actuel :** Application déployée en production auto-hébergée sur `https://biblio.mathieuegardtest.fr` (Dell OptiPlex 3060 Micro Debian 13, Docker `docker-compose.tunnel.yml` sur `127.0.0.1:8082:3000`, SQLite WAL + couvertures disque `/data`, 14 migrations `0001`–`0014`, CRON interne actif, sauvegardes quotidiennes 03h00). Les 5 chantiers de refactoring (Intégrales unifiées, Photo IA serveur en tâche de fond, Front-end DRY, Design System unifié, Gateway modulaire) sont terminés.
+* **Prochaine étape immédiate :** Validation terrain sur `https://biblio.mathieuegardtest.fr` du nouveau flux Photo IA en tâche de fond (envoi photo → fermeture de l'app → réouverture → arbitrage/validation manuelle).
+* **Chantiers ultérieurs envisagés :** auto-promotion admin du 1er utilisateur créé sur base vierge, et poursuite éventuelle de la migration progressive des anciens écrans vers les classes `.ds-*`.
 
 ---
 
