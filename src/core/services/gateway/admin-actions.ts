@@ -317,6 +317,109 @@ export async function handleAdminGatewayAction(
       return jsonResp({ ok: true, ...res });
     }
 
+    case 'admin-catalog-update': {
+      const admin = await requireAdmin(db, request);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
+      }
+      const targetUri = String(body?.uri || '').trim();
+      const label = String(body?.label || '').trim();
+      if (!targetUri || !label) {
+        return jsonResp({ error: 'uri et label requis.' }, 400);
+      }
+      const imageUrl = body?.image_url !== undefined ? String(body.image_url || '').trim() || null : undefined;
+      const mainCategory = body?.main_category !== undefined ? String(body.main_category || '').trim() || null : undefined;
+      const seriesNumber = body?.series_number !== undefined ? String(body.series_number || '').trim() || null : undefined;
+      const publisher = body?.publisher !== undefined ? String(body.publisher || '').trim() || null : undefined;
+      const publicationDate = body?.publication_date !== undefined ? String(body.publication_date || '').trim() || null : undefined;
+
+      // 1. Mettre à jour `catalog_entities` (socle V2)
+      const existingCe = await db
+        .prepare('SELECT entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+        .bind(targetUri)
+        .first<{ entity_json: string | null }>();
+      let parsedEntity: Record<string, any> = {};
+      if (existingCe?.entity_json) {
+        try {
+          parsedEntity = JSON.parse(existingCe.entity_json);
+        } catch {
+          parsedEntity = {};
+        }
+      }
+      parsedEntity.label = label;
+      if (publisher !== undefined) parsedEntity.publisher = publisher;
+      if (publicationDate !== undefined) parsedEntity.publishDate = publicationDate;
+
+      await db
+        .prepare(
+          `UPDATE catalog_entities
+           SET label = ?,
+               image_url = COALESCE(?, image_url),
+               main_category = COALESCE(?, main_category),
+               series_number = COALESCE(?, series_number),
+               entity_json = ?,
+               updated_at = ?
+           WHERE uri = ?`
+        )
+        .bind(
+          label,
+          imageUrl === undefined ? null : imageUrl,
+          mainCategory === undefined ? null : mainCategory,
+          seriesNumber === undefined ? null : seriesNumber,
+          JSON.stringify(parsedEntity),
+          now,
+          targetUri
+        )
+        .run();
+
+      // 2. Synchroniser également la table maître V4 `books` si l'ouvrage y existe
+      const rawIsbn = targetUri.startsWith('isbn:') ? targetUri.slice(5).replace(/[^0-9X]/gi, '') : '';
+      const v4Row = await db
+        .prepare(
+          rawIsbn
+            ? `SELECT b.id FROM books b
+               WHERE b.legacy_entity_uri = ?
+                  OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND bi.isbn13 = ?)
+               LIMIT 1`
+            : 'SELECT id FROM books WHERE legacy_entity_uri = ? OR id = ? LIMIT 1'
+        )
+        .bind(targetUri, rawIsbn || targetUri.replace(/^(?:v4:|book:)/, ''))
+        .first<{ id: string }>()
+        .catch(() => null);
+
+      if (v4Row?.id) {
+        const volNum = seriesNumber && /^\d+$/.test(seriesNumber) ? parseInt(seriesNumber, 10) : null;
+        await db
+          .prepare(
+            `UPDATE books
+             SET canonical_title = ?,
+                 selected_cover_url = COALESCE(?, selected_cover_url),
+                 main_category = COALESCE(?, main_category),
+                 volume_label = COALESCE(?, volume_label),
+                 volume_number = COALESCE(?, volume_number),
+                 publisher = COALESCE(?, publisher),
+                 publication_year = COALESCE(?, publication_year),
+                 updated_at = ?
+             WHERE id = ?`
+          )
+          .bind(
+            label,
+            imageUrl === undefined ? null : imageUrl,
+            mainCategory === undefined ? null : mainCategory,
+            seriesNumber === undefined ? null : seriesNumber,
+            volNum,
+            publisher === undefined ? null : publisher,
+            publicationDate === undefined ? null : publicationDate,
+            now,
+            v4Row.id
+          )
+          .run()
+          .catch(() => {});
+      }
+
+      return jsonResp({ ok: true, uri: targetUri, updatedV4: Boolean(v4Row?.id) });
+    }
+
     case 'rehydrate-catalog': {
       const admin = await requireAdmin(db, request);
       if (!admin) {

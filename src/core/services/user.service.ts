@@ -75,7 +75,7 @@ export const userService = {
     password: string,
     inviteCode?: string,
     friendToken?: string,
-    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string }
+    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string; gdprAccepted?: boolean }
   ): Promise<boolean> {
     const res = await fetchWithTimeout('/api/gateway?action=auth-login', {
       method: 'POST',
@@ -87,6 +87,7 @@ export const userService = {
         password,
         ...(options?.mode ? { mode: options.mode } : {}),
         ...(options?.recoveryEmail ? { recoveryEmail: options.recoveryEmail } : {}),
+        ...(options?.gdprAccepted ? { gdprAccepted: true } : {}),
         ...(inviteCode ? { inviteCode } : {}),
         ...(friendToken ? { friendToken } : {})
       })
@@ -583,5 +584,50 @@ export const userService = {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || "Impossible d'ajouter le genre au lot.");
     return { updatedCount: Number(data?.updatedCount) || 0 };
+  },
+
+  async markNotifOnboardingSeen(): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    await fetchWithTimeout('/api/gateway?action=onboarding-notif-seen', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userUri: savedUri })
+    }).catch(() => {});
+  },
+
+  async deleteAccount(password: string): Promise<{ ok: boolean; libraryDeleted: boolean }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=account-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de supprimer le compte.');
+    }
+    sessionStore.clearSession();
+    return { ok: true, libraryDeleted: Boolean(data?.libraryDeleted) };
+  },
+
+  async updateAdminCatalogItem(payload: {
+    uri: string;
+    label: string;
+    image_url?: string | null;
+    main_category?: string | null;
+    series_number?: string | null;
+    publisher?: string | null;
+    publication_date?: string | null;
+  }): Promise<void> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-catalog-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible de modifier cette fiche catalogue.');
+    }
   }
 };

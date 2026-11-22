@@ -125,7 +125,7 @@ export const connectionService = {
     password: string,
     inviteCode?: string,
     friendToken?: string,
-    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string }
+    options?: { mode?: 'login' | 'register' | 'auto'; recoveryEmail?: string; gdprAccepted?: boolean }
   ): Promise<boolean> {
     console.group("[CONNECTION SERVICE] Tentative de connexion de l'utilisateur");
     try {
@@ -187,5 +187,26 @@ export const connectionService = {
     this.isInitialized = false;
     this.userUri = null;
     scannerState.notifyCatalogChanged();
+  },
+
+  async deleteAccount(password: string): Promise<{ libraryDeleted: boolean }> {
+    const res = await userService.deleteAccount(password);
+    if (typeof databaseService?.clearAllBookData === 'function') {
+      await databaseService.clearAllBookData().catch(() => {});
+    }
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('biblio_last_user_uri');
+      localStorage.removeItem('biblio_v4_last_sync_at');
+      localStorage.removeItem('biblio_scan_photo_draft_v1');
+      localStorage.removeItem('biblio_catalog_sync_version');
+      localStorage.removeItem('biblio_show_notif_onboarding');
+    }
+    loanService.invalidateInventoryCache();
+    loanService.shelfId = null;
+    wishlistService.wishlistId = null;
+    this.isInitialized = false;
+    this.userUri = null;
+    scannerState.notifyCatalogChanged();
+    return { libraryDeleted: res.libraryDeleted };
   }
 };

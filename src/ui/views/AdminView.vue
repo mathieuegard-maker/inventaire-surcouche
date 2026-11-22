@@ -16,11 +16,62 @@ const overview = ref<any>(null);
 const catalogItems = ref<any[]>([]);
 const catalogTotal = ref(0);
 const catalogPage = ref(1);
-const catalogPageSize = 24;
+const catalogPageSize = ref(24);
 const catalogQuery = ref('');
 const catalogType = ref('edition');
 const catalogFilter = ref('all');
 const catalogLoading = ref(false);
+
+// Édition directe d'une fiche maître du catalogue serveur (Admin uniquement)
+const editingCatalogItem = ref<any | null>(null);
+const editCatalogForm = ref({
+  uri: '',
+  label: '',
+  image_url: '',
+  main_category: '',
+  series_number: '',
+  publisher: '',
+  publication_date: ''
+});
+const savingCatalogEdit = ref(false);
+
+const openAdminCatalogEditor = (item: any) => {
+  editingCatalogItem.value = item;
+  editCatalogForm.value = {
+    uri: item.uri || '',
+    label: item.label || '',
+    image_url: item.image_url || '',
+    main_category: item.main_category || '',
+    series_number: item.series_number || '',
+    publisher: item.publisher || '',
+    publication_date: item.publication_date || ''
+  };
+};
+
+const saveAdminCatalogEditor = async () => {
+  if (!editCatalogForm.value.uri || !editCatalogForm.value.label.trim() || savingCatalogEdit.value) return;
+  savingCatalogEdit.value = true;
+  errorMsg.value = '';
+  actionFeedback.value = '';
+  try {
+    await userService.updateAdminCatalogItem({
+      uri: editCatalogForm.value.uri,
+      label: editCatalogForm.value.label.trim(),
+      image_url: editCatalogForm.value.image_url.trim() || null,
+      main_category: editCatalogForm.value.main_category.trim() || null,
+      series_number: editCatalogForm.value.series_number.trim() || null,
+      publisher: editCatalogForm.value.publisher.trim() || null,
+      publication_date: editCatalogForm.value.publication_date.trim() || null
+    });
+    actionFeedback.value = `Fiche catalogue serveur « ${editCatalogForm.value.label.trim()} » mise à jour.`;
+    editingCatalogItem.value = null;
+    await loadCatalog();
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Erreur lors de la sauvegarde catalogue.';
+  } finally {
+    savingCatalogEdit.value = false;
+  }
+};
 
 // Comptes & maintenance
 const usersList = ref<any[]>([]);
@@ -37,7 +88,7 @@ const logsQuery = ref('');
 const expandedTraceIds = ref<Record<string, boolean>>({});
 
 const catalogTotalPages = computed(() =>
-  Math.max(1, Math.ceil(catalogTotal.value / catalogPageSize))
+  Math.max(1, Math.ceil(catalogTotal.value / catalogPageSize.value))
 );
 
 const formatBytes = (bytes: number) => {
@@ -66,7 +117,7 @@ const loadCatalog = async () => {
       type: catalogType.value,
       filter: catalogFilter.value,
       page: catalogPage.value,
-      pageSize: catalogPageSize
+      pageSize: catalogPageSize.value
     });
     catalogItems.value = res.items || [];
     catalogTotal.value = res.total || 0;
@@ -166,7 +217,7 @@ const searchCatalog = () => {
   loadCatalog();
 };
 
-watch([catalogType, catalogFilter], () => {
+watch([catalogType, catalogFilter, catalogPageSize], () => {
   catalogPage.value = 1;
   if (activeTab.value === 'catalog') loadCatalog();
 });
@@ -275,7 +326,7 @@ onMounted(() => {
             <li><span>Comptes créés</span><strong>{{ overview.users.total }}</strong></li>
             <li><span>Nouveaux (7 derniers jours)</span><strong>{{ overview.users.recent7d }}</strong></li>
             <li><span>Bibliothèques / Foyers</span><strong>{{ overview.users.totalLibraries }}</strong></li>
-            <li><span>Digests actifs (Push/Email)</span><strong>{{ overview.users.activeNotifUsers }}</strong></li>
+            <li><span>Notifications actives (Push/Email)</span><strong>{{ overview.users.activeNotifUsers }}</strong></li>
           </ul>
         </div>
 
@@ -338,17 +389,31 @@ onMounted(() => {
             <option value="no_cover">Sans couverture</option>
             <option value="no_series">Sans série</option>
           </select>
+          <select v-model.number="catalogPageSize" class="filter-select" aria-label="Entrées par page">
+            <option :value="12">12 / page</option>
+            <option :value="24">24 / page</option>
+            <option :value="48">48 / page</option>
+            <option :value="60">60 / page</option>
+          </select>
           <button type="button" class="wireframe-btn primary" @click="searchCatalog">
             Rechercher
           </button>
         </div>
 
-        <p class="count-line">{{ catalogTotal }} fiche(s) trouvée(s)</p>
+        <p class="count-line">{{ catalogTotal }} fiche(s) trouvée(s) — cliquez sur une ligne pour modifier la fiche maître serveur</p>
 
         <div v-if="catalogLoading" class="loading-line">Chargement...</div>
 
         <div v-else class="catalog-list">
-          <div v-for="item in catalogItems" :key="item.uri" class="catalog-row">
+          <div
+            v-for="item in catalogItems"
+            :key="item.uri"
+            role="button"
+            tabindex="0"
+            class="catalog-row catalog-row-clickable"
+            @click="openAdminCatalogEditor(item)"
+            @keydown.enter.prevent="openAdminCatalogEditor(item)"
+          >
             <img
               v-if="item.image_url"
               :src="imageUtil.resolveExternalUrl(item.image_url, item.uri?.startsWith('isbn:') ? item.uri.slice(5) : undefined)"
@@ -369,6 +434,7 @@ onMounted(() => {
                 <span v-if="item.series_number">• Tome {{ item.series_number }}</span>
               </div>
             </div>
+            <span class="catalog-edit-pill">Modifier</span>
           </div>
         </div>
 
@@ -402,7 +468,7 @@ onMounted(() => {
       <!-- TAB 3 : COMPTES & MAINTENANCE -->
       <div v-if="activeTab === 'users'" class="users-section">
         <div class="admin-card">
-          <h3>Maintenance serveur</h3>
+          <h3>Maintenance serveur (déclenchement manuel des tâches CRON)</h3>
           <div class="maint-actions">
             <button
               type="button"
@@ -410,7 +476,7 @@ onMounted(() => {
               :disabled="maintBusy"
               @click="handleReleaseSweep"
             >
-              Vérifier 6 séries (Nouveautés)
+              Lancer maintenant : veille nouveautés (6 séries)
             </button>
             <button
               type="button"
@@ -418,7 +484,7 @@ onMounted(() => {
               :disabled="maintBusy"
               @click="handleRehydrate"
             >
-              Ré-hydrater 20 fiches catalogue
+              Lancer maintenant : ré-hydratation catalogue (20 fiches)
             </button>
           </div>
         </div>
@@ -433,7 +499,7 @@ onMounted(() => {
                   <th>Utilisateur</th>
                   <th>E-mail récup.</th>
                   <th>IA ce mois</th>
-                  <th>Digest</th>
+                  <th>Notifications</th>
                   <th>Action</th>
                 </tr>
               </thead>
@@ -555,6 +621,63 @@ onMounted(() => {
         </div>
       </div>
     </template>
+
+    <!-- Modale d'édition directe de la fiche maître catalogue serveur (Admin) -->
+    <Teleport to="body">
+      <div v-if="editingCatalogItem" class="modal-overlay" @click.self="editingCatalogItem = null">
+        <div class="modal-box" role="dialog" aria-modal="true" aria-label="Modifier la fiche catalogue serveur">
+          <h2>Éditer la fiche maître serveur</h2>
+          <p class="modal-text">
+            URI : <code>{{ editCatalogForm.uri }}</code><br />
+            Les modifications s’appliquent directement au catalogue central commun.
+          </p>
+          <div class="admin-edit-fields">
+            <label class="ds-field">
+              <span>Titre / Libellé</span>
+              <input v-model="editCatalogForm.label" type="text" class="ds-input" />
+            </label>
+            <label class="ds-field">
+              <span>Catégorie principale / Genre</span>
+              <input v-model="editCatalogForm.main_category" type="text" class="ds-input" placeholder="Ex: Bande dessinée, Roman..." />
+            </label>
+            <label class="ds-field">
+              <span>Numéro de tome</span>
+              <input v-model="editCatalogForm.series_number" type="text" class="ds-input" placeholder="Ex: 1, HS, Int. 1-3" />
+            </label>
+            <label class="ds-field">
+              <span>Éditeur</span>
+              <input v-model="editCatalogForm.publisher" type="text" class="ds-input" />
+            </label>
+            <label class="ds-field">
+              <span>Date / Année de publication</span>
+              <input v-model="editCatalogForm.publication_date" type="text" class="ds-input" />
+            </label>
+            <label class="ds-field">
+              <span>URL de couverture</span>
+              <input v-model="editCatalogForm.image_url" type="text" class="ds-input" />
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button
+              type="button"
+              class="btn-action"
+              :disabled="savingCatalogEdit || !editCatalogForm.label.trim()"
+              @click="saveAdminCatalogEditor"
+            >
+              {{ savingCatalogEdit ? 'Enregistrement...' : 'Enregistrer sur le serveur' }}
+            </button>
+            <button
+              type="button"
+              class="btn-close"
+              :disabled="savingCatalogEdit"
+              @click="editingCatalogItem = null"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -584,6 +707,32 @@ onMounted(() => {
 .admin-card h3 {
   margin: 0 0 0.75rem;
   font-size: 1rem;
+}
+
+.catalog-row-clickable {
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.catalog-row-clickable:hover {
+  background: #f8fafc;
+}
+
+.catalog-edit-pill {
+  margin-left: auto;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-edit-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 
 .stat-list {

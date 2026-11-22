@@ -92,10 +92,29 @@
           />
         </div>
 
+        <div v-if="authMode === 'register'" class="gdpr-box">
+          <label class="sync-check">
+            <input v-model="gdprAccepted" type="checkbox" required />
+            <span>
+              J’accepte la conservation de mon compte et de ma bibliothèque sur ce serveur privé (aucune revente de données, suppression possible à tout moment dans Mon profil).
+              <button type="button" class="gdpr-link" @click.prevent="showGdprInfo = !showGdprInfo">
+                {{ showGdprInfo ? 'Masquer les détails' : 'En savoir plus (RGPD)' }}
+              </button>
+            </span>
+          </label>
+          <p v-if="showGdprInfo" class="gdpr-details">
+            Vos données personnelles (identifiant, e-mail de récupération, bibliothèque, prêts, statut de lecture et préférences) sont hébergées sur un serveur privé dédié. Vous pouvez exporter, modifier ou supprimer définitivement votre compte à tout moment depuis « Mon profil ». Les fiches bibliographiques anonymisées du catalogue commun ne contiennent aucune donnée personnelle.
+          </p>
+        </div>
+
         <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
         <p v-if="successMsg" class="success-msg">{{ successMsg }}</p>
 
-        <button type="submit" class="submit-btn" :disabled="submitting">
+        <button
+          type="submit"
+          class="submit-btn"
+          :disabled="submitting || (authMode === 'register' && !gdprAccepted)"
+        >
           {{
             submitting
               ? 'Patientez...'
@@ -197,6 +216,8 @@ const errorMsg = ref('');
 const successMsg = ref('');
 const syncFamily = ref(true);
 const followFriend = ref(true);
+const gdprAccepted = ref(false);
+const showGdprInfo = ref(false);
 
 const switchMode = (mode: 'login' | 'register' | 'forgot') => {
   authMode.value = mode;
@@ -254,12 +275,17 @@ const handleSubmit = async () => {
     errorMsg.value = "L'adresse e-mail est obligatoire pour créer un compte.";
     return;
   }
+  if (authMode.value === 'register' && !gdprAccepted.value) {
+    errorMsg.value = 'Veuillez cocher la case RGPD pour créer un compte.';
+    return;
+  }
   submitting.value = true;
   errorMsg.value = '';
   successMsg.value = '';
 
   const effectiveInvite = inviteCodeFromUrl.value && syncFamily.value ? inviteCodeFromUrl.value : undefined;
   const effectiveFriend = friendTokenFromUrl.value && followFriend.value ? friendTokenFromUrl.value : undefined;
+  const isRegistering = authMode.value === 'register';
 
   try {
     const ok = await connectionService.login(
@@ -268,8 +294,8 @@ const handleSubmit = async () => {
       effectiveInvite,
       effectiveFriend,
       {
-        mode: authMode.value === 'register' ? 'register' : 'login',
-        ...(authMode.value === 'register' ? { recoveryEmail: recoveryEmail.value.trim() } : {})
+        mode: isRegistering ? 'register' : 'login',
+        ...(isRegistering ? { recoveryEmail: recoveryEmail.value.trim(), gdprAccepted: true } : {})
       }
     );
 
@@ -278,8 +304,12 @@ const handleSubmit = async () => {
       return;
     }
 
+    if (isRegistering && typeof localStorage !== 'undefined') {
+      localStorage.setItem('biblio_show_notif_onboarding', '1');
+    }
+
     if (effectiveFriend && !effectiveInvite) {
-      router.push('/friends');
+      router.push('/family?tab=friends');
     } else {
       router.push('/dashboard');
     }
@@ -551,5 +581,35 @@ const handleForgotSubmit = async () => {
   padding: 0.55rem 0.75rem;
   font-size: 0.84rem;
   font-weight: 600;
+}
+
+.gdpr-box {
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: #334155;
+}
+
+.gdpr-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 0.25rem;
+  color: #4f46e5;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.gdpr-details {
+  margin: 0.5rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid #e2e8f0;
+  font-size: 0.76rem;
+  color: #475569;
 }
 </style>

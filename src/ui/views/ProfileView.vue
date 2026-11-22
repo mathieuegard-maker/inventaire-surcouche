@@ -291,6 +291,26 @@ const handleLogout = async () => {
     loggingOut.value = false;
   }
 };
+
+const showDeleteAccountModal = ref(false);
+const deleteAccountPassword = ref('');
+const deletingAccount = ref(false);
+const deleteAccountError = ref('');
+
+const handleConfirmDeleteAccount = async () => {
+  if (!deleteAccountPassword.value || deletingAccount.value) return;
+  deletingAccount.value = true;
+  deleteAccountError.value = '';
+  try {
+    await connectionService.deleteAccount(deleteAccountPassword.value);
+    showDeleteAccountModal.value = false;
+    router.push('/login');
+  } catch (e: unknown) {
+    deleteAccountError.value = e instanceof Error ? e.message : 'Erreur lors de la suppression du compte.';
+  } finally {
+    deletingAccount.value = false;
+  }
+};
 </script>
 
 <template>
@@ -436,6 +456,14 @@ const handleLogout = async () => {
         >
           {{ loggingOut ? 'Déconnexion...' : 'Se déconnecter' }}
         </button>
+
+        <button
+          type="button"
+          class="wireframe-btn delete-account-trigger"
+          @click="showDeleteAccountModal = true; deleteAccountPassword = ''; deleteAccountError = ''"
+        >
+          Supprimer définitivement mon compte
+        </button>
       </div>
 
       <div v-else-if="activeTab === 'genres'" class="profile-card">
@@ -564,6 +592,53 @@ const handleLogout = async () => {
         </form>
       </div>
     </div>
+
+    <!-- Modale de suppression définitive de compte -->
+    <Teleport to="body">
+      <div v-if="showDeleteAccountModal" class="modal-overlay" @click.self="showDeleteAccountModal = false">
+        <div class="modal-box" role="dialog" aria-modal="true" aria-label="Supprimer mon compte">
+          <h2>Supprimer mon compte</h2>
+          <p class="modal-text">
+            Cette action est <strong>irréversible</strong>. Elle supprime votre compte, vos statuts de lecture, vos notes personnelles et vos préférences :
+          </p>
+          <ul class="delete-account-rules">
+            <li>Si vous êtes <strong>seul</strong> dans votre bibliothèque, votre collection, wishlist et prêts seront supprimés.</li>
+            <li>Si vous partagez un <strong>foyer</strong> avec d’autres membres, la bibliothèque du foyer reste intacte pour eux.</li>
+            <li>Le catalogue central commun des livres n’est jamais affecté.</li>
+          </ul>
+          <div class="field">
+            <label for="delete-account-pwd">Confirmez avec votre mot de passe actuel</label>
+            <input
+              id="delete-account-pwd"
+              v-model="deleteAccountPassword"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Votre mot de passe"
+              @keydown.enter.prevent="handleConfirmDeleteAccount"
+            />
+          </div>
+          <p v-if="deleteAccountError" class="error-msg">{{ deleteAccountError }}</p>
+          <div class="modal-actions">
+            <button
+              type="button"
+              class="btn-danger"
+              :disabled="deletingAccount || !deleteAccountPassword"
+              @click="handleConfirmDeleteAccount"
+            >
+              {{ deletingAccount ? 'Suppression...' : 'Supprimer définitivement' }}
+            </button>
+            <button
+              type="button"
+              class="btn-close"
+              :disabled="deletingAccount"
+              @click="showDeleteAccountModal = false"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -774,5 +849,24 @@ const handleLogout = async () => {
 
 .profile-genre-remove:hover {
   color: #dc2626;
+}
+
+.delete-account-trigger {
+  margin-top: 0.6rem;
+  width: 100%;
+  min-block-size: 40px;
+  background: transparent;
+  border-color: #fca5a5;
+  color: #b91c1c;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.delete-account-rules {
+  margin: 0 0 0.75rem;
+  padding-left: 1.15rem;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: #475569;
 }
 </style>

@@ -209,6 +209,12 @@ export async function handleD1GatewayAction(
             400
           );
         }
+        if (mode === 'register' && body?.gdprAccepted !== true) {
+          return jsonResp(
+            { error: 'Vous devez accepter la politique de confidentialité (RGPD) pour créer un compte.' },
+            400
+          );
+        }
         const existingEmailUser = await db
           .prepare('SELECT id FROM users WHERE LOWER(recovery_email) = ? LIMIT 1')
           .bind(rawRecoveryEmail)
@@ -217,13 +223,13 @@ export async function handleD1GatewayAction(
           return jsonResp({ error: 'Cette adresse e-mail est déjà associée à un autre compte.' }, 409);
         }
 
-        // Création automatique du compte utilisateur
+        // Création automatique du compte utilisateur avec horodatage consentement RGPD
         const userId = `usr_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
         await db
           .prepare(
-            'INSERT INTO users (id, email, display_name, password_hash, recovery_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO users (id, email, display_name, password_hash, recovery_email, gdpr_accepted_at, onboarding_notif_seen, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)'
           )
-          .bind(userId, emailKey, rawUsername, passHash, rawRecoveryEmail, now, now)
+          .bind(userId, emailKey, rawUsername, passHash, rawRecoveryEmail, body?.gdprAccepted ? now : null, now, now)
           .run();
 
         userRow = {
@@ -333,9 +339,9 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Session invalide' }, 401);
       }
       const userDetails = await db
-        .prepare('SELECT recovery_email, is_admin FROM users WHERE id = ? LIMIT 1')
+        .prepare('SELECT recovery_email, is_admin, onboarding_notif_seen FROM users WHERE id = ? LIMIT 1')
         .bind(auth.userId)
-        .first<{ recovery_email?: string | null; is_admin?: number }>();
+        .first<{ recovery_email?: string | null; is_admin?: number; onboarding_notif_seen?: number }>();
       const tokens = await getOrCreateShareTokens(db, auth.libraryId, auth.userId);
       const members = await db
         .prepare(
@@ -353,6 +359,7 @@ export async function handleD1GatewayAction(
         username: auth.username,
         recoveryEmail: userDetails?.recovery_email || null,
         isAdmin: Boolean(userDetails?.is_admin),
+        onboardingNotifSeen: Boolean(userDetails?.onboarding_notif_seen),
         libraryId: auth.libraryId,
         libraryName: auth.libraryName,
         role: auth.role,
@@ -360,6 +367,90 @@ export async function handleD1GatewayAction(
         publicReadonlyToken: tokens.publicReadonlyToken,
         members: members.results || []
       });
+    }
+
+    case 'onboarding-notif-seen': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) return jsonResp({ error: 'Session invalide' }, 401);
+      await db
+        .prepare('UPDATE users SET onboarding_notif_seen = 1, updated_at = ? WHERE id = ?')
+        .bind(now, auth.userId)
+        .run();
+      return jsonResp({ ok: true });
+    }
+
+    case 'account-delete': {
+      const auth = await resolveAuthSession(db, request, body?.userUri);
+      if (!auth) return jsonResp({ error: 'Session invalide' }, 401);
+
+      const password = String(body?.password || '');
+      if (!password) {
+        return jsonResp({ error: 'Veuillez saisir votre mot de passe pour confirmer la suppression.' }, 400);
+      }
+
+      const existingUser = await db
+        .prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1')
+        .bind(auth.userId)
+        .first<{ password_hash: string }>();
+      const passHash = await sha256Hex(`biblio_salt_v2:${password}`);
+      if (!existingUser || existingUser.password_hash !== passHash) {
+        return jsonResp({ error: 'Mot de passe incorrect.' }, 401);
+      }
+
+      // Vérifier si le foyer est partagé avec d'autres membres (Étage 2)
+      const otherMembers = await db
+        .prepare('SELECT user_id FROM library_members WHERE library_id = ? AND user_id != ?')
+        .bind(auth.libraryId, auth.userId)
+        .all<{ user_id: string }>();
+      const remainingMembers = otherMembers.results || [];
+
+      if (remainingMembers.length === 0) {
+        // Utilisateur SEUL dans son foyer : on supprime aussi sa bibliothèque (Étage 2),
+        // mais JAMAIS le catalogue central commun (Étage 1 : books, v4_series, book_isbn_index, catalog_covers)
+        await db.prepare('DELETE FROM v4_library_books WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM library_items WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM loans WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM borrower_contacts WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM share_tokens WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM series_release_alerts WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM library_members WHERE library_id = ?').bind(auth.libraryId).run().catch(() => {});
+        await db.prepare('DELETE FROM libraries WHERE id = ?').bind(auth.libraryId).run().catch(() => {});
+      } else {
+        // Foyer PARTAGÉ : conserver la bibliothèque pour les autres membres et transférer la propriété si nécessaire
+        await db
+          .prepare('DELETE FROM library_members WHERE library_id = ? AND user_id = ?')
+          .bind(auth.libraryId, auth.userId)
+          .run();
+        await db
+          .prepare('UPDATE libraries SET owner_user_id = ?, updated_at = ? WHERE id = ? AND owner_user_id = ?')
+          .bind(remainingMembers[0].user_id, now, auth.libraryId, auth.userId)
+          .run();
+        await db
+          .prepare('UPDATE v4_library_books SET wished_by_user_id = NULL WHERE wished_by_user_id = ?')
+          .bind(auth.userId)
+          .run()
+          .catch(() => {});
+      }
+
+      // Suppression complète de l'Étage 3 (données individuelles du compte)
+      await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM reading_statuses WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM user_notification_prefs WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM user_push_subscriptions WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM friend_connections WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM user_ai_usage WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM photo_scan_jobs WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM user_default_genres WHERE user_id = ?').bind(auth.userId).run().catch(() => {});
+      await db.prepare('DELETE FROM users WHERE id = ?').bind(auth.userId).run();
+
+      const isHttps = url.protocol === 'https:';
+      const clearCookie = `biblio_session=; Path=/; Max-Age=0; SameSite=Lax; HttpOnly${isHttps ? '; Secure' : ''}`;
+      return jsonResp(
+        { ok: true, libraryDeleted: remainingMembers.length === 0 },
+        200,
+        { 'Set-Cookie': clearCookie }
+      );
     }
 
     case 'profile-update': {
@@ -397,18 +488,35 @@ export async function handleD1GatewayAction(
         return jsonResp({ error: 'Cette adresse e-mail est déjà associée à un autre compte.' }, 409);
       }
 
+      const existingUser = await db
+        .prepare('SELECT email, display_name, recovery_email, password_hash FROM users WHERE id = ? LIMIT 1')
+        .bind(auth.userId)
+        .first<{ email: string; display_name: string; recovery_email?: string | null; password_hash: string }>();
+      if (!existingUser) {
+        return jsonResp({ error: 'Compte introuvable.' }, 404);
+      }
+
+      const identityChanged =
+        newEmailKey !== (existingUser.email || '').toLowerCase() ||
+        newRecoveryEmail !== (existingUser.recovery_email || '').toLowerCase();
+
+      if (identityChanged || newPassword) {
+        if (!currentPassword) {
+          return jsonResp(
+            { error: 'Veuillez saisir votre mot de passe actuel pour modifier votre identifiant, e-mail ou mot de passe.' },
+            400
+          );
+        }
+        const currentHash = await sha256Hex(`biblio_salt_v2:${currentPassword}`);
+        if (existingUser.password_hash !== currentHash) {
+          return jsonResp({ error: 'Le mot de passe actuel est incorrect.' }, 401);
+        }
+      }
+
       let nextPassHash: string | null = null;
       if (newPassword) {
         if (newPassword.length < 4) {
           return jsonResp({ error: 'Le nouveau mot de passe doit contenir au moins 4 caractères.' }, 400);
-        }
-        const existingUser = await db
-          .prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1')
-          .bind(auth.userId)
-          .first<{ password_hash: string }>();
-        const currentHash = await sha256Hex(`biblio_salt_v2:${currentPassword}`);
-        if (!existingUser || existingUser.password_hash !== currentHash) {
-          return jsonResp({ error: 'Le mot de passe actuel est incorrect.' }, 401);
         }
         nextPassHash = await sha256Hex(`biblio_salt_v2:${newPassword}`);
       }

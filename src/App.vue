@@ -7,6 +7,7 @@ import { backgroundCreationOrchestrator } from './core/orchestrators/background-
 import { TEXTS } from './ui/locales/fr';
 import PwaReloadPrompt from './ui/components/PwaReloadPrompt.vue';
 import CameraBarcodeModal from './ui/components/CameraBarcodeModal.vue';
+import NotificationOnboardingModal from './ui/components/NotificationOnboardingModal.vue';
 import { connectionState } from './state/connection';
 import { scannerState } from './state/scanner';
 import { photoBatchQueueService } from './core/services/photo-batch-queue.service';
@@ -18,8 +19,20 @@ const photoStats = photoBatchQueueService.stats;
 const photoProcessing = photoBatchQueueService.isProcessing;
 const photoMsg = photoBatchQueueService.currentStatusMessage;
 const isInitializing = ref(true);
+const showNotifOnboarding = ref(false);
 const router = useRouter();
 const route = useRoute();
+
+const checkNotifOnboardingFlag = () => {
+  if (
+    typeof localStorage !== 'undefined' &&
+    localStorage.getItem('biblio_show_notif_onboarding') === '1' &&
+    route.path !== '/login' &&
+    !route.path.startsWith('/shared/')
+  ) {
+    showNotifOnboarding.value = true;
+  }
+};
 
 // Surveillance réactive du retour réseau
 watch(isOffline, async (newOfflineVal) => {
@@ -46,6 +59,7 @@ watch(
     if (scannerState.isScanningActive.value) {
       scannerState.stopScan();
     }
+    checkNotifOnboardingFlag();
   }
 );
 
@@ -159,6 +173,7 @@ onMounted(async () => {
   </div>
 
   <PwaReloadPrompt />
+  <NotificationOnboardingModal :show="showNotifOnboarding" @close="showNotifOnboarding = false" />
 </template>
 
 <style scoped>
