@@ -66,6 +66,20 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
           ></div>
         </div>
 
+        <div
+          v-if="activeMode === 'burst' && scannerState.burstFlashEvent.value"
+          :class="['burst-capture-toast', scannerState.burstFlashEvent.value.status]"
+          role="status"
+          aria-live="polite"
+        >
+          <template v-if="scannerState.burstFlashEvent.value.status === 'duplicate'">
+            Déjà scanné ({{ scannerState.burstFlashEvent.value.isbn }})
+          </template>
+          <template v-else>
+            ✓ Code-barres pris en compte ({{ scannerState.burstFlashEvent.value.isbn }}) — passez au suivant
+          </template>
+        </div>
+
         <div v-if="scannerState.errorMessage.value" class="camera-error-msg">
           {{ scannerState.errorMessage.value }}
         </div>
@@ -155,7 +169,7 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
   position: absolute;
   inset: 0;
   pointer-events: none;
-  animation: burst-flash 0.55s ease-out;
+  animation: burst-flash 0.55s ease-out forwards;
 }
 
 .burst-flash-overlay.success {
@@ -171,6 +185,27 @@ const { isScrollable } = useModalScrollable(modalCardRef, () => [isCameraOpen.va
 @keyframes burst-flash {
   from { opacity: 1; }
   to { opacity: 0; }
+}
+
+.burst-capture-toast {
+  padding: 0.55rem 0.8rem;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.3;
+}
+
+.burst-capture-toast.success {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #86efac;
+}
+
+.burst-capture-toast.duplicate {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
 }
 
 .camera-error-msg {

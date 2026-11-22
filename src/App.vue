@@ -17,7 +17,6 @@ const isOffline = computed(() => connectionState.isOffline.value);
 const bgStatus = backgroundCreationOrchestrator.status;
 const photoStats = photoBatchQueueService.stats;
 const photoProcessing = photoBatchQueueService.isProcessing;
-const photoMsg = photoBatchQueueService.currentStatusMessage;
 const isInitializing = ref(true);
 const showNotifOnboarding = ref(false);
 const router = useRouter();
@@ -140,21 +139,14 @@ onMounted(async () => {
       @keydown.enter.prevent="scannerState.startScan(router, 'photo')"
       @keydown.space.prevent="scannerState.startScan(router, 'photo')"
     >
-      <div class="photo-global-banner__content">
-        <strong class="photo-global-banner__title">
-          <template v-if="photoProcessing">
-            Analyse photo en cours ({{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }}) — traitement serveur en arrière-plan
-          </template>
-          <template v-else>
-            Lot photo prêt à valider ({{ photoStats.donePhotos }}/{{ photoStats.totalPhotos }}) — toucher pour ouvrir
-          </template>
-        </strong>
-        <div class="photo-global-banner__meta">
-          {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • {{ photoStats.sureCount }} sûr(s) •
-          {{ photoStats.doubtCount }} doute(s) • {{ photoStats.unresolvedCount }} non trouvé(s)
-          <template v-if="photoProcessing && photoMsg"> • {{ photoMsg }}</template>
-        </div>
-      </div>
+      <strong class="photo-global-banner__title">
+        <template v-if="photoProcessing">
+          Photo IA — En cours : {{ photoStats.donePhotos }}/{{ photoStats.totalPhotos }} réalisé
+        </template>
+        <template v-else>
+          Photo IA — Fini ({{ photoStats.donePhotos }}/{{ photoStats.totalPhotos }})
+        </template>
+      </strong>
       <div v-if="photoStats.errorPhotos > 0" class="photo-global-banner__actions">
         <button
           type="button"
@@ -212,21 +204,10 @@ onMounted(async () => {
   color: #14532d;
 }
 
-.photo-global-banner__content {
-  flex: 1;
-  min-width: 220px;
-}
-
 .photo-global-banner__title {
   display: block;
   font-size: 13px;
   line-height: 1.3;
-}
-
-.photo-global-banner__meta {
-  font-size: 12px;
-  opacity: 0.9;
-  margin-top: 2px;
 }
 
 .photo-global-banner__retry {

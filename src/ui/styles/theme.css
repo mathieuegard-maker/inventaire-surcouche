@@ -1579,11 +1579,12 @@ h3.wireframe-title {
   transition: background-color 0.15s ease, border-color 0.15s ease !important;
 }
 
-.modal-box .btn-danger:hover {
+.modal-box .btn-danger:hover:not(:disabled) {
   background-color: #dc2626 !important;
   border-color: #dc2626 !important;
 }
 
+.modal-box .btn-danger:disabled,
 .modal-box .btn-action:disabled {
   background-color: var(--color-bg-alt) !important;
   color: var(--color-text-muted) !important;

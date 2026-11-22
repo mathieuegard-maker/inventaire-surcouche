@@ -16,8 +16,10 @@ const stats = ref<DetailedStats | null>(null);
 const selectedPeriod = ref(30);
 const isLoading = ref(true);
 
-const loadStats = async () => {
-  isLoading.value = true;
+const loadStats = async (silent = false) => {
+  if (!silent && !stats.value) {
+    isLoading.value = true;
+  }
   try {
     if (!connectionState.isOffline.value) {
       await userService.syncAllUserReadingStatuses().catch(() => {});
@@ -46,8 +48,10 @@ const openPublisherFilter = (publisherName: string) => {
   router.push({ name: 'CollectionView', query: { mode: 'books', filter: publisherName } });
 };
 
-onMounted(loadStats);
-watch(() => scannerState.lastUpdatedTick.value, loadStats);
+onMounted(() => loadStats(false));
+watch(() => scannerState.lastUpdatedTick.value, () => {
+  void loadStats(true);
+});
 
 const maxGenreCount = computed(() => Math.max(1, ...(stats.value?.topGenres.map((g) => g.count) || [1])));
 const maxAuthorCount = computed(() => Math.max(1, ...(stats.value?.topAuthors.map((a) => a.count) || [1])));
@@ -67,7 +71,7 @@ const totalReadingTracked = computed(() => {
       <h3 v-else class="stats-embedded-title">Statistiques</h3>
       <div class="stats-period-row">
         <label for="stats-period-select" class="stats-period-label">Période :</label>
-        <select id="stats-period-select" v-model="selectedPeriod" @change="loadStats" class="wireframe-input kpi-period-select" aria-label="Période d'analyse">
+        <select id="stats-period-select" v-model="selectedPeriod" @change="loadStats(true)" class="wireframe-input kpi-period-select" aria-label="Période d'analyse">
           <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
           <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>
           <option :value="365">{{ TEXTS.dashboardStats.period365 }}</option>

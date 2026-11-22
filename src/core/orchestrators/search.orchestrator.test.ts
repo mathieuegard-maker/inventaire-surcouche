@@ -35,6 +35,15 @@ vi.mock('../resolvers/series.resolver', () => ({
 vi.mock('../services/image.service', () => ({
   imageService: { compressAndEncode: vi.fn() }
 }));
+vi.mock('../services/external-metadata.service', () => ({
+  externalMetadataService: { fetchFromExternalSources: vi.fn().mockResolvedValue(null) }
+}));
+vi.mock('../services/v4-client.service', () => ({
+  ingestIsbnsViaV4: vi.fn().mockResolvedValue({ results: [] }),
+  v4BookRecordToHumanizedBook: vi.fn(),
+  checkLocalIntegralConflict: vi.fn().mockReturnValue({ status: null, ownedIntegralMatches: [], includedOwnedWorkIds: [] }),
+  formatV4StatusNotice: vi.fn()
+}));
 vi.mock('./sync.orchestrator', () => ({
   syncOrchestrator: { refreshBookInBackground: vi.fn().mockResolvedValue(undefined) }
 }));
@@ -82,9 +91,11 @@ describe('Search Orchestrator (TTL & Cache)', () => {
   it('doit renvoyer un statut isUnknown si le livre n\'existe ni en cache ni sur le réseau inventaire.io', async () => {
     // Arrange : Livre absent du cache et absent du réseau
     const { entityResolver } = await import('../resolvers/entity.resolver');
+    const { externalMetadataService } = await import('../services/external-metadata.service');
     
     vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(undefined);
     vi.mocked(entityResolver.resolvePhysicalEntity).mockResolvedValue(null);
+    vi.mocked(externalMetadataService.fetchFromExternalSources).mockResolvedValue(null);
 
     // Act
     const res = await searchService.searchByIsbn('9782355848858');
@@ -94,6 +105,27 @@ describe('Search Orchestrator (TTL & Cache)', () => {
       isUnknown: true,
       isbn: '9782355848858'
     });
+  });
+
+  it('bascule sur externalMetadataService si V4 et entityResolver ne trouvent pas le livre (parité Scan simple / Rafale)', async () => {
+    const { entityResolver } = await import('../resolvers/entity.resolver');
+    const { externalMetadataService } = await import('../services/external-metadata.service');
+
+    vi.mocked(databaseService.getBookByIsbn).mockResolvedValue(undefined);
+    vi.mocked(entityResolver.resolvePhysicalEntity).mockResolvedValue(null);
+    vi.mocked(externalMetadataService.fetchFromExternalSources).mockResolvedValue({
+      title: 'Album trouvé en secours',
+      authors: ['Auteur Test'],
+      publisher: 'Dargaud'
+    } as any);
+    vi.mocked(databaseService.isUriInRegistry).mockResolvedValue(false);
+    vi.mocked(wishlistService.isUriWished).mockResolvedValue(false);
+    vi.mocked(databaseService.getLoan).mockResolvedValue(undefined);
+
+    const res = await searchService.searchByIsbn('9782355848858');
+    expect(res?.source).toBe('network');
+    expect(res?.mainBook.title).toBe('Album trouvé en secours');
+    expect(res?.mainBook.uri).toBe('isbn:9782355848858');
   });
 
   it('renvoie la fiche locale même hors-ligne si l’œuvre existe déjà dans cache_books (possédée ou non)', async () => {

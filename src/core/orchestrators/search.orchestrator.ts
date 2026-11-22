@@ -3,6 +3,8 @@ import { databaseService } from '../database/database.service';
 import { wishlistService } from '../services/wishlist.service';
 import { entityResolver } from '../resolvers/entity.resolver';
 import { bookCacheService } from '../services/book-cache.service';
+import { externalMetadataService } from '../services/external-metadata.service';
+import { imageUtil } from '../utils/image.util';
 import { isbnUtil } from '../utils/isbn.util';
 import { findMatchingOwnedWork } from '../utils/series-matcher.util';
 import {
@@ -43,10 +45,11 @@ export const searchService = {
         return { isOfflineUnavailable: true, isbn } as any;
       }
       console.log("[SEARCH] Absent du cache, interrogation Pipeline V4...");
+      let lastNetworkErr: unknown = null;
       try {
         const v4Batch = await ingestIsbnsViaV4({
           isbns: [isbn],
-          sourceChannel: /^(330|378|977)\d{10}$/.test(isbn) ? 'canal_1_barcode' : 'canal_2_manual_isbn',
+          sourceChannel: 'canal_1_barcode',
           action: 'preview'
         });
         v4IngestResult = v4Batch?.results?.[0] || null;
@@ -60,25 +63,63 @@ export const searchService = {
           book = v4BookRecordToHumanizedBook(v4IngestResult.book, initialOwned);
           source = 'network';
           await bookCacheService.saveAndProcessImage(book);
-        } else {
+        }
+      } catch (v4Err: unknown) {
+        lastNetworkErr = v4Err;
+        console.warn(`[SEARCH] Pipeline V4 indisponible pour ${isbn}, bascule sur les sources de secours`, v4Err);
+      }
+
+      if (!book) {
+        try {
           book = await entityResolver.resolvePhysicalEntity(`isbn:${isbn}`);
           if (book) {
             source = 'network';
             await bookCacheService.saveAndProcessImage(book);
           }
+        } catch (resolverErr: unknown) {
+          lastNetworkErr = resolverErr;
+          console.warn(`[SEARCH] entityResolver en échec pour ${isbn}`, resolverErr);
         }
-      } catch (networkErr: any) {
-        if (connectionState.isOffline.value || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
-          console.warn(`[SEARCH] Coupure réseau pendant la résolution pour ${isbn}`, networkErr);
-          console.groupEnd();
-          return { isOfflineUnavailable: true, isbn } as any;
-        }
-        throw networkErr;
       }
 
       if (!book) {
-        if (connectionState.isOffline.value) {
-          console.warn(`[SEARCH] Bascule hors-ligne pendant la recherche pour ${isbn}`);
+        try {
+          const meta = await externalMetadataService.fetchFromExternalSources(isbn);
+          if (meta && (meta.title?.trim() || meta.authors?.length)) {
+            const coverFallbackUrls = imageUtil.buildCoverCandidates(isbn, [
+              meta.coverUrl,
+              ...(meta.coverFallbackUrls || [])
+            ]);
+            book = {
+              uri: `isbn:${isbn}`,
+              type: 'edition',
+              isbn13: isbn,
+              title: meta.title?.trim() || `Livre ISBN ${isbn}`,
+              authors: meta.authors?.length ? meta.authors : ['Auteur inconnu'],
+              illustrators: [],
+              scriptwriters: [],
+              publisher: meta.publisher || '',
+              publishDate: meta.publishDate,
+              pageCount: meta.pageCount,
+              coverUrl: meta.coverUrl || coverFallbackUrls[0],
+              ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
+              series: meta.series,
+              seriesNumber: meta.seriesNumber,
+              genres: meta.genres || [],
+              ownershipStatus: 'none'
+            };
+            source = 'network';
+            await bookCacheService.saveAndProcessImage(book);
+          }
+        } catch (extErr: unknown) {
+          lastNetworkErr = extErr;
+          console.warn(`[SEARCH] externalMetadataService en échec pour ${isbn}`, extErr);
+        }
+      }
+
+      if (!book) {
+        if (connectionState.isOffline.value || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+          console.warn(`[SEARCH] Bascule hors-ligne pendant la recherche pour ${isbn}`, lastNetworkErr);
           console.groupEnd();
           return { isOfflineUnavailable: true, isbn } as any;
         }

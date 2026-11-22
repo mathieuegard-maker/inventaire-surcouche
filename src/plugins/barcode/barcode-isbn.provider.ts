@@ -6,8 +6,27 @@ import { connectionState } from '../../state/connection';
 import type { SearchResponse } from '../../core/types';
 
 let html5QrcodeInstance: Html5Qrcode | null = null;
+let sharedAudioContext: AudioContext | null = null;
 const recentScansCooldown = new Map<string, number>();
 const COOLDOWN_MS = 3200;
+
+/**
+ * Débloque l'AudioContext sur le geste utilisateur qui ouvre la caméra (mobile iOS/Android)
+ */
+export function unlockScanAudio(): void {
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+      sharedAudioContext = new AudioCtx();
+    }
+    if (sharedAudioContext.state === 'suspended') {
+      void sharedAudioContext.resume().catch(() => {});
+    }
+  } catch {
+    // Ignore si Web Audio API indisponible
+  }
+}
 
 /**
  * Émet un court bip sonore de confirmation via Web Audio API (0 dépendance externe)
@@ -23,18 +42,23 @@ export function playScanBeep(type: 'success' | 'duplicate' = 'success'): void {
   try {
     const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
+      sharedAudioContext = new AudioCtx();
+    }
+    const ctx = sharedAudioContext;
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+    }
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
     osc.frequency.value = type === 'success' ? 1046.5 : 440; // Do6 (succès) ou La4 (doublon)
-    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.setValueAtTime(0.14, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.14);
-    setTimeout(() => ctx.close().catch(() => {}), 200);
   } catch {
     // Ignore si l'audio est bloqué par le navigateur
   }
@@ -84,15 +108,22 @@ export const barcodeIsbnProvider = {
           }
 
           // Anti-rebond en mode rafale : ignore le même ISBN pendant 3,2 secondes
-          const now = Date.now();
-          const lastTime = recentScansCooldown.get(cleanIsbn) || 0;
-          if (now - lastTime < COOLDOWN_MS) {
-            return;
+          if (continuous) {
+            const now = Date.now();
+            const lastTime = recentScansCooldown.get(cleanIsbn) || 0;
+            if (now - lastTime < COOLDOWN_MS) {
+              return;
+            }
+            recentScansCooldown.set(cleanIsbn, now);
           }
-          recentScansCooldown.set(cleanIsbn, now);
 
           if (!continuous) {
             await this.stopScanner();
+            options?.onBarcodeDetected?.(cleanIsbn);
+            if (skipLookup) {
+              return;
+            }
+          } else {
             options?.onBarcodeDetected?.(cleanIsbn);
             if (skipLookup) {
               return;

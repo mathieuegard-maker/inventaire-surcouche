@@ -6,11 +6,8 @@
 
 import { ref } from 'vue';
 import type { Router } from 'vue-router';
-import { barcodeIsbnProvider, playScanBeep } from '../plugins/barcode/barcode-isbn.provider';
-import { externalMetadataService } from '../core/services/external-metadata.service';
-import { databaseService } from '../core/database/database.service';
-import { findMatchingOwnedWork } from '../core/utils/series-matcher.util';
-import { ingestIsbnsViaV4, v4BookRecordToHumanizedBook } from '../core/services/v4-client.service';
+import { barcodeIsbnProvider, playScanBeep, unlockScanAudio } from '../plugins/barcode/barcode-isbn.provider';
+import { searchService } from '../core/orchestrators/search.orchestrator';
 import { imageUtil } from '../core/utils/image.util';
 import { saveBookNavigationOrder } from './bookNavigation';
 import { connectionState } from './connection';
@@ -30,17 +27,17 @@ const activeMode = ref<ScannerMode>('photo');
 const burstBooks = ref<HumanizedBook[]>([]);
 const simpleBooks = ref<HumanizedBook[]>([]);
 const latestBurstBook = ref<HumanizedBook | null>(null);
-const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate' } | null>(null);
+const burstFlashEvent = ref<{ id: number; status: 'success' | 'duplicate'; isbn?: string } | null>(null);
 const lastUpdatedTick = ref<number>(Date.now());
 let activeRouter: Router | null = null;
 let flashTimer: ReturnType<typeof setTimeout> | null = null;
 let isbnPickerCallback: ((isbn: string) => void) | null = null;
 
-function triggerBurstFeedback(status: 'success' | 'duplicate') {
-  burstFlashEvent.value = { id: Date.now(), status };
+function triggerBurstFeedback(status: 'success' | 'duplicate', isbn?: string) {
+  burstFlashEvent.value = { id: Date.now(), status, isbn };
   if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
     try {
-      navigator.vibrate(status === 'duplicate' ? [25, 45, 25] : 45);
+      navigator.vibrate(status === 'duplicate' ? [25, 45, 25] : 55);
     } catch {
       // Vibration ignorée si non supportée par l'appareil
     }
@@ -48,7 +45,7 @@ function triggerBurstFeedback(status: 'success' | 'duplicate') {
   if (flashTimer) clearTimeout(flashTimer);
   flashTimer = setTimeout(() => {
     burstFlashEvent.value = null;
-  }, 600);
+  }, 1400);
 }
 
 export const scannerState = {
@@ -99,6 +96,7 @@ export const scannerState = {
   },
 
   async openCameraModal(router: Router, mode: 'simple' | 'burst' = 'simple') {
+    unlockScanAudio();
     activeRouter = router;
     activeMode.value = mode;
     errorMessage.value = null;
@@ -112,7 +110,6 @@ export const scannerState = {
           'global-barcode-scanner-viewport',
           async (response: any, rawIsbn?: string) => {
             if (activeMode.value === 'burst') {
-              await this.handleBurstDetection(response, rawIsbn || '');
               return;
             }
 
@@ -122,7 +119,6 @@ export const scannerState = {
             simpleResolvingIsbn.value = null;
             const cleanScanned = (response?.isbn || rawIsbn || '').trim();
             if (response?.isOfflineUnavailable || (!response && connectionState.isOffline.value)) {
-              playScanBeep('success');
               await this.stopScan();
               if (cleanScanned) {
                 pendingScansStore.addPendingScan(cleanScanned);
@@ -134,7 +130,9 @@ export const scannerState = {
             }
 
             if (response) {
-              playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
+              if (response.ownership?.isWorkOwned) {
+                playScanBeep('duplicate');
+              }
               await this.stopScan();
               if ('isUnknown' in response && response.isUnknown) {
                 await router.push({
@@ -162,14 +160,17 @@ export const scannerState = {
           },
           {
             continuous: isContinuous,
+            skipLookup: isContinuous,
             onBarcodeDetected: (isbn) => {
-              if (!isContinuous) {
-                playScanBeep('success');
-                isCameraModalOpen.value = false;
-                isSearching.value = false;
-                isSimpleResolving.value = true;
-                simpleResolvingIsbn.value = isbn;
+              if (isContinuous) {
+                this.handleInstantBurstCapture(isbn);
+                return;
               }
+              playScanBeep('success');
+              isCameraModalOpen.value = false;
+              isSearching.value = false;
+              isSimpleResolving.value = true;
+              simpleResolvingIsbn.value = isbn;
             }
           }
         );
@@ -183,67 +184,38 @@ export const scannerState = {
     }, 150);
   },
 
-  async handleBurstDetection(response: any, scannedIsbn: string) {
-    if (!scannedIsbn) return;
+  /**
+   * Capture Rafale instantanée (0 ms) : bip + vibration + confirmation visuelle immédiate,
+   * puis identification V4 / BnF / sources externes entièrement en arrière-plan.
+   */
+  handleInstantBurstCapture(scannedIsbn: string) {
+    const cleanIsbn = (scannedIsbn || '').trim();
+    if (!cleanIsbn) return;
 
-    // Éviter d'empiler deux fois le même ISBN ou la même œuvre dans la liste courante
     const alreadyInList = burstBooks.value.some(
       (b) =>
-        b.isbn13 === scannedIsbn ||
-        b.isbn10 === scannedIsbn ||
-        b.uri === `isbn:${scannedIsbn}` ||
-        b.knownIsbns?.includes(scannedIsbn)
+        b.isbn13 === cleanIsbn ||
+        b.isbn10 === cleanIsbn ||
+        b.uri === `isbn:${cleanIsbn}` ||
+        b.knownIsbns?.includes(cleanIsbn)
     );
     if (alreadyInList) {
       playScanBeep('duplicate');
-      triggerBurstFeedback('duplicate');
+      triggerBurstFeedback('duplicate', cleanIsbn);
       return;
     }
 
-    // Cas 1 : Livre déjà connu (cache local / D1) — aucun enregistrement automatique !
-    if (response && response.mainBook?.uri && !response.isUnknown && !response.isOfflineUnavailable) {
-      const book: HumanizedBook = {
-        ...response.mainBook,
-        loan: response.loan?.details || response.mainBook.loan
-      };
-      playScanBeep(response.ownership?.isWorkOwned ? 'duplicate' : 'success');
-      triggerBurstFeedback('success');
-      burstBooks.value.unshift(book);
-      latestBurstBook.value = book;
-      return;
-    }
-
-    // Cas 1b : Pas de réseau et absent du cache local -> mémoriser le code-barres pour plus tard
-    if (response?.isOfflineUnavailable || connectionState.isOffline.value) {
-      pendingScansStore.addPendingScan(scannedIsbn);
-      playScanBeep('success');
-      triggerBurstFeedback('success');
-      const offlineBook: HumanizedBook = {
-        uri: `isbn:${scannedIsbn}`,
-        type: 'edition',
-        isbn13: scannedIsbn,
-        title: `Code-barres mémorisé (${scannedIsbn})`,
-        authors: ['Hors réseau — à consulter dès le retour de la connexion'],
-        illustrators: [],
-        scriptwriters: [],
-        genres: [],
-        ownershipStatus: 'none'
-      };
-      burstBooks.value.unshift(offlineBook);
-      latestBurstBook.value = offlineBook;
-      return;
-    }
-
-    // Cas 2 : ISBN absent de D1 -> Pipeline V4 (/api/v2/books/ingest en aperçu) puis repli externalMetadataService
+    // 1. Retour immédiat (0 ms) pour enchaîner sur le livre suivant sans attendre le réseau
     playScanBeep('success');
-    triggerBurstFeedback('success');
-    const placeholderUri = `isbn:${scannedIsbn}`;
+    triggerBurstFeedback('success', cleanIsbn);
+
+    const placeholderUri = `isbn:${cleanIsbn}`;
     const placeholderBook: HumanizedBook = {
       uri: placeholderUri,
       type: 'edition',
-      isbn13: scannedIsbn,
-      title: `Recherche V4 / BnF (${scannedIsbn})...`,
-      authors: [],
+      isbn13: cleanIsbn,
+      title: `Code-barres pris en compte (${cleanIsbn})`,
+      authors: ['Identification en cours en arrière-plan...'],
       illustrators: [],
       scriptwriters: [],
       genres: [],
@@ -252,83 +224,68 @@ export const scannerState = {
     burstBooks.value.unshift(placeholderBook);
     latestBurstBook.value = placeholderBook;
 
-    ingestIsbnsViaV4({ isbns: [scannedIsbn], sourceChannel: 'canal_1_barcode', action: 'preview' })
-      .then(async (v4Batch) => {
-        const v4Item = v4Batch?.results?.[0];
-        if (v4Item?.book) {
-          const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
-          if (idx === -1) return;
-          const isDup =
-            v4Item.layer2Status === 'ALREADY_OWNED' ||
-            v4Item.layer2Status === 'INCLUDED_IN_INTEGRAL' ||
-            v4Item.layer2Status === 'FULL_INTEGRAL_OWNED';
-          if (isDup) playScanBeep('duplicate');
-          const resolvedBook = v4BookRecordToHumanizedBook(v4Item.book, isDup ? 'owned' : 'none');
-          burstBooks.value[idx] = resolvedBook;
-          if (latestBurstBook.value?.uri === placeholderUri) {
-            latestBurstBook.value = resolvedBook;
-          }
-          return;
+    // 2. Identification asynchrone en arrière-plan via l'orchestrateur unifié (Cache -> V4 -> EntityResolver -> Sources externes)
+    void this.resolveBurstPlaceholder(cleanIsbn, placeholderUri);
+  },
+
+  async resolveBurstPlaceholder(scannedIsbn: string, placeholderUri: string) {
+    try {
+      const response = await searchService.searchByIsbn(scannedIsbn);
+      const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+      if (idx === -1) return;
+
+      if (response && (response as any).mainBook?.uri && !(response as any).isUnknown && !(response as any).isOfflineUnavailable) {
+        const resolvedBook: HumanizedBook = {
+          ...(response as any).mainBook,
+          loan: (response as any).loan?.details || (response as any).mainBook.loan
+        };
+        burstBooks.value[idx] = resolvedBook;
+        if (latestBurstBook.value?.uri === placeholderUri) {
+          latestBurstBook.value = resolvedBook;
         }
-        return externalMetadataService.fetchFromExternalSources(scannedIsbn).then(async (meta) => {
-          const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
-          if (idx === -1) return;
-          const coverFallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn, [
-            meta?.coverUrl,
-            ...(meta?.coverFallbackUrls || [])
-          ]);
-          const localBooks =
-            typeof databaseService.getAllBooksFromCache === 'function'
-              ? await databaseService.getAllBooksFromCache().catch(() => [])
-              : [];
-          const ownedMatch = findMatchingOwnedWork({
-            candidateIsbns: [scannedIsbn],
-            candidateTitle: meta?.title,
-            candidateAuthors: meta?.authors,
-            candidateSeries: meta?.series,
-            candidateSeriesNumber: meta?.seriesNumber,
-            existingBooks: localBooks,
-            targetStatuses: ['owned', 'wish']
-          });
-          if (ownedMatch?.book.ownershipStatus === 'owned') {
-            playScanBeep('duplicate');
-          }
-          burstBooks.value[idx] = {
-            ...burstBooks.value[idx],
-            uri: ownedMatch?.book.uri || burstBooks.value[idx].uri,
-            workUri: ownedMatch?.book.workUri,
-            title: meta?.title?.trim() || `Livre ISBN ${scannedIsbn}`,
-            authors: meta?.authors?.length ? meta.authors : ['Auteur inconnu'],
-            publisher: meta?.publisher || '',
-            publishDate: meta?.publishDate,
-            pageCount: meta?.pageCount,
-            coverUrl: meta?.coverUrl || coverFallbackUrls[0],
-            ...(coverFallbackUrls.length ? { coverFallbackUrls } : {}),
-            series: ownedMatch?.book.series || meta?.series,
-            seriesId: ownedMatch?.book.seriesId,
-            seriesNumber: meta?.seriesNumber,
-            genres: meta?.genres || [],
-            ownershipStatus: ownedMatch?.book.ownershipStatus || 'none'
-          };
-          if (latestBurstBook.value?.uri === placeholderUri || latestBurstBook.value?.uri === burstBooks.value[idx].uri) {
-            latestBurstBook.value = burstBooks.value[idx];
-          }
-        });
-      })
-      .catch((e: unknown) => {
-        console.warn('[BURST SCAN] Échec enrichissement aperçu :', e);
-        const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
-        if (idx !== -1) {
-          const fallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn);
-          burstBooks.value[idx] = {
-            ...burstBooks.value[idx],
-            title: `Livre ISBN ${scannedIsbn}`,
-            authors: ['Auteur inconnu'],
-            coverUrl: burstBooks.value[idx].coverUrl || fallbackUrls[0],
-            ...(fallbackUrls.length ? { coverFallbackUrls: fallbackUrls } : {})
-          };
+        return;
+      }
+
+      if ((response as any)?.isOfflineUnavailable || connectionState.isOffline.value) {
+        pendingScansStore.addPendingScan(scannedIsbn);
+        const offlineBook: HumanizedBook = {
+          ...burstBooks.value[idx],
+          title: `Code-barres mémorisé (${scannedIsbn})`,
+          authors: ['Hors réseau — à consulter dès le retour de la connexion']
+        };
+        burstBooks.value[idx] = offlineBook;
+        if (latestBurstBook.value?.uri === placeholderUri) {
+          latestBurstBook.value = offlineBook;
         }
-      });
+        return;
+      }
+
+      const fallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn);
+      const unknownBook: HumanizedBook = {
+        ...burstBooks.value[idx],
+        title: `Livre ISBN ${scannedIsbn}`,
+        authors: ['Référence à préciser'],
+        coverUrl: burstBooks.value[idx].coverUrl || fallbackUrls[0],
+        ...(fallbackUrls.length ? { coverFallbackUrls: fallbackUrls } : {})
+      };
+      burstBooks.value[idx] = unknownBook;
+      if (latestBurstBook.value?.uri === placeholderUri) {
+        latestBurstBook.value = unknownBook;
+      }
+    } catch (e: unknown) {
+      console.warn('[BURST SCAN] Échec enrichissement en arrière-plan :', e);
+      const idx = burstBooks.value.findIndex((b) => b.uri === placeholderUri);
+      if (idx !== -1) {
+        const fallbackUrls = imageUtil.buildCoverCandidates(scannedIsbn);
+        burstBooks.value[idx] = {
+          ...burstBooks.value[idx],
+          title: `Livre ISBN ${scannedIsbn}`,
+          authors: ['Auteur inconnu'],
+          coverUrl: burstBooks.value[idx].coverUrl || fallbackUrls[0],
+          ...(fallbackUrls.length ? { coverFallbackUrls: fallbackUrls } : {})
+        };
+      }
+    }
   },
 
   clearBurstBooks() {
@@ -348,6 +305,7 @@ export const scannerState = {
   },
 
   async openIsbnPickerModal(onPicked: (isbn: string) => void) {
+    unlockScanAudio();
     isIsbnPickerMode.value = true;
     isbnPickerCallback = onPicked;
     errorMessage.value = null;

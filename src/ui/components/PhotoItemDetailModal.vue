@@ -40,7 +40,26 @@ const localIsbn = ref('');
 const localIsIntegral = ref(false);
 const localIncludedVolumesText = ref('');
 const localSelected = ref(true);
-const showManualForm = ref(false);
+
+// Modale dédiée « Ce n’est pas la bonne référence / Je ne trouve pas mon livre » (toujours vierge à l’ouverture)
+const showManualSearchModal = ref(false);
+const manualTitle = ref('');
+const manualSeries = ref('');
+const manualVolume = ref('');
+const manualAuthor = ref('');
+const manualPublisher = ref('');
+const manualIsbn = ref('');
+
+const hasAnyManualField = computed(() =>
+  Boolean(
+    manualTitle.value.trim() ||
+    manualSeries.value.trim() ||
+    manualVolume.value.trim() ||
+    manualAuthor.value.trim() ||
+    manualPublisher.value.trim() ||
+    manualIsbn.value.trim()
+  )
+);
 const zoomedImageUrl = ref<string | null>(null);
 const zoomedImageAlt = ref('');
 const zoomScale = ref(1);
@@ -220,7 +239,7 @@ watch(
       ? props.item.includedVolumeNumbers.join(', ')
       : '';
     localSelected.value = Boolean(props.item.selected);
-    showManualForm.value = props.item.status === 'unresolved' || (props.item.alternatives?.length || 0) === 0;
+    showManualSearchModal.value = false;
     zoomedImageUrl.value = null;
     resetZoomTransform();
     exhaustedOptionCovers.value = {};
@@ -243,6 +262,10 @@ const onKeyDown = (e: KeyboardEvent) => {
   if (e.key === 'Escape') {
     if (zoomedImageUrl.value) {
       zoomedImageUrl.value = null;
+      return;
+    }
+    if (showManualSearchModal.value) {
+      showManualSearchModal.value = false;
       return;
     }
     if (props.show) emit('close');
@@ -275,11 +298,11 @@ const commitFieldChanges = () => {
 };
 
 watch(
-  () => scannerState.isScanning.value,
+  () => scannerState.isCameraModalOpen.value,
   (scanning, wasScanning) => {
     if (wasScanning && !scanning && openedScannerFromIsbnClick.value) {
       openedScannerFromIsbnClick.value = false;
-      if (!localIsbn.value.trim()) {
+      if (!manualIsbn.value.trim()) {
         // L'utilisateur a refermé la caméra sans scanner : éviter de rouvrir en boucle s'il veut saisir au clavier
         skipNextEmptyIsbnClick.value = true;
       }
@@ -288,17 +311,26 @@ watch(
 );
 
 const clearAllManualFields = () => {
-  localTitle.value = '';
-  localSeries.value = '';
-  localVolume.value = '';
-  localAuthor.value = '';
-  localPublisher.value = '';
-  localIsbn.value = '';
+  manualTitle.value = '';
+  manualSeries.value = '';
+  manualVolume.value = '';
+  manualAuthor.value = '';
+  manualPublisher.value = '';
+  manualIsbn.value = '';
   skipNextEmptyIsbnClick.value = false;
 };
 
+const openEmptyManualSearchModal = () => {
+  clearAllManualFields();
+  showManualSearchModal.value = true;
+};
+
+const closeManualSearchModal = () => {
+  showManualSearchModal.value = false;
+};
+
 const clearIsbnField = () => {
-  localIsbn.value = '';
+  manualIsbn.value = '';
   skipNextEmptyIsbnClick.value = false;
 };
 
@@ -307,13 +339,13 @@ const openManualIsbnScanner = () => {
   skipNextEmptyIsbnClick.value = false;
   scannerState.openIsbnPickerModal((isbn: string) => {
     openedScannerFromIsbnClick.value = false;
-    localIsbn.value = isbn;
+    manualIsbn.value = isbn;
     handleSearchBnf();
   });
 };
 
 const handleIsbnInputClick = () => {
-  if (!localIsbn.value.trim() && !skipNextEmptyIsbnClick.value) {
+  if (!manualIsbn.value.trim() && !skipNextEmptyIsbnClick.value) {
     openManualIsbnScanner();
   }
 };
@@ -337,15 +369,16 @@ const handleOptionTap = (opt: PhotoResolutionOption | null) => {
 };
 
 const handleSearchBnf = () => {
-  if (!props.item) return;
+  if (!props.item || !hasAnyManualField.value) return;
+  showManualSearchModal.value = false;
   emit('retry-bnf', {
     ...props.item.rawCandidate,
-    title: localTitle.value.trim(),
-    series: localSeries.value.trim() || undefined,
-    volumeNumber: localVolume.value.trim() || undefined,
-    author: localAuthor.value.trim() || undefined,
-    publisher: localPublisher.value.trim() || undefined,
-    isbn: localIsbn.value.trim() || undefined
+    title: manualTitle.value.trim(),
+    series: manualSeries.value.trim() || undefined,
+    volumeNumber: manualVolume.value.trim() || undefined,
+    author: manualAuthor.value.trim() || undefined,
+    publisher: manualPublisher.value.trim() || undefined,
+    isbn: manualIsbn.value.trim() || undefined
   });
 };
 
@@ -504,174 +537,21 @@ const handleConfirmClose = () => {
             </div>
           </div>
 
-          <!-- Recherche / correction manuelle BnF -->
+          <!-- Bouton explicite vers la modale de recherche manuelle BnF (champs vierges) -->
           <div class="manual-block">
-            <div class="manual-header-row">
-              <button type="button" class="link-toggle-btn" @click="showManualForm = !showManualForm">
-                {{ showManualForm ? '▾ Masquer la recherche manuelle BnF' : '▸ Corriger titre / série / ISBN et relancer la BnF' }}
-              </button>
-              <button
-                v-if="showManualForm"
-                type="button"
-                class="manual-clear-all-btn"
-                title="Effacer tous les champs de recherche"
-                @click="clearAllManualFields"
-              >
-                Tout effacer
-              </button>
-            </div>
-
-            <div v-if="showManualForm" class="manual-grid">
-              <div class="manual-field">
-                <label class="manual-field-label" for="manual-title-input">Titre du livre</label>
-                <div class="input-with-actions">
-                  <input
-                    id="manual-title-input"
-                    v-model="localTitle"
-                    placeholder="Ex : Le Lotus bleu"
-                    class="cand-input cand-input--has-clear"
-                  />
-                  <button
-                    v-if="localTitle"
-                    type="button"
-                    class="field-icon-btn"
-                    title="Effacer le titre"
-                    aria-label="Effacer le titre"
-                    @click="localTitle = ''"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </div>
-              <div class="manual-two-col">
-                <div class="manual-field">
-                  <label class="manual-field-label" for="manual-series-input">Nom de la série</label>
-                  <div class="input-with-actions">
-                    <input
-                      id="manual-series-input"
-                      v-model="localSeries"
-                      placeholder="Ex : Les Aventures de Tintin"
-                      class="cand-input cand-input--has-clear"
-                    />
-                    <button
-                      v-if="localSeries"
-                      type="button"
-                      class="field-icon-btn"
-                      title="Effacer la série"
-                      aria-label="Effacer la série"
-                      @click="localSeries = ''"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-                <div class="manual-field">
-                  <label class="manual-field-label" for="manual-volume-input">N° de tome</label>
-                  <div class="input-with-actions">
-                    <input
-                      id="manual-volume-input"
-                      v-model="localVolume"
-                      placeholder="Ex : 5"
-                      class="cand-input cand-input--has-clear"
-                    />
-                    <button
-                      v-if="localVolume"
-                      type="button"
-                      class="field-icon-btn"
-                      title="Effacer le n° de tome"
-                      aria-label="Effacer le n° de tome"
-                      @click="localVolume = ''"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div class="manual-two-col">
-                <div class="manual-field">
-                  <label class="manual-field-label" for="manual-author-input">Auteur</label>
-                  <div class="input-with-actions">
-                    <input
-                      id="manual-author-input"
-                      v-model="localAuthor"
-                      placeholder="Ex : Hergé"
-                      class="cand-input cand-input--has-clear"
-                    />
-                    <button
-                      v-if="localAuthor"
-                      type="button"
-                      class="field-icon-btn"
-                      title="Effacer l'auteur"
-                      aria-label="Effacer l'auteur"
-                      @click="localAuthor = ''"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-                <div class="manual-field">
-                  <label class="manual-field-label" for="manual-publisher-input">Éditeur (optionnel)</label>
-                  <div class="input-with-actions">
-                    <input
-                      id="manual-publisher-input"
-                      v-model="localPublisher"
-                      placeholder="Ex : Dargaud, Dupuis, Folio..."
-                      class="cand-input cand-input--has-clear"
-                    />
-                    <button
-                      v-if="localPublisher"
-                      type="button"
-                      class="field-icon-btn"
-                      title="Effacer l'éditeur"
-                      aria-label="Effacer l'éditeur"
-                      @click="localPublisher = ''"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div class="manual-field">
-                <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel)</label>
-                <div class="input-with-actions">
-                  <input
-                    id="manual-isbn-input"
-                    v-model="localIsbn"
-                    :placeholder="!localIsbn && !skipNextEmptyIsbnClick ? 'Cliquer pour scanner...' : '9782...'"
-                    class="cand-input cand-input--isbn"
-                    @click="handleIsbnInputClick"
-                  />
-                  <button
-                    v-if="localIsbn"
-                    type="button"
-                    class="field-icon-btn"
-                    title="Effacer l'ISBN"
-                    aria-label="Effacer l'ISBN"
-                    @click="clearIsbnField"
-                  >
-                    ✕
-                  </button>
-                  <button
-                    type="button"
-                    class="field-icon-btn field-icon-btn--scan"
-                    title="Scanner le code-barres ISBN"
-                    aria-label="Scanner le code-barres ISBN"
-                    @click="openManualIsbnScanner"
-                  >
-                    📷
-                  </button>
-                </div>
-              </div>
-              <button
-                type="button"
-                class="wireframe-btn"
-                :disabled="retrying"
-                @click="handleSearchBnf"
-              >
-                {{ retrying ? 'Recherche BnF en cours...' : 'Relancer la recherche BnF' }}
-              </button>
-              <small v-if="item.failureReason" class="warn-hint">{{ item.failureReason }}</small>
-            </div>
+            <button
+              type="button"
+              class="wireframe-btn wrong-ref-btn"
+              :disabled="retrying"
+              @click="openEmptyManualSearchModal"
+            >
+              {{
+                retrying
+                  ? 'Recherche BnF en cours...'
+                  : 'Ce n’est pas la bonne référence / Je ne trouve pas mon livre'
+              }}
+            </button>
+            <small v-if="item.failureReason" class="warn-hint">{{ item.failureReason }}</small>
           </div>
         </div>
 
@@ -680,6 +560,199 @@ const handleConfirmClose = () => {
             Valider et revenir à la liste
           </button>
         </footer>
+      </div>
+    </div>
+
+    <!-- Modale dédiée de recherche BnF avec champs vierges -->
+    <div
+      v-if="show && item && showManualSearchModal"
+      class="manual-search-backdrop"
+      @click.self="closeManualSearchModal"
+    >
+      <div
+        class="manual-search-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Rechercher une autre référence BnF"
+      >
+        <div class="manual-modal-header">
+          <h4>Rechercher une autre référence (BnF)</h4>
+          <button
+            type="button"
+            class="manual-modal-close"
+            aria-label="Fermer la fenêtre de recherche"
+            @click="closeManualSearchModal"
+          >
+            ✕
+          </button>
+        </div>
+
+        <p class="manual-modal-hint">
+          Les champs sont volontairement vierges pour repartir d’une base propre. Renseignez uniquement ce dont vous êtes sûr (titre, série, tome, auteur, éditeur ou ISBN / code-barres) puis relancez la BnF.
+        </p>
+
+        <form class="manual-grid" @submit.prevent="handleSearchBnf">
+          <div class="manual-field">
+            <label class="manual-field-label" for="manual-title-input">Titre du livre</label>
+            <div class="input-with-actions">
+              <input
+                id="manual-title-input"
+                v-model="manualTitle"
+                placeholder="Ex : Le Lotus bleu"
+                class="cand-input cand-input--has-clear"
+              />
+              <button
+                v-if="manualTitle"
+                type="button"
+                class="field-icon-btn"
+                title="Effacer le titre"
+                aria-label="Effacer le titre"
+                @click="manualTitle = ''"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          <div class="manual-two-col">
+            <div class="manual-field">
+              <label class="manual-field-label" for="manual-series-input">Nom de la série</label>
+              <div class="input-with-actions">
+                <input
+                  id="manual-series-input"
+                  v-model="manualSeries"
+                  placeholder="Ex : Les Aventures de Tintin"
+                  class="cand-input cand-input--has-clear"
+                />
+                <button
+                  v-if="manualSeries"
+                  type="button"
+                  class="field-icon-btn"
+                  title="Effacer la série"
+                  aria-label="Effacer la série"
+                  @click="manualSeries = ''"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div class="manual-field">
+              <label class="manual-field-label" for="manual-volume-input">N° de tome</label>
+              <div class="input-with-actions">
+                <input
+                  id="manual-volume-input"
+                  v-model="manualVolume"
+                  placeholder="Ex : 5 ou Intégrale 1"
+                  class="cand-input cand-input--has-clear"
+                />
+                <button
+                  v-if="manualVolume"
+                  type="button"
+                  class="field-icon-btn"
+                  title="Effacer le n° de tome"
+                  aria-label="Effacer le n° de tome"
+                  @click="manualVolume = ''"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="manual-two-col">
+            <div class="manual-field">
+              <label class="manual-field-label" for="manual-author-input">Auteur</label>
+              <div class="input-with-actions">
+                <input
+                  id="manual-author-input"
+                  v-model="manualAuthor"
+                  placeholder="Ex : Hergé"
+                  class="cand-input cand-input--has-clear"
+                />
+                <button
+                  v-if="manualAuthor"
+                  type="button"
+                  class="field-icon-btn"
+                  title="Effacer l'auteur"
+                  aria-label="Effacer l'auteur"
+                  @click="manualAuthor = ''"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div class="manual-field">
+              <label class="manual-field-label" for="manual-publisher-input">Éditeur (optionnel)</label>
+              <div class="input-with-actions">
+                <input
+                  id="manual-publisher-input"
+                  v-model="manualPublisher"
+                  placeholder="Ex : Dargaud, Dupuis, Folio..."
+                  class="cand-input cand-input--has-clear"
+                />
+                <button
+                  v-if="manualPublisher"
+                  type="button"
+                  class="field-icon-btn"
+                  title="Effacer l'éditeur"
+                  aria-label="Effacer l'éditeur"
+                  @click="manualPublisher = ''"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="manual-field">
+            <label class="manual-field-label" for="manual-isbn-input">ISBN-13 (optionnel — scan rapide disponible)</label>
+            <div class="input-with-actions">
+              <input
+                id="manual-isbn-input"
+                v-model="manualIsbn"
+                :placeholder="!manualIsbn && !skipNextEmptyIsbnClick ? 'Cliquer pour scanner...' : '9782...'"
+                class="cand-input cand-input--isbn"
+                @click="handleIsbnInputClick"
+              />
+              <button
+                v-if="manualIsbn"
+                type="button"
+                class="field-icon-btn"
+                title="Effacer l'ISBN"
+                aria-label="Effacer l'ISBN"
+                @click="clearIsbnField"
+              >
+                ✕
+              </button>
+              <button
+                type="button"
+                class="field-icon-btn field-icon-btn--scan"
+                title="Scanner le code-barres ISBN"
+                aria-label="Scanner le code-barres ISBN"
+                @click="openManualIsbnScanner"
+              >
+                📷
+              </button>
+            </div>
+          </div>
+
+          <div class="manual-modal-actions">
+            <button
+              type="submit"
+              class="wireframe-btn btn-primary"
+              :disabled="retrying || !hasAnyManualField"
+            >
+              {{ retrying ? 'Recherche BnF en cours...' : 'Lancer la recherche BnF' }}
+            </button>
+            <button
+              type="button"
+              class="wireframe-btn"
+              @click="closeManualSearchModal"
+            >
+              Annuler
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 
@@ -1240,42 +1313,92 @@ const handleConfirmClose = () => {
   padding-top: 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
-.link-toggle-btn {
-  align-self: flex-start;
-  border: none;
-  background: none;
-  color: #2563eb;
+.wrong-ref-btn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.6rem 0.9rem;
+  height: auto;
+  text-align: center;
+  line-height: 1.3;
+  background: #fef3c7;
+  border-color: #f59e0b;
+  color: #92400e;
   font-weight: 700;
-  font-size: 0.84rem;
-  padding: 0;
-  cursor: pointer;
 }
 
-.manual-header-row {
+.wrong-ref-btn:hover:not(:disabled) {
+  background: #fde68a;
+  border-color: #d97706;
+}
+
+.manual-search-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 2250;
+  background: rgba(15, 23, 42, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.manual-search-modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  background: var(--color-surface, #fff);
+  border-radius: 16px;
+  padding: 1.15rem;
+  box-shadow: 0 24px 55px rgba(15, 23, 42, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.manual-modal-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
 }
 
-.manual-clear-all-btn {
+.manual-modal-header h4 {
+  margin: 0;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.manual-modal-close {
   border: 1px solid #cbd5e1;
   background: #f8fafc;
-  color: #475569;
-  font-size: 0.74rem;
+  color: #334155;
+  border-radius: 999px;
+  width: 32px;
+  height: 32px;
   font-weight: 700;
-  padding: 0.22rem 0.55rem;
-  border-radius: 6px;
   cursor: pointer;
 }
 
-.manual-clear-all-btn:hover {
-  background: #fee2e2;
-  border-color: #fca5a5;
-  color: #b91c1c;
+.manual-modal-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+}
+
+.manual-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
 }
 
 .manual-grid {
