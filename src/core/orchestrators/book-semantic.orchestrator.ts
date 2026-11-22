@@ -213,16 +213,18 @@ export const bookSemanticOrchestrator = {
       await databaseService.saveBookToCache(plainBook);
     }
 
-    // 4. Si le genre a été modifié et que le livre appartient à une série, appliquer à tous les tomes de cette série
-    const oldGenresKey = (originalBook.genres || []).map((g) => g.trim().toLowerCase()).join('|');
+    // 4. Si de nouveaux genres ont été ajoutés sur un tome d'une série, les ajouter CUMULATIVEMENT aux autres tomes
+    //    sans écraser les genres propres déjà présents sur les autres volumes.
+    const oldGenreSet = new Set((originalBook.genres || []).map((g) => g.trim().toLowerCase()).filter(Boolean));
     const newGenresList = Array.isArray(updatedData.genres) ? updatedData.genres : [];
-    const newGenresKey = newGenresList.map((g) => g.trim().toLowerCase()).join('|');
+    const newlyAddedGenres = newGenresList
+      .map((g) => g.trim())
+      .filter((g) => g && !oldGenreSet.has(g.toLowerCase()));
     const targetSeriesId = plainBook.seriesId;
     const normSeriesName = (plainBook.series || '').trim().toLowerCase();
 
     if (
-      Array.isArray(updatedData.genres) &&
-      oldGenresKey !== newGenresKey &&
+      newlyAddedGenres.length > 0 &&
       (targetSeriesId || normSeriesName) &&
       typeof databaseService.getAllBooksFromCache === 'function'
     ) {
@@ -234,9 +236,15 @@ export const bookSemanticOrchestrator = {
           normSeriesName && (sibling.series || '').trim().toLowerCase() === normSeriesName
         );
         if (matchesSeriesId || matchesSeriesName) {
+          const mergedGenres = [...(sibling.genres || [])];
+          for (const g of newlyAddedGenres) {
+            if (!mergedGenres.some((e) => e.trim().toLowerCase() === g.toLowerCase())) {
+              mergedGenres.push(g);
+            }
+          }
           const updatedSibling: HumanizedBook = {
             ...sibling,
-            genres: [...newGenresList],
+            genres: mergedGenres,
             isLocallyEdited: true
           };
           await databaseService.saveBookToCache(JSON.parse(JSON.stringify(updatedSibling)));

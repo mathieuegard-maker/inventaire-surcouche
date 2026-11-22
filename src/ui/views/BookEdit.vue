@@ -17,6 +17,7 @@ import {
 } from '../../core/bibliographic/integral.util';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
 import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
+import { userService } from '../../core/services/user.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { deduplicateCoverUrls } from '../../core/utils/cover-dedup.util';
 import { compressImageToWebpDataUrl } from '../../core/utils/webp-compressor.util';
@@ -50,6 +51,9 @@ const pageCountInput = ref<number | undefined>(undefined);
 const coverUrlInput = ref('');
 const genresInput = ref<string[]>([]);
 const customGenreInput = ref('');
+const defaultGenreChips = ref<string[]>([...SUGGESTED_GENRE_CHIPS]);
+const savingDefaultGenre = ref(false);
+const defaultGenreNotice = ref('');
 const noSeries = ref(false);
 const showSeriesMergeModal = ref(false);
 const brokenCandidateUrls = ref<Record<string, boolean>>({});
@@ -133,6 +137,26 @@ const addCustomGenreTag = () => {
     genresInput.value = [...genresInput.value, clean];
   }
   customGenreInput.value = '';
+};
+
+const addCustomGenreToDefaults = async () => {
+  const clean = customGenreInput.value.trim();
+  if (!clean || savingDefaultGenre.value) return;
+  savingDefaultGenre.value = true;
+  defaultGenreNotice.value = '';
+  try {
+    if (!genresInput.value.some((g) => g.toLowerCase() === clean.toLowerCase())) {
+      genresInput.value = [...genresInput.value, clean];
+    }
+    const res = await userService.updateDefaultGenres('add', clean);
+    defaultGenreChips.value = res.genres;
+    defaultGenreNotice.value = `« ${clean} » ajouté à l’œuvre et à vos genres par défaut.`;
+    customGenreInput.value = '';
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : "Impossible d'ajouter ce genre par défaut.";
+  } finally {
+    savingDefaultGenre.value = false;
+  }
 };
 
 const isGenreSelected = (tag: string) =>
@@ -295,7 +319,14 @@ const loadBookForEdit = async () => {
   }
 };
 
-onMounted(loadBookForEdit);
+onMounted(() => {
+  void loadBookForEdit();
+  void userService.fetchDefaultGenres().then((res) => {
+    if (res.genres.length > 0) {
+      defaultGenreChips.value = res.genres;
+    }
+  });
+});
 watch(() => route.params.uri, () => {
   void loadBookForEdit();
 });
@@ -502,6 +533,60 @@ const saveChanges = async () => {
             </div>
           </div>
 
+          <!-- Genres personnels AU-DESSUS des couvertures (évite tout décalage pendant le chargement des images) -->
+          <div class="form-group">
+            <label class="form-label">
+              Genre(s)
+              <span v-if="!noSeries && (seriesInput || originalBook?.series)" class="series-genre-hint">
+                (les nouveaux genres ajoutés complètent aussi les autres tomes de la série, uniquement pour votre foyer)
+              </span>
+            </label>
+            <div v-if="genresInput.length > 0" class="selected-genres-row">
+              <span v-for="g in genresInput" :key="g" class="genre-active-chip">
+                {{ g }}
+                <button type="button" class="chip-remove-btn" @click="toggleGenreTag(g)" title="Retirer">×</button>
+              </span>
+            </div>
+            <div class="genres-picker-grid">
+              <button
+                v-for="chip in defaultGenreChips"
+                :key="chip"
+                type="button"
+                class="genre-toggle-chip"
+                :class="{ active: isGenreSelected(chip) }"
+                @click="toggleGenreTag(chip)"
+              >
+                {{ isGenreSelected(chip) ? '✓ ' : '+ ' }}{{ chip }}
+              </button>
+            </div>
+            <div class="custom-genre-add-row">
+              <input
+                type="text"
+                v-model="customGenreInput"
+                placeholder="Nouveau genre personnalisé..."
+                class="wireframe-input custom-genre-input"
+                @keydown.enter.prevent="addCustomGenreTag"
+              />
+              <button
+                type="button"
+                class="wireframe-btn custom-genre-add-btn"
+                :disabled="!customGenreInput.trim()"
+                @click="addCustomGenreTag"
+              >
+                + À l’œuvre
+              </button>
+              <button
+                type="button"
+                class="wireframe-btn custom-genre-add-btn custom-genre-default-btn"
+                :disabled="!customGenreInput.trim() || savingDefaultGenre"
+                @click="addCustomGenreToDefaults"
+              >
+                {{ savingDefaultGenre ? 'Ajout...' : '+ Aux genres par défaut' }}
+              </button>
+            </div>
+            <p v-if="defaultGenreNotice" class="default-genre-notice">{{ defaultGenreNotice }}</p>
+          </div>
+
           <!-- Couverture + sélecteur multi-sources -->
           <div class="form-group">
             <label class="form-label">Couverture</label>
@@ -558,50 +643,6 @@ const saveChanges = async () => {
             </div>
             <div v-else-if="isLoadingExtCovers" class="covers-hint-line">
               Recherche de couvertures alternatives en cours...
-            </div>
-          </div>
-
-          <!-- Genres personnels (appliqués à toute la série en cas de modification) -->
-          <div class="form-group">
-            <label class="form-label">
-              Genre(s)
-              <span v-if="!noSeries && (seriesInput || originalBook?.series)" class="series-genre-hint">
-                (appliqués automatiquement à toute la série)
-              </span>
-            </label>
-            <div v-if="genresInput.length > 0" class="selected-genres-row">
-              <span v-for="g in genresInput" :key="g" class="genre-active-chip">
-                {{ g }}
-                <button type="button" class="chip-remove-btn" @click="toggleGenreTag(g)" title="Retirer">×</button>
-              </span>
-            </div>
-            <div class="genres-picker-grid">
-              <button
-                v-for="chip in SUGGESTED_GENRE_CHIPS"
-                :key="chip"
-                type="button"
-                class="genre-toggle-chip"
-                :class="{ active: isGenreSelected(chip) }"
-                @click="toggleGenreTag(chip)"
-              >
-                {{ isGenreSelected(chip) ? '✓ ' : '+ ' }}{{ chip }}
-              </button>
-            </div>
-            <div class="custom-genre-add-row">
-              <input
-                type="text"
-                v-model="customGenreInput"
-                placeholder="Ajouter un genre personnalisé..."
-                class="wireframe-input custom-genre-input"
-                @keydown.enter.prevent="addCustomGenreTag"
-              />
-              <button
-                type="button"
-                class="wireframe-btn custom-genre-add-btn"
-                @click="addCustomGenreTag"
-              >
-                + Ajouter
-              </button>
             </div>
           </div>
         </div>
@@ -666,26 +707,26 @@ const saveChanges = async () => {
 .edit-box {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-md);
+  gap: 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 14px);
   background-color: var(--color-bg-main);
   box-shadow: var(--shadow-card);
-  padding: var(--spacing-lg, 1.25rem);
+  padding: 0.9rem 1rem;
   margin-top: var(--spacing-sm);
 }
 
 .edit-form-grid {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.65rem;
   width: 100%;
 }
 
 .edit-two-cols {
   display: grid;
   grid-template-columns: 2fr 1fr;
-  gap: 0.85rem;
+  gap: 0.65rem;
   align-items: start;
 }
 
@@ -851,10 +892,8 @@ const saveChanges = async () => {
 .genres-picker-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  max-height: 155px;
-  overflow-y: auto;
-  padding: 0.5rem;
+  gap: 0.3rem;
+  padding: 0.45rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md, 10px);
   background: var(--color-bg-alt);
@@ -865,8 +904,8 @@ const saveChanges = async () => {
   color: var(--color-text-main);
   border: 1px solid var(--color-border);
   border-radius: 999px;
-  padding: 0.25rem 0.6rem;
-  font-size: 0.76rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.74rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.15s ease, border-color 0.15s ease;
@@ -880,13 +919,14 @@ const saveChanges = async () => {
 
 .custom-genre-add-row {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.4rem;
   align-items: center;
-  margin-top: 0.3rem;
+  margin-top: 0.25rem;
 }
 
 .custom-genre-input {
-  flex: 1 1 auto;
+  flex: 1 1 180px;
   min-width: 0;
   width: auto;
 }
@@ -895,8 +935,21 @@ const saveChanges = async () => {
   flex: 0 0 auto;
   width: auto !important;
   white-space: nowrap;
-  padding: 0 0.95rem;
-  font-size: 0.82rem;
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
+}
+
+.custom-genre-default-btn {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.default-genre-notice {
+  margin: 0.25rem 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #166534;
 }
 
 .form-actions-row {

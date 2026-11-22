@@ -10,6 +10,7 @@ import type { SyncDeltaRequest, SyncDeltaResponse } from '../domain/v2.types';
 import { resolveAuthSession } from './d1-gateway.service';
 import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './pipeline-logger.service';
 import {
+  addGenresToBooksOptionB,
   excludeBookFromSeriesForLibrary,
   getV4SeriesBooks,
   runV4IngestionPipeline,
@@ -19,6 +20,13 @@ import {
   type SourceChannel,
   type UserIngestHint
 } from './v4-pipeline.service';
+import {
+  getUserDefaultGenres,
+  getUserReadingStatus,
+  listUserReadingStatuses,
+  updateUserDefaultGenres,
+  upsertUserReadingStatus
+} from './user-preferences.service';
 import { resolveBookHintsCanal3 } from './canal3-resolver.service';
 import {
   clearUserPhotoScanJobs,
@@ -138,8 +146,8 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         .all();
 
       const readingRows = await env.DB
-        .prepare('SELECT * FROM reading_statuses WHERE library_id = ? AND updated_at > ?')
-        .bind(payload.libraryId, since)
+        .prepare('SELECT * FROM reading_statuses WHERE library_id = ? AND user_id = ? AND updated_at > ?')
+        .bind(payload.libraryId, auth.userId, since)
         .all();
 
       const response: SyncDeltaResponse = {
@@ -506,6 +514,97 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
       if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
       await deleteUserPhotoScanJob(env.DB, auth.userId, jobId);
       return jsonResponse({ ok: true });
+    }
+
+    // 9. Statut de lecture, note & notes personnelles STRICTEMENT individuels par compte (`user_id`)
+    if (path === 'reading-status' && method === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const auth = await resolveAuthSession(env.DB, request, url.searchParams.get('userUri'));
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const workId = (url.searchParams.get('workId') || '').trim();
+      if (workId) {
+        const record = await getUserReadingStatus(env.DB, auth.userId, auth.libraryId, workId);
+        return jsonResponse({ ok: true, record });
+      }
+      const records = await listUserReadingStatuses(env.DB, auth.userId, auth.libraryId);
+      return jsonResponse({ ok: true, records });
+    }
+
+    if (path === 'reading-status' && (method === 'PUT' || method === 'POST')) {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const payload = (await request.json().catch(() => ({}))) as {
+        workId?: string;
+        status?: string;
+        rating?: number | null;
+        personalNotes?: string | null;
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const workId = String(payload.workId || '').trim();
+      if (!workId) return jsonResponse({ error: 'workId requis' }, 400);
+      const record = await upsertUserReadingStatus(env.DB, {
+        userId: auth.userId,
+        libraryId: auth.libraryId,
+        workId,
+        status: payload.status || 'none',
+        rating: payload.rating,
+        personalNotes: payload.personalNotes
+      });
+      return jsonResponse({ ok: true, record });
+    }
+
+    // 10. Genres par défaut personnalisés par compte (`user_default_genres`)
+    if (path === 'user-genres' && method === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const auth = await resolveAuthSession(env.DB, request, url.searchParams.get('userUri'));
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const res = await getUserDefaultGenres(env.DB, auth.userId);
+      return jsonResponse({ ok: true, ...res });
+    }
+
+    if (path === 'user-genres' && method === 'POST') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const payload = (await request.json().catch(() => ({}))) as {
+        action?: 'add' | 'remove' | 'reset';
+        genre?: string;
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const action = payload.action === 'remove' || payload.action === 'reset' ? payload.action : 'add';
+      const res = await updateUserDefaultGenres(env.DB, auth.userId, action, payload.genre);
+      return jsonResponse({ ok: true, ...res });
+    }
+
+    // 11. Ajout cumulatif de genre(s) en lot sur N livres (Option B isolée au foyer)
+    if (path === 'books/batch-genres' && method === 'POST') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const payload = (await request.json().catch(() => ({}))) as {
+        bookUris?: string[];
+        genres?: string[];
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const res = await addGenresToBooksOptionB(env.DB, {
+        libraryId: auth.libraryId,
+        bookUris: Array.isArray(payload.bookUris) ? payload.bookUris : [],
+        genres: Array.isArray(payload.genres) ? payload.genres : []
+      });
+      return jsonResponse({ ok: true, ...res });
     }
 
     return jsonResponse({ error: `Route V2 inconnue: ${method} /api/v2/${path}` }, 404);

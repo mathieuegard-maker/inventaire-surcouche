@@ -11,14 +11,70 @@ import { sessionStore } from '../../state/session';
 const route = useRoute();
 const router = useRouter();
 
-type ProfileTab = 'account' | 'stats' | 'notifications';
+type ProfileTab = 'account' | 'stats' | 'genres' | 'notifications';
 
 const activeTab = computed<ProfileTab>(() => {
   const q = String(route.query.tab || '').toLowerCase();
   if (q === 'stats') return 'stats';
+  if (q === 'genres') return 'genres';
   if (q === 'notifications') return 'notifications';
   return 'account';
 });
+
+const defaultGenres = ref<string[]>([]);
+const newDefaultGenre = ref('');
+const savingGenres = ref(false);
+const genresFeedback = ref('');
+const genresError = ref('');
+
+const handleAddDefaultGenre = async () => {
+  const clean = newDefaultGenre.value.trim();
+  if (!clean || savingGenres.value) return;
+  savingGenres.value = true;
+  genresError.value = '';
+  genresFeedback.value = '';
+  try {
+    const res = await userService.updateDefaultGenres('add', clean);
+    defaultGenres.value = res.genres;
+    newDefaultGenre.value = '';
+    genresFeedback.value = `« ${clean} » ajouté à vos genres par défaut.`;
+  } catch (e: unknown) {
+    genresError.value = e instanceof Error ? e.message : "Impossible d'ajouter ce genre.";
+  } finally {
+    savingGenres.value = false;
+  }
+};
+
+const handleRemoveDefaultGenre = async (genre: string) => {
+  if (savingGenres.value) return;
+  savingGenres.value = true;
+  genresError.value = '';
+  genresFeedback.value = '';
+  try {
+    const res = await userService.updateDefaultGenres('remove', genre);
+    defaultGenres.value = res.genres;
+  } catch (e: unknown) {
+    genresError.value = e instanceof Error ? e.message : 'Impossible de retirer ce genre.';
+  } finally {
+    savingGenres.value = false;
+  }
+};
+
+const handleResetDefaultGenres = async () => {
+  if (savingGenres.value) return;
+  savingGenres.value = true;
+  genresError.value = '';
+  genresFeedback.value = '';
+  try {
+    const res = await userService.updateDefaultGenres('reset');
+    defaultGenres.value = res.genres;
+    genresFeedback.value = 'Liste des genres par défaut réinitialisée.';
+  } catch (e: unknown) {
+    genresError.value = e instanceof Error ? e.message : 'Impossible de réinitialiser les genres.';
+  } finally {
+    savingGenres.value = false;
+  }
+};
 
 const setProfileTab = (tab: ProfileTab) => {
   if (activeTab.value === tab) return;
@@ -64,10 +120,14 @@ const urlBase64ToUint8Array = (base64String: string) => {
 
 onMounted(async () => {
   try {
-    const [profile, prefs] = await Promise.all([
+    const [profile, prefs, genrePrefs] = await Promise.all([
       userService.fetchProfile(),
-      userService.getNotificationPrefs().catch(() => null)
+      userService.getNotificationPrefs().catch(() => null),
+      userService.fetchDefaultGenres().catch(() => null)
     ]);
+    if (genrePrefs?.genres) {
+      defaultGenres.value = genrePrefs.genres;
+    }
     if (profile) {
       username.value = profile.username || '';
       recoveryEmail.value = profile.recoveryEmail || '';
@@ -261,6 +321,15 @@ const handleLogout = async () => {
         <button
           type="button"
           role="tab"
+          :aria-selected="activeTab === 'genres'"
+          :class="['profile-subnav-tab', { active: activeTab === 'genres' }]"
+          @click="setProfileTab('genres')"
+        >
+          Genres par défaut
+        </button>
+        <button
+          type="button"
+          role="tab"
           :aria-selected="activeTab === 'notifications'"
           :class="['profile-subnav-tab', { active: activeTab === 'notifications' }]"
           @click="setProfileTab('notifications')"
@@ -366,6 +435,58 @@ const handleLogout = async () => {
           @click="handleLogout"
         >
           {{ loggingOut ? 'Déconnexion...' : 'Se déconnecter' }}
+        </button>
+      </div>
+
+      <div v-else-if="activeTab === 'genres'" class="profile-card">
+        <h3 class="notif-title">Mes genres par défaut</h3>
+        <p class="notif-sub">
+          Personnalisez les genres proposés par défaut lorsque vous modifiez une fiche ou classez un lot de livres. Ces préférences sont propres à votre compte.
+        </p>
+
+        <form class="genre-add-form" @submit.prevent="handleAddDefaultGenre">
+          <input
+            v-model="newDefaultGenre"
+            type="text"
+            class="ds-input"
+            placeholder="Nouveau genre (ex: Comics, Polar historique...)"
+            :disabled="savingGenres"
+          />
+          <button
+            type="submit"
+            class="wireframe-btn primary genre-add-submit"
+            :disabled="savingGenres || !newDefaultGenre.trim()"
+          >
+            + Ajouter
+          </button>
+        </form>
+
+        <p v-if="genresError" class="error-msg">{{ genresError }}</p>
+        <p v-if="genresFeedback" class="success-msg">{{ genresFeedback }}</p>
+
+        <div class="profile-genres-list">
+          <span v-for="genre in defaultGenres" :key="genre" class="profile-genre-chip">
+            {{ genre }}
+            <button
+              type="button"
+              class="profile-genre-remove"
+              :disabled="savingGenres"
+              title="Retirer de mes genres par défaut"
+              @click="handleRemoveDefaultGenre(genre)"
+            >
+              ×
+            </button>
+          </span>
+        </div>
+
+        <hr class="section-sep logout-sep" />
+        <button
+          type="button"
+          class="wireframe-btn save-btn"
+          :disabled="savingGenres"
+          @click="handleResetDefaultGenres"
+        >
+          Réinitialiser la liste standard
         </button>
       </div>
 
@@ -601,5 +722,57 @@ const handleLogout = async () => {
 .loading-text {
   margin: 0;
   color: #64748b;
+}
+
+.genre-add-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.genre-add-form .ds-input {
+  flex: 1 1 200px;
+}
+
+.genre-add-submit {
+  width: auto !important;
+  padding: 0 1rem;
+  white-space: nowrap;
+}
+
+.profile-genres-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.profile-genre-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: #f1f5f9;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  padding: 0.28rem 0.65rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.profile-genre-remove {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-weight: 800;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.profile-genre-remove:hover {
+  color: #dc2626;
 }
 </style>

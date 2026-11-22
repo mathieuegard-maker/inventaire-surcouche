@@ -1,5 +1,6 @@
 // src/core/services/stats.service.ts
 import { databaseService } from '../database/database.service';
+import { userService } from './user.service';
 
 export interface DashboardStats {
   totalOwned: number;
@@ -102,19 +103,12 @@ export const statsService = {
 
       let metaStatus: keyof typeof readingCounts = 'none';
       let metaRating = 0;
-      if (typeof localStorage !== 'undefined') {
-        try {
-          const raw = localStorage.getItem(`biblio_reading_${book.uri}`);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (parsed.status && parsed.status in readingCounts) {
-              metaStatus = parsed.status;
-            }
-            metaRating = Number(parsed.rating) || 0;
-          }
-        } catch {
-          // ignore
+      const localReading = userService.readLocalReadingStatus(book.uri);
+      if (localReading) {
+        if (localReading.status && localReading.status in readingCounts) {
+          metaStatus = localReading.status as keyof typeof readingCounts;
         }
+        metaRating = Number(localReading.rating) || 0;
       }
       readingCounts[metaStatus]++;
       if (metaRating > 0) {

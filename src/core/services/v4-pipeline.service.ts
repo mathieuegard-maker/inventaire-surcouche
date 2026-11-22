@@ -50,6 +50,7 @@ export {
 } from './v4/v4-layer5-orchestrator';
 
 export {
+  addGenresToBooksOptionB,
   excludeBookFromSeriesForLibrary,
   getV4SeriesBooks,
   syncV4LibraryBooks,

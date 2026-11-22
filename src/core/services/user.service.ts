@@ -1,6 +1,8 @@
 // src/core/services/user.service.ts
 import { sessionStore } from '../../state/session';
 import { fetchWithTimeout } from '../../state/connection';
+import { SUGGESTED_GENRE_CHIPS } from '../utils/category-classifier.util';
+import type { IndividualReadingStatus, UserBookReadingRecord } from './user-preferences.service';
 
 export interface FriendLibrarySummary {
   libraryId: string;
@@ -432,5 +434,154 @@ export const userService = {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || 'Échec purge des logs.');
+  },
+
+  // =========================================================================
+  // Statuts de lecture, notes & genres par défaut (STRICTEMENT individuels)
+  // =========================================================================
+  getScopedReadingStorageKey(workId: string): string {
+    const uid = (sessionStore.state.user?.username || sessionStore.state.user?.uri || 'anon').toLowerCase();
+    return `biblio_reading_u_${uid}_${workId}`;
+  },
+
+  readLocalReadingStatus(workId: string): {
+    status: IndividualReadingStatus;
+    rating: number;
+    personalNotes: string;
+  } | null {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+      const scoped = localStorage.getItem(this.getScopedReadingStorageKey(workId));
+      const raw = scoped || localStorage.getItem(`biblio_reading_${workId}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      const st = parsed.status === 'unread' ? 'to_read' : (parsed.status || 'none');
+      return {
+        status: st as IndividualReadingStatus,
+        rating: Number(parsed.rating) || 0,
+        personalNotes: String(parsed.personalNotes || '')
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  writeLocalReadingStatus(
+    workId: string,
+    data: { status: IndividualReadingStatus; rating: number; personalNotes: string }
+  ): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem(this.getScopedReadingStorageKey(workId), JSON.stringify(data));
+    } catch {
+      // ignore quota errors
+    }
+  },
+
+  async fetchReadingStatus(workId: string): Promise<UserBookReadingRecord | null> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = new URLSearchParams({ workId, ...(savedUri ? { userUri: savedUri } : {}) });
+    const res = await fetchWithTimeout(`/api/v2/reading-status?${qs.toString()}`).catch(() => null);
+    if (!res || !res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const rec = (data?.record || null) as UserBookReadingRecord | null;
+    if (rec) {
+      this.writeLocalReadingStatus(workId, {
+        status: rec.status,
+        rating: rec.rating,
+        personalNotes: rec.personalNotes || ''
+      });
+    }
+    return rec;
+  },
+
+  async syncAllUserReadingStatuses(): Promise<UserBookReadingRecord[]> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/v2/reading-status${qs}`).catch(() => null);
+    if (!res || !res.ok) return [];
+    const data = await res.json().catch(() => null);
+    const records: UserBookReadingRecord[] = Array.isArray(data?.records) ? data.records : [];
+    for (const rec of records) {
+      this.writeLocalReadingStatus(rec.workId, {
+        status: rec.status,
+        rating: rec.rating,
+        personalNotes: rec.personalNotes || ''
+      });
+    }
+    return records;
+  },
+
+  async saveReadingStatus(params: {
+    workId: string;
+    status: IndividualReadingStatus;
+    rating: number;
+    personalNotes?: string;
+  }): Promise<UserBookReadingRecord | null> {
+    const clean = {
+      status: params.status,
+      rating: Number(params.rating) || 0,
+      personalNotes: String(params.personalNotes || '').trim()
+    };
+    this.writeLocalReadingStatus(params.workId, clean);
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/v2/reading-status', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workId: params.workId,
+        status: clean.status,
+        rating: clean.rating,
+        personalNotes: clean.personalNotes,
+        userUri: savedUri
+      })
+    }).catch(() => null);
+    if (!res || !res.ok) return null;
+    const data = await res.json().catch(() => null);
+    return (data?.record || null) as UserBookReadingRecord | null;
+  },
+
+  async fetchDefaultGenres(): Promise<{ genres: string[]; isCustomized: boolean }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/v2/user-genres${qs}`).catch(() => null);
+    if (!res || !res.ok) {
+      return { genres: [...SUGGESTED_GENRE_CHIPS], isCustomized: false };
+    }
+    const data = await res.json().catch(() => null);
+    if (Array.isArray(data?.genres)) {
+      return { genres: data.genres, isCustomized: Boolean(data.isCustomized) };
+    }
+    return { genres: [...SUGGESTED_GENRE_CHIPS], isCustomized: false };
+  },
+
+  async updateDefaultGenres(
+    action: 'add' | 'remove' | 'reset',
+    genre?: string
+  ): Promise<{ genres: string[]; isCustomized: boolean }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/v2/user-genres', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, genre, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Impossible de mettre à jour les genres par défaut.');
+    return {
+      genres: Array.isArray(data?.genres) ? data.genres : [...SUGGESTED_GENRE_CHIPS],
+      isCustomized: Boolean(data?.isCustomized)
+    };
+  },
+
+  async addGenresToBooksBatch(bookUris: string[], genres: string[]): Promise<{ updatedCount: number }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/v2/books/batch-genres', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookUris, genres, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || "Impossible d'ajouter le genre au lot.");
+    return { updatedCount: Number(data?.updatedCount) || 0 };
   }
 };

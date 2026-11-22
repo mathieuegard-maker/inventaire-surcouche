@@ -19,6 +19,8 @@ import IntegralConfigFields from '../components/IntegralConfigFields.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
 import { transformBookIntegralStatus } from '../../core/services/integral.service';
 import { formatIncludedVolumeNumbers } from '../../core/bibliographic/integral.util';
+import { userService } from '../../core/services/user.service';
+import type { IndividualReadingStatus } from '../../core/services/user-preferences.service';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
@@ -68,11 +70,13 @@ const onDetailCoverError = (event: Event) => {
   });
 };
 
-// Statut de lecture optionnel (stocké localement par URI d'œuvre/édition)
-const readingStatus = ref<string>('none');
+// Statut de lecture, note & notes personnelles (strictement individuels par compte `user_id` + synchro serveur)
+const readingStatus = ref<IndividualReadingStatus>('none');
 const readingRating = ref<number>(0);
+const readingNotes = ref<string>('');
+const savingReadingMeta = ref(false);
 
-// Configuration rapide Intégrale (fonction métier autonome partagée)
+// Configuration rapide Intégrale (modale dédiée, homogène avec Rattacher une série)
 const showIntegralPanel = ref(false);
 const integralDraftIsIntegral = ref(false);
 const integralDraftVolumesText = ref('');
@@ -84,7 +88,13 @@ const openIntegralPanel = () => {
   integralDraftVolumesText.value = formatIncludedVolumeNumbers(
     book.value.integralMetadata?.includedVolumeNumbers
   );
-  showIntegralPanel.value = !showIntegralPanel.value;
+  showIntegralPanel.value = true;
+};
+
+const openAuthorPage = (name: string) => {
+  const clean = name.trim();
+  if (!clean) return;
+  router.push(`/author/${encodeURIComponent(clean)}`);
 };
 
 const saveIntegralConfig = async () => {
@@ -110,30 +120,52 @@ const saveIntegralConfig = async () => {
 };
 
 function loadLocalReadingMeta(uri: string) {
-  try {
-    const raw = localStorage.getItem(`biblio_reading_${uri}`);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      const st = parsed.status || 'none';
-      readingStatus.value = st === 'unread' ? 'to_read' : st;
-      readingRating.value = Number(parsed.rating) || 0;
-    } else {
-      readingStatus.value = 'none';
-      readingRating.value = 0;
-    }
-  } catch {
+  const local = userService.readLocalReadingStatus(uri);
+  if (local) {
+    readingStatus.value = local.status;
+    readingRating.value = local.rating;
+    readingNotes.value = local.personalNotes;
+  } else {
     readingStatus.value = 'none';
     readingRating.value = 0;
+    readingNotes.value = '';
+  }
+
+  // Synchronisation serveur silencieuse (source de vérité individuelle pour cet utilisateur)
+  if (!connectionState.isOffline.value) {
+    void userService.fetchReadingStatus(uri).then((remote) => {
+      if (book.value?.uri !== uri) return;
+      if (remote) {
+        readingStatus.value = remote.status;
+        readingRating.value = remote.rating;
+        readingNotes.value = remote.personalNotes || '';
+      } else if (local && (local.status !== 'none' || local.rating > 0 || local.personalNotes)) {
+        // Migration douce de l'ancien cache localStorage vers le serveur pour ce compte
+        void userService.saveReadingStatus({
+          workId: uri,
+          status: local.status,
+          rating: local.rating,
+          personalNotes: local.personalNotes
+        });
+      }
+    });
   }
 }
 
-function saveLocalReadingMeta() {
+async function saveLocalReadingMeta() {
   if (!book.value?.uri) return;
-  localStorage.setItem(
-    `biblio_reading_${book.value.uri}`,
-    JSON.stringify({ status: readingStatus.value, rating: readingRating.value })
-  );
-  successMessage.value = 'Statut de lecture mis à jour.';
+  savingReadingMeta.value = true;
+  try {
+    await userService.saveReadingStatus({
+      workId: book.value.uri,
+      status: readingStatus.value,
+      rating: readingRating.value,
+      personalNotes: readingNotes.value
+    });
+    successMessage.value = 'Statut de lecture et notes personnelles enregistrés pour votre compte.';
+  } finally {
+    savingReadingMeta.value = false;
+  }
 }
 
 const isOwned = computed(() => book.value?.ownershipStatus === 'owned');
@@ -697,13 +729,22 @@ const confirmDelete = async () => {
 
           <div class="book-meta-group" v-if="book.authors?.length || book.scriptwriters?.length || book.illustrators?.length">
             <p class="book-meta-item" v-if="book.authors?.length">
-              <strong>{{ TEXTS.bookCard.meta.authors }} :</strong> {{ book.authors.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.authors }} :</strong>
+              <template v-for="(authorName, idx) in book.authors" :key="`a-${authorName}-${idx}`">
+                <button type="button" class="discreet-saga-link" @click="openAuthorPage(authorName)">{{ authorName }}</button><span v-if="idx < book.authors.length - 1">, </span>
+              </template>
             </p>
             <p class="book-meta-item" v-if="book.scriptwriters?.length">
-              <strong>{{ TEXTS.bookCard.meta.scriptwriters }} :</strong> {{ book.scriptwriters.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.scriptwriters }} :</strong>
+              <template v-for="(name, idx) in book.scriptwriters" :key="`s-${name}-${idx}`">
+                <button type="button" class="discreet-saga-link" @click="openAuthorPage(name)">{{ name }}</button><span v-if="idx < book.scriptwriters.length - 1">, </span>
+              </template>
             </p>
             <p class="book-meta-item" v-if="book.illustrators?.length">
-              <strong>{{ TEXTS.bookCard.meta.illustrators }} :</strong> {{ book.illustrators.join(', ') }}
+              <strong>{{ TEXTS.bookCard.meta.illustrators }} :</strong>
+              <template v-for="(name, idx) in book.illustrators" :key="`i-${name}-${idx}`">
+                <button type="button" class="discreet-saga-link" @click="openAuthorPage(name)">{{ name }}</button><span v-if="idx < book.illustrators.length - 1">, </span>
+              </template>
             </p>
           </div>
 
@@ -726,10 +767,10 @@ const confirmDelete = async () => {
             </p>
           </div>
 
-          <!-- Lu / Non lu et Note discrets entre métadonnées et synopsis -->
+          <!-- Lu / Non lu, Note & Notes personnelles strictement individuels par compte -->
           <div class="book-meta-group book-reading-discreet">
             <p class="book-meta-item reading-inline-row">
-              <strong>Lecture :</strong>
+              <strong>Ma lecture :</strong>
               <select v-model="readingStatus" @change="saveLocalReadingMeta" class="discreet-meta-select">
                 <option value="none">Non renseigné</option>
                 <option value="to_read">Non lu (À lire)</option>
@@ -737,7 +778,7 @@ const confirmDelete = async () => {
                 <option value="read">Lu</option>
                 <option value="abandoned">Abandonné</option>
               </select>
-              <strong style="margin-left: 8px;">Note :</strong>
+              <strong style="margin-left: 8px;">Ma note :</strong>
               <select v-model.number="readingRating" @change="saveLocalReadingMeta" class="discreet-meta-select">
                 <option :value="0">—</option>
                 <option :value="5">5 / 5</option>
@@ -747,6 +788,15 @@ const confirmDelete = async () => {
                 <option :value="1">1 / 5</option>
               </select>
             </p>
+            <div class="personal-notes-row">
+              <textarea
+                v-model="readingNotes"
+                rows="2"
+                class="personal-notes-input"
+                placeholder="Mes notes personnelles (visibles uniquement sur mon compte)..."
+                @blur="saveLocalReadingMeta"
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -805,39 +855,46 @@ const confirmDelete = async () => {
               {{ isExcludingSeries ? 'Retrait en cours...' : 'Ne fait pas partie de cette série' }}
             </button>
           </div>
-          <div
-            v-if="showIntegralPanel"
-            style="padding: 0.75rem; border: 1px solid #c7d2fe; border-radius: 10px; background: #ffffff; display: flex; flex-direction: column; gap: 0.6rem;"
-          >
-            <IntegralConfigFields
-              v-model:is-integral="integralDraftIsIntegral"
-              v-model:included-volumes-text="integralDraftVolumesText"
-              input-id="book-detail-integral-vols"
-              :disabled="isSavingIntegral"
-            />
-            <div style="display: flex; gap: 0.5rem;">
-              <button
-                type="button"
-                class="wireframe-btn primary"
-                :disabled="isSavingIntegral"
-                @click="saveIntegralConfig"
-              >
-                {{ isSavingIntegral ? 'Enregistrement...' : 'Enregistrer le format' }}
-              </button>
-              <button
-                type="button"
-                class="wireframe-btn"
-                :disabled="isSavingIntegral"
-                @click="showIntegralPanel = false"
-              >
-                Annuler
-              </button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
     </template>
+
+    <!-- Modale dédiée Format / Intégrale (homogène avec Rattacher une série) -->
+    <Teleport to="body">
+      <div v-if="showIntegralPanel" class="modal-overlay" @click.self="showIntegralPanel = false">
+        <div class="modal-box">
+          <h2>{{ book?.isIntegral ? 'Modifier l’intégrale' : 'Transformer en intégrale' }}</h2>
+          <p class="modal-text">
+            Cette configuration est enregistrée uniquement pour votre foyer (Option B).
+          </p>
+          <IntegralConfigFields
+            v-model:is-integral="integralDraftIsIntegral"
+            v-model:included-volumes-text="integralDraftVolumesText"
+            input-id="book-detail-integral-vols"
+            :disabled="isSavingIntegral"
+          />
+          <div class="modal-actions">
+            <button
+              type="button"
+              class="btn-action"
+              :disabled="isSavingIntegral"
+              @click="saveIntegralConfig"
+            >
+              {{ isSavingIntegral ? 'Enregistrement...' : 'Enregistrer le format' }}
+            </button>
+            <button
+              type="button"
+              class="btn-close"
+              :disabled="isSavingIntegral"
+              @click="showIntegralPanel = false"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <LendModal
       :show="showLendModal"
@@ -975,5 +1032,21 @@ const confirmDelete = async () => {
   text-decoration: underline;
   font-weight: 700;
   cursor: pointer;
+}
+
+.personal-notes-row {
+  margin-top: 6px;
+}
+
+.personal-notes-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 0.85rem;
+  resize: vertical;
+  background: #f8fafc;
 }
 </style>

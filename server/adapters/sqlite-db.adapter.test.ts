@@ -14,6 +14,12 @@ import {
   clearUserPhotoScanJobs,
   listUserPhotoScanJobs
 } from '../../src/core/services/photo-scan-jobs.service';
+import {
+  getUserDefaultGenres,
+  getUserReadingStatus,
+  updateUserDefaultGenres,
+  upsertUserReadingStatus
+} from '../../src/core/services/user-preferences.service';
 import { FsCoverBucketAdapter } from './fs-cover-bucket.adapter';
 import { SqliteDatabaseAdapter } from './sqlite-db.adapter';
 
@@ -193,6 +199,39 @@ describe('Self-hosted adapters (SQLite + FS Cover Bucket)', () => {
         await clearUserPhotoScanJobs(db, 'u1');
         expect(await listUserPhotoScanJobs(db, 'u1')).toHaveLength(0);
         expect(await listUserPhotoScanJobs(db, 'u2')).toHaveLength(1);
+
+        // Migration 0015 : statuts de lecture/notes et genres par défaut strictement individuels par user_id dans le même foyer
+        await upsertUserReadingStatus(db, {
+          userId: 'u1',
+          libraryId: 'lib_1',
+          workId: 'isbn:9782012101333',
+          status: 'read',
+          rating: 5,
+          personalNotes: 'Excellent classique'
+        });
+        await upsertUserReadingStatus(db, {
+          userId: 'u2',
+          libraryId: 'lib_1',
+          workId: 'isbn:9782012101333',
+          status: 'to_read',
+          rating: 0,
+          personalNotes: 'À lire cet été'
+        });
+        const r1 = await getUserReadingStatus(db, 'u1', 'lib_1', 'isbn:9782012101333');
+        const r2 = await getUserReadingStatus(db, 'u2', 'lib_1', 'isbn:9782012101333');
+        expect(r1?.status).toBe('read');
+        expect(r1?.rating).toBe(5);
+        expect(r1?.personalNotes).toBe('Excellent classique');
+        expect(r2?.status).toBe('to_read');
+        expect(r2?.rating).toBe(0);
+        expect(r2?.personalNotes).toBe('À lire cet été');
+
+        const g1 = await updateUserDefaultGenres(db, 'u1', 'add', 'Polar historique');
+        expect(g1.isCustomized).toBe(true);
+        expect(g1.genres).toContain('Polar historique');
+        const g2 = await getUserDefaultGenres(db, 'u2');
+        expect(g2.isCustomized).toBe(false);
+        expect(g2.genres).not.toContain('Polar historique');
       } finally {
         vi.unstubAllGlobals();
       }

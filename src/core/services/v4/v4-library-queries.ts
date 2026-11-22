@@ -503,36 +503,173 @@ export async function updateV4BookMetadata(
     )
     .run();
 
-  // Propager les genres modifiés uniquement aux autres tomes de la série DANS LA BIBLIOTHÈQUE DU FOYER (`v4_library_books`)
+  // Propager de manière CUMULATIVE les genres ajoutés aux autres tomes de la série DANS LA BIBLIOTHÈQUE DU FOYER (`v4_library_books`)
+  // sans jamais écraser les genres existants des autres tomes ni toucher au catalogue central `books`.
   if (Array.isArray(params.genres) && params.genres.length > 0 && nextSeriesId) {
-    const siblingLinks = await db
-      .prepare(
-        `SELECT lb.book_id, lb.custom_overrides_json
-         FROM v4_library_books lb
-         JOIN books b ON b.id = lb.book_id
-         WHERE lb.library_id = ? AND b.series_id = ? AND lb.book_id != ?`
-      )
-      .bind(params.libraryId, nextSeriesId, bookId)
-      .all<{ book_id: string; custom_overrides_json?: string | null }>()
-      .catch(() => ({ results: [] as Array<{ book_id: string; custom_overrides_json?: string | null }> }));
+    const prevBookGenres = [
+      ...(currentOverrides.mainCategory ? [currentOverrides.mainCategory] : baseBook.mainCategory ? [baseBook.mainCategory] : []),
+      ...(currentOverrides.subgenres ?? baseBook.subgenres ?? [])
+    ];
+    const prevLowerSet = new Set(prevBookGenres.map((g) => g.trim().toLowerCase()).filter(Boolean));
+    const newlyAddedGenres = params.genres
+      .map((g) => g.trim())
+      .filter((g) => g && !prevLowerSet.has(g.toLowerCase()));
 
-    for (const sib of siblingLinks.results || []) {
-      const sibOv = sib.custom_overrides_json
-        ? safeJsonParse<LibraryBookOverrides>(sib.custom_overrides_json, {})
-        : {};
-      sibOv.mainCategory = params.genres[0];
-      sibOv.subgenres = params.genres.slice(1);
-      await db
+    if (newlyAddedGenres.length > 0) {
+      const siblingLinks = await db
         .prepare(
-          'UPDATE v4_library_books SET custom_overrides_json = ?, updated_at = ? WHERE library_id = ? AND book_id = ?'
+          `SELECT lb.book_id, lb.custom_overrides_json, b.main_category, b.subgenres_json
+           FROM v4_library_books lb
+           JOIN books b ON b.id = lb.book_id
+           WHERE lb.library_id = ? AND b.series_id = ? AND lb.book_id != ?`
         )
-        .bind(JSON.stringify(sibOv), now, params.libraryId, sib.book_id)
-        .run()
-        .catch(() => {});
+        .bind(params.libraryId, nextSeriesId, bookId)
+        .all<{
+          book_id: string;
+          custom_overrides_json?: string | null;
+          main_category?: string | null;
+          subgenres_json?: string | null;
+        }>()
+        .catch(() => ({
+          results: [] as Array<{
+            book_id: string;
+            custom_overrides_json?: string | null;
+            main_category?: string | null;
+            subgenres_json?: string | null;
+          }>
+        }));
+
+      for (const sib of siblingLinks.results || []) {
+        const sibOv = sib.custom_overrides_json
+          ? safeJsonParse<LibraryBookOverrides>(sib.custom_overrides_json, {})
+          : {};
+        const sibExisting = [
+          ...(sibOv.mainCategory ? [sibOv.mainCategory] : sib.main_category ? [sib.main_category] : []),
+          ...(sibOv.subgenres ?? safeJsonParse<string[]>(sib.subgenres_json, []))
+        ].filter(Boolean);
+
+        const mergedGenres = [...sibExisting];
+        for (const g of newlyAddedGenres) {
+          if (!mergedGenres.some((existing) => existing.trim().toLowerCase() === g.toLowerCase())) {
+            mergedGenres.push(g);
+          }
+        }
+        if (mergedGenres.length > 0) {
+          sibOv.mainCategory = mergedGenres[0];
+          sibOv.subgenres = mergedGenres.slice(1);
+          await db
+            .prepare(
+              'UPDATE v4_library_books SET custom_overrides_json = ?, updated_at = ? WHERE library_id = ? AND book_id = ?'
+            )
+            .bind(JSON.stringify(sibOv), now, params.libraryId, sib.book_id)
+            .run()
+            .catch(() => {});
+        }
+      }
     }
   }
 
   return applyLibraryOverridesToBook(baseBook, nextCoverUrl, overridesJson);
+}
+
+/**
+ * Option B : Ajoute de manière cumulative un ou plusieurs genres à un lot de livres
+ * uniquement dans la bibliothèque du foyer (`v4_library_books`), sans écraser les genres existants.
+ */
+export async function addGenresToBooksOptionB(
+  db: DatabaseBinding,
+  params: {
+    libraryId: string;
+    bookUris: string[];
+    genres: string[];
+  }
+): Promise<{ updatedCount: number }> {
+  const cleanGenres = Array.from(
+    new Set(params.genres.map((g) => g.trim()).filter(Boolean))
+  );
+  if (!params.libraryId || cleanGenres.length === 0 || params.bookUris.length === 0) {
+    return { updatedCount: 0 };
+  }
+
+  const now = new Date().toISOString();
+  let updatedCount = 0;
+
+  for (const rawUri of params.bookUris) {
+    const uri = String(rawUri || '').trim();
+    if (!uri) continue;
+
+    let bookRow: { id: string; main_category?: string | null; subgenres_json?: string | null } | null = null;
+    if (uri.startsWith('isbn:')) {
+      const isbn13 = isbnUtil.normalize(uri.slice(5));
+      if (isbn13) {
+        bookRow = await db
+          .prepare(
+            `SELECT b.id, b.main_category, b.subgenres_json
+             FROM book_isbn_index bi JOIN books b ON b.id = bi.book_id
+             WHERE bi.isbn13 = ? LIMIT 1`
+          )
+          .bind(isbn13)
+          .first();
+      }
+    }
+    if (!bookRow) {
+      bookRow = await db
+        .prepare('SELECT id, main_category, subgenres_json FROM books WHERE legacy_entity_uri = ? OR id = ? LIMIT 1')
+        .bind(uri, uri.replace(/^(?:v4:|book:)/, ''))
+        .first();
+    }
+    if (!bookRow) continue;
+
+    const link = await db
+      .prepare('SELECT is_owned, is_wished, selected_cover_url, custom_overrides_json FROM v4_library_books WHERE library_id = ? AND book_id = ? LIMIT 1')
+      .bind(params.libraryId, bookRow.id)
+      .first<{
+        is_owned: number;
+        is_wished: number;
+        selected_cover_url?: string | null;
+        custom_overrides_json?: string | null;
+      }>();
+
+    const ov = link?.custom_overrides_json
+      ? safeJsonParse<LibraryBookOverrides>(link.custom_overrides_json, {})
+      : {};
+    const existingGenres = [
+      ...(ov.mainCategory ? [ov.mainCategory] : bookRow.main_category ? [bookRow.main_category] : []),
+      ...(ov.subgenres ?? safeJsonParse<string[]>(bookRow.subgenres_json, []))
+    ].filter(Boolean);
+
+    const merged = [...existingGenres];
+    for (const g of cleanGenres) {
+      if (!merged.some((e) => e.trim().toLowerCase() === g.toLowerCase())) {
+        merged.push(g);
+      }
+    }
+    ov.mainCategory = merged[0];
+    ov.subgenres = merged.slice(1);
+
+    await db
+      .prepare(
+        `INSERT INTO v4_library_books (library_id, book_id, is_owned, is_wished, source_channel, selected_cover_url, custom_overrides_json, added_at, updated_at)
+         VALUES (?, ?, ?, ?, 'batch_genres', ?, ?, ?, ?)
+         ON CONFLICT(library_id, book_id) DO UPDATE SET
+           custom_overrides_json = excluded.custom_overrides_json,
+           updated_at = excluded.updated_at`
+      )
+      .bind(
+        params.libraryId,
+        bookRow.id,
+        link ? Number(link.is_owned) : 0,
+        link ? Number(link.is_wished) : 0,
+        link?.selected_cover_url ?? null,
+        JSON.stringify(ov),
+        now,
+        now
+      )
+      .run();
+    updatedCount++;
+  }
+
+  return { updatedCount };
 }
 
 /**
