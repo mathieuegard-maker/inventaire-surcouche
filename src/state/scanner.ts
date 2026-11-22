@@ -38,6 +38,13 @@ let isbnPickerCallback: ((isbn: string) => void) | null = null;
 
 function triggerBurstFeedback(status: 'success' | 'duplicate') {
   burstFlashEvent.value = { id: Date.now(), status };
+  if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+    try {
+      navigator.vibrate(status === 'duplicate' ? [25, 45, 25] : 45);
+    } catch {
+      // Vibration ignorée si non supportée par l'appareil
+    }
+  }
   if (flashTimer) clearTimeout(flashTimer);
   flashTimer = setTimeout(() => {
     burstFlashEvent.value = null;
@@ -135,11 +142,8 @@ export const scannerState = {
                   query: { isbn: response.isbn || rawIsbn || '' }
                 });
               } else if (response.mainBook?.uri) {
-                const alreadyInSimple = simpleBooks.value.some((b) => b.uri === response.mainBook.uri);
-                if (!alreadyInSimple) {
-                  simpleBooks.value.unshift(response.mainBook);
-                }
-                saveBookNavigationOrder(simpleBooks.value.map((b) => b.uri), 'direct');
+                saveBookNavigationOrder([response.mainBook.uri], 'direct');
+                await router.push(`/book/${encodeURIComponent(response.mainBook.uri)}`);
               } else {
                 errorMessage.value = 'Ouvrage non trouvé.';
               }

@@ -6,7 +6,6 @@ import BookMiniCard from '../BookMiniCard.vue';
 import WireframeTable from '../WireframeTable.vue';
 import BatchActionBar from '../BatchActionBar.vue';
 import LendModal from '../LendModal.vue';
-import IntegralConfigFields from '../IntegralConfigFields.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -36,15 +35,9 @@ const {
   batchBusy,
   feedbackMessage,
   errorMessage,
-  editingIntegralUri,
-  integralFlag,
-  integralVolsText,
-  integralSaving,
   toggleAll,
   toggleSelection,
   clearSelection,
-  toggleIntegralEditor,
-  applyIntegralEditor,
   dispatchBatchAction,
   confirmGroupLend
 } = useBookBatchActions(booksRef, {
@@ -96,40 +89,7 @@ const handleClearList = () => {
           :book="livre"
           :model-value="selectedUris.includes(livre.uri)"
           @update:model-value="(val) => toggleSelection(livre.uri, val)"
-        >
-          <template #extra>
-            <button type="button" class="ds-pill-btn" @click="toggleIntegralEditor(livre)">
-              {{ livre.isIntegral ? 'Modifier intégrale' : 'Déclarer intégrale' }}
-            </button>
-            <div v-if="editingIntegralUri === livre.uri" class="inline-integral-panel">
-              <IntegralConfigFields
-                v-model:is-integral="integralFlag"
-                v-model:included-volumes-text="integralVolsText"
-                :compact="true"
-                :disabled="integralSaving"
-                :input-id="`${idPrefix}-int-${livre.uri}`"
-              />
-              <div class="ds-actions-row">
-                <button
-                  type="button"
-                  class="wireframe-btn primary"
-                  :disabled="integralSaving"
-                  @click="applyIntegralEditor(livre)"
-                >
-                  Valider
-                </button>
-                <button
-                  type="button"
-                  class="wireframe-btn"
-                  :disabled="integralSaving"
-                  @click="editingIntegralUri = null"
-                >
-                  Fermer
-                </button>
-              </div>
-            </div>
-          </template>
-        </BookMiniCard>
+        />
       </WireframeTable>
 
       <BatchActionBar

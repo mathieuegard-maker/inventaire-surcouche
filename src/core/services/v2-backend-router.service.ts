@@ -29,6 +29,7 @@ import {
   upsertUserReadingStatus
 } from './user-preferences.service';
 import { resolveBookHintsCanal3 } from './canal3-resolver.service';
+import { searchCatalogExhaustive } from './catalog-search.service';
 import {
   clearUserPhotoScanJobs,
   createPhotoScanJob,
@@ -178,6 +179,30 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         limit: Number(url.searchParams.get('limit') || 10)
       });
       return jsonResponse({ hits });
+    }
+
+    // 5C. Recherche Catalogue Exhaustive (Séries + Œuvres) — dédiée à la Recherche textuelle & Auteur
+    if (path === 'books/search-catalog' && method === 'POST') {
+      if (!env.DB) {
+        return jsonResponse({ error: 'Base non configurée' }, 503);
+      }
+      const payload = (await request.json().catch(() => ({}))) as {
+        q?: string;
+        title?: string;
+        series?: string;
+        volumeNumber?: string;
+        author?: string;
+        edition?: string;
+        publisher?: string;
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      const res = await searchCatalogExhaustive(env.DB, payload, auth?.libraryId || null);
+      return jsonResponse({ ok: true, ...res });
     }
 
     // 6. Contrat Pivot V4 (Couches 1 -> 5) : Ingestion d'ISBNs vers Index O(1), Découverte C3, Consolidation C4 et Série C5

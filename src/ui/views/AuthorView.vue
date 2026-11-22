@@ -6,6 +6,7 @@ import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BookMiniCard from '../components/BookMiniCard.vue';
+import SeriesMiniCard from '../components/SeriesMiniCard.vue';
 import WireframeTable from '../components/WireframeTable.vue';
 import WireframePagination from '../components/WireframePagination.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
@@ -16,9 +17,18 @@ import { workUriResolver } from '../../core/resolvers/workUri.resolver';
 import { databaseService } from '../../core/database/database.service';
 import { entityResolver } from '../../core/resolvers/entity.resolver';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
+import { annotateIntegralCoverage } from '../../core/bibliographic/integral.util';
+import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
+import { filterEligibleBooksForBatchAction } from '../../core/utils/batch-actions.util';
+import { imageUtil } from '../../core/utils/image.util';
+import type {
+  CatalogSearchResponse,
+  CatalogSearchSeriesHit
+} from '../../core/services/catalog-search.service';
 import type { HumanizedBook } from '../../core/types';
-import { entityHumanizer } from '../../core/resolvers/humanizer';
-import { fetchWithTimeout } from '../../state/connection';
+import { connectionState, fetchWithTimeout } from '../../state/connection';
+import { sessionStore } from '../../state/session';
+import { textSearchState } from '../../state/textSearchState';
 import { saveBookNavigationOrder } from '../../state/bookNavigation';
 
 const route = useRoute();
@@ -27,42 +37,23 @@ const router = useRouter();
 const isLoading = ref(true);
 const errorMessage = ref('');
 const authorName = ref('');
+const authorSeries = ref<CatalogSearchSeriesHit[]>([]);
 const authorBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const displayedTomes = ref<HumanizedBook[]>([]);
 const filteredAuthorBooks = ref<HumanizedBook[]>([]);
 const showLendModal = ref(false);
 
-const checkAndTriggerRehumanize = (currentBook: HumanizedBook) => {
-  const needsHumanization = (currentBook.series && currentBook.series.startsWith('wd:')) ||
-                            (currentBook.authors && currentBook.authors.some(a => a.startsWith('wd:'))) ||
-                            (currentBook.publisher && currentBook.publisher.startsWith('wd:')) ||
-                            (currentBook.genres && currentBook.genres.some(g => g.startsWith('wd:'))) ||
-                            (currentBook.collection && currentBook.collection.startsWith('wd:'));
-  if (needsHumanization) {
-    console.log(`[AUTHOR VIEW] Livre partiellement humanisé détecté (${currentBook.uri}). Ré-humanisation à la volée...`);
-    entityHumanizer.rehumanize(currentBook).then((updated) => {
-      if (updated) {
-        const idx = authorBooks.value.findIndex(b => b.uri === currentBook.uri);
-        if (idx !== -1) {
-          authorBooks.value[idx] = { 
-            ...updated, 
-            ownershipStatus: authorBooks.value[idx].ownershipStatus, 
-            loan: authorBooks.value[idx].loan 
-          };
-        }
-      }
-    });
-  }
-};
-
-const loadAuthorProfile = async (authorId: string) => {
+const loadAuthorProfile = async (rawAuthorParam: string) => {
   isLoading.value = true;
   errorMessage.value = '';
+  authorSeries.value = [];
   authorBooks.value = [];
   selectedIds.value = [];
   displayedTomes.value = [];
   filteredAuthorBooks.value = [];
+
+  const authorId = decodeURIComponent(rawAuthorParam || '').trim();
   if (!authorId) {
     errorMessage.value = TEXTS.authorView.errorFetch;
     isLoading.value = false;
@@ -70,147 +61,203 @@ const loadAuthorProfile = async (authorId: string) => {
   }
 
   try {
-    const authorRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(authorId)}`);
-    if (authorRes.ok) {
-      const authorData = await authorRes.json();
-      const entity = authorData.entities?.[authorId];
-      authorName.value = entity?.label || entity?.labels?.fr || entity?.labels?.en || authorId;
+    const isEntityUri = /^(?:wd|inv):/i.test(authorId);
+    if (isEntityUri && !connectionState.isOffline.value) {
+      const authorRes = await fetchWithTimeout(`/api/gateway?action=entities-by-uris&uris=${encodeURIComponent(authorId)}`).catch(() => null);
+      if (authorRes?.ok) {
+        const authorData = await authorRes.json().catch(() => null);
+        const entity = authorData?.entities?.[authorId];
+        authorName.value = entity?.label || entity?.labels?.fr || entity?.labels?.en || authorId;
+      } else {
+        authorName.value = authorId;
+      }
     } else {
       authorName.value = authorId;
     }
 
-    const workUris = await inventaireSearchProvider.fetchAuthorWorks(authorId);
-    if (workUris.length === 0) {
-      isLoading.value = false;
-      return;
+    // 1. Collecter tous les livres locaux correspondant à cet auteur (rapide + offline-ready)
+    const allCached = await databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]);
+    const loans = await databaseService.getAllLoans().catch(() => []);
+    const loanByUri = new Map(loans.map((l) => [l.uri, l]));
+    const normAuthor = normalizeTextKey(authorName.value);
+
+    const bookMap = new Map<string, HumanizedBook>();
+    const seriesMap = new Map<string, CatalogSearchSeriesHit>();
+
+    for (const b of allCached) {
+      const people = [...(b.authors || []), ...(b.scriptwriters || []), ...(b.illustrators || [])];
+      const matches = people.some((p) => {
+        const np = normalizeTextKey(p);
+        return np === normAuthor || np.includes(normAuthor) || normAuthor.includes(np);
+      });
+      if (!matches) continue;
+      const copy: HumanizedBook = { ...b, loan: loanByUri.get(b.uri) || b.loan };
+      bookMap.set(copy.uri, copy);
+      if (copy.series) {
+        const sKey = normalizeTextKey(copy.series);
+        const existingS = seriesMap.get(sKey);
+        if (existingS) {
+          existingS.volumesCount++;
+          if (copy.ownershipStatus === 'owned') existingS.ownedCount++;
+          if (!existingS.coverUrl) existingS.coverUrl = imageUtil.resolveCoverUrl(copy);
+        } else {
+          seriesMap.set(sKey, {
+            id: copy.seriesId || `search-series:${encodeURIComponent(copy.series)}`,
+            name: copy.series,
+            coreKey: sKey,
+            authors: [authorName.value],
+            coverUrl: imageUtil.resolveCoverUrl(copy),
+            volumesCount: 1,
+            ownedCount: copy.ownershipStatus === 'owned' ? 1 : 0,
+            source: 'local',
+            isMaterializedInLocal: Boolean(copy.seriesId)
+          });
+        }
+      }
     }
 
-    // 3. Résolution groupée en URIs physiques
-    const physicalUris = await workUriResolver.resolveBulk(workUris);
+    // 2. Recherche catalogue serveur exhaustive (Séries + Livres BnF/SQLite) pour cet auteur
+    if (!connectionState.isOffline.value && authorName.value) {
+      const savedUri = sessionStore.getUserUri() || undefined;
+      const res = await fetchWithTimeout('/api/v2/books/search-catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ author: authorName.value, userUri: savedUri }),
+        timeout: 15000
+      }).catch(() => null);
 
-    // 4. Résolution complète en HumanizedBook (avec cache-first)
-    const fetchedBooks: HumanizedBook[] = [];
-    const CHUNK_SIZE = 10;
-
-    for (let i = 0; i < physicalUris.length; i += CHUNK_SIZE) {
-      const chunk = physicalUris.slice(i, i + CHUNK_SIZE);
-      const chunkBooks = await Promise.all(
-        chunk.map(async (uri) => {
-          try {
-            let book = await databaseService.getBookFromCache(uri);
-            if (!book) {
-              book = await entityResolver.resolvePhysicalEntity(uri);
-              if (book) {
-                await databaseService.saveBookToCache(book);
-              }
+      if (res?.ok) {
+        const data = (await res.json()) as CatalogSearchResponse;
+        for (const s of data.series || []) {
+          const existing = seriesMap.get(s.coreKey) || seriesMap.get(normalizeTextKey(s.name));
+          if (!existing) {
+            seriesMap.set(s.coreKey, s);
+          } else {
+            if (s.isMaterializedInLocal && !existing.isMaterializedInLocal) {
+              existing.id = s.id;
+              existing.isMaterializedInLocal = true;
             }
-            if (book) {
-              // Couplage dynamique avec l'état local (possession, souhaits, prêt)
-              const isInInventory = await databaseService.isUriInRegistry('inventory', book.uri) ||
-                                    (book.workUri ? await databaseService.isUriInRegistry('inventory', book.workUri) : false);
-              if (isInInventory) {
-                book.ownershipStatus = 'owned';
-                const activeLoan = await databaseService.getLoan(book.uri);
-                if (activeLoan) {
-                  book.loan = activeLoan;
-                }
-              } else {
-                const isInWishlist = await databaseService.isUriInRegistry('wishlist', book.uri) ||
-                                     (book.workUri ? await databaseService.isUriInRegistry('wishlist', book.workUri) : false);
-                if (isInWishlist) {
-                  book.ownershipStatus = 'wish';
-                } else {
-                  book.ownershipStatus = 'none';
-                }
-              }
-              checkAndTriggerRehumanize(book);
-            }
-            return book;
-          } catch (e) {
-            console.error(`[AUTHOR VIEW] Erreur de résolution pour ${uri} :`, e);
-            return null;
+            if (!existing.coverUrl && s.coverUrl) existing.coverUrl = s.coverUrl;
           }
-        })
-      );
-      fetchedBooks.push(...(chunkBooks.filter((b): b is HumanizedBook => !!b)));
+        }
+        for (const hit of data.books || []) {
+          if (bookMap.has(hit.uri)) continue;
+          const cached = await databaseService.getBookFromCache(hit.uri).catch(() => null);
+          const candidates = hit.coverFallbackUrls?.length
+            ? hit.coverFallbackUrls
+            : hit.isbn13
+              ? imageUtil.buildCoverCandidates(hit.isbn13, [hit.coverUrl])
+              : [];
+          bookMap.set(cached?.uri || hit.uri, {
+            uri: cached?.uri || hit.uri,
+            bookId: cached?.bookId || hit.bookId,
+            type: 'edition',
+            isbn13: cached?.isbn13 || hit.isbn13,
+            title: cached?.title || hit.title,
+            authors: cached?.authors?.length ? cached.authors : hit.authors,
+            illustrators: cached?.illustrators || [],
+            scriptwriters: cached?.scriptwriters || [],
+            publisher: cached?.publisher || hit.publisher,
+            publishDate: cached?.publishDate || hit.publishDate,
+            series: cached?.series || hit.series,
+            seriesId: cached?.seriesId || hit.seriesId,
+            seriesNumber: cached?.seriesNumber || hit.seriesNumber,
+            genres: cached?.genres || [],
+            coverUrl: cached?.localCover || cached?.coverUrl || hit.coverUrl || candidates[0],
+            coverFallbackUrls: cached?.coverFallbackUrls || candidates,
+            ownershipStatus: cached?.ownershipStatus || hit.ownershipStatus || 'none',
+            isIntegral: cached?.isIntegral ?? Boolean(hit.isIntegral),
+            loan: cached?.loan
+          });
+        }
+      } else if (isEntityUri) {
+        // Repli historique Inventaire.io uniquement si URI wd:/inv:
+        const workUris = await inventaireSearchProvider.fetchAuthorWorks(authorId).catch(() => []);
+        const physicalUris = await workUriResolver.resolveBulk(workUris.slice(0, 30)).catch(() => []);
+        for (const uri of physicalUris) {
+          if (bookMap.has(uri)) continue;
+          const b = (await databaseService.getBookFromCache(uri)) || (await entityResolver.resolvePhysicalEntity(uri));
+          if (b) bookMap.set(b.uri, b);
+        }
+      }
     }
 
-    authorBooks.value = fetchedBooks;
-  } catch (error) {
-    console.error('[AUTHOR VIEW] Échec du chargement du profil de l\'auteur :', error);
+    authorSeries.value = Array.from(seriesMap.values()).sort((a, b) => {
+      if (a.ownedCount !== b.ownedCount) return b.ownedCount - a.ownedCount;
+      return a.name.localeCompare(b.name, 'fr');
+    });
+
+    const mergedBooks = annotateIntegralCoverage(Array.from(bookMap.values()), allCached);
+    authorBooks.value = mergedBooks;
+    saveBookNavigationOrder(mergedBooks.map((b) => b.uri), 'author');
+  } catch (err: unknown) {
+    console.error('[AUTHOR VIEW] Erreur chargement auteur :', err);
     errorMessage.value = TEXTS.authorView.errorFetch;
   } finally {
     isLoading.value = false;
   }
 };
 
-onMounted(() => {
-  void loadAuthorProfile(route.params.id as string);
+const openSeriesHit = async (s: CatalogSearchSeriesHit) => {
+  if (s.isMaterializedInLocal || s.id.startsWith('wd:') || s.id.startsWith('inv:') || s.id.startsWith('ser_')) {
+    await router.push({ name: 'SeriesView', params: { id: s.id }, query: { fromMode: 'author' } });
+    return;
+  }
+  textSearchState.form.value = {
+    title: '',
+    series: s.name,
+    volumeNumber: '',
+    author: authorName.value,
+    edition: '',
+    publisher: '',
+    isbn: ''
+  };
+  await router.push({ name: 'ScanView', query: { mode: 'search' } });
+};
+
+onMounted(() => loadAuthorProfile(route.params.id as string));
+watch(() => route.params.id, (newId) => {
+  if (newId) void loadAuthorProfile(newId as string);
 });
 
-watch(
-  () => route.params.id,
-  (newId) => {
-    if (newId) void loadAuthorProfile(newId as string);
-  }
-);
-
-// Méthodes d'interaction
 const isAllSelected = computed(() => {
   const targets = filteredAuthorBooks.value.length > 0 ? filteredAuthorBooks.value : authorBooks.value;
-  return targets.length > 0 && targets.every((book) => selectedIds.value.includes(book.uri));
+  return targets.length > 0 && targets.every((b) => selectedIds.value.includes(b.uri));
 });
-const selectedBooks = computed(() => authorBooks.value.filter(book => selectedIds.value.includes(book.uri)));
-const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
-const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
-const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
-
-const isSelectionMixed = computed(() => {
-  let categories = 0;
-  if (hasUnownedSelected.value) categories++;
-  if (hasAvailableOwnedSelected.value) categories++;
-  if (hasLentSelected.value) categories++;
-  return categories > 1;
-});
-
-const batchContext = computed(() => {
-  if (hasUnownedSelected.value) return 'unowned';
-  if (hasLentSelected.value) return 'lent';
-  return 'owned';
-});
+const selectedBooks = computed(() => authorBooks.value.filter((b) => selectedIds.value.includes(b.uri)));
+const eligibleLendBooks = computed(() => filterEligibleBooksForBatchAction(selectedBooks.value, 'LEND'));
 
 const handleToggleAll = (checked: boolean) => {
   const targets = filteredAuthorBooks.value.length > 0 ? filteredAuthorBooks.value : authorBooks.value;
-  selectedIds.value = checked ? targets.map(item => item.uri) : [];
+  selectedIds.value = checked ? targets.map((item) => item.uri) : [];
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
-  if (selectedIds.value.length === 0) return;
+  const eligible = filterEligibleBooksForBatchAction(selectedBooks.value, action);
+  if (eligible.length === 0) return;
   if (action === 'LEND') {
     showLendModal.value = true;
     return;
   }
+  const eligibleSet = new Set(eligible.map((b) => b.uri));
   try {
-    for (const uri of selectedIds.value) {
+    for (const book of eligible) {
       if (action === 'DELETE') {
-        const book = authorBooks.value.find(b => b.uri === uri);
-        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
-        await queueService.enqueueAction(removeAct, uri);
+        const removeAct = book.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, book.uri);
       } else {
-        await queueService.enqueueAction(action, uri);
+        await queueService.enqueueAction(action, book.uri);
       }
     }
-    authorBooks.value = authorBooks.value.map(book => {
-      if (selectedIds.value.includes(book.uri)) {
+    authorBooks.value = authorBooks.value.map((book) => {
+      if (eligibleSet.has(book.uri)) {
         if (action === 'RETURN') {
-          const copy = { ...book };
-          delete copy.loan;
-          return copy;
+          const { loan, ...rest } = book;
+          return rest;
         }
         if (action === 'DELETE') {
-          const copy = { ...book, ownershipStatus: 'none' as const };
-          delete copy.loan;
-          return copy;
+          const { loan, ...rest } = book;
+          return { ...rest, ownershipStatus: 'none' as const };
         }
         return { ...book, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
       }
@@ -218,21 +265,20 @@ const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'L
     });
     selectedIds.value = [];
   } catch (error) {
-    console.error('[AUTHOR VIEW] Échec de l\'action groupée :', error);
+    console.error("[AUTHOR VIEW] Échec de l'action groupée :", error);
   }
 };
 
 const confirmGroupLend = async (friendName: string) => {
+  const eligible = eligibleLendBooks.value;
+  const eligibleSet = new Set(eligible.map((b) => b.uri));
   try {
-    for (const uri of selectedIds.value) {
-      await queueService.enqueueAction('LEND', uri, { friendName });
+    for (const book of eligible) {
+      await queueService.enqueueAction('LEND', book.uri, { friendName });
     }
-    authorBooks.value = authorBooks.value.map(book => {
-      if (selectedIds.value.includes(book.uri)) {
-        return { ...book, loan: { uri: book.uri, friendName, loanDate: Date.now() } };
-      }
-      return book;
-    });
+    authorBooks.value = authorBooks.value.map((book) =>
+      eligibleSet.has(book.uri) ? { ...book, loan: { uri: book.uri, friendName, loanDate: Date.now() } } : book
+    );
     selectedIds.value = [];
   } catch (error) {
     console.error('[AUTHOR VIEW] Échec du prêt groupé :', error);
@@ -251,16 +297,32 @@ const confirmGroupLend = async (friendName: string) => {
 
     <div v-else class="main-content-wrapper">
       <BaseBanner v-if="errorMessage" type="error" :message="errorMessage" />
-      
-      <BaseBanner 
-        v-if="!authorBooks.length && !errorMessage" 
-        type="error" 
-        :message="TEXTS.authorView.emptyWorks" 
+
+      <BaseBanner
+        v-if="!authorSeries.length && !authorBooks.length && !errorMessage"
+        type="error"
+        :message="TEXTS.authorView.emptyWorks"
       />
 
+      <!-- SECTION 1 : SÉRIES DE L'AUTEUR -->
+      <div v-if="authorSeries.length" class="semantic-bucket-section" style="margin-bottom: 1.25rem;">
+        <div class="wishlist-section-header">Séries ({{ authorSeries.length }})</div>
+        <WireframeTable>
+          <SeriesMiniCard
+            v-for="saga in authorSeries"
+            :key="saga.id"
+            :name="saga.name"
+            :owned-count="saga.ownedCount"
+            :cover-url="saga.coverUrl ? imageUtil.resolveExternalUrl(saga.coverUrl) : undefined"
+            @click="openSeriesHit(saga)"
+          />
+        </WireframeTable>
+      </div>
+
+      <!-- SECTION 2 : ŒUVRES & ALBUMS -->
       <div v-if="authorBooks.length" class="semantic-bucket-section">
-        <div class="wishlist-section-header">{{ TEXTS.authorView.sectionWorks }}</div>
-        
+        <div class="wishlist-section-header">{{ TEXTS.authorView.sectionWorks }} ({{ authorBooks.length }})</div>
+
         <WireframePagination
           :items="authorBooks"
           :searchKeys="['title', 'series']"
@@ -276,9 +338,9 @@ const confirmGroupLend = async (friendName: string) => {
           </div>
 
           <WireframeTable v-else>
-            <BookMiniCard 
-              v-for="livre in displayedTomes" 
-              :key="livre.uri" 
+            <BookMiniCard
+              v-for="livre in displayedTomes"
+              :key="livre.uri"
               :book="livre"
               :model-value="selectedIds.includes(livre.uri)"
               @update:model-value="(val) => {
@@ -292,10 +354,9 @@ const confirmGroupLend = async (friendName: string) => {
             />
           </WireframeTable>
 
-          <BatchActionBar 
+          <BatchActionBar
             :selected-count="selectedIds.length"
             :selected-books="selectedBooks"
-            :context="batchContext"
             @execute="dispatchBatchAction"
             @clear="selectedIds = []"
           />
@@ -305,7 +366,7 @@ const confirmGroupLend = async (friendName: string) => {
 
     <LendModal
       :show="showLendModal"
-      :bookCount="selectedIds.length"
+      :bookCount="eligibleLendBooks.length"
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
     />

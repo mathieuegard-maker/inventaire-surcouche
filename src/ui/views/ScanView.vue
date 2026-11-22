@@ -1101,18 +1101,27 @@ async function clearPhotoQueueAndForm() {
     />
 
     <!-- ================================================================ -->
-    <!-- ONGLET 3 : SCAN SIMPLE (COMPOSANT PARTAGÉ)                       -->
+    <!-- ONGLET 3 : SCAN SIMPLE (OUVERTURE DIRECTE DE LA FICHE)           -->
     <!-- ================================================================ -->
-    <ScanBookListTab
-      v-if="activeMode === 'simple'"
-      :books="simpleBooks"
-      mode-label="Scan simple"
-      id-prefix="simple"
-      :is-resolving="scannerState.isSimpleResolving.value"
-      :resolving-isbn="scannerState.simpleResolvingIsbn.value"
-      empty-hint="Aucun livre scanné pour le moment. Appuyez sur l'onglet Scan simple ci-dessus pour ouvrir la caméra : la fiche apparaîtra ici dès que vous fermerez la fenêtre."
-      @clear-list="scannerState.clearSimpleBooks()"
-    />
+    <section v-if="activeMode === 'simple'" class="ds-card" style="display: flex; flex-direction: column; gap: 0.75rem; align-items: flex-start;">
+      <p style="margin: 0; font-size: 0.9rem; color: var(--color-text-muted);">
+        Flashez un code-barres pour ouvrir directement la fiche complète du livre (statut possédé / non possédé, prêt, wishlist).
+      </p>
+      <div v-if="scannerState.isSimpleResolving.value" class="ds-banner ds-banner-info" style="width: 100%;">
+        <strong>Chargement de la fiche ({{ scannerState.simpleResolvingIsbn.value }}) en cours...</strong>
+      </div>
+      <div v-if="scannerState.errorMessage.value" class="ds-banner ds-banner-error" style="width: 100%;">
+        {{ scannerState.errorMessage.value }}
+      </div>
+      <button
+        type="button"
+        class="wireframe-btn primary"
+        style="width: auto; padding: 0.55rem 1.15rem;"
+        @click="scannerState.openCameraModal(router, 'simple')"
+      >
+        Ouvrir la caméra (Scan simple)
+      </button>
+    </section>
 
     <!-- ================================================================ -->
     <!-- ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CHAMPS                      -->
