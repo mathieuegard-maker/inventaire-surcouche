@@ -20,6 +20,13 @@ import {
   type UserIngestHint
 } from './v4-pipeline.service';
 import { resolveBookHintsCanal3 } from './canal3-resolver.service';
+import {
+  clearUserPhotoScanJobs,
+  createPhotoScanJob,
+  deleteUserPhotoScanJob,
+  listUserPhotoScanJobs,
+  retryUserFailedPhotoScanJobs
+} from './photo-scan-jobs.service';
 
 function jsonResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {
@@ -430,6 +437,75 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         return jsonResponse({ ok: true, traceId: tracer.traceId, recorded: steps.length });
       }
       return jsonResponse({ ok: true, recorded: 0 });
+    }
+
+    // 8. Traitement Photo IA en tâche de fond côté serveur (isolé par utilisateur / foyer)
+    if (path === 'photo-jobs' && method === 'POST') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const payload = (await request.json().catch(() => ({}))) as {
+        mode?: 'cover' | 'shelf';
+        imageDataUrl?: string;
+        mimeType?: string;
+        userUri?: string;
+      };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      if (!payload.imageDataUrl || typeof payload.imageDataUrl !== 'string') {
+        return jsonResponse({ error: 'imageDataUrl requis' }, 400);
+      }
+      const job = await createPhotoScanJob(env.DB, env, {
+        userId: auth.userId,
+        libraryId: auth.libraryId,
+        mode: payload.mode === 'cover' ? 'cover' : 'shelf',
+        imageDataUrl: payload.imageDataUrl,
+        mimeType: payload.mimeType
+      });
+      return jsonResponse({ ok: true, job }, 202);
+    }
+
+    if (path === 'photo-jobs' && method === 'GET') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const userUriParam = url.searchParams.get('userUri');
+      const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const jobs = await listUserPhotoScanJobs(env.DB, auth.userId);
+      return jsonResponse({ ok: true, jobs });
+    }
+
+    if (path === 'photo-jobs/retry' && method === 'POST') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const payload = (await request.json().catch(() => ({}))) as { userUri?: string };
+      const auth = await resolveAuthSession(
+        env.DB,
+        request,
+        typeof payload.userUri === 'string' ? payload.userUri : null
+      );
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      const retried = await retryUserFailedPhotoScanJobs(env.DB, env, auth.userId);
+      return jsonResponse({ ok: true, retried });
+    }
+
+    if (path === 'photo-jobs' && method === 'DELETE') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const userUriParam = url.searchParams.get('userUri');
+      const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      await clearUserPhotoScanJobs(env.DB, auth.userId);
+      return jsonResponse({ ok: true });
+    }
+
+    if (path.startsWith('photo-jobs/') && method === 'DELETE') {
+      if (!env.DB) return jsonResponse({ error: 'Base non configurée' }, 503);
+      const jobId = decodeURIComponent(path.slice('photo-jobs/'.length));
+      const userUriParam = url.searchParams.get('userUri');
+      const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      if (!auth) return jsonResponse({ error: 'Authentification requise' }, 401);
+      await deleteUserPhotoScanJob(env.DB, auth.userId, jobId);
+      return jsonResponse({ ok: true });
     }
 
     return jsonResponse({ error: `Route V2 inconnue: ${method} /api/v2/${path}` }, 404);

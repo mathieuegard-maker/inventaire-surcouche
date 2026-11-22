@@ -74,6 +74,7 @@ export interface LocalIsbnIndexEntry {
 
 export interface PhotoScanJobRecord {
   id?: number;
+  serverJobId?: string;
   mode: 'cover' | 'shelf';
   imageDataUrl: string;
   status: 'pending' | 'ai_running' | 'resolving' | 'done' | 'error';

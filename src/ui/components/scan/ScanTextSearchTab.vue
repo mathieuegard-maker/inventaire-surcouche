@@ -92,32 +92,41 @@ const optionToHumanizedBook = async (opt: Canal3ResolutionOption): Promise<Human
   if (!isbn13) return null;
   const uri = `isbn:${isbn13}`;
   const cached = await databaseService.getBookFromCache(uri).catch(() => null);
-  const candidates = imageUtil.buildCoverCandidates(isbn13, [opt.meta?.coverUrl]);
+  const candidates = opt.coverFallbackUrls?.length
+    ? opt.coverFallbackUrls
+    : imageUtil.buildCoverCandidates(isbn13, [opt.coverUrl]);
   return {
     uri: cached?.uri || uri,
     bookId: cached?.bookId,
     type: 'edition',
     isbn13,
-    title: cached?.title || opt.meta?.title || 'Titre inconnu',
+    title: cached?.title || opt.title || 'Titre inconnu',
     authors: cached?.authors?.length
       ? cached.authors
-      : opt.meta?.authors?.length
-        ? opt.meta.authors
+      : opt.authors?.length
+        ? opt.authors
         : ['Auteur inconnu'],
     illustrators: cached?.illustrators || [],
     scriptwriters: cached?.scriptwriters || [],
-    publisher: cached?.publisher || opt.meta?.publisher,
-    publishDate: cached?.publishDate || opt.meta?.publishDate,
-    series: cached?.series || opt.meta?.series,
+    publisher: cached?.publisher || opt.publisher,
+    publishDate: cached?.publishDate || opt.publishDate,
+    series: cached?.series || opt.series,
     seriesId: cached?.seriesId,
-    seriesNumber: cached?.seriesNumber || opt.meta?.seriesNumber,
-    collection: cached?.collection || opt.meta?.collection,
+    seriesNumber: cached?.seriesNumber || opt.seriesNumber,
     genres: cached?.genres || [],
-    coverUrl: cached?.localCover || cached?.coverUrl || candidates[0],
+    coverUrl: cached?.localCover || cached?.coverUrl || opt.coverUrl || candidates[0],
     coverFallbackUrls: cached?.coverFallbackUrls || candidates,
     ownershipStatus: cached?.ownershipStatus || 'none',
-    isIntegral: cached?.isIntegral,
-    integralMetadata: cached?.integralMetadata,
+    isIntegral: cached?.isIntegral ?? Boolean(opt.isIntegral),
+    integralMetadata:
+      cached?.integralMetadata ||
+      (opt.includedVolumeNumbers?.length
+        ? {
+            includedVolumeNumbers: opt.includedVolumeNumbers,
+            includedWorkIds: [],
+            includedIsbns: []
+          }
+        : undefined),
     wishedByName: cached?.wishedByName,
     loan: cached?.loan
   };
@@ -185,9 +194,16 @@ const handleSearch = async () => {
     if (resolved.isbn13 && resolved.meta) {
       await pushOption({
         isbn13: resolved.isbn13,
-        meta: resolved.meta,
+        title: resolved.meta.title,
+        authors: resolved.meta.authors || [],
+        publisher: resolved.meta.publisher,
+        publishDate: resolved.meta.publishDate,
+        coverUrl: resolved.meta.coverUrl,
+        coverFallbackUrls: resolved.meta.coverFallbackUrls,
+        series: resolved.meta.series,
+        seriesNumber: resolved.meta.seriesNumber,
         sourcesCount: resolved.sourcesCount || 1,
-        confidenceScore: 100
+        score: 100
       });
     }
     for (const alt of resolved.alternatives || []) {

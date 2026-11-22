@@ -782,9 +782,9 @@ async function clearPhotoQueueAndForm() {
             <button type="button" class="link-btn" @click="dismissPhotoHelp">Ne plus afficher</button>
           </div>
           <p class="photo-help-text">
-            Importez une ou plusieurs photos (étagère, pile ou couverture). Sur les séries avec plusieurs éditions
-            (ex. <strong>Tome unitaire</strong> vs <strong>Intégrale</strong>), un menu déroulant vous permet de choisir
-            l'édition exacte avant l'enregistrement.
+            Importez une ou plusieurs photos (étagère, pile ou couverture). L’analyse IA et les recherches BnF tournent
+            <strong>en arrière-plan sur le serveur</strong> : vous pouvez fermer l’application et revenir plus tard pour
+            affiner et valider vos livres avant l’ajout.
           </p>
         </div>
 
@@ -805,7 +805,7 @@ async function clearPhotoQueueAndForm() {
       <!-- Suivi file IA / Canal 3 -->
       <div v-if="photoStats.totalPhotos > 0" class="scan-card">
         <div class="queue-progress-header">
-          <strong>{{ isPhotoProcessing ? 'Traitement IA & BnF en cours' : 'Résumé du lot photo' }}</strong>
+          <strong>{{ isPhotoProcessing ? 'Traitement serveur en cours (vous pouvez fermer l’app)' : 'Résumé du lot photo' }}</strong>
           <div class="queue-header-actions">
             <button
               v-if="photoStats.errorPhotos > 0"

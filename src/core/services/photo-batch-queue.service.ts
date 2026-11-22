@@ -1,59 +1,38 @@
 // src/core/services/photo-batch-queue.service.ts
-// File persistante de capture photo en rafale + traitement asynchrone en arrière-plan
-// tant que l'application reste ouverte, avec suivi détaillé (photos IA, recherches, sûrs/doutes/non-trouvés).
+// Orchestrateur client des lots Photo IA :
+// - Mode principal : exécution en tâche de fond côté serveur (/api/v2/photo-jobs) isolée par compte,
+//   permettant de fermer l'application immédiatement après l'envoi des photos et de retrouver les résultats prêts à valider.
+// - Polling léger (3 s) uniquement tant qu'au moins une photo est en cours de traitement côté serveur.
 
 import { computed, ref } from 'vue';
+import { connectionState, fetchWithTimeout } from '../../state/connection';
+import { sessionStore } from '../../state/session';
 import { databaseService, type PhotoScanJobRecord } from '../database/database.service';
 import { byokVisionService } from './byok-vision.service';
-import {
-  photoBookResolutionService,
-  type PhotoBatchResolutionResult,
-  type ResolvedPhotoItem
-} from './photo-book-resolution.service';
+import type { ResolvedPhotoItem } from './photo-book-resolution.service';
+import type { ServerPhotoScanJob } from './photo-scan-jobs.service';
 import { normalizeTextKey } from '../resolvers/bnf.resolver';
 
 const jobs = ref<PhotoScanJobRecord[]>([]);
 const isProcessing = ref(false);
 const currentStatusMessage = ref('');
 const wakeLockActive = ref(false);
-let workerLoopPromise: Promise<void> | null = null;
-let wakeLockSentinel: { release?: () => Promise<void> } | null = null;
+let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-async function acquireWakeLock(): Promise<void> {
-  try {
-    const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
-    if (nav?.wakeLock?.request) {
-      wakeLockSentinel = await nav.wakeLock.request('screen');
-      wakeLockActive.value = true;
-    }
-  } catch {
-    wakeLockActive.value = false;
-  }
-}
-
-async function releaseWakeLock(): Promise<void> {
-  try {
-    if (wakeLockSentinel?.release) {
-      await wakeLockSentinel.release();
-    }
-  } catch {
-    // Ignore
-  } finally {
-    wakeLockSentinel = null;
-    wakeLockActive.value = false;
-  }
-}
-
-if (typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && isProcessing.value) {
-      void acquireWakeLock();
-    }
-  });
-}
-
-async function refreshJobs(): Promise<void> {
-  jobs.value = await databaseService.getPhotoScanJobs();
+function mapServerJobToLocalRecord(job: ServerPhotoScanJob, idx: number): PhotoScanJobRecord {
+  return {
+    id: idx + 1,
+    serverJobId: job.id,
+    mode: job.mode,
+    imageDataUrl: job.imageDataUrl,
+    status: job.status,
+    errorMessage: job.errorMessage,
+    candidatesCount: job.candidatesCount,
+    externalLookupsCount: job.externalLookupsCount,
+    result: job.result,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt
+  };
 }
 
 export interface PhotoQueueStats {
@@ -123,91 +102,66 @@ const stats = computed<PhotoQueueStats>(() => {
   };
 });
 
-async function runWorkerLoop(): Promise<void> {
-  if (isProcessing.value) return;
-  isProcessing.value = true;
-  await acquireWakeLock();
-
-  try {
-    while (true) {
-      await refreshJobs();
-      const nextJob = jobs.value.find((j) => j.status === 'pending');
-      if (!nextJob || typeof nextJob.id !== 'number') break;
-
-      const jobId = nextJob.id;
-      const doneIdx = jobs.value.filter((j) => j.status === 'done' || j.status === 'error').length + 1;
-      const total = jobs.value.length;
-
-      try {
-        await databaseService.updatePhotoScanJob(jobId, {
-          status: 'ai_running',
-          errorMessage: undefined,
-          updatedAt: Date.now()
-        });
-        await refreshJobs();
-
-        currentStatusMessage.value = `Photo ${doneIdx}/${total} : lecture visuelle par l'IA...`;
-        const candidates = await byokVisionService.analyzePhoto(
-          nextJob.imageDataUrl,
-          nextJob.mode,
-          (msg) => {
-            currentStatusMessage.value = `Photo ${doneIdx}/${total} : ${msg}`;
-          }
-        );
-
-        let jobLookups = 0;
-        await databaseService.updatePhotoScanJob(jobId, {
-          status: 'resolving',
-          candidatesCount: candidates.length,
-          externalLookupsCount: 0,
-          updatedAt: Date.now()
-        });
-        await refreshJobs();
-
-        let result: PhotoBatchResolutionResult;
-        if (candidates.length === 0) {
-          result = { detectedItems: [], seriesExtraItems: [], detectedSeriesNames: [] };
-        } else {
-          result = await photoBookResolutionService.resolveCandidatesAndDiscoverSeries(
-            candidates,
-            (msg) => {
-              currentStatusMessage.value = `Photo ${doneIdx}/${total} : ${msg}`;
-            },
-            (delta) => {
-              jobLookups += delta;
-              const live = jobs.value.find((j) => j.id === jobId);
-              if (live) live.externalLookupsCount = jobLookups;
-            }
-          );
-        }
-
-        await databaseService.updatePhotoScanJob(jobId, {
-          status: 'done',
-          candidatesCount: candidates.length,
-          externalLookupsCount: jobLookups,
-          result,
-          updatedAt: Date.now()
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Erreur lors du traitement de la photo.';
-        await databaseService.updatePhotoScanJob(jobId, {
-          status: 'error',
-          errorMessage: msg,
-          updatedAt: Date.now()
-        });
-      }
-      await refreshJobs();
-    }
-
-    currentStatusMessage.value =
-      stats.value.donePhotos > 0
-        ? `Traitement terminé : ${stats.value.donePhotos} photo(s) prête(s) à valider.`
-        : '';
-  } finally {
-    isProcessing.value = false;
-    await releaseWakeLock();
-    workerLoopPromise = null;
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
+}
+
+function updateStatusMessageFromJobs() {
+  const active = jobs.value.filter(
+    (j) => j.status === 'pending' || j.status === 'ai_running' || j.status === 'resolving'
+  );
+  if (active.length > 0) {
+    isProcessing.value = true;
+    const first = active[0];
+    if (first.status === 'resolving' && first.candidatesCount) {
+      currentStatusMessage.value = `Traitement serveur : recherche BnF (${first.externalLookupsCount || 0}/${first.candidatesCount} livres)... Vous pouvez fermer l’application et revenir plus tard.`;
+    } else {
+      currentStatusMessage.value = `Traitement serveur : analyse IA en cours (${active.length} photo(s))... Vous pouvez fermer l’application et revenir plus tard.`;
+    }
+    return;
+  }
+
+  isProcessing.value = false;
+  stopPolling();
+  if (stats.value.donePhotos > 0) {
+    currentStatusMessage.value = `Traitement terminé : ${stats.value.donePhotos} photo(s) prête(s) à valider.`;
+  } else {
+    currentStatusMessage.value = '';
+  }
+}
+
+async function syncFromServer(): Promise<boolean> {
+  if (connectionState.isOffline.value || typeof fetch !== 'function') return false;
+  try {
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    const res = await fetchWithTimeout(`/api/v2/photo-jobs${qs}`, { timeout: 10000 });
+    if (!res?.ok) return false;
+    const data = (await res.json()) as { ok?: boolean; jobs?: ServerPhotoScanJob[] };
+    if (!data?.ok || !Array.isArray(data.jobs)) return false;
+
+    jobs.value = data.jobs.map((j, idx) => mapServerJobToLocalRecord(j, idx));
+    updateStatusMessageFromJobs();
+    if (isProcessing.value && !pollTimer) {
+      pollTimer = setInterval(() => {
+        void syncFromServer();
+      }, 3000);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      void syncFromServer();
+    }
+  });
 }
 
 export const photoBatchQueueService = {
@@ -218,88 +172,104 @@ export const photoBatchQueueService = {
   wakeLockActive,
 
   async initAndResume(): Promise<void> {
-    await refreshJobs();
-    // Si un onglet a été fermé en plein traitement, remettre ces photos en pending
-    for (const job of jobs.value) {
-      if ((job.status === 'ai_running' || job.status === 'resolving') && typeof job.id === 'number') {
-        await databaseService.updatePhotoScanJob(job.id, {
-          status: 'pending',
-          updatedAt: Date.now()
-        });
-      }
-    }
-    await refreshJobs();
-    if (jobs.value.some((j) => j.status === 'pending')) {
-      this.ensureProcessing();
+    const synced = await syncFromServer();
+    if (!synced) {
+      jobs.value = await databaseService.getPhotoScanJobs().catch(() => []);
+      updateStatusMessageFromJobs();
     }
   },
 
   ensureProcessing(): void {
-    if (!workerLoopPromise) {
-      workerLoopPromise = runWorkerLoop();
+    if (!pollTimer && isProcessing.value) {
+      pollTimer = setInterval(() => {
+        void syncFromServer();
+      }, 3000);
     }
   },
 
   async enqueuePhotos(files: File[], mode: 'cover' | 'shelf'): Promise<number> {
     if (files.length === 0) return 0;
-    currentStatusMessage.value = `Compression de ${files.length} photo(s) en WebP...`;
+    currentStatusMessage.value = `Envoi de ${files.length} photo(s) au serveur...`;
 
+    const savedUri = sessionStore.getUserUri() || undefined;
     let added = 0;
+
     for (const file of files) {
       const imageDataUrl = await byokVisionService.compressForMode(file, mode);
-      await databaseService.addPhotoScanJob({
-        mode,
-        imageDataUrl,
-        status: 'pending',
-        candidatesCount: 0,
-        externalLookupsCount: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
+      const res = await fetchWithTimeout('/api/v2/photo-jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 20000,
+        body: JSON.stringify({
+          mode,
+          imageDataUrl,
+          mimeType: 'image/webp',
+          userUri: savedUri
+        })
       });
+      if (!res?.ok) {
+        const errData = await res?.json().catch(() => ({}));
+        throw new Error(errData?.error || 'Impossible d’envoyer la photo au serveur.');
+      }
       added++;
     }
 
-    await refreshJobs();
-    this.ensureProcessing();
+    await syncFromServer();
     return added;
   },
 
   async retryFailedJobs(): Promise<void> {
-    await refreshJobs();
-    for (const job of jobs.value) {
-      if (job.status === 'error' && typeof job.id === 'number') {
-        await databaseService.updatePhotoScanJob(job.id, {
-          status: 'pending',
-          errorMessage: undefined,
-          updatedAt: Date.now()
-        });
-      }
-    }
-    await refreshJobs();
-    this.ensureProcessing();
+    const savedUri = sessionStore.getUserUri() || undefined;
+    await fetchWithTimeout('/api/v2/photo-jobs/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000,
+      body: JSON.stringify({ userUri: savedUri })
+    }).catch(() => {});
+    await syncFromServer();
   },
 
   async removeJob(id: number): Promise<void> {
-    await databaseService.deletePhotoScanJob(id);
-    await refreshJobs();
+    const target = jobs.value.find((j) => j.id === id);
+    if (target?.serverJobId) {
+      const savedUri = sessionStore.getUserUri() || '';
+      const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+      await fetchWithTimeout(`/api/v2/photo-jobs/${encodeURIComponent(target.serverJobId)}${qs}`, {
+        method: 'DELETE',
+        timeout: 10000
+      }).catch(() => {});
+    } else {
+      await databaseService.deletePhotoScanJob(id).catch(() => {});
+    }
+    await syncFromServer();
   },
 
   async clearCompletedJobs(): Promise<void> {
-    await refreshJobs();
-    for (const job of jobs.value) {
-      if (job.status === 'done' && typeof job.id === 'number') {
-        await databaseService.deletePhotoScanJob(job.id);
+    const doneJobs = jobs.value.filter((j) => j.status === 'done');
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    for (const job of doneJobs) {
+      if (job.serverJobId) {
+        await fetchWithTimeout(`/api/v2/photo-jobs/${encodeURIComponent(job.serverJobId)}${qs}`, {
+          method: 'DELETE',
+          timeout: 10000
+        }).catch(() => {});
       }
     }
-    await refreshJobs();
-    if (jobs.value.length === 0) {
-      currentStatusMessage.value = '';
-    }
+    await syncFromServer();
   },
 
   async clearAllJobs(): Promise<void> {
-    await databaseService.clearPhotoScanJobs();
-    await refreshJobs();
+    stopPolling();
+    const savedUri = sessionStore.getUserUri() || '';
+    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    await fetchWithTimeout(`/api/v2/photo-jobs${qs}`, {
+      method: 'DELETE',
+      timeout: 10000
+    }).catch(() => {});
+    await databaseService.clearPhotoScanJobs().catch(() => {});
+    jobs.value = [];
+    isProcessing.value = false;
     currentStatusMessage.value = '';
   },
 

@@ -12,6 +12,7 @@ import { handleV2ApiRequest } from '../src/core/services/v2-backend-router.servi
 import { FsCoverBucketAdapter } from './adapters/fs-cover-bucket.adapter';
 import { SqliteDatabaseAdapter } from './adapters/sqlite-db.adapter';
 import { startSelfHostedScheduler } from './scheduler';
+import { resumePendingPhotoScanJobs } from '../src/core/services/photo-scan-jobs.service';
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -135,6 +136,14 @@ const scheduler = CRON_ENABLED
       initialDelaySeconds: 90
     })
   : null;
+
+void resumePendingPhotoScanJobs(dbAdapter, backendEnv)
+  .then((count) => {
+    if (count > 0) {
+      console.log(`[SERVER] Reprise automatique de ${count} lot(s) Photo IA en cours.`);
+    }
+  })
+  .catch(() => {});
 
 const server = serve(
   {

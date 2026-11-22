@@ -10,6 +10,10 @@ import {
   syncV4LibraryBooks,
   updateV4BookMetadata
 } from '../../src/core/services/v4-pipeline.service';
+import {
+  clearUserPhotoScanJobs,
+  listUserPhotoScanJobs
+} from '../../src/core/services/photo-scan-jobs.service';
 import { FsCoverBucketAdapter } from './fs-cover-bucket.adapter';
 import { SqliteDatabaseAdapter } from './sqlite-db.adapter';
 
@@ -165,6 +169,30 @@ describe('Self-hosted adapters (SQLite + FS Cover Bucket)', () => {
         expect(asIntegral?.isIntegral).toBe(true);
         expect(asIntegral?.integralMetadata.includedVolumeNumbers).toEqual(['1', '2']);
         expect(asIntegral?.integralMetadata.includedWorkIds).toContain(wishedBook.id);
+
+        // Migration 0014 : isolation stricte des lots Photo IA serveur par utilisateur
+        await db
+          .prepare(
+            `INSERT INTO photo_scan_jobs (id, user_id, library_id, mode, status, image_data_url, mime_type, candidates_count, progress_done, created_at, updated_at)
+             VALUES (?, ?, ?, 'shelf', 'done', 'data:image/webp;base64,AA==', 'image/webp', 2, 2, ?, ?)`
+          )
+          .bind('pjob_u1', 'u1', 'lib_1', now, now)
+          .run();
+        await db
+          .prepare(
+            `INSERT INTO photo_scan_jobs (id, user_id, library_id, mode, status, image_data_url, mime_type, candidates_count, progress_done, created_at, updated_at)
+             VALUES (?, ?, ?, 'shelf', 'done', 'data:image/webp;base64,AA==', 'image/webp', 1, 1, ?, ?)`
+          )
+          .bind('pjob_u2', 'u2', 'lib_1', now, now)
+          .run();
+
+        const u1Jobs = await listUserPhotoScanJobs(db, 'u1');
+        const u2Jobs = await listUserPhotoScanJobs(db, 'u2');
+        expect(u1Jobs.map((j) => j.id)).toEqual(['pjob_u1']);
+        expect(u2Jobs.map((j) => j.id)).toEqual(['pjob_u2']);
+        await clearUserPhotoScanJobs(db, 'u1');
+        expect(await listUserPhotoScanJobs(db, 'u1')).toHaveLength(0);
+        expect(await listUserPhotoScanJobs(db, 'u2')).toHaveLength(1);
       } finally {
         vi.unstubAllGlobals();
       }
