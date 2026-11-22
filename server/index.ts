@@ -92,6 +92,20 @@ app.use('/assets/*', async (c, next) => {
   }
 });
 
+app.use('/', async (c, next) => {
+  await next();
+  if (c.res.status === 200) {
+    c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+});
+
+app.use('/index.html', async (c, next) => {
+  await next();
+  if (c.res.status === 200) {
+    c.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+  }
+});
+
 app.use('/sw.js', async (c, next) => {
   await next();
   if (c.res.status === 200) {

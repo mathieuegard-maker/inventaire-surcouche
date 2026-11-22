@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRegisterSW } from 'virtual:pwa-register/vue';
 import { TEXTS } from '../locales/fr';
+
+let swRegistration: ServiceWorkerRegistration | undefined;
+let cleanupVisibilityListener: (() => void) | null = null;
+let cleanupFocusListener: (() => void) | null = null;
 
 const {
   offlineReady,
@@ -10,19 +14,25 @@ const {
 } = useRegisterSW({
   onRegistered(r) {
     console.log('[PWA] Service Worker correctement enregistré.', r);
+    swRegistration = r;
     if (r) {
       r.update().catch(() => {});
       if (typeof document !== 'undefined') {
-        document.addEventListener('visibilitychange', () => {
+        const onVisibilityChange = () => {
           if (!document.hidden) {
             r.update().catch(() => {});
           }
-        });
+        };
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        cleanupVisibilityListener = () =>
+          document.removeEventListener('visibilitychange', onVisibilityChange);
       }
       if (typeof window !== 'undefined') {
-        window.addEventListener('focus', () => {
+        const onFocus = () => {
           r.update().catch(() => {});
-        });
+        };
+        window.addEventListener('focus', onFocus);
+        cleanupFocusListener = () => window.removeEventListener('focus', onFocus);
       }
     }
   },
@@ -32,16 +42,81 @@ const {
 });
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
+const isUpdating = ref(false);
 const isOpen = computed(() => offlineReady.value || needRefresh.value);
 let pressedOutsideBackdrop = false;
+let reloadTriggered = false;
 
 const closeModal = () => {
+  if (isUpdating.value) return;
   offlineReady.value = false;
   needRefresh.value = false;
   if (dialogRef.value?.open) {
     dialogRef.value.close();
   }
 };
+
+const triggerReloadOnce = () => {
+  if (reloadTriggered) return;
+  reloadTriggered = true;
+  offlineReady.value = false;
+  needRefresh.value = false;
+  if (dialogRef.value?.open) {
+    dialogRef.value.close();
+  }
+  window.location.reload();
+};
+
+const applyUpdate = async () => {
+  if (isUpdating.value) return;
+  isUpdating.value = true;
+
+  const hasSw = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
+
+  // Écouter directement controllerchange sans dépendre du flag `event.isUpdate` de workbox-window
+  // (souvent ignoré après reprise d'une PWA déjà en attente ou sur iOS Safari).
+  if (hasSw) {
+    navigator.serviceWorker.addEventListener('controllerchange', triggerReloadOnce, { once: true });
+  }
+
+  // Garde-fou : garantit le rechargement même si le navigateur n'émet pas controllerchange.
+  const fallbackTimer = window.setTimeout(() => {
+    triggerReloadOnce();
+  }, 1500);
+
+  try {
+    await updateServiceWorker(true);
+
+    if (hasSw) {
+      const reg = swRegistration || (await navigator.serviceWorker.getRegistration());
+      if (reg?.waiting) {
+        reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      } else if (reg?.installing) {
+        reg.installing.addEventListener('statechange', () => {
+          if (reg.waiting) {
+            reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+          }
+        });
+      } else {
+        // Le nouveau Service Worker a déjà pris la main entre-temps : recharger immédiatement
+        window.clearTimeout(fallbackTimer);
+        triggerReloadOnce();
+      }
+    } else {
+      window.clearTimeout(fallbackTimer);
+      triggerReloadOnce();
+    }
+  } catch (err) {
+    console.warn('[PWA] Rechargement de secours après échec updateServiceWorker:', err);
+    window.clearTimeout(fallbackTimer);
+    triggerReloadOnce();
+  }
+};
+
+onUnmounted(() => {
+  cleanupVisibilityListener?.();
+  cleanupFocusListener?.();
+});
 
 const syncDialogVisibility = () => {
   const el = dialogRef.value;
@@ -130,13 +205,15 @@ const onDialogPointerUp = (e: PointerEvent) => {
             type="button"
             class="btn-action pwa-btn-lg"
             autofocus
-            @click="updateServiceWorker()"
+            :disabled="isUpdating"
+            @click="applyUpdate"
           >
-            Mettre à jour maintenant
+            {{ isUpdating ? 'Mise à jour en cours…' : 'Mettre à jour maintenant' }}
           </button>
           <button
             type="button"
             class="btn-close pwa-btn-lg"
+            :disabled="isUpdating"
             @click="closeModal"
           >
             {{ needRefresh ? 'Plus tard' : 'Compris' }}
