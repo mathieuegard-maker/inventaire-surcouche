@@ -24,6 +24,7 @@ import {
   extractAuthorLastNameForBnfCql,
   fetchWithTimeoutAndRetry,
   isGoogleBooksCircuitOpen,
+  scheduleBnfSruCall,
   searchLocalBooksForCanal3,
   tripGoogleBooksCircuit,
   type SourceChannel
@@ -53,8 +54,12 @@ function normalizeToIsbn13(raw?: string): string | undefined {
 async function fetchBnfByCql(cql: string, maxRecords = 18): Promise<ExternalBookMetadata[]> {
   const url = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=${maxRecords}&startRecord=1`;
   try {
-    const res = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4800, retriesOn5xx: 1 });
-    if (!res.ok) return [];
+    await scheduleBnfSruCall(260);
+    const res = await fetchWithTimeoutAndRetry(url, { timeoutMs: 5200, retriesOn5xx: 2 });
+    if (!res.ok) {
+      console.warn(`[BNF SRU] HTTP ${res.status} pour CQL: ${cql}`);
+      return [];
+    }
     const xml = await res.text();
     const records = xml.split('<srw:record>').slice(1);
     const out: ExternalBookMetadata[] = [];
@@ -73,7 +78,11 @@ async function fetchBnfByCql(cql: string, maxRecords = 18): Promise<ExternalBook
 }
 
 async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBookMetadata[]> {
-  const cleanTerm = (val?: string) => (val || '').replace(/["()]/g, ' ').replace(/\s+/g, ' ').trim();
+  const cleanTerm = (val?: string) =>
+    (val || '')
+      .replace(/['’"()!?,;:/]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   const title = cleanTerm(hints.title);
   const series = cleanTerm(hints.series);
   const vol = normalizeSeriesNumber(hints.volumeNumber);
@@ -99,7 +108,9 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
     queries.push(clauses.join(' and '));
   } else if (title && vol && !series) {
     const pubClause = publisher ? ` and (bib.publisher all "${publisher}")` : '';
+    const authClause = authorLast ? ` and (bib.author all "${authorLast}")` : '';
     queries.push(`(bib.anywhere all "${title} ${vol}")${pubClause} and (bib.doctype all "a")`);
+    queries.push(`(bib.title all "${title}")${authClause}${pubClause} and (bib.doctype all "a")`);
   }
   if (title && queries.length === 0) {
     queries.push(`(bib.title all "${title}") and (bib.doctype all "a")`);
@@ -120,12 +131,14 @@ async function searchBnfServerByHints(hints: BnfHintQuery): Promise<ExternalBook
       const fallback = await fetchBnfByCql(fallbackCql, 18);
       merged = [...merged, ...fallback];
     }
-    // Second repli sur les mots significatifs >= 4 lettres si l'OCR contenait un mot parasite
-    if (merged.length === 0 && (title || series)) {
-      const sigWords = `${series} ${title}`
+    // Second repli sur les mots significatifs >= 4 lettres si l'OCR contenait un mot parasite ou un sigle (ex. rawSpineText)
+    if (merged.length === 0 && (title || series || hints.rawSpineText)) {
+      const rawExtra = cleanTerm(hints.rawSpineText);
+      const sigWords = `${series} ${title} ${rawExtra}`
         .split(/\s+/)
         .map((w) => w.replace(/[^a-zA-ZÀ-ÿ0-9]/g, ''))
-        .filter((w) => w.length >= 4)
+        .filter((w) => w.length >= 4 && normalizeTextKey(w) !== normalizeTextKey(authorLast))
+        .filter((w, i, arr) => arr.indexOf(w) === i)
         .slice(0, 3);
       if (sigWords.length >= 1) {
         const relaxedTerm = [...sigWords, vol].filter(Boolean).join(' ').trim();

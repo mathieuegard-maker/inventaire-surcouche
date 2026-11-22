@@ -46,8 +46,9 @@ export async function fetchWithTimeoutAndRetry(
     try {
       const res = await fetch(url, { headers, signal: controller.signal });
       clearTimeout(timer);
-      if ((res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+      if ((res.status === 429 || res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
+        const delayMs = res.status === 429 ? 450 * (attempt + 1) : 250 * (attempt + 1);
+        await new Promise((r) => setTimeout(r, delayMs));
         continue;
       }
       return res;
@@ -67,11 +68,37 @@ export async function fetchWithTimeoutAndRetry(
  * Extrait proprement le nom de famille d'un auteur pour une requête CQL `bib.author` BnF,
  * qu'il soit au format "Prénom Nom" ("René Goscinny", "J. K. Rowling") ou "Nom, Prénom" ("Goscinny, René").
  */
+let bnfThrottleChain: Promise<void> = Promise.resolve();
+let lastBnfCallTimestamp = 0;
+
+/**
+ * Espace les appels HTTP sortants vers l'API SRU de la BnF d'au moins `minIntervalMs`
+ * afin d'éviter les rafales parallèles provoquant HTTP 429 / 503 / ECONNRESET.
+ */
+export async function scheduleBnfSruCall(minIntervalMs = 260): Promise<void> {
+  const prev = bnfThrottleChain;
+  let release!: () => void;
+  bnfThrottleChain = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await prev;
+  try {
+    const elapsed = Date.now() - lastBnfCallTimestamp;
+    if (elapsed < minIntervalMs) {
+      await new Promise((r) => setTimeout(r, minIntervalMs - elapsed));
+    }
+    lastBnfCallTimestamp = Date.now();
+  } finally {
+    release();
+  }
+}
+
 export function extractAuthorLastNameForBnfCql(rawAuthor?: string): string {
   if (!rawAuthor) return '';
   const cleaned = rawAuthor
     .replace(/\s*\([^)]*\)/g, '')
     .replace(/["()]/g, ' ')
+    .split(/\s+(?:et|and)\s+|[,;/&]|\s+-\s+/i)[0]
     .trim();
   if (!cleaned) return '';
   if (cleaned.includes(',')) {

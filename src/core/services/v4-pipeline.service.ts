@@ -9,6 +9,7 @@ export {
   isGoogleBooksCircuitOpen,
   normalizeIsbnWithPressFallback,
   resetGoogleBooksCircuit,
+  scheduleBnfSruCall,
   tripGoogleBooksCircuit,
   type IngestBatchResult,
   type IngestSingleResult,
