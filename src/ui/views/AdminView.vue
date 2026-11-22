@@ -35,6 +35,150 @@ const editCatalogForm = ref({
 });
 const savingCatalogEdit = ref(false);
 
+// Sélection multiple et modification groupée dans le catalogue Admin
+const selectedCatalogUris = ref<string[]>([]);
+const showBulkEditModal = ref(false);
+const savingBulkEdit = ref(false);
+const bulkEditForm = ref({
+  applyPublisher: false,
+  publisher: '',
+  applyMainCategory: false,
+  main_category: '',
+  applySeriesName: false,
+  series_name: '',
+  applyAuthors: false,
+  authors: '',
+  applySubgenres: false,
+  subgenres: '',
+  applyPublicationDate: false,
+  publication_date: ''
+});
+
+const ADMIN_MAIN_CATEGORIES = [
+  'BD',
+  'Comics',
+  'Manga',
+  'Roman',
+  'Roman graphique',
+  'Jeunesse',
+  'Essai',
+  'Autre'
+];
+
+const isCatalogItemSelected = (uri: string): boolean => selectedCatalogUris.value.includes(uri);
+
+const toggleCatalogItemSelection = (uri: string) => {
+  if (!uri) return;
+  if (selectedCatalogUris.value.includes(uri)) {
+    selectedCatalogUris.value = selectedCatalogUris.value.filter((u) => u !== uri);
+  } else {
+    selectedCatalogUris.value = [...selectedCatalogUris.value, uri];
+  }
+};
+
+const allCurrentPageSelected = computed(() => {
+  if (catalogItems.value.length === 0) return false;
+  return catalogItems.value.every((item) => selectedCatalogUris.value.includes(item.uri));
+});
+
+const toggleSelectAllCurrentPage = (checked: boolean) => {
+  const pageUris = catalogItems.value.map((item) => item.uri).filter(Boolean);
+  if (checked) {
+    selectedCatalogUris.value = Array.from(new Set([...selectedCatalogUris.value, ...pageUris]));
+  } else {
+    const pageSet = new Set(pageUris);
+    selectedCatalogUris.value = selectedCatalogUris.value.filter((u) => !pageSet.has(u));
+  }
+};
+
+const clearCatalogSelection = () => {
+  selectedCatalogUris.value = [];
+};
+
+const hasAnyBulkFieldSelected = computed(
+  () =>
+    bulkEditForm.value.applyPublisher ||
+    bulkEditForm.value.applyMainCategory ||
+    bulkEditForm.value.applySeriesName ||
+    bulkEditForm.value.applyAuthors ||
+    bulkEditForm.value.applySubgenres ||
+    bulkEditForm.value.applyPublicationDate
+);
+
+const openBulkEditModal = () => {
+  if (selectedCatalogUris.value.length === 0) return;
+  bulkEditForm.value = {
+    applyPublisher: false,
+    publisher: '',
+    applyMainCategory: false,
+    main_category: '',
+    applySeriesName: false,
+    series_name: '',
+    applyAuthors: false,
+    authors: '',
+    applySubgenres: false,
+    subgenres: '',
+    applyPublicationDate: false,
+    publication_date: ''
+  };
+  showBulkEditModal.value = true;
+};
+
+const saveAdminBulkCatalogEdit = async () => {
+  if (selectedCatalogUris.value.length === 0 || !hasAnyBulkFieldSelected.value || savingBulkEdit.value) return;
+  savingBulkEdit.value = true;
+  errorMsg.value = '';
+  actionFeedback.value = '';
+  try {
+    const patch: {
+      publisher?: string | null;
+      main_category?: string | null;
+      series_name?: string | null;
+      authors?: string[];
+      subgenres?: string[];
+      publication_date?: string | null;
+    } = {};
+
+    if (bulkEditForm.value.applyPublisher) {
+      patch.publisher = bulkEditForm.value.publisher.trim() || null;
+    }
+    if (bulkEditForm.value.applyMainCategory) {
+      patch.main_category = bulkEditForm.value.main_category.trim() || null;
+    }
+    if (bulkEditForm.value.applySeriesName) {
+      patch.series_name = bulkEditForm.value.series_name.trim() || null;
+    }
+    if (bulkEditForm.value.applyAuthors) {
+      patch.authors = bulkEditForm.value.authors
+        .split(',')
+        .map((a) => a.trim())
+        .filter(Boolean);
+    }
+    if (bulkEditForm.value.applySubgenres) {
+      patch.subgenres = bulkEditForm.value.subgenres
+        .split(',')
+        .map((g) => g.trim())
+        .filter(Boolean);
+    }
+    if (bulkEditForm.value.applyPublicationDate) {
+      patch.publication_date = bulkEditForm.value.publication_date.trim() || null;
+    }
+
+    const res = await userService.bulkUpdateAdminCatalogItems({
+      uris: selectedCatalogUris.value,
+      patch
+    });
+    showBulkEditModal.value = false;
+    selectedCatalogUris.value = [];
+    actionFeedback.value = `Modification groupée appliquée : ${res.updatedCount} fiche(s) mise(s) à jour sur le catalogue serveur (${res.updatedV4Count} synchronisée(s) V4).`;
+    await loadCatalog();
+  } catch (e: unknown) {
+    errorMsg.value = e instanceof Error ? e.message : 'Erreur lors de la modification groupée.';
+  } finally {
+    savingBulkEdit.value = false;
+  }
+};
+
 const openAdminCatalogEditor = (item: any) => {
   editingCatalogItem.value = item;
   editCatalogForm.value = {
@@ -400,7 +544,43 @@ onMounted(() => {
           </button>
         </div>
 
-        <p class="count-line">{{ catalogTotal }} fiche(s) trouvée(s) — cliquez sur une ligne pour modifier la fiche maître serveur</p>
+        <div class="catalog-select-bar">
+          <label class="catalog-select-all-label">
+            <input
+              type="checkbox"
+              class="wireframe-checkbox"
+              :checked="allCurrentPageSelected"
+              :disabled="catalogItems.length === 0"
+              @change="toggleSelectAllCurrentPage(($event.target as HTMLInputElement).checked)"
+            />
+            <span>Tout sélectionner sur cette page ({{ catalogItems.length }})</span>
+          </label>
+          <span class="count-line-inline">
+            {{ catalogTotal }} fiche(s) trouvée(s)
+          </span>
+        </div>
+
+        <div v-if="selectedCatalogUris.length > 0" class="admin-bulk-bar">
+          <strong class="admin-bulk-count">
+            {{ selectedCatalogUris.length }} œuvre(s) sélectionnée(s)
+          </strong>
+          <div class="admin-bulk-actions">
+            <button
+              type="button"
+              class="wireframe-btn btn-primary admin-bulk-btn"
+              @click="openBulkEditModal"
+            >
+              Modifier la sélection ({{ selectedCatalogUris.length }})
+            </button>
+            <button
+              type="button"
+              class="wireframe-btn admin-bulk-btn"
+              @click="clearCatalogSelection"
+            >
+              Tout désélectionner
+            </button>
+          </div>
+        </div>
 
         <div v-if="catalogLoading" class="loading-line">Chargement...</div>
 
@@ -411,9 +591,19 @@ onMounted(() => {
             role="button"
             tabindex="0"
             class="catalog-row catalog-row-clickable"
+            :class="{ 'catalog-row-selected': isCatalogItemSelected(item.uri) }"
             @click="openAdminCatalogEditor(item)"
             @keydown.enter.prevent="openAdminCatalogEditor(item)"
           >
+            <label class="catalog-row-check-wrap" @click.stop>
+              <input
+                type="checkbox"
+                class="wireframe-checkbox"
+                :checked="isCatalogItemSelected(item.uri)"
+                :aria-label="`Sélectionner ${item.label}`"
+                @change="toggleCatalogItemSelection(item.uri)"
+              />
+            </label>
             <img
               v-if="item.image_url"
               :src="imageUtil.resolveExternalUrl(item.image_url, item.uri?.startsWith('isbn:') ? item.uri.slice(5) : undefined)"
@@ -428,6 +618,7 @@ onMounted(() => {
               <strong>{{ item.label }}</strong>
               <div class="catalog-sub">
                 <span>{{ item.uri }}</span>
+                <span v-if="item.series_name">• {{ item.series_name }}</span>
                 <span v-if="item.publisher">• {{ item.publisher }}</span>
                 <span v-if="item.publication_date">• {{ item.publication_date }}</span>
                 <span v-if="item.main_category">• {{ item.main_category }}</span>
@@ -622,6 +813,128 @@ onMounted(() => {
       </div>
     </template>
 
+    <!-- Modale de modification groupée (sélection multiple Admin) -->
+    <Teleport to="body">
+      <div v-if="showBulkEditModal" class="modal-overlay" @click.self="showBulkEditModal = false">
+        <div class="modal-box" role="dialog" aria-modal="true" aria-label="Modification groupée du catalogue">
+          <h2>Modifier {{ selectedCatalogUris.length }} œuvre(s)</h2>
+          <p class="modal-text">
+            Cochez uniquement les champs que vous souhaitez appliquer à l’ensemble des fiches sélectionnées. Les champs non cochés resteront intacts sur chaque œuvre.
+          </p>
+
+          <datalist id="admin-main-category-options">
+            <option v-for="cat in ADMIN_MAIN_CATEGORIES" :key="cat" :value="cat" />
+          </datalist>
+
+          <div class="admin-edit-fields">
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applyPublisher }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applyPublisher" type="checkbox" class="wireframe-checkbox" />
+                <span>Éditeur</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applyPublisher"
+                v-model="bulkEditForm.publisher"
+                type="text"
+                class="ds-input"
+                placeholder="Ex : Urban Comics, Dargaud, Dupuis... (vide pour effacer)"
+              />
+            </div>
+
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applyMainCategory }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applyMainCategory" type="checkbox" class="wireframe-checkbox" />
+                <span>Catégorie principale</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applyMainCategory"
+                v-model="bulkEditForm.main_category"
+                type="text"
+                list="admin-main-category-options"
+                class="ds-input"
+                placeholder="Ex : BD, Comics, Manga, Roman..."
+              />
+            </div>
+
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applySeriesName }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applySeriesName" type="checkbox" class="wireframe-checkbox" />
+                <span>Série</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applySeriesName"
+                v-model="bulkEditForm.series_name"
+                type="text"
+                class="ds-input"
+                placeholder="Ex : Fables (laisser vide pour détacher de la série)"
+              />
+            </div>
+
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applyAuthors }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applyAuthors" type="checkbox" class="wireframe-checkbox" />
+                <span>Auteurs (séparés par des virgules)</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applyAuthors"
+                v-model="bulkEditForm.authors"
+                type="text"
+                class="ds-input"
+                placeholder="Ex : Bill Willingham, Mark Buckingham"
+              />
+            </div>
+
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applySubgenres }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applySubgenres" type="checkbox" class="wireframe-checkbox" />
+                <span>Sous-genres / Genres secondaires (virgules)</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applySubgenres"
+                v-model="bulkEditForm.subgenres"
+                type="text"
+                class="ds-input"
+                placeholder="Ex : Fantastique, Aventure"
+              />
+            </div>
+
+            <div class="bulk-field-card" :class="{ active: bulkEditForm.applyPublicationDate }">
+              <label class="bulk-field-toggle">
+                <input v-model="bulkEditForm.applyPublicationDate" type="checkbox" class="wireframe-checkbox" />
+                <span>Date / Année de publication</span>
+              </label>
+              <input
+                v-if="bulkEditForm.applyPublicationDate"
+                v-model="bulkEditForm.publication_date"
+                type="text"
+                class="ds-input"
+                placeholder="Ex : 2012"
+              />
+            </div>
+          </div>
+
+          <div class="modal-actions">
+            <button
+              type="button"
+              class="btn-action"
+              :disabled="savingBulkEdit || !hasAnyBulkFieldSelected"
+              @click="saveAdminBulkCatalogEdit"
+            >
+              {{ savingBulkEdit ? 'Application en cours...' : `Appliquer à ${selectedCatalogUris.length} fiche(s)` }}
+            </button>
+            <button
+              type="button"
+              class="btn-close"
+              :disabled="savingBulkEdit"
+              @click="showBulkEditModal = false"
+            >
+              Annuler
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
     <!-- Modale d'édition directe de la fiche maître catalogue serveur (Admin) -->
     <Teleport to="body">
       <div v-if="editingCatalogItem" class="modal-overlay" @click.self="editingCatalogItem = null">
@@ -711,11 +1024,106 @@ onMounted(() => {
 
 .catalog-row-clickable {
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
 }
 
 .catalog-row-clickable:hover {
   background: #f8fafc;
+}
+
+.catalog-row-selected {
+  border-color: var(--color-primary, #4f46e5) !important;
+  background: #eef2ff;
+}
+
+.catalog-row-check-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.catalog-select-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.35rem 0 0.65rem;
+}
+
+.catalog-select-all-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.count-line-inline {
+  font-size: 0.84rem;
+  color: #64748b;
+}
+
+.admin-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.85rem;
+  margin-bottom: 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+}
+
+.admin-bulk-count {
+  font-size: 0.88rem;
+  color: #3730a3;
+}
+
+.admin-bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-bulk-btn {
+  width: auto !important;
+  height: auto !important;
+  min-block-size: 36px;
+  padding: 0.35rem 0.8rem !important;
+  font-size: 0.82rem !important;
+}
+
+.bulk-field-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.bulk-field-card.active {
+  border-color: #c7d2fe;
+  background: #eef2ff;
+}
+
+.bulk-field-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #0f172a;
+  cursor: pointer;
 }
 
 .catalog-edit-pill {

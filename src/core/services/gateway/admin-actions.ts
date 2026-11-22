@@ -1,11 +1,259 @@
 // src/core/services/gateway/admin-actions.ts
 // Domaine métier : Administration, supervision du catalogue, quotas IA et observabilité des logs.
 
+import type { DatabaseBinding } from '../../adapters/storage-db.interface';
+import { cleanSeriesName, normalizeTextKey } from '../../resolvers/bnf.resolver';
+import { stripEditorialCollectionSuffixes } from '../../utils/series-matcher.util';
 import { computeMonthlyAiQuota } from '../../utils/vision-prompt.util';
 import { rehydrateAllCatalogEntitiesInD1 } from '../d1-gateway.service';
 import { purgeOldPipelineLogs, queryPipelineLogs } from '../pipeline-logger.service';
 import { runCentralizedSeriesReleaseSweep } from '../series-digest.service';
 import { jsonResp, maskEmail, requireAdmin, type GatewayActionContext } from './gateway-context';
+
+export interface AdminCatalogPatchInput {
+  label?: string;
+  image_url?: string | null;
+  main_category?: string | null;
+  subgenres?: string[];
+  series_number?: string | null;
+  series_name?: string | null;
+  authors?: string[];
+  publisher?: string | null;
+  publication_date?: string | null;
+}
+
+async function resolveOrCreateV4SeriesForAdmin(
+  db: DatabaseBinding,
+  rawSeriesName: string,
+  authors: string[],
+  now: string
+): Promise<{ id: string; canonicalName: string } | null> {
+  const clean = rawSeriesName.trim();
+  if (!clean) return null;
+  const { coreKey, cleanDisplay } = stripEditorialCollectionSuffixes(cleanSeriesName(clean));
+  const targetName = cleanDisplay || clean;
+  const normKey = coreKey || normalizeTextKey(targetName);
+  const existing = await db
+    .prepare('SELECT id, canonical_name FROM v4_series WHERE normalized_core_key = ? OR LOWER(canonical_name) = ? LIMIT 1')
+    .bind(normKey, targetName.toLowerCase())
+    .first<{ id: string; canonical_name: string }>()
+    .catch(() => null);
+  if (existing?.id) {
+    return { id: String(existing.id), canonicalName: String(existing.canonical_name) };
+  }
+  const newId = `ser_${normKey.replace(/[^a-z0-9]/g, '_')}_${Math.random().toString(36).slice(2, 7)}`;
+  await db
+    .prepare(
+      `INSERT OR IGNORE INTO v4_series
+        (id, canonical_name, normalized_core_key, aliases_json, primary_authors_json, bnf_ensemble_ids_json, is_complete_expanded, known_volumes_count, created_at, updated_at)
+       VALUES (?, ?, ?, '[]', ?, '[]', 0, 1, ?, ?)`
+    )
+    .bind(newId, targetName, normKey, JSON.stringify(authors), now, now)
+    .run()
+    .catch(() => {});
+  return { id: newId, canonicalName: targetName };
+}
+
+/**
+ * Applique un patch partiel d'administration sur une fiche maître (`catalog_entities` + `books` V4).
+ * Seuls les champs explicitement présents (différents de `undefined`) dans `patch` sont modifiés.
+ */
+async function applyAdminCatalogPatch(
+  db: DatabaseBinding,
+  targetUri: string,
+  patch: AdminCatalogPatchInput,
+  now: string
+): Promise<{ updated: boolean; updatedV4: boolean }> {
+  const existingCe = await db
+    .prepare('SELECT label, image_url, main_category, series_uri, series_number, entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
+    .bind(targetUri)
+    .first<{
+      label: string;
+      image_url: string | null;
+      main_category: string | null;
+      series_uri: string | null;
+      series_number: string | null;
+      entity_json: string | null;
+    }>();
+
+  let parsedEntity: Record<string, any> = {};
+  if (existingCe?.entity_json) {
+    try {
+      parsedEntity = JSON.parse(existingCe.entity_json);
+    } catch {
+      parsedEntity = {};
+    }
+  }
+
+  const nextLabel = patch.label !== undefined && patch.label.trim() ? patch.label.trim() : existingCe?.label;
+  const nextImageUrl = patch.image_url !== undefined ? (patch.image_url?.trim() || null) : existingCe?.image_url ?? null;
+  const nextMainCategory = patch.main_category !== undefined ? (patch.main_category?.trim() || null) : existingCe?.main_category ?? null;
+  const nextSeriesNumber = patch.series_number !== undefined ? (patch.series_number?.trim() || null) : existingCe?.series_number ?? null;
+
+  let resolvedSeries: { id: string; canonicalName: string } | null = null;
+  if (patch.series_name !== undefined && patch.series_name?.trim()) {
+    resolvedSeries = await resolveOrCreateV4SeriesForAdmin(
+      db,
+      patch.series_name,
+      patch.authors || (Array.isArray(parsedEntity.authors) ? parsedEntity.authors : []),
+      now
+    );
+  }
+  const nextSeriesUri =
+    patch.series_name !== undefined
+      ? resolvedSeries?.id ?? null
+      : existingCe?.series_uri ?? null;
+
+  if (nextLabel) parsedEntity.label = nextLabel;
+  if (patch.publisher !== undefined) parsedEntity.publisher = patch.publisher?.trim() || null;
+  if (patch.publication_date !== undefined) parsedEntity.publishDate = patch.publication_date?.trim() || null;
+  if (patch.authors !== undefined) parsedEntity.authors = patch.authors;
+  if (patch.subgenres !== undefined) parsedEntity.genres = patch.subgenres;
+  if (patch.series_name !== undefined) {
+    parsedEntity.series = resolvedSeries?.canonicalName ?? null;
+  }
+
+  if (existingCe) {
+    await db
+      .prepare(
+        `UPDATE catalog_entities
+         SET label = ?,
+             image_url = ?,
+             main_category = ?,
+             series_uri = ?,
+             series_number = ?,
+             entity_json = ?,
+             updated_at = ?
+         WHERE uri = ?`
+      )
+      .bind(
+        nextLabel || existingCe.label,
+        nextImageUrl,
+        nextMainCategory,
+        nextSeriesUri,
+        nextSeriesNumber,
+        JSON.stringify(parsedEntity),
+        now,
+        targetUri
+      )
+      .run();
+  }
+
+  // Synchroniser également la table maître V4 `books` (colonnes réelles du schéma V4 + `editions_catalog_json`)
+  const rawIsbn = targetUri.startsWith('isbn:') ? targetUri.slice(5).replace(/[^0-9X]/gi, '') : '';
+  const v4Row = await db
+    .prepare(
+      rawIsbn
+        ? `SELECT b.id, b.canonical_title, b.selected_cover_url, b.main_category, b.subgenres_json,
+                  b.series_id, b.series_name, b.volume_label, b.volume_number, b.authors_json, b.editions_catalog_json
+           FROM books b
+           WHERE b.legacy_entity_uri = ?
+              OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND bi.isbn13 = ?)
+           LIMIT 1`
+        : `SELECT id, canonical_title, selected_cover_url, main_category, subgenres_json,
+                  series_id, series_name, volume_label, volume_number, authors_json, editions_catalog_json
+           FROM books WHERE legacy_entity_uri = ? OR id = ? LIMIT 1`
+    )
+    .bind(targetUri, rawIsbn || targetUri.replace(/^(?:v4:|book:)/, ''))
+    .first<{
+      id: string;
+      canonical_title: string;
+      selected_cover_url: string | null;
+      main_category: string;
+      subgenres_json: string | null;
+      series_id: string | null;
+      series_name: string | null;
+      volume_label: string | null;
+      volume_number: number | null;
+      authors_json: string | null;
+      editions_catalog_json: string | null;
+    }>()
+    .catch(() => null);
+
+  if (v4Row?.id) {
+    const v4Title = patch.label !== undefined && patch.label.trim() ? patch.label.trim() : v4Row.canonical_title;
+    const v4Cover = patch.image_url !== undefined ? (patch.image_url?.trim() || null) : v4Row.selected_cover_url;
+    const v4MainCat = patch.main_category !== undefined ? (patch.main_category?.trim() || 'Autre') : v4Row.main_category;
+    const v4SubgenresJson =
+      patch.subgenres !== undefined ? JSON.stringify(patch.subgenres) : (v4Row.subgenres_json || '[]');
+    const v4AuthorsJson =
+      patch.authors !== undefined ? JSON.stringify(patch.authors) : (v4Row.authors_json || '[]');
+    const v4SeriesId =
+      patch.series_name !== undefined ? (resolvedSeries?.id ?? null) : v4Row.series_id;
+    const v4SeriesName =
+      patch.series_name !== undefined ? (resolvedSeries?.canonicalName ?? null) : v4Row.series_name;
+
+    let v4VolLabel = v4Row.volume_label;
+    let v4VolNum = v4Row.volume_number;
+    if (patch.series_number !== undefined) {
+      const cleanNum = patch.series_number?.trim() || null;
+      v4VolLabel = cleanNum;
+      v4VolNum = cleanNum && /^\d+$/.test(cleanNum) ? parseInt(cleanNum, 10) : null;
+    }
+
+    // Mettre à jour `publisher` et `publicationYear` dans `editions_catalog_json`
+    let editionsCatalog: Array<Record<string, any>> = [];
+    if (v4Row.editions_catalog_json) {
+      try {
+        const parsed = JSON.parse(v4Row.editions_catalog_json);
+        if (Array.isArray(parsed)) editionsCatalog = parsed;
+      } catch {
+        editionsCatalog = [];
+      }
+    }
+    if (patch.publisher !== undefined || patch.publication_date !== undefined) {
+      const cleanPub = patch.publisher !== undefined ? (patch.publisher?.trim() || undefined) : undefined;
+      const cleanYear = patch.publication_date !== undefined ? (patch.publication_date?.trim() || undefined) : undefined;
+      if (editionsCatalog.length === 0) {
+        editionsCatalog.push({
+          isbn13: rawIsbn || targetUri,
+          ...(cleanPub !== undefined ? { publisher: cleanPub } : {}),
+          ...(cleanYear !== undefined ? { publicationYear: cleanYear } : {})
+        });
+      } else {
+        editionsCatalog = editionsCatalog.map((ed) => ({
+          ...ed,
+          ...(patch.publisher !== undefined ? { publisher: cleanPub } : {}),
+          ...(patch.publication_date !== undefined ? { publicationYear: cleanYear } : {})
+        }));
+      }
+    }
+
+    await db
+      .prepare(
+        `UPDATE books
+         SET canonical_title = ?,
+             selected_cover_url = ?,
+             main_category = ?,
+             subgenres_json = ?,
+             series_id = ?,
+             series_name = ?,
+             volume_label = ?,
+             volume_number = ?,
+             authors_json = ?,
+             editions_catalog_json = ?,
+             updated_at = ?
+         WHERE id = ?`
+      )
+      .bind(
+        v4Title,
+        v4Cover,
+        v4MainCat,
+        v4SubgenresJson,
+        v4SeriesId,
+        v4SeriesName,
+        v4VolLabel,
+        v4VolNum,
+        v4AuthorsJson,
+        JSON.stringify(editionsCatalog),
+        now,
+        v4Row.id
+      )
+      .run();
+  }
+
+  return { updated: Boolean(existingCe || v4Row?.id), updatedV4: Boolean(v4Row?.id) };
+}
 
 export async function handleAdminGatewayAction(
   ctx: GatewayActionContext
@@ -178,16 +426,24 @@ export async function handleAdminGatewayAction(
       const items = (rows.results || []).map((row) => {
         let publisher: string | null = null;
         let publication_date: string | null = null;
+        let series_name: string | null = null;
+        let authors: string[] = [];
         if (row.entity_json) {
           try {
             const parsed = JSON.parse(row.entity_json) as {
               claims?: Record<string, unknown[]>;
               publisher?: string;
               publishDate?: string;
+              series?: string;
+              authors?: string[];
             };
             publisher = parsed.publisher || null;
             const rawDate = parsed.publishDate || parsed.claims?.['wdt:P577']?.[0];
             if (typeof rawDate === 'string') publication_date = rawDate;
+            if (typeof parsed.series === 'string' && parsed.series.trim()) series_name = parsed.series.trim();
+            if (Array.isArray(parsed.authors)) {
+              authors = parsed.authors.map((a) => String(a || '').trim()).filter(Boolean);
+            }
           } catch {
             // Ignorer un JSON malformé
           }
@@ -199,7 +455,9 @@ export async function handleAdminGatewayAction(
           image_url: row.image_url,
           main_category: row.main_category,
           series_uri: row.series_uri,
+          series_name,
           series_number: row.series_number,
+          authors,
           publisher,
           publication_date,
           updated_at: row.updated_at
@@ -327,97 +585,78 @@ export async function handleAdminGatewayAction(
       if (!targetUri || !label) {
         return jsonResp({ error: 'uri et label requis.' }, 400);
       }
-      const imageUrl = body?.image_url !== undefined ? String(body.image_url || '').trim() || null : undefined;
-      const mainCategory = body?.main_category !== undefined ? String(body.main_category || '').trim() || null : undefined;
-      const seriesNumber = body?.series_number !== undefined ? String(body.series_number || '').trim() || null : undefined;
-      const publisher = body?.publisher !== undefined ? String(body.publisher || '').trim() || null : undefined;
-      const publicationDate = body?.publication_date !== undefined ? String(body.publication_date || '').trim() || null : undefined;
+      const patch: AdminCatalogPatchInput = {
+        label,
+        ...(body?.image_url !== undefined ? { image_url: body.image_url ? String(body.image_url) : null } : {}),
+        ...(body?.main_category !== undefined ? { main_category: body.main_category ? String(body.main_category) : null } : {}),
+        ...(Array.isArray(body?.subgenres)
+          ? { subgenres: body.subgenres.map((s: unknown) => String(s || '').trim()).filter(Boolean) }
+          : {}),
+        ...(body?.series_number !== undefined ? { series_number: body.series_number ? String(body.series_number) : null } : {}),
+        ...(body?.series_name !== undefined ? { series_name: body.series_name ? String(body.series_name) : null } : {}),
+        ...(Array.isArray(body?.authors)
+          ? { authors: body.authors.map((a: unknown) => String(a || '').trim()).filter(Boolean) }
+          : {}),
+        ...(body?.publisher !== undefined ? { publisher: body.publisher ? String(body.publisher) : null } : {}),
+        ...(body?.publication_date !== undefined ? { publication_date: body.publication_date ? String(body.publication_date) : null } : {})
+      };
 
-      // 1. Mettre à jour `catalog_entities` (socle V2)
-      const existingCe = await db
-        .prepare('SELECT entity_json FROM catalog_entities WHERE uri = ? LIMIT 1')
-        .bind(targetUri)
-        .first<{ entity_json: string | null }>();
-      let parsedEntity: Record<string, any> = {};
-      if (existingCe?.entity_json) {
-        try {
-          parsedEntity = JSON.parse(existingCe.entity_json);
-        } catch {
-          parsedEntity = {};
-        }
+      const res = await applyAdminCatalogPatch(db, targetUri, patch, now);
+      return jsonResp({ ok: true, uri: targetUri, updatedV4: res.updatedV4 });
+    }
+
+    case 'admin-catalog-bulk-update': {
+      const admin = await requireAdmin(db, request);
+      if (!admin) {
+        return jsonResp({ error: 'Accès administrateur requis.' }, 403);
       }
-      parsedEntity.label = label;
-      if (publisher !== undefined) parsedEntity.publisher = publisher;
-      if (publicationDate !== undefined) parsedEntity.publishDate = publicationDate;
-
-      await db
-        .prepare(
-          `UPDATE catalog_entities
-           SET label = ?,
-               image_url = COALESCE(?, image_url),
-               main_category = COALESCE(?, main_category),
-               series_number = COALESCE(?, series_number),
-               entity_json = ?,
-               updated_at = ?
-           WHERE uri = ?`
-        )
-        .bind(
-          label,
-          imageUrl === undefined ? null : imageUrl,
-          mainCategory === undefined ? null : mainCategory,
-          seriesNumber === undefined ? null : seriesNumber,
-          JSON.stringify(parsedEntity),
-          now,
-          targetUri
-        )
-        .run();
-
-      // 2. Synchroniser également la table maître V4 `books` si l'ouvrage y existe
-      const rawIsbn = targetUri.startsWith('isbn:') ? targetUri.slice(5).replace(/[^0-9X]/gi, '') : '';
-      const v4Row = await db
-        .prepare(
-          rawIsbn
-            ? `SELECT b.id FROM books b
-               WHERE b.legacy_entity_uri = ?
-                  OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND bi.isbn13 = ?)
-               LIMIT 1`
-            : 'SELECT id FROM books WHERE legacy_entity_uri = ? OR id = ? LIMIT 1'
-        )
-        .bind(targetUri, rawIsbn || targetUri.replace(/^(?:v4:|book:)/, ''))
-        .first<{ id: string }>()
-        .catch(() => null);
-
-      if (v4Row?.id) {
-        const volNum = seriesNumber && /^\d+$/.test(seriesNumber) ? parseInt(seriesNumber, 10) : null;
-        await db
-          .prepare(
-            `UPDATE books
-             SET canonical_title = ?,
-                 selected_cover_url = COALESCE(?, selected_cover_url),
-                 main_category = COALESCE(?, main_category),
-                 volume_label = COALESCE(?, volume_label),
-                 volume_number = COALESCE(?, volume_number),
-                 publisher = COALESCE(?, publisher),
-                 publication_year = COALESCE(?, publication_year),
-                 updated_at = ?
-             WHERE id = ?`
-          )
-          .bind(
-            label,
-            imageUrl === undefined ? null : imageUrl,
-            mainCategory === undefined ? null : mainCategory,
-            seriesNumber === undefined ? null : seriesNumber,
-            volNum,
-            publisher === undefined ? null : publisher,
-            publicationDate === undefined ? null : publicationDate,
-            now,
-            v4Row.id
-          )
-          .run()
-          .catch(() => {});
+      const rawUris = Array.isArray(body?.uris) ? body.uris : [];
+      const uris: string[] = Array.from(
+        new Set(rawUris.map((u: unknown) => String(u || '').trim()).filter(Boolean))
+      ).slice(0, 200);
+      if (uris.length === 0) {
+        return jsonResp({ error: 'Au moins une œuvre (uris) doit être sélectionnée.' }, 400);
       }
 
-      return jsonResp({ ok: true, uri: targetUri, updatedV4: Boolean(v4Row?.id) });
+      const rawPatch = (body?.patch && typeof body.patch === 'object' ? body.patch : {}) as Record<string, any>;
+      const patch: AdminCatalogPatchInput = {};
+      if (rawPatch.publisher !== undefined) {
+        patch.publisher = rawPatch.publisher ? String(rawPatch.publisher).trim() : null;
+      }
+      if (rawPatch.main_category !== undefined) {
+        patch.main_category = rawPatch.main_category ? String(rawPatch.main_category).trim() : null;
+      }
+      if (rawPatch.series_name !== undefined) {
+        patch.series_name = rawPatch.series_name ? String(rawPatch.series_name).trim() : null;
+      }
+      if (rawPatch.publication_date !== undefined) {
+        patch.publication_date = rawPatch.publication_date ? String(rawPatch.publication_date).trim() : null;
+      }
+      if (Array.isArray(rawPatch.authors)) {
+        patch.authors = rawPatch.authors.map((a: unknown) => String(a || '').trim()).filter(Boolean);
+      }
+      if (Array.isArray(rawPatch.subgenres)) {
+        patch.subgenres = rawPatch.subgenres.map((s: unknown) => String(s || '').trim()).filter(Boolean);
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return jsonResp({ error: 'Aucun champ à modifier dans patch.' }, 400);
+      }
+
+      let updatedCount = 0;
+      let updatedV4Count = 0;
+      for (const targetUri of uris) {
+        const res = await applyAdminCatalogPatch(db, targetUri, patch, now);
+        if (res.updated) updatedCount++;
+        if (res.updatedV4) updatedV4Count++;
+      }
+
+      return jsonResp({
+        ok: true,
+        requestedCount: uris.length,
+        updatedCount,
+        updatedV4Count
+      });
     }
 
     case 'rehydrate-catalog': {

@@ -615,7 +615,10 @@ export const userService = {
     label: string;
     image_url?: string | null;
     main_category?: string | null;
+    subgenres?: string[];
     series_number?: string | null;
+    series_name?: string | null;
+    authors?: string[];
     publisher?: string | null;
     publication_date?: string | null;
   }): Promise<void> {
@@ -629,5 +632,33 @@ export const userService = {
     if (!res.ok) {
       throw new Error(data?.error || 'Impossible de modifier cette fiche catalogue.');
     }
+  },
+
+  async bulkUpdateAdminCatalogItems(payload: {
+    uris: string[];
+    patch: {
+      publisher?: string | null;
+      main_category?: string | null;
+      series_name?: string | null;
+      authors?: string[];
+      subgenres?: string[];
+      publication_date?: string | null;
+    };
+  }): Promise<{ requestedCount: number; updatedCount: number; updatedV4Count: number }> {
+    const savedUri = sessionStore.getUserUri() || '';
+    const res = await fetchWithTimeout('/api/gateway?action=admin-catalog-bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...payload, userUri: savedUri })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Impossible d’appliquer les modifications groupées.');
+    }
+    return {
+      requestedCount: Number(data.requestedCount || payload.uris.length),
+      updatedCount: Number(data.updatedCount || 0),
+      updatedV4Count: Number(data.updatedV4Count || 0)
+    };
   }
 };
