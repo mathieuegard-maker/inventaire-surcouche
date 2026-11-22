@@ -103,7 +103,7 @@ const onSortChange = (event: Event) => {
       </div>
     </div>
 
-    <div class="control-group" v-if="currentMode !== 'series'">
+    <div class="control-group">
       <label class="control-label" for="collection-sort-select">{{ TEXTS.collectionView?.sortLabel || 'Trier par' }}</label>
       <select id="collection-sort-select" :value="sortValue" class="wireframe-input control-select" @change="onSortChange">
         <option value="title">{{ TEXTS.collectionView?.sortByTitle || 'Titres' }}</option>

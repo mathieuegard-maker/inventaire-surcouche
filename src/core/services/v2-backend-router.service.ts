@@ -11,6 +11,7 @@ import { resolveAuthSession } from './d1-gateway.service';
 import { PipelineTracer, type PipelineLayer, type PipelineStepStatus } from './pipeline-logger.service';
 import {
   addGenresToBooksOptionB,
+  drainEnrichmentQueueBatch,
   excludeBookFromSeriesForLibrary,
   getV4SeriesBooks,
   runV4IngestionPipeline,
@@ -303,11 +304,27 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         return jsonResponse({ error: 'Identifiant de série requis' }, 400);
       }
       const userUriParam = url.searchParams.get('userUri');
+      const forceEnrich = url.searchParams.get('force') === '1';
       const auth = await resolveAuthSession(env.DB, request, userUriParam);
+      if (forceEnrich) {
+        await env.DB
+          .prepare('UPDATE v4_series SET is_complete_expanded = 0 WHERE id = ?')
+          .bind(seriesId)
+          .run()
+          .catch(() => {});
+      }
       const seriesData = await getV4SeriesBooks(env.DB, {
         seriesId,
         libraryId: auth?.libraryId || null
       });
+      if (forceEnrich) {
+        await drainEnrichmentQueueBatch(env.DB, 6).catch(() => {});
+        const refreshed = await getV4SeriesBooks(env.DB, {
+          seriesId,
+          libraryId: auth?.libraryId || null
+        });
+        return jsonResponse(refreshed);
+      }
       return jsonResponse(seriesData);
     }
 

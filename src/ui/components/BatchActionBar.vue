@@ -1,18 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { connectionState } from '../../state/connection';
-import { computeCommonBatchActions, type BatchActionType } from '../../core/utils/batch-actions.util';
-import type { HumanizedBook } from '../../core/types';
+import {
+  computeCommonBatchActions,
+  type BatchActionType,
+  type BatchBookLike
+} from '../../core/utils/batch-actions.util';
 
 const props = withDefaults(
   defineProps<{
     selectedCount: number;
-    selectedBooks?: Array<Pick<HumanizedBook, 'ownershipStatus' | 'loan'>>;
+    selectedBooks?: Array<BatchBookLike>;
     isMixed?: boolean;
     context?: 'owned' | 'lent' | 'wishlist' | 'unowned';
     inline?: boolean;
     busy?: boolean;
     busyLabel?: string;
+    allowSeriesAttach?: boolean;
+    allowGenreAdd?: boolean;
+    confirmDelete?: boolean;
   }>(),
   {
     selectedBooks: undefined,
@@ -20,37 +26,79 @@ const props = withDefaults(
     context: 'owned',
     inline: false,
     busy: false,
-    busyLabel: 'Enregistrement...'
+    busyLabel: 'Enregistrement...',
+    allowSeriesAttach: false,
+    allowGenreAdd: false,
+    confirmDelete: true
   }
 );
 
 const emit = defineEmits<{
   (e: 'execute', action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE'): void;
+  (e: 'attach-series'): void;
+  (e: 'add-genre'): void;
   (e: 'clear'): void;
 }>();
 
 const isOffline = computed(() => connectionState.isOffline.value);
+const showDeleteConfirmModal = ref(false);
 
 const commonSummary = computed(() => {
   if (props.selectedBooks && props.selectedBooks.length > 0) {
     return computeCommonBatchActions(props.selectedBooks);
   }
-  if (props.isMixed) {
-    return { count: props.selectedCount, actions: [] as BatchActionType[], isHomogeneousDelete: null };
-  }
+  const c = props.selectedCount;
+  const zero = { ADD_INVENTORY: 0, ADD_WISHLIST: 0, LEND: 0, RETURN: 0, DELETE: 0 };
   if (props.context === 'lent') {
-    return { count: props.selectedCount, actions: ['RETURN', 'DELETE'] as BatchActionType[], isHomogeneousDelete: 'lent' as const };
+    return {
+      count: c,
+      actions: ['RETURN', 'DELETE'] as BatchActionType[],
+      eligibleCounts: { ...zero, RETURN: c, DELETE: c },
+      isHomogeneousDelete: 'lent' as const
+    };
   }
   if (props.context === 'wishlist') {
-    return { count: props.selectedCount, actions: ['ADD_INVENTORY', 'DELETE'] as BatchActionType[], isHomogeneousDelete: 'wish' as const };
+    return {
+      count: c,
+      actions: ['ADD_INVENTORY', 'DELETE'] as BatchActionType[],
+      eligibleCounts: { ...zero, ADD_INVENTORY: c, DELETE: c },
+      isHomogeneousDelete: 'wish' as const
+    };
   }
   if (props.context === 'unowned') {
-    return { count: props.selectedCount, actions: ['ADD_INVENTORY', 'ADD_WISHLIST'] as BatchActionType[], isHomogeneousDelete: null };
+    return {
+      count: c,
+      actions: ['ADD_INVENTORY', 'ADD_WISHLIST'] as BatchActionType[],
+      eligibleCounts: { ...zero, ADD_INVENTORY: c, ADD_WISHLIST: c },
+      isHomogeneousDelete: null
+    };
   }
-  return { count: props.selectedCount, actions: ['LEND', 'DELETE'] as BatchActionType[], isHomogeneousDelete: 'owned' as const };
+  return {
+    count: c,
+    actions: ['LEND', 'DELETE'] as BatchActionType[],
+    eligibleCounts: { ...zero, LEND: c, DELETE: c },
+    isHomogeneousDelete: 'owned' as const
+  };
 });
 
 const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes(act);
+const countSuffix = (act: BatchActionType) => {
+  const n = commonSummary.value.eligibleCounts[act];
+  return n > 0 && n < props.selectedCount ? ` (${n})` : '';
+};
+
+const handleDeleteClick = () => {
+  if (props.confirmDelete) {
+    showDeleteConfirmModal.value = true;
+  } else {
+    emit('execute', 'DELETE');
+  }
+};
+
+const confirmDeleteAction = () => {
+  showDeleteConfirmModal.value = false;
+  emit('execute', 'DELETE');
+};
 </script>
 
 <template>
@@ -68,15 +116,15 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
 
         <span v-else-if="isOffline" class="batch-hint-warn">Hors-ligne</span>
 
-        <template v-else-if="commonSummary.actions.length === 0">
-          <span class="batch-hint-warn">Aucune action commune</span>
+        <template v-else-if="commonSummary.actions.length === 0 && !allowSeriesAttach && !allowGenreAdd">
+          <span class="batch-hint-warn">Aucune action disponible</span>
         </template>
 
         <div
           v-else
           role="toolbar"
           focusgroup="toolbar wrap"
-          aria-label="Actions communes"
+          aria-label="Actions sur la sélection"
           class="batch-toolbar-group"
         >
           <button
@@ -86,7 +134,7 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             :disabled="busy"
             @click="emit('execute', 'ADD_INVENTORY')"
           >
-            Ajouter
+            Posséder{{ countSuffix('ADD_INVENTORY') }}
           </button>
 
           <button
@@ -96,34 +144,57 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
             :disabled="busy"
             @click="emit('execute', 'ADD_WISHLIST')"
           >
-            Wishlist
+            Wishlist{{ countSuffix('ADD_WISHLIST') }}
           </button>
 
           <button
             v-if="hasAction('LEND')"
             type="button"
             class="batch-chip-btn primary"
+            :disabled="busy"
             @click="emit('execute', 'LEND')"
           >
-            Prêter
+            Prêter{{ countSuffix('LEND') }}
           </button>
 
           <button
             v-if="hasAction('RETURN')"
             type="button"
             class="batch-chip-btn primary"
+            :disabled="busy"
             @click="emit('execute', 'RETURN')"
           >
-            Rendre
+            Rendre{{ countSuffix('RETURN') }}
+          </button>
+
+          <button
+            v-if="allowSeriesAttach"
+            type="button"
+            class="batch-chip-btn secondary"
+            :disabled="busy"
+            @click="emit('attach-series')"
+          >
+            Rattacher série
+          </button>
+
+          <button
+            v-if="allowGenreAdd"
+            type="button"
+            class="batch-chip-btn secondary"
+            :disabled="busy"
+            @click="emit('add-genre')"
+          >
+            + Genre
           </button>
 
           <button
             v-if="hasAction('DELETE')"
             type="button"
             class="batch-chip-btn danger"
-            @click="emit('execute', 'DELETE')"
+            :disabled="busy"
+            @click="handleDeleteClick"
           >
-            Supprimer
+            Supprimer{{ countSuffix('DELETE') }}
           </button>
         </div>
 
@@ -136,6 +207,27 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
         >
           ✕
         </button>
+      </div>
+    </div>
+  </Teleport>
+
+  <Teleport to="body">
+    <div v-if="showDeleteConfirmModal" class="modal-overlay" @click.self="showDeleteConfirmModal = false">
+      <div class="modal-box" role="dialog" aria-modal="true" aria-label="Confirmer la suppression">
+        <h2>Confirmer la suppression</h2>
+        <p class="modal-text">
+          Êtes-vous sûr de vouloir supprimer
+          <strong>{{ commonSummary.eligibleCounts.DELETE || selectedCount }} ouvrage(s)</strong>
+          de votre bibliothèque ?
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="btn-danger" @click="confirmDeleteAction">
+            Supprimer définitivement
+          </button>
+          <button type="button" class="btn-close" @click="showDeleteConfirmModal = false">
+            Annuler
+          </button>
+        </div>
       </div>
     </div>
   </Teleport>
@@ -227,6 +319,16 @@ const hasAction = (act: BatchActionType) => commonSummary.value.actions.includes
 
 .batch-chip-btn.primary:hover {
   background: var(--color-primary-hover, #4338ca);
+}
+
+.batch-chip-btn.secondary {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.batch-chip-btn.secondary:hover {
+  background: #e0e7ff;
 }
 
 .batch-chip-btn.danger {

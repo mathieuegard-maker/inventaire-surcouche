@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { computed, ref, onMounted, watch } from 'vue';
 import { databaseService } from '../../core/database/database.service';
 import { fetchWithTimeout } from '../../state/connection';
 import { sessionStore } from '../../state/session';
 import { scannerState } from '../../state/scanner';
 import { useModalScrollable } from '../composables/useModalScrollable';
+
+function stripLeadingArticlesForSort(name: string): string {
+  return name
+    .trim()
+    .replace(/^(?:les|la|le|un|une|des|du|de|the|an|a)\s+/i, '')
+    .replace(/^l['’]\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
 
 const props = defineProps<{
   show: boolean;
@@ -22,7 +31,14 @@ const emit = defineEmits<{
 
 const existingSeries = ref<Array<{ id: string; name: string; count: number }>>([]);
 const selectedSeriesId = ref<string>('');
+const seriesSearchQuery = ref<string>('');
 const customNewSeriesTitle = ref<string>('');
+
+const filteredSeries = computed(() => {
+  const q = seriesSearchQuery.value.trim().toLowerCase();
+  if (!q) return existingSeries.value;
+  return existingSeries.value.filter((s) => s.name.toLowerCase().includes(q));
+});
 const volumeType = ref<'standard' | 'hors_serie' | 'integrale' | 'unnumbered'>('standard');
 const volumeLabelInput = ref<string>(props.initialVolumeLabel || '');
 const sortOrderInput = ref<number>(100);
@@ -62,7 +78,7 @@ async function loadLocalSeries() {
     }
   }
   existingSeries.value = Array.from(map.values()).sort((a, b) =>
-    a.name.localeCompare(b.name, 'fr')
+    stripLeadingArticlesForSort(a.name).localeCompare(stripLeadingArticlesForSort(b.name), 'fr')
   );
 }
 
@@ -169,13 +185,35 @@ async function handleConfirmMerge() {
 
       <div class="form-group">
         <label>1. Série de destination :</label>
-        <select v-model="selectedSeriesId" class="input-control">
-          <option value="">-- Choisir une série de votre collection --</option>
-          <option v-for="s in existingSeries" :key="s.id" :value="s.id">
-            {{ s.name }} ({{ s.count }} tome(s))
-          </option>
-          <option value="__NEW__">+ Créer / Saisir un nouveau nom de série...</option>
-        </select>
+        <input
+          v-model="seriesSearchQuery"
+          type="search"
+          class="input-control"
+          placeholder="Filtrer vos séries..."
+        />
+        <div class="series-picker-list" role="listbox" aria-label="Séries disponibles">
+          <button
+            v-for="s in filteredSeries"
+            :key="s.id"
+            type="button"
+            role="option"
+            :aria-selected="selectedSeriesId === s.id"
+            :class="['series-picker-option', { selected: selectedSeriesId === s.id }]"
+            @click="selectedSeriesId = s.id"
+          >
+            <span>{{ s.name }}</span>
+            <span class="series-picker-count">{{ s.count }} tome(s)</span>
+          </button>
+          <button
+            type="button"
+            role="option"
+            :aria-selected="selectedSeriesId === '__NEW__'"
+            :class="['series-picker-option new-series-opt', { selected: selectedSeriesId === '__NEW__' }]"
+            @click="selectedSeriesId = '__NEW__'"
+          >
+            + Créer / Saisir un nouveau nom de série...
+          </button>
+        </div>
       </div>
 
       <div v-if="selectedSeriesId === '__NEW__'" class="form-group">
@@ -415,5 +453,60 @@ async function handleConfirmMerge() {
   padding: 0.55rem 0.75rem;
   font-size: 0.8125rem;
   font-weight: 600;
+}
+
+.series-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-block-size: 210px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border, #e2e8f0);
+  border-radius: var(--radius-sm, 8px);
+  padding: 0.3rem;
+  background: var(--color-bg-alt, #f8fafc);
+}
+
+.series-picker-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  text-align: left;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #ffffff;
+  color: var(--color-text-main, #0f172a);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.series-picker-option:hover {
+  background: #eef2ff;
+}
+
+.series-picker-option.selected {
+  background: var(--color-primary, #4f46e5);
+  color: #ffffff;
+}
+
+.series-picker-option.selected .series-picker-count {
+  color: #e0e7ff;
+}
+
+.series-picker-count {
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.new-series-opt {
+  color: var(--color-primary, #4f46e5);
+  border-style: dashed;
+  border-color: #c7d2fe;
 }
 </style>

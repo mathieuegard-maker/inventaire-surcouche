@@ -12,11 +12,14 @@ import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
 import SeriesMergeModal from '../components/SeriesMergeModal.vue';
+import BatchGenreModal from '../components/BatchGenreModal.vue';
 import { TEXTS } from '../locales/fr';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { seriesOrchestrator } from '../../core/orchestrators/series.orchestrator';
 import { backgroundCreationOrchestrator } from '../../core/orchestrators/background-creation.orchestrator';
-import { fetchWithTimeout } from '../../state/connection';
+import { fetchV4SeriesBooksToIndexedDb } from '../../core/services/v4-client.service';
+import { filterEligibleBooksForBatchAction } from '../../core/utils/batch-actions.util';
+import { connectionState, fetchWithTimeout } from '../../state/connection';
 import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
 import type { HumanizedBook } from '../../core/types';
 
@@ -31,10 +34,45 @@ const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
 const showMergeSeriesModal = ref(false);
+const showBatchGenreModal = ref(false);
 const isExcluding = ref(false);
+const isForceEnriching = ref(false);
+const ownershipFilter = ref<'all' | 'owned' | 'unowned'>('all');
 const excludeFeedback = ref('');
 const displayedTomes = ref<HumanizedBook[]>([]);
 const filteredTomes = ref<HumanizedBook[]>([]);
+
+const ownedTomesCount = computed(
+  () => seriesTomes.value.filter((t) => t.ownershipStatus === 'owned' || Boolean(t.ownedViaIntegral)).length
+);
+const unownedTomesCount = computed(
+  () => seriesTomes.value.filter((t) => t.ownershipStatus !== 'owned' && !t.ownedViaIntegral).length
+);
+const ownershipFilteredTomes = computed(() => {
+  if (ownershipFilter.value === 'owned') {
+    return seriesTomes.value.filter((t) => t.ownershipStatus === 'owned' || Boolean(t.ownedViaIntegral));
+  }
+  if (ownershipFilter.value === 'unowned') {
+    return seriesTomes.value.filter((t) => t.ownershipStatus !== 'owned' && !t.ownedViaIntegral);
+  }
+  return seriesTomes.value;
+});
+
+const triggerImmediateEnrich = async () => {
+  if (isForceEnriching.value || connectionState.isOffline.value) return;
+  isForceEnriching.value = true;
+  excludeFeedback.value = '';
+  try {
+    await fetchV4SeriesBooksToIndexedDb(seriesId.value, { force: true });
+    seriesOrchestrator.startBackgroundHydration(seriesId.value);
+    await loadLocalData();
+    excludeFeedback.value = 'Enrichissement de la série lancé : les nouveaux tomes détectés ont été mis à jour.';
+  } catch {
+    excludeFeedback.value = 'Erreur lors de la recherche des tomes manquants.';
+  } finally {
+    isForceEnriching.value = false;
+  }
+};
 
 // Stockage du titre résolu (pour éviter wd:Q...)
 const resolvedSeriesTitle = ref<string | null>(null);
@@ -132,20 +170,14 @@ watch(
 // Note : J'ai omis le code répétitif pour la concision, mais tu conserves tes méthodes existantes ici.
 
 const isAllSelected = computed(() => {
-  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : ownershipFilteredTomes.value;
   return targets.length > 0 && targets.every((tome) => selectedIds.value.includes(tome.uri));
 });
 const selectedBooks = computed(() => seriesTomes.value.filter(tome => selectedIds.value.includes(tome.uri)));
+const eligibleLendBooks = computed(() => filterEligibleBooksForBatchAction(selectedBooks.value, 'LEND'));
 const hasLentSelected = computed(() => selectedBooks.value.some(book => !!book.loan));
 const hasAvailableOwnedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus === 'owned' && !book.loan));
 const hasUnownedSelected = computed(() => selectedBooks.value.some(book => book.ownershipStatus !== 'owned'));
-const isSelectionMixed = computed(() => {
-  let categories = 0;
-  if (hasUnownedSelected.value) categories++;
-  if (hasAvailableOwnedSelected.value) categories++;
-  if (hasLentSelected.value) categories++;
-  return categories > 1;
-});
 const batchContext = computed(() => {
   if (hasUnownedSelected.value) return 'unowned';
   if (hasLentSelected.value) return 'lent';
@@ -153,25 +185,26 @@ const batchContext = computed(() => {
 });
 
 const handleToggleAll = (checked: boolean) => {
-  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : seriesTomes.value;
+  const targets = filteredTomes.value.length > 0 ? filteredTomes.value : ownershipFilteredTomes.value;
   selectedIds.value = checked ? targets.map(item => item.uri) : [];
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
-  if (selectedIds.value.length === 0) return;
+  const eligible = filterEligibleBooksForBatchAction(selectedBooks.value, action);
+  if (eligible.length === 0) return;
   if (action === 'LEND') { showLendModal.value = true; return; }
+  const eligibleUris = new Set(eligible.map((b) => b.uri));
   try {
-    for (const uri of selectedIds.value) {
+    for (const book of eligible) {
       if (action === 'DELETE') {
-        const book = seriesTomes.value.find(b => b.uri === uri);
-        const removeAct = book?.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
-        await queueService.enqueueAction(removeAct, uri);
+        const removeAct = book.ownershipStatus === 'wish' ? 'REMOVE_WISHLIST' : 'REMOVE_INVENTORY';
+        await queueService.enqueueAction(removeAct, book.uri);
       } else {
-        await queueService.enqueueAction(action, uri);
+        await queueService.enqueueAction(action, book.uri);
       }
     }
     seriesTomes.value = seriesTomes.value.map(tome => {
-      if (selectedIds.value.includes(tome.uri)) {
+      if (eligibleUris.has(tome.uri)) {
         if (action === 'RETURN') { const { loan, ...rest } = tome; return rest; }
         if (action === 'DELETE') { const { loan, ...rest } = tome; return { ...rest, ownershipStatus: 'none' }; }
         return { ...tome, ownershipStatus: action === 'ADD_INVENTORY' ? 'owned' : 'wish' };
@@ -183,31 +216,16 @@ const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'L
 };
 
 const confirmGroupLend = async (friendName: string) => {
+  const eligible = eligibleLendBooks.value;
+  const eligibleUris = new Set(eligible.map((b) => b.uri));
   try {
-    for (const uri of selectedIds.value) await queueService.enqueueAction('LEND', uri, { friendName });
+    for (const book of eligible) await queueService.enqueueAction('LEND', book.uri, { friendName });
     seriesTomes.value = seriesTomes.value.map(tome => {
-      if (selectedIds.value.includes(tome.uri)) return { ...tome, loan: { uri: tome.uri, friendName, loanDate: Date.now() } };
+      if (eligibleUris.has(tome.uri)) return { ...tome, loan: { uri: tome.uri, friendName, loanDate: Date.now() } };
       return tome;
     });
     selectedIds.value = [];
   } catch (error) { console.error(error); } finally { showLendModal.value = false; }
-};
-const missingTomes = computed(() => seriesTomes.value.filter(tome => tome.ownershipStatus !== 'owned'));
-
-const completeMissingSeries = async () => {
-  const targets = missingTomes.value.map(t => t.uri);
-  if (targets.length === 0) return;
-  try {
-    for (const uri of targets) {
-      await queueService.enqueueAction('ADD_INVENTORY', uri);
-    }
-    seriesTomes.value = seriesTomes.value.map(tome =>
-      targets.includes(tome.uri) ? { ...tome, ownershipStatus: 'owned' } : tome
-    );
-    selectedIds.value = [];
-  } catch (error) {
-    console.error(error);
-  }
 };
 
 const excludeSelectedFromSeries = async () => {
@@ -258,33 +276,95 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       </div>
 
       <template v-else>
-        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: var(--spacing-md);">
-          <button
-            v-if="missingTomes.length > 0 && seriesTomes.length > 0"
-            class="wireframe-btn btn-primary"
-            style="flex: 2; min-width: 220px;"
-            @click="completeMissingSeries"
-          >
-            Tout posséder : ajouter les {{ missingTomes.length }} tome(s) manquant(s)
-          </button>
+        <!-- Bandeau d'information enrichissement en tâche de fond + bouton immédiat -->
+        <div
+          v-if="unownedTomesCount === 0 || progressState.isActive"
+          style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; padding: 0.65rem 0.9rem; margin-bottom: var(--spacing-sm); border: 1px solid #fde68a; border-radius: 10px; background: #fffbeb; color: #78350f; font-size: 0.84rem;"
+        >
+          <span>
+            <template v-if="progressState.isActive">
+              Enrichissement de la série en cours en arrière-plan… Les tomes manquants apparaîtront progressivement.
+            </template>
+            <template v-else>
+              Tous les tomes de cette série ne sont peut-être pas encore chargés (enrichissement automatique en arrière-plan).
+            </template>
+          </span>
           <button
             type="button"
             class="wireframe-btn"
-            style="flex: 1; min-width: 180px; background: #eef2ff; font-weight: 700;"
-            @click="showMergeSeriesModal = true"
+            style="width: auto; padding: 0.35rem 0.75rem; background: #ffffff; color: #92400e; border-color: #f59e0b; font-weight: 700; font-size: 0.8rem;"
+            :disabled="isForceEnriching || connectionState.isOffline.value"
+            @click="triggerImmediateEnrich"
           >
-            {{ selectedIds.length > 0 ? `Rattacher / Fusionner (${selectedIds.length})` : 'Fusionner / Regrouper la série' }}
+            {{ isForceEnriching ? 'Recherche en cours...' : 'Enrichir la série maintenant' }}
           </button>
-          <button
-            v-if="selectedIds.length > 0"
-            type="button"
-            class="wireframe-btn"
-            :disabled="isExcluding"
-            style="flex: 1; min-width: 200px; background: #fef2f2; color: #b91c1c; border-color: #fca5a5; font-weight: 700;"
-            @click="excludeSelectedFromSeries"
-          >
-            {{ isExcluding ? 'Retrait en cours...' : `Ne fait pas partie de cette série (${selectedIds.length})` }}
-          </button>
+        </div>
+
+        <!-- Filtre rapide Tout / Possédés / Non possédés -->
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; margin-bottom: var(--spacing-md);">
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;" role="tablist" aria-label="Filtrer par possession">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="ownershipFilter === 'all'"
+              class="wireframe-btn"
+              :style="ownershipFilter === 'all' ? 'width:auto;padding:0.35rem 0.8rem;background:var(--color-primary,#4f46e5);color:#fff;border-color:var(--color-primary,#4f46e5);font-weight:700;' : 'width:auto;padding:0.35rem 0.8rem;'"
+              @click="ownershipFilter = 'all'; selectedIds = []"
+            >
+              Tout ({{ seriesTomes.length }})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="ownershipFilter === 'owned'"
+              class="wireframe-btn"
+              :style="ownershipFilter === 'owned' ? 'width:auto;padding:0.35rem 0.8rem;background:#16a34a;color:#fff;border-color:#16a34a;font-weight:700;' : 'width:auto;padding:0.35rem 0.8rem;'"
+              @click="ownershipFilter = 'owned'; selectedIds = []"
+            >
+              Possédés ({{ ownedTomesCount }})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="ownershipFilter === 'unowned'"
+              class="wireframe-btn"
+              :style="ownershipFilter === 'unowned' ? 'width:auto;padding:0.35rem 0.8rem;background:#475569;color:#fff;border-color:#475569;font-weight:700;' : 'width:auto;padding:0.35rem 0.8rem;'"
+              @click="ownershipFilter = 'unowned'; selectedIds = []"
+            >
+              Non possédés ({{ unownedTomesCount }})
+            </button>
+          </div>
+
+          <div style="display: flex; gap: 0.45rem; flex-wrap: wrap;">
+            <button
+              v-if="unownedTomesCount > 0 && !progressState.isActive"
+              type="button"
+              class="wireframe-btn"
+              style="width: auto; padding: 0.35rem 0.75rem; font-size: 0.82rem;"
+              :disabled="isForceEnriching || connectionState.isOffline.value"
+              @click="triggerImmediateEnrich"
+            >
+              {{ isForceEnriching ? 'Enrichissement...' : 'Actualiser la série' }}
+            </button>
+            <button
+              type="button"
+              class="wireframe-btn"
+              style="width: auto; padding: 0.35rem 0.75rem; background: #eef2ff; font-weight: 700; font-size: 0.82rem;"
+              @click="showMergeSeriesModal = true"
+            >
+              {{ selectedIds.length > 0 ? `Rattacher / Fusionner (${selectedIds.length})` : 'Fusionner la série' }}
+            </button>
+            <button
+              v-if="selectedIds.length > 0"
+              type="button"
+              class="wireframe-btn"
+              :disabled="isExcluding"
+              style="width: auto; padding: 0.35rem 0.75rem; background: #fef2f2; color: #b91c1c; border-color: #fca5a5; font-weight: 700; font-size: 0.82rem;"
+              @click="excludeSelectedFromSeries"
+            >
+              {{ isExcluding ? 'Retrait en cours...' : `Ne fait pas partie de cette série (${selectedIds.length})` }}
+            </button>
+          </div>
         </div>
 
         <BaseBanner
@@ -294,7 +374,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
         />
 
         <WireframePagination
-          :items="seriesTomes"
+          :items="ownershipFilteredTomes"
           :searchKeys="['title']"
           :hasSelectAll="true"
           :selectAllValue="isAllSelected"
@@ -328,7 +408,11 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
             :selected-count="selectedIds.length"
             :selected-books="selectedBooks"
             :context="batchContext"
+            :allow-series-attach="true"
+            :allow-genre-add="true"
             @execute="dispatchBatchAction"
+            @attach-series="showMergeSeriesModal = true"
+            @add-genre="showBatchGenreModal = true"
             @clear="selectedIds = []"
           />
         </WireframePagination>
@@ -337,7 +421,7 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
 
     <LendModal
       :show="showLendModal"
-      :bookCount="selectedIds.length"
+      :bookCount="eligibleLendBooks.length"
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
     />
@@ -350,6 +434,13 @@ const handleBackToCollection = () => router.push({ name: 'CollectionView', query
       :singleBook="selectedIds.length === 1"
       @close="showMergeSeriesModal = false"
       @merged="(p) => router.push({ name: 'SeriesView', params: { id: p.seriesId } })"
+    />
+
+    <BatchGenreModal
+      :show="showBatchGenreModal"
+      :bookUris="selectedIds"
+      @close="showBatchGenreModal = false"
+      @applied="() => { selectedIds = []; void loadLocalData(); }"
     />
   </div>
 </template>

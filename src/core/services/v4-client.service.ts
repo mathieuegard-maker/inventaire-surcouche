@@ -444,13 +444,19 @@ export async function syncV4BooksToIndexedDb(forceFull = false): Promise<{ synce
  * Hydrate directement tous les tomes V4 consolidés d'une série (`GET /api/v2/books/series/:seriesId`)
  * dans IndexedDB sans passer par l'ancien endpoint V2 `series-list`.
  */
-export async function fetchV4SeriesBooksToIndexedDb(seriesId: string): Promise<{ count: number } | null> {
+export async function fetchV4SeriesBooksToIndexedDb(
+  seriesId: string,
+  options?: { force?: boolean }
+): Promise<{ count: number; isCompleteExpanded?: boolean } | null> {
   if (!seriesId || connectionState.isOffline.value || typeof fetch !== 'function') return null;
   try {
     const savedUri = sessionStore.getUserUri() || undefined;
-    const qs = savedUri ? `?userUri=${encodeURIComponent(savedUri)}` : '';
+    const params = new URLSearchParams();
+    if (savedUri) params.set('userUri', savedUri);
+    if (options?.force) params.set('force', '1');
+    const qs = params.toString() ? `?${params.toString()}` : '';
     const res = await fetchWithTimeout(`/api/v2/books/series/${encodeURIComponent(seriesId)}${qs}`, {
-      timeout: 10000
+      timeout: options?.force ? 28000 : 10000
     });
     if (!res?.ok) return null;
     const data = (await res.json()) as V4SeriesBooksResponse;

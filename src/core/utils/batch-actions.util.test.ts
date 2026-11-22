@@ -1,15 +1,25 @@
 // src/core/utils/batch-actions.util.test.ts
 import { describe, it, expect } from 'vitest';
-import { computeCommonBatchActions } from './batch-actions.util';
+import {
+  computeCommonBatchActions,
+  filterEligibleBooksForBatchAction
+} from './batch-actions.util';
 
-describe('computeCommonBatchActions', () => {
-  it('autorise uniquement Collection lorsqu’on sélectionne un Non possédé et un À avoir', () => {
-    const res = computeCommonBatchActions([
-      { ownershipStatus: 'none' },
-      { ownershipStatus: 'wish' }
-    ]);
-    expect(res.actions).toEqual(['ADD_INVENTORY']);
-    expect(res.isHomogeneousDelete).toBeNull();
+describe('computeCommonBatchActions (sélection multiple intelligente)', () => {
+  it('propose Collection, Wishlist et Supprimer avec sous-ensembles exacts pour Non possédé + À avoir', () => {
+    const books = [
+      { ownershipStatus: 'none' as const },
+      { ownershipStatus: 'wish' as const }
+    ];
+    const res = computeCommonBatchActions(books);
+    expect(res.actions).toEqual(['ADD_INVENTORY', 'ADD_WISHLIST', 'DELETE']);
+    expect(res.eligibleCounts).toEqual({
+      ADD_INVENTORY: 2,
+      ADD_WISHLIST: 1,
+      LEND: 0,
+      RETURN: 0,
+      DELETE: 1
+    });
   });
 
   it('autorise Collection et Wishlist si tous sont Non possédés', () => {
@@ -38,12 +48,24 @@ describe('computeCommonBatchActions', () => {
     expect(res.isHomogeneousDelete).toBe('lent');
   });
 
-  it('ne propose aucune action commune si Possédé et Non possédé sont mélangés', () => {
-    const res = computeCommonBatchActions([
-      { ownershipStatus: 'owned' },
-      { ownershipStatus: 'none' }
-    ]);
-    expect(res.actions).toEqual([]);
-    expect(res.isHomogeneousDelete).toBeNull();
+  it('propose les actions par sous-ensemble éligible quand Possédé, Prêté et Non possédé sont mélangés', () => {
+    const books = [
+      { ownershipStatus: 'owned' as const },
+      { ownershipStatus: 'owned' as const, loan: { uri: 'inv:2', friendName: 'Bob', loanDate: 2 } },
+      { ownershipStatus: 'none' as const }
+    ];
+    const res = computeCommonBatchActions(books);
+    expect(res.actions).toEqual(['ADD_INVENTORY', 'ADD_WISHLIST', 'LEND', 'RETURN', 'DELETE']);
+    expect(res.eligibleCounts).toEqual({
+      ADD_INVENTORY: 1,
+      ADD_WISHLIST: 1,
+      LEND: 1,
+      RETURN: 1,
+      DELETE: 2
+    });
+    expect(filterEligibleBooksForBatchAction(books, 'LEND')).toHaveLength(1);
+    expect(filterEligibleBooksForBatchAction(books, 'RETURN')).toHaveLength(1);
+    expect(filterEligibleBooksForBatchAction(books, 'DELETE')).toHaveLength(2);
+    expect(filterEligibleBooksForBatchAction(books, 'ADD_INVENTORY')).toHaveLength(1);
   });
 });

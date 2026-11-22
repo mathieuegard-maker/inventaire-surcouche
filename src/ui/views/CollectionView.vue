@@ -15,6 +15,9 @@ import BaseLoading from '../components/BaseLoading.vue';
 import BaseBanner from '../components/BaseBanner.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
+import SeriesMergeModal from '../components/SeriesMergeModal.vue';
+import BatchGenreModal from '../components/BatchGenreModal.vue';
+import { filterEligibleBooksForBatchAction } from '../../core/utils/batch-actions.util';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { getOrCreateViewState, saveViewState } from '../../state/viewState';
@@ -32,7 +35,8 @@ const allOwnedBooks = ref<HumanizedBook[]>([]);
 const selectedIds = ref<string[]>([]);
 const isLoading = ref(true);
 const showLendModal = ref(false);
-const showDeleteModal = ref(false);
+const showSeriesAttachModal = ref(false);
+const showBatchGenreModal = ref(false);
 
 const stateKey = 'collection';
 const pageState = getOrCreateViewState(stateKey, {
@@ -271,18 +275,29 @@ const seriesGondolas = computed(() => {
   const gondolas = Object.values(groups).map(g => {
     const sortedTomes = sortSeriesTomes(g.tomes);
     const coverBook = sortedTomes.find(t => t.localCover || t.coverUrl) || sortedTomes[0];
+    const primaryAuthor = (sortedTomes.find(t => t.authors?.length)?.authors?.[0] || '').toLowerCase();
+    const latestAdded = Math.max(...sortedTomes.map(t => t.addedDate || 0), 0);
     return {
       id: g.id,
       name: g.name,
       ownedCount: sortedTomes.length,
-      coverUrl: imageUtil.resolveCoverUrl(coverBook)
+      coverUrl: imageUtil.resolveCoverUrl(coverBook),
+      primaryAuthor,
+      latestAdded
     };
   });
 
+  const cleanSortName = (n: string) =>
+    n.replace(/^(?:les|la|le|un|une|des|du|de|the|an|a)\s+/i, '').replace(/^l['’]\s*/i, '').trim().toLowerCase();
+
   return gondolas.sort((a, b) => {
-    const cleanA = a.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-    const cleanB = b.name.replace(/^(les\s+|la\s+|le\s+|l'|une\s+|un\s+)/i, '').trim().toLowerCase();
-    return cleanA.localeCompare(cleanB);
+    if (currentSort.value === 'date') {
+      if (b.latestAdded !== a.latestAdded) return b.latestAdded - a.latestAdded;
+    } else if (currentSort.value === 'author') {
+      const authCmp = (a.primaryAuthor || 'zzz').localeCompare(b.primaryAuthor || 'zzz', 'fr');
+      if (authCmp !== 0) return authCmp;
+    }
+    return cleanSortName(a.name).localeCompare(cleanSortName(b.name), 'fr');
   });
 });
 
@@ -311,7 +326,8 @@ const handleToggleAll = (checked: boolean) => {
 };
 
 const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'LEND' | 'RETURN' | 'DELETE') => {
-  if (selectedIds.value.length === 0) return;
+  const eligible = filterEligibleBooksForBatchAction(selectedBooks.value, action);
+  if (eligible.length === 0) return;
 
   if (action === 'LEND') {
     showLendModal.value = true;
@@ -319,44 +335,45 @@ const dispatchBatchAction = async (action: 'ADD_INVENTORY' | 'ADD_WISHLIST' | 'L
   }
 
   if (action === 'DELETE') {
-    showDeleteModal.value = true;
+    try {
+      for (const b of eligible) {
+        await inventoryService.removeFromLibrary(b.uri);
+      }
+      await fetchCatalogue();
+    } catch (e) {
+      console.error("Erreur lors de la suppression en lot :", e);
+    } finally {
+      selectedIds.value = [];
+    }
     return;
   }
 
   try {
-    for (const uri of selectedIds.value) {
-      await queueService.enqueueAction(action, uri);
+    for (const b of eligible) {
+      await queueService.enqueueAction(action, b.uri);
     }
     await fetchCatalogue();
+    selectedIds.value = [];
   } catch (e) {
     console.error(e);
   }
 };
 
+const eligibleLendBooks = computed(() =>
+  filterEligibleBooksForBatchAction(selectedBooks.value, 'LEND')
+);
+
 const confirmGroupLend = async (friendName: string) => {
   try {
-    for (const uri of selectedIds.value) {
-      await queueService.enqueueAction('LEND', uri, { friendName });
+    for (const b of eligibleLendBooks.value) {
+      await queueService.enqueueAction('LEND', b.uri, { friendName });
     }
     await fetchCatalogue();
+    selectedIds.value = [];
   } catch (e) {
     console.error(e);
   } finally {
     showLendModal.value = false;
-  }
-};
-
-const confirmGroupDelete = async () => {
-  try {
-    for (const uri of selectedIds.value) {
-      await inventoryService.removeFromLibrary(uri);
-    }
-    await fetchCatalogue();
-  } catch (e) {
-    console.error("Erreur lors de la suppression en lot :", e);
-  } finally {
-    showDeleteModal.value = false;
-    selectedIds.value = [];
   }
 };
 
@@ -452,7 +469,11 @@ const resetSelection = () => {
           :selected-count="selectedIds.length"
           :selected-books="selectedBooks"
           :context="batchContext"
+          :allow-series-attach="true"
+          :allow-genre-add="true"
           @execute="dispatchBatchAction"
+          @attach-series="showSeriesAttachModal = true"
+          @add-genre="showBatchGenreModal = true"
           @clear="selectedIds = []"
         />
       </WireframePagination>
@@ -460,37 +481,24 @@ const resetSelection = () => {
 
     <LendModal
       :show="showLendModal"
-      :bookCount="selectedIds.length"
+      :bookCount="eligibleLendBooks.length"
       @close="showLendModal = false"
       @confirm="confirmGroupLend"
     />
 
-    <!-- Modal de confirmation de suppression en lot -->
-    <Teleport to="body">
-      <div v-if="showDeleteModal" class="modal-overlay" @click.self="showDeleteModal = false">
-        <div class="modal-box">
-          <h2>{{ TEXTS.batchActionBar?.deleteConfirmTitle || 'Confirmer la suppression' }}</h2>
-          <p class="modal-text">
-            {{ selectedIds.length > 1 
-              ? (TEXTS.batchActionBar?.deleteConfirmMsgPlural || 'Voulez-vous vraiment supprimer ces {count} ouvrages de votre collection ? Cette action est définitive et les retirera également de votre compte inventaire.io.').replace('{count}', selectedIds.length.toString())
-              : (TEXTS.batchActionBar?.deleteConfirmMsgSingular || 'Voulez-vous vraiment supprimer cet ouvrage de votre collection ? Cette action est définitive et le retirera également de votre compte inventaire.io.') 
-            }}
-          </p>
-          
-          <div class="modal-actions">
-            <button 
-              @click="confirmGroupDelete" 
-              class="btn-danger"
-            >
-              {{ TEXTS.batchActionBar?.btnDeleteConfirm || 'Supprimer' }}
-            </button>
-            
-            <button @click="showDeleteModal = false" class="btn-close">
-              {{ TEXTS.batchActionBar?.btnDeleteCancel || 'Annuler' }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <SeriesMergeModal
+      :show="showSeriesAttachModal"
+      :bookUris="selectedIds"
+      :singleBook="selectedIds.length === 1"
+      @close="showSeriesAttachModal = false"
+      @merged="() => { selectedIds = []; void fetchCatalogue(); }"
+    />
+
+    <BatchGenreModal
+      :show="showBatchGenreModal"
+      :bookUris="selectedIds"
+      @close="showBatchGenreModal = false"
+      @applied="() => { selectedIds = []; void fetchCatalogue(); }"
+    />
   </div>
 </template>
