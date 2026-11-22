@@ -4,6 +4,7 @@
 
 import type { AppBackendEnv, DatabaseBinding } from '../adapters/storage-db.interface';
 import { expandSeriesVolumesInD1 } from './d1-gateway.service';
+import { getV4SeriesBooks } from './v4-pipeline.service';
 import { sendWebPushNotification } from './web-push.service';
 
 export interface NotificationPrefRow {
@@ -173,6 +174,94 @@ export async function runCentralizedSeriesReleaseSweep(
     }
     if (delayMs > 0 && checkedCount < (staleSeries.results?.length || 0)) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+
+  // Passe complémentaire V4 : séries suivies via `v4_library_books` + `v4_series`
+  const remainingLimit = Math.max(0, limit - checkedCount);
+  if (remainingLimit > 0) {
+    try {
+      const v4StaleSeries = await db
+        .prepare(
+          `SELECT DISTINCT s.id, s.canonical_name
+           FROM v4_library_books lb
+           JOIN books b ON b.id = lb.book_id
+           JOIN v4_series s ON s.id = b.series_id
+           WHERE lb.is_owned = 1
+             AND (s.updated_at IS NULL OR s.updated_at < ?)
+           ORDER BY s.updated_at ASC
+           LIMIT ?`
+        )
+        .bind(staleCutoff, remainingLimit)
+        .all<{ id: string; canonical_name: string }>();
+
+      for (const s of v4StaleSeries.results || []) {
+        checkedCount++;
+        try {
+          const beforeRows = await db
+            .prepare('SELECT id FROM books WHERE series_id = ?')
+            .bind(s.id)
+            .all<{ id: string }>();
+          const beforeIds = new Set((beforeRows.results || []).map((r) => r.id));
+
+          await db
+            .prepare('UPDATE v4_series SET is_complete_expanded = 0, updated_at = ? WHERE id = ?')
+            .bind(now, s.id)
+            .run();
+
+          const expanded = await getV4SeriesBooks(db, { seriesId: s.id, libraryId: null });
+          const newBooks = (expanded.books || []).filter((entry) => !beforeIds.has(entry.book.id));
+
+          if (beforeIds.size > 0 && newBooks.length > 0) {
+            const owningLibs = await db
+              .prepare(
+                `SELECT DISTINCT lb.library_id
+                 FROM v4_library_books lb
+                 JOIN books b ON b.id = lb.book_id
+                 WHERE lb.is_owned = 1 AND b.series_id = ?`
+              )
+              .bind(s.id)
+              .all<{ library_id: string }>();
+
+            for (const lib of owningLibs.results || []) {
+              for (const entry of newBooks) {
+                const b = entry.book;
+                const isbn13 = b.knownIsbns?.[0] || null;
+                const volUri = b.legacyEntityUri || (isbn13 ? `isbn:${isbn13}` : `v4:${b.id}`);
+                const alertId = `${lib.library_id}:${b.id}`;
+                await db
+                  .prepare(
+                    `INSERT OR IGNORE INTO series_release_alerts (
+                       id, library_id, series_uri, series_title, volume_uri, volume_title,
+                       series_number, isbn13, cover_url, detected_at, dismissed
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+                  )
+                  .bind(
+                    alertId,
+                    lib.library_id,
+                    s.id,
+                    s.canonical_name,
+                    volUri,
+                    b.canonicalTitle,
+                    b.volumeLabel || (b.volumeNumber != null ? String(b.volumeNumber) : null),
+                    isbn13,
+                    b.selectedCoverUrl || null,
+                    now
+                  )
+                  .run();
+                alertsCreated++;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(`[SERIES SWEEP V4] Erreur sur ${s.id}:`, err);
+        }
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    } catch {
+      // Non-bloquant si tables V4 absentes dans un test unitaire minimal
     }
   }
 

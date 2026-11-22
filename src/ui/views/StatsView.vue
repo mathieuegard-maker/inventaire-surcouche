@@ -6,6 +6,8 @@ import BaseTitle from '../components/BaseTitle.vue';
 import BaseLoading from '../components/BaseLoading.vue';
 import { TEXTS } from '../locales/fr';
 import { statsService, type DetailedStats } from '../../core/services/stats.service';
+import { userService } from '../../core/services/user.service';
+import { connectionState } from '../../state/connection';
 import { scannerState } from '../../state/scanner';
 
 const props = defineProps<{ embedded?: boolean }>();
@@ -17,12 +19,31 @@ const isLoading = ref(true);
 const loadStats = async () => {
   isLoading.value = true;
   try {
+    if (!connectionState.isOffline.value) {
+      await userService.syncAllUserReadingStatuses().catch(() => {});
+    }
     stats.value = await statsService.getDetailedStats(selectedPeriod.value);
   } catch (e) {
-    console.error('[STATS VIEW] Erreur de chargement KPIs :', e);
+    console.error('[STATS VIEW] Erreur de chargement des statistiques :', e);
   } finally {
     isLoading.value = false;
   }
+};
+
+const openGenreFilter = (genreName: string) => {
+  router.push({ name: 'CollectionView', query: { mode: 'books', filter: genreName } });
+};
+
+const openAuthorFilter = (authorName: string) => {
+  router.push(`/author/${encodeURIComponent(authorName)}`);
+};
+
+const openSeriesFilter = (seriesName: string) => {
+  router.push({ name: 'CollectionView', query: { mode: 'series', filter: seriesName } });
+};
+
+const openPublisherFilter = (publisherName: string) => {
+  router.push({ name: 'CollectionView', query: { mode: 'books', filter: publisherName } });
 };
 
 onMounted(loadStats);
@@ -44,12 +65,15 @@ const totalReadingTracked = computed(() => {
     <div class="kpi-page-top">
       <BaseTitle v-if="!props.embedded" text="Statistiques" level="h2" />
       <h3 v-else class="stats-embedded-title">Statistiques</h3>
-      <select v-model="selectedPeriod" @change="loadStats" class="wireframe-input kpi-period-select" aria-label="Période d'analyse">
-        <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
-        <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>
-        <option :value="365">{{ TEXTS.dashboardStats.period365 }}</option>
-        <option :value="-1">{{ TEXTS.dashboardStats.periodAll }}</option>
-      </select>
+      <div class="stats-period-row">
+        <label for="stats-period-select" class="stats-period-label">Période :</label>
+        <select id="stats-period-select" v-model="selectedPeriod" @change="loadStats" class="wireframe-input kpi-period-select" aria-label="Période d'analyse">
+          <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
+          <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>
+          <option :value="365">{{ TEXTS.dashboardStats.period365 }}</option>
+          <option :value="-1">{{ TEXTS.dashboardStats.periodAll }}</option>
+        </select>
+      </div>
     </div>
 
     <BaseLoading v-if="isLoading" />
@@ -135,19 +159,21 @@ const totalReadingTracked = computed(() => {
         </div>
       </section>
 
-      <!-- 3. Top Genres & Top Auteurs avec barres proportionnelles -->
+      <!-- 3. Top Genres & Top Auteurs cliquables avec barres proportionnelles -->
       <section class="kpi-grid-2">
         <div class="kpi-panel">
           <h3>Répartition par genres (Top 10)</h3>
           <ul v-if="stats.topGenres.length" class="kpi-bar-list">
             <li v-for="g in stats.topGenres" :key="g.name" class="kpi-bar-item">
-              <div class="kpi-bar-row">
-                <span class="kpi-bar-name">{{ g.name }}</span>
-                <span class="kpi-bar-val">{{ g.count }}</span>
-              </div>
-              <div class="kpi-bar-track">
-                <div class="kpi-bar-fill indigo" :style="{ width: `${Math.round((g.count / maxGenreCount) * 100)}%` }"></div>
-              </div>
+              <button type="button" class="stats-clickable-row" @click="openGenreFilter(g.name)">
+                <div class="kpi-bar-row">
+                  <span class="kpi-bar-name">{{ g.name }}</span>
+                  <span class="kpi-bar-val">{{ g.count }} ›</span>
+                </div>
+                <div class="kpi-bar-track">
+                  <div class="kpi-bar-fill indigo" :style="{ width: `${Math.round((g.count / maxGenreCount) * 100)}%` }"></div>
+                </div>
+              </button>
             </li>
           </ul>
           <p v-else class="kpi-empty-note">{{ TEXTS.dashboardStats.noData }}</p>
@@ -157,13 +183,15 @@ const totalReadingTracked = computed(() => {
           <h3>Auteurs les plus présents (Top 10)</h3>
           <ul v-if="stats.topAuthors.length" class="kpi-bar-list">
             <li v-for="a in stats.topAuthors" :key="a.name" class="kpi-bar-item">
-              <div class="kpi-bar-row">
-                <span class="kpi-bar-name">{{ a.name }}</span>
-                <span class="kpi-bar-val">{{ a.count }}</span>
-              </div>
-              <div class="kpi-bar-track">
-                <div class="kpi-bar-fill emerald" :style="{ width: `${Math.round((a.count / maxAuthorCount) * 100)}%` }"></div>
-              </div>
+              <button type="button" class="stats-clickable-row" @click="openAuthorFilter(a.name)">
+                <div class="kpi-bar-row">
+                  <span class="kpi-bar-name">{{ a.name }}</span>
+                  <span class="kpi-bar-val">{{ a.count }} ›</span>
+                </div>
+                <div class="kpi-bar-track">
+                  <div class="kpi-bar-fill emerald" :style="{ width: `${Math.round((a.count / maxAuthorCount) * 100)}%` }"></div>
+                </div>
+              </button>
             </li>
           </ul>
           <p v-else class="kpi-empty-note">{{ TEXTS.dashboardStats.noData }}</p>
@@ -176,13 +204,15 @@ const totalReadingTracked = computed(() => {
           <h3>Avancement des sagas</h3>
           <ul v-if="stats.topSeries.length" class="kpi-bar-list">
             <li v-for="s in stats.topSeries" :key="s.name" class="kpi-bar-item">
-              <div class="kpi-bar-row">
-                <span class="kpi-bar-name">{{ s.name }}</span>
-                <span class="kpi-bar-val">{{ s.owned }}/{{ s.knownTotal }}</span>
-              </div>
-              <div class="kpi-bar-track">
-                <div class="kpi-bar-fill amber" :style="{ width: `${Math.round((s.owned / Math.max(1, s.knownTotal)) * 100)}%` }"></div>
-              </div>
+              <button type="button" class="stats-clickable-row" @click="openSeriesFilter(s.name)">
+                <div class="kpi-bar-row">
+                  <span class="kpi-bar-name">{{ s.name }}</span>
+                  <span class="kpi-bar-val">{{ s.owned }}/{{ s.knownTotal }} ›</span>
+                </div>
+                <div class="kpi-bar-track">
+                  <div class="kpi-bar-fill amber" :style="{ width: `${Math.round((s.owned / Math.max(1, s.knownTotal)) * 100)}%` }"></div>
+                </div>
+              </button>
             </li>
           </ul>
           <p v-else class="kpi-empty-note">Aucune saga détectée.</p>
@@ -192,8 +222,10 @@ const totalReadingTracked = computed(() => {
           <h3>Principaux éditeurs</h3>
           <ul v-if="stats.topPublishers.length" class="kpi-simple-list">
             <li v-for="p in stats.topPublishers" :key="p.name">
-              <span>{{ p.name }}</span>
-              <strong>{{ p.count }}</strong>
+              <button type="button" class="stats-clickable-inline" @click="openPublisherFilter(p.name)">
+                <span>{{ p.name }}</span>
+                <strong>{{ p.count }} ›</strong>
+              </button>
             </li>
           </ul>
           <p v-else class="kpi-empty-note">Aucun éditeur renseigné.</p>
@@ -217,11 +249,67 @@ const totalReadingTracked = computed(() => {
 <style scoped>
 .kpi-page-top {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.stats-embedded-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--color-text-main, #0f172a);
+}
+
+.stats-period-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.stats-period-label {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-text-muted, #475569);
+}
+
+.stats-clickable-row {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0.25rem 0.35rem;
+  margin: -0.25rem -0.35rem;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: background-color 0.12s ease;
+}
+
+.stats-clickable-row:hover {
+  background: #f1f5f9;
+}
+
+.stats-clickable-inline {
+  width: 100%;
+  display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  flex-wrap: wrap;
-  margin-bottom: 1rem;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+}
+
+.stats-clickable-inline:hover {
+  color: var(--color-primary, #4f46e5);
 }
 
 .kpi-period-select {

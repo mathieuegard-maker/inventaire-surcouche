@@ -28,13 +28,33 @@ const infoBanner = ref<string | null>(null);
 const currentPage = ref(1);
 const pageSize = ref(20);
 const searchQuery = ref('');
+const sortMode = ref<'date_desc' | 'date_asc' | 'alpha_asc' | 'alpha_desc'>('date_desc');
 
 onMounted(async () => {
   await seriesReleaseService.checkNewReleasesOnOpen();
 });
 
+const sortedAlerts = computed(() => {
+  const list = [...alerts.value];
+  const labelOf = (a: SeriesReleaseAlert) =>
+    `${a.seriesTitle || ''} ${a.volumeTitle || ''}`.trim().toLowerCase();
+
+  return list.sort((a, b) => {
+    if (sortMode.value === 'date_asc') {
+      return (a.detectedAt || '').localeCompare(b.detectedAt || '');
+    }
+    if (sortMode.value === 'alpha_asc') {
+      return labelOf(a).localeCompare(labelOf(b), 'fr');
+    }
+    if (sortMode.value === 'alpha_desc') {
+      return labelOf(b).localeCompare(labelOf(a), 'fr');
+    }
+    return (b.detectedAt || '').localeCompare(a.detectedAt || '');
+  });
+});
+
 const releaseBooks = computed<HumanizedBook[]>(() =>
-  alerts.value.map((a) => ({
+  sortedAlerts.value.map((a) => ({
     uri: a.isbn13 ? `isbn:${a.isbn13}` : a.volumeUri,
     isbn13: a.isbn13,
     type: 'edition',
@@ -111,6 +131,16 @@ const dispatchBatchAction = async (
       >
         {{ isChecking ? 'Vérification en cours...' : 'Vérifier les sorties' }}
       </button>
+      <select
+        v-model="sortMode"
+        class="wireframe-input releases-sort-select"
+        aria-label="Trier les nouveautés"
+      >
+        <option value="date_desc">Plus récentes d’abord</option>
+        <option value="date_asc">Plus anciennes d’abord</option>
+        <option value="alpha_asc">Ordre alphabétique (A → Z)</option>
+        <option value="alpha_desc">Ordre alphabétique (Z → A)</option>
+      </select>
       <button
         v-if="alerts.length > 0"
         type="button"
@@ -183,7 +213,8 @@ const dispatchBatchAction = async (
   margin-bottom: var(--spacing-md);
 }
 
-.releases-tool-btn {
+.releases-tool-btn,
+.releases-sort-select {
   width: auto !important;
   flex: 1 1 auto;
   min-width: 150px;

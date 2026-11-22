@@ -52,8 +52,22 @@ const pageState = getOrCreateViewState(stateKey, {
 
 // COHÉRENCE ROUTAGE : Initialisation native basée sur l'URL courante ou l'état sauvegardé
 const currentMode = ref<'books' | 'series' | 'oneshots'>((route.query.mode as any) || pageState.filters.mode || 'books');
-const filterText = ref(pageState.filters.genre === 'all' ? '' : (pageState.filters.genre || ''));
+const queryFilter = typeof route.query.filter === 'string' ? route.query.filter : typeof route.query.genre === 'string' ? route.query.genre : '';
+const filterText = ref(queryFilter || (pageState.filters.genre === 'all' ? '' : (pageState.filters.genre || '')));
 const currentSort = ref(pageState.filters.sort || 'date');
+
+watch(
+  () => [route.query.filter, route.query.genre, route.query.mode],
+  ([f, g, m]) => {
+    const nextFilter = typeof f === 'string' ? f : typeof g === 'string' ? g : null;
+    if (nextFilter !== null) {
+      filterText.value = nextFilter;
+    }
+    if (m === 'books' || m === 'series' || m === 'oneshots') {
+      currentMode.value = m;
+    }
+  }
+);
 
 const currentPage = ref(pageState.currentPage);
 const pageSize = ref(pageState.pageSize);
