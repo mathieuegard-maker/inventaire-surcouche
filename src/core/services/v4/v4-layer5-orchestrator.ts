@@ -667,6 +667,8 @@ export async function runV4IngestionPipeline(
     }
 
     if (resolvedL2 && resolvedL2.book) {
+      const activeHint = params.hints?.[activeIsbn13] || rawUserHint;
+      const userChosenCover = activeHint?.coverUrl?.trim() || null;
       // Lier à la bibliothèque si nouvel ajout demandé et pas déjà intégralement couvert/possédé
       if (
         params.libraryId &&
@@ -684,8 +686,12 @@ export async function runV4IngestionPipeline(
           isWished: params.action === 'wishlist',
           wishedByUserId: params.action === 'wishlist' ? params.userId || null : null,
           sourceChannel: params.sourceChannel,
-          coverUrl: resolvedL2.book.selectedCoverUrl
+          coverUrl: userChosenCover || resolvedL2.book.selectedCoverUrl,
+          preferNewCover: Boolean(userChosenCover)
         });
+        if (userChosenCover) {
+          resolvedL2.book = { ...resolvedL2.book, selectedCoverUrl: userChosenCover };
+        }
       }
 
       // Si la série du livre n'a pas encore été étendue en Couche 5, l'étendre même sur un HIT Couche 2 !
@@ -755,12 +761,14 @@ export async function runV4IngestionPipeline(
     }
 
     // Consolider d'abord en mode preview pour que postCheck puisse détecter INCLUDED_IN_INTEGRAL / PARTIAL_INTEGRAL_OWNED avant liaison bibliothèque
-    const consolidated = await consolidateBookLayer4(db, staging, {
+    const activePostHint = params.hints?.[activeIsbn13] || rawUserHint;
+    const userChosenPostCover = activePostHint?.coverUrl?.trim() || null;
+    let consolidated = await consolidateBookLayer4(db, staging, {
       sourceChannel: params.sourceChannel,
       libraryId: params.libraryId,
       action: 'preview',
       tracer,
-      userHint: params.hints?.[activeIsbn13] || rawUserHint,
+      userHint: activePostHint,
       replaceSkeletonBookId: staleSkeletonBookId
     });
 
@@ -786,8 +794,12 @@ export async function runV4IngestionPipeline(
         isWished: params.action === 'wishlist',
         wishedByUserId: params.action === 'wishlist' ? params.userId || null : null,
         sourceChannel: params.sourceChannel,
-        coverUrl: consolidated.selectedCoverUrl
+        coverUrl: userChosenPostCover || consolidated.selectedCoverUrl,
+        preferNewCover: Boolean(userChosenPostCover)
       });
+      if (userChosenPostCover) {
+        consolidated = { ...consolidated, selectedCoverUrl: userChosenPostCover };
+      }
     }
 
     // Couche 5 : Squelette rapide + file d'attente (strictement limité au 1er miss de la requête pour éviter la limite de 50 sous-requêtes Workers)

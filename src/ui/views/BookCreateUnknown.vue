@@ -162,6 +162,7 @@ const saveChanges = async () => {
       .map(a => a.trim())
       .filter(Boolean);
 
+    const cleanCoverUrl = coverUrlInput.value.trim() || undefined;
     const tempBook: HumanizedBook = {
       uri: `isbn:${normalizedIsbn}`,
       isbn13: normalizedIsbn.length === 13 ? normalizedIsbn : undefined,
@@ -174,11 +175,14 @@ const saveChanges = async () => {
       publisher: publisherInput.value.trim() || undefined,
       publishDate: publishDateInput.value.trim() || undefined,
       pageCount: pageCountInput.value || undefined,
-      coverUrl: coverUrlInput.value.trim() || undefined,
+      coverUrl: cleanCoverUrl,
+      ...(cleanCoverUrl?.startsWith('data:image/') ? { localCover: cleanCoverUrl } : {}),
       genres: [],
       ownershipStatus: 'none',
       series: noSeries.value ? undefined : (seriesInput.value.trim() || undefined),
-      seriesNumber: noSeries.value ? undefined : (seriesNumberInput.value.trim() || undefined)
+      seriesNumber: noSeries.value ? undefined : (seriesNumberInput.value.trim() || undefined),
+      isLocallyEdited: Boolean(cleanCoverUrl),
+      updatedAt: Date.now()
     };
 
     await backgroundCreationOrchestrator.enqueueBookCreation({

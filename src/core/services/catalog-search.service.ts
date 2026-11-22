@@ -259,7 +259,9 @@ export async function searchCatalogExhaustive(
                    FROM books b
                    LEFT JOIN v4_library_books lb ON lb.book_id = b.id AND lb.library_id = ?
                    WHERE b.series_id = s.id AND COALESCE(lb.selected_cover_url, b.selected_cover_url) IS NOT NULL
-                   ORDER BY COALESCE(b.volume_number, 9999) ASC LIMIT 1) as cover_url,
+                   ORDER BY COALESCE(lb.is_owned, 0) DESC,
+                            CASE WHEN lb.selected_cover_url IS NOT NULL THEN 0 ELSE 1 END ASC,
+                            COALESCE(b.volume_number, 9999) ASC LIMIT 1) as cover_url,
                   (SELECT COUNT(*) FROM books b WHERE b.series_id = s.id) as actual_count,
                   (SELECT COUNT(*) FROM v4_library_books lb JOIN books b ON b.id = lb.book_id
                    WHERE lb.library_id = ? AND b.series_id = s.id AND lb.is_owned = 1) as owned_count

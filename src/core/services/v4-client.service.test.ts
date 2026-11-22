@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { databaseService } from '../database/database.service';
 import { connectionState } from '../../state/connection';
 import { sessionStore } from '../../state/session';
-import { ingestIsbnsViaV4 } from './v4-client.service';
+import { fetchV4SeriesBooksToIndexedDb, ingestIsbnsViaV4 } from './v4-client.service';
 
 describe('v4-client.service', () => {
   beforeEach(() => {
@@ -78,6 +78,86 @@ describe('v4-client.service', () => {
     );
     expect(regSpy).toHaveBeenCalledWith('inventory', 'isbn:9782075079297');
     expect(removeWishSpy).toHaveBeenCalledWith('wishlist', 'isbn:9782075079297');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('préserve la couverture choisie manuellement sur la fiche livre lors dune hydratation de série V4 (ex: Fables)', async () => {
+    const editedLocalBook = {
+      uri: 'isbn:9782365770125',
+      bookId: 'bk_fables_1',
+      isbn13: '9782365770125',
+      type: 'edition' as const,
+      title: 'Fables — Tome 1 : Légendes en exil',
+      authors: ['Bill Willingham'],
+      illustrators: [],
+      scriptwriters: [],
+      genres: ['Comics'],
+      series: 'Fables',
+      seriesId: 'ser_fables_urban',
+      seriesNumber: '1',
+      coverUrl: 'https://urban-comics.example/fables-t1-user-choice.jpg',
+      localCover: 'data:image/webp;base64,USER_CHOSEN_COVER',
+      ownershipStatus: 'owned' as const,
+      isLocallyEdited: true,
+      updatedAt: Date.parse('2026-11-22T18:00:00Z')
+    };
+
+    vi.spyOn(databaseService, 'getBookFromCache').mockResolvedValue(editedLocalBook);
+    const saveSpy = vi.spyOn(databaseService, 'saveBookToCache').mockResolvedValue(undefined);
+    vi.spyOn(databaseService, 'addRegistryEntry').mockResolvedValue(undefined);
+    vi.spyOn(databaseService, 'removeRegistryEntry').mockResolvedValue(undefined);
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            series: { id: 'ser_fables_urban', canonicalName: 'Fables', aliases: [] },
+            books: [
+              {
+                ownershipStatus: 'owned',
+                book: {
+                  id: 'bk_fables_1',
+                  workCanonicalId: 'series:fables:vol:1',
+                  canonicalTitle: 'Fables — Tome 1 : Légendes en exil',
+                  normalizedTitle: 'fables tome 1 legendes en exil',
+                  seriesId: 'ser_fables_urban',
+                  seriesName: 'Fables',
+                  volumeNumber: 1,
+                  volumeLabel: '1',
+                  isHorsSerie: false,
+                  isIntegral: false,
+                  integralMetadata: { includedVolumeNumbers: [], includedWorkIds: [], includedIsbns: [] },
+                  parentIntegrals: [],
+                  authors: ['Bill Willingham'],
+                  language: 'fr',
+                  knownIsbns: ['9782365770125'],
+                  editionsCatalog: [{ isbn13: '9782365770125', publisher: 'Urban Comics' }],
+                  selectedCoverUrl: 'https://panini-old.example/wrong-edition.jpg',
+                  mainCategory: 'Comics',
+                  subgenres: [],
+                  legacyEntityUri: 'isbn:9782365770125',
+                  updatedAt: '2026-11-20T10:00:00Z'
+                }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+      )
+    );
+
+    await fetchV4SeriesBooksToIndexedDb('ser_fables_urban');
+
+    expect(saveSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uri: 'isbn:9782365770125',
+        coverUrl: 'https://urban-comics.example/fables-t1-user-choice.jpg',
+        localCover: 'data:image/webp;base64,USER_CHOSEN_COVER',
+        isLocallyEdited: true
+      })
+    );
 
     vi.unstubAllGlobals();
   });

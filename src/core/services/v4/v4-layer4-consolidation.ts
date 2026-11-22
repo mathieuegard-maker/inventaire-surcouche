@@ -995,10 +995,15 @@ export async function linkBookToLibrary(
     wishedByUserId?: string | null;
     sourceChannel?: string;
     coverUrl?: string | null;
+    /** true uniquement lorsque l'utilisateur a explicitement choisi une couverture (création / Photo IA / édition). */
+    preferNewCover?: boolean;
   }
 ): Promise<void> {
   const now = new Date().toISOString();
   const effectiveWishedBy = params.isWished && !params.isOwned ? params.wishedByUserId || null : null;
+  const coverConflictExpr = params.preferNewCover
+    ? 'COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url)'
+    : 'COALESCE(v4_library_books.selected_cover_url, excluded.selected_cover_url)';
   await db
     .prepare(
       `INSERT INTO v4_library_books
@@ -1012,7 +1017,7 @@ export async function linkBookToLibrary(
            WHEN excluded.is_wished = 1 THEN COALESCE(excluded.wished_by_user_id, v4_library_books.wished_by_user_id)
            ELSE NULL
          END,
-         selected_cover_url = COALESCE(excluded.selected_cover_url, v4_library_books.selected_cover_url),
+         selected_cover_url = ${coverConflictExpr},
          updated_at = excluded.updated_at`
     )
     .bind(

@@ -137,11 +137,20 @@ const fetchCatalogue = async (silent = false) => {
     const cached = await databaseService.getAllBooksFromCache();
     const rawOwned = cached.filter(b => b.ownershipStatus === 'owned');
 
-    // Déduplication canonique (évite doublons work + edition + v4)
+    // Déduplication canonique (évite doublons work + edition + v4) en privilégiant toujours la fiche éditée / la plus récente
+    const bookPriorityScore = (b: HumanizedBook) =>
+      (b.isLocallyEdited ? 1_000_000 : 0) +
+      (b.localCover ? 10_000 : 0) +
+      (b.coverUrl ? 100 : 0);
     const dedupMap = new Map<string, HumanizedBook>();
     for (const book of rawOwned) {
       const key = book.bookId || book.workUri || book.isbn13 || book.uri;
-      if (!dedupMap.has(key)) {
+      const prev = dedupMap.get(key);
+      if (
+        !prev ||
+        bookPriorityScore(book) > bookPriorityScore(prev) ||
+        (bookPriorityScore(book) === bookPriorityScore(prev) && (book.updatedAt || 0) > (prev.updatedAt || 0))
+      ) {
         dedupMap.set(key, book);
       }
     }
@@ -160,7 +169,7 @@ const fetchCatalogue = async (silent = false) => {
       list
         .map(
           (b) =>
-            `${b.uri}|${b.ownershipStatus}|${b.isIntegral ? '1' : '0'}|${(b.integralMetadata?.includedVolumeNumbers || []).join(',')}|${b.ownedViaIntegral?.integralBookId || ''}|${b.loan?.friendName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`
+            `${b.uri}|${b.ownershipStatus}|${b.isIntegral ? '1' : '0'}|${(b.integralMetadata?.includedVolumeNumbers || []).join(',')}|${b.ownedViaIntegral?.integralBookId || ''}|${b.loan?.friendName || ''}|${imageUtil.getCoverFingerprint(b)}|${b.updatedAt || 0}`
         )
         .sort()
         .join('\n');
@@ -295,7 +304,9 @@ const seriesGondolas = computed(() => {
       id: g.id,
       name: g.name,
       ownedCount: sortedTomes.length,
-      coverUrl: imageUtil.resolveCoverUrl(coverBook),
+      coverUrl: imageUtil.resolveBookCardCoverUrl(coverBook),
+      coverIsbn: coverBook?.isbn13 || coverBook?.isbn10,
+      coverFallbackUrls: coverBook?.coverFallbackUrls,
       primaryAuthor,
       latestAdded
     };
@@ -439,6 +450,8 @@ const resetSelection = () => {
             :name="saga.name"
             :ownedCount="saga.ownedCount"
             :coverUrl="saga.coverUrl"
+            :isbn="saga.coverIsbn"
+            :fallbackUrls="saga.coverFallbackUrls"
             @click="navigateToSeries(saga.id)"
           />
         </WireframeTable>

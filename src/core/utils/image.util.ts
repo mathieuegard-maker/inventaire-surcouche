@@ -33,6 +33,42 @@ export const imageUtil = {
   },
 
   /**
+   * Source de vérité unique pour l'affichage de la couverture d'une fiche livre
+   * (dans la fiche détail, les cartes de livres et les cartes de séries).
+   * Priorité stricte :
+   * 1. `localCover` (WebP / photo importée / couverture validée en cache local)
+   * 2. `coverUrl` exacte de la fiche livre (sans suffixe `&isbn=` afin que le proxy ne substitue jamais une couverture d'une autre édition/ISBN)
+   * 3. En dernier recours uniquement (aucune image sur la fiche), candidats CDN par ISBN.
+   */
+  resolveBookCardCoverUrl(book: HumanizedBook | undefined | null): string {
+    if (!book) return '';
+    if (book.localCover) {
+      return book.localCover;
+    }
+    if (book.coverUrl?.trim()) {
+      return this.resolveExternalUrl(book.coverUrl.trim());
+    }
+    const rawIsbn = book.isbn13 || book.isbn10 || '';
+    const candidates = rawIsbn ? this.buildCoverCandidates(rawIsbn) : [];
+    if (candidates.length > 0) {
+      return this.resolveExternalUrl(candidates[0], rawIsbn);
+    }
+    return '';
+  },
+
+  /**
+   * Empreinte légère de la couverture d'un livre pour détecter tout changement
+   * (y compris lorsqu'un `localCover` Base64 remplace un ancien `localCover` Base64).
+   */
+  getCoverFingerprint(book: { localCover?: string; coverUrl?: string } | undefined | null): string {
+    if (!book) return '';
+    const lc = book.localCover || '';
+    const lcSig = lc ? `L:${lc.length}:${lc.slice(0, 32)}:${lc.slice(-24)}` : '';
+    const cu = book.coverUrl || '';
+    return `${lcSig}|${cu}`;
+  },
+
+  /**
    * Fait passer une URL externe par le proxy d'image du Gateway (avec cache central R2/D1 par ISBN).
    */
   resolveExternalUrl(url: string | undefined | null, isbn13?: string): string {

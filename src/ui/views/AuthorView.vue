@@ -29,7 +29,7 @@ import type { HumanizedBook } from '../../core/types';
 import { connectionState, fetchWithTimeout } from '../../state/connection';
 import { sessionStore } from '../../state/session';
 import { textSearchState } from '../../state/textSearchState';
-import { saveBookNavigationOrder } from '../../state/bookNavigation';
+import { saveBookNavigationOrder, sortSeriesTomes } from '../../state/bookNavigation';
 
 const route = useRoute();
 const router = useRouter();
@@ -83,6 +83,7 @@ const loadAuthorProfile = async (rawAuthorParam: string) => {
 
     const bookMap = new Map<string, HumanizedBook>();
     const seriesMap = new Map<string, CatalogSearchSeriesHit>();
+    const localSeriesTomes = new Map<string, HumanizedBook[]>();
 
     for (const b of allCached) {
       const people = [...(b.authors || []), ...(b.scriptwriters || []), ...(b.illustrators || [])];
@@ -95,25 +96,29 @@ const loadAuthorProfile = async (rawAuthorParam: string) => {
       bookMap.set(copy.uri, copy);
       if (copy.series) {
         const sKey = normalizeTextKey(copy.series);
-        const existingS = seriesMap.get(sKey);
-        if (existingS) {
-          existingS.volumesCount++;
-          if (copy.ownershipStatus === 'owned') existingS.ownedCount++;
-          if (!existingS.coverUrl) existingS.coverUrl = imageUtil.resolveCoverUrl(copy);
-        } else {
-          seriesMap.set(sKey, {
-            id: copy.seriesId || `search-series:${encodeURIComponent(copy.series)}`,
-            name: copy.series,
-            coreKey: sKey,
-            authors: [authorName.value],
-            coverUrl: imageUtil.resolveCoverUrl(copy),
-            volumesCount: 1,
-            ownedCount: copy.ownershipStatus === 'owned' ? 1 : 0,
-            source: 'local',
-            isMaterializedInLocal: Boolean(copy.seriesId)
-          });
-        }
+        const bucket = localSeriesTomes.get(sKey) || [];
+        bucket.push(copy);
+        localSeriesTomes.set(sKey, bucket);
       }
+    }
+
+    for (const [sKey, rawTomes] of localSeriesTomes.entries()) {
+      const ownedTomes = rawTomes.filter((t) => t.ownershipStatus === 'owned');
+      const pool = ownedTomes.length > 0 ? ownedTomes : rawTomes;
+      const sortedPool = sortSeriesTomes(pool);
+      const coverBook = sortedPool.find((t) => t.localCover || t.coverUrl) || sortedPool[0];
+      const firstWithId = rawTomes.find((t) => t.seriesId) || rawTomes[0];
+      seriesMap.set(sKey, {
+        id: firstWithId.seriesId || `search-series:${encodeURIComponent(firstWithId.series || sKey)}`,
+        name: firstWithId.series || sKey,
+        coreKey: sKey,
+        authors: [authorName.value],
+        coverUrl: imageUtil.resolveBookCardCoverUrl(coverBook),
+        volumesCount: rawTomes.length,
+        ownedCount: ownedTomes.length,
+        source: 'local',
+        isMaterializedInLocal: Boolean(firstWithId.seriesId)
+      });
     }
 
     // 2. Recherche catalogue serveur exhaustive (Séries + Livres BnF/SQLite) pour cet auteur

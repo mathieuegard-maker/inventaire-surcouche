@@ -688,7 +688,7 @@ const confirmDelete = async () => {
             </div>
             <img
               v-else
-              :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
+              :src="imageUtil.resolveBookCardCoverUrl(book)"
               :data-cover-isbn="book.isbn13 || book.isbn10"
               :alt="book.title"
               class="book-cover-image"

@@ -242,14 +242,61 @@ async function saveV4BookPreservingLocalCover(humanized: HumanizedBook): Promise
     }
     return;
   }
-  const existing =
+  let existing: HumanizedBook | undefined =
     typeof databaseService.getBookFromCache === 'function'
       ? await databaseService.getBookFromCache(humanized.uri).catch(() => undefined)
       : undefined;
+
+  // Recherche élargie (bookId / ISBN) pour ne jamais perdre une couverture choisie manuellement
+  // lorsque l'URI locale diffère de l'URI canonique V4 (ex: multi-éditions / Fables)
+  if (!existing && typeof databaseService.getBookByIsbn === 'function' && humanized.isbn13) {
+    existing = await databaseService.getBookByIsbn(humanized.isbn13).catch(() => undefined);
+  }
+  if (!existing && humanized.bookId && typeof databaseService.getAllBooksFromCache === 'function') {
+    const allCached = await databaseService.getAllBooksFromCache().catch(() => []);
+    existing = allCached.find(
+      (b) =>
+        b.bookId === humanized.bookId ||
+        (humanized.knownIsbns?.length &&
+          ((b.isbn13 && humanized.knownIsbns.includes(b.isbn13)) ||
+            (b.knownIsbns || []).some((code) => humanized.knownIsbns!.includes(code))))
+    );
+  }
+
   if (existing) {
-    if (existing.localCover && (!humanized.coverUrl || existing.coverUrl === humanized.coverUrl)) {
+    const existingHasCustomCover = Boolean(existing.localCover || existing.coverUrl);
+    const localEditIsAuthoritative = Boolean(
+      existing.isLocallyEdited &&
+      existingHasCustomCover &&
+      (
+        !humanized.coverUrl ||
+        existing.coverUrl === humanized.coverUrl ||
+        (existing.updatedAt || 0) >= (humanized.updatedAt || 0) ||
+        Boolean(existing.localCover?.startsWith('data:image/'))
+      )
+    );
+
+    if (localEditIsAuthoritative) {
+      // La couverture sélectionnée par l'utilisateur sur la fiche livre reste la source de vérité
+      if (existing.coverUrl) humanized.coverUrl = existing.coverUrl;
+      if (existing.localCover) humanized.localCover = existing.localCover;
+      humanized.isLocallyEdited = true;
+      if (existing.coverFallbackUrls?.length) {
+        humanized.coverFallbackUrls = Array.from(
+          new Set([
+            ...(existing.coverUrl ? [existing.coverUrl] : []),
+            ...existing.coverFallbackUrls,
+            ...(humanized.coverFallbackUrls || [])
+          ])
+        );
+      }
+      if ((existing.updatedAt || 0) > (humanized.updatedAt || 0)) {
+        humanized.updatedAt = existing.updatedAt;
+      }
+    } else if (existing.localCover && (!humanized.coverUrl || existing.coverUrl === humanized.coverUrl)) {
       humanized.localCover = existing.localCover;
     }
+
     if (existing.loan && humanized.ownershipStatus === 'owned') {
       humanized.loan = existing.loan;
     }

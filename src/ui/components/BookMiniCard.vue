@@ -72,7 +72,7 @@ const handleZoneClick = () => {
     <div class="row-cover-container">
       <img
         v-if="!coverExhausted && (book.localCover || book.coverUrl || book.isbn13 || book.isbn10)"
-        :src="imageUtil.resolveCoverUrl(book.localCover ? book : (book.coverUrl || imageUtil.buildCoverCandidates(book.isbn13 || book.isbn10)[0] || ''))"
+        :src="imageUtil.resolveBookCardCoverUrl(book)"
         :data-cover-isbn="book.isbn13 || book.isbn10"
         :alt="book.title"
         class="row-cover-image"

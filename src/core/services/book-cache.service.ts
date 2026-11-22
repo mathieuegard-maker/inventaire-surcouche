@@ -3,6 +3,7 @@ import { databaseService } from '../database/database.service';
 import { imageService } from './image.service';
 import { imageUtil } from '../utils/image.util';
 import { isbnUtil } from '../utils/isbn.util';
+import { scannerState } from '../../state/scanner';
 import type { HumanizedBook } from '../types';
 
 async function uploadCompressedCoverToCentralStorage(params: {
@@ -156,10 +157,20 @@ export const bookCacheService = {
             if (resolvedBase64 && resolvedUrl) {
               const updatedBook = await databaseService.getBookFromCache(book.uri);
               if (updatedBook) {
-                updatedBook.localCover = resolvedBase64;
-                updatedBook.coverUrl = resolvedUrl;
-                updatedBook.coverFallbackUrls = Array.from(new Set(allCandidates));
-                await databaseService.saveBookToCache(updatedBook);
+                // Garde anti-course : ne jamais écraser une couverture modifiée par l'utilisateur entre-temps
+                const userChangedCoverMeanwhile = Boolean(
+                  updatedBook.isLocallyEdited &&
+                  updatedBook.coverUrl &&
+                  book.coverUrl &&
+                  updatedBook.coverUrl !== book.coverUrl
+                );
+                if (!userChangedCoverMeanwhile) {
+                  updatedBook.localCover = resolvedBase64;
+                  updatedBook.coverUrl = resolvedUrl;
+                  updatedBook.coverFallbackUrls = Array.from(new Set(allCandidates));
+                  await databaseService.saveBookToCache(updatedBook);
+                  scannerState.notifyCatalogChanged();
+                }
               }
               await uploadCompressedCoverToCentralStorage({
                 isbn: book.isbn13 || book.isbn10,

@@ -100,10 +100,6 @@ async function handleCustomCoverUpload(event: Event) {
       cropRatio: 0.7
     });
     coverUrlInput.value = webpDataUrl;
-    originalBook.value.localCover = webpDataUrl;
-    originalBook.value.coverUrl = webpDataUrl;
-    originalBook.value.isLocallyEdited = true;
-    await databaseService.saveBookToCache(originalBook.value);
   } catch (e: any) {
     errorMsg.value = e.message || 'Impossible de compresser la couverture.';
   } finally {
@@ -593,7 +589,7 @@ const saveChanges = async () => {
             <div class="cover-url-preview-row">
               <img
                 v-if="coverUrlInput"
-                :src="imageUtil.resolveCoverUrl(coverUrlInput, originalBook?.isbn13 || originalBook?.isbn10)"
+                :src="imageUtil.resolveExternalUrl(coverUrlInput)"
                 :data-cover-isbn="originalBook?.isbn13 || originalBook?.isbn10"
                 alt="Couverture actuelle"
                 class="current-cover-thumb"

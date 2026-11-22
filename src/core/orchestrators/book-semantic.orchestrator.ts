@@ -200,7 +200,8 @@ export const bookSemanticOrchestrator = {
           : originalBook.localCover,
       genres: Array.isArray(updatedData.genres) ? updatedData.genres : originalBook.genres,
       workUri: res.workUri,
-      isLocallyEdited: true
+      isLocallyEdited: true,
+      updatedAt: Date.now()
     };
 
     console.log(`[BOOK SEMANTIC ORCHESTRATOR] Mise à jour du cache local IndexedDB pour : ${updatedBook.title}`);
@@ -211,6 +212,33 @@ export const bookSemanticOrchestrator = {
       await bookCacheService.saveAndProcessImage(plainBook, undefined, { forceOverwrite: true });
     } else {
       await databaseService.saveBookToCache(plainBook);
+    }
+
+    // 3B. Propager la couverture choisie à toute éventuelle fiche doublon locale du même `bookId` / `workUri`
+    //     pour que la liste des séries ne puisse jamais afficher une ancienne couverture d'une autre édition de la même œuvre.
+    if (coverChanged && (plainBook.bookId || plainBook.workUri) && typeof databaseService.getAllBooksFromCache === 'function') {
+      const allCachedForCover = await databaseService.getAllBooksFromCache().catch(() => []);
+      for (const dup of allCachedForCover) {
+        if (!dup || dup.uri === plainBook.uri) continue;
+        const sameBook =
+          (plainBook.bookId && dup.bookId === plainBook.bookId) ||
+          (plainBook.workUri && dup.workUri === plainBook.workUri);
+        if (sameBook) {
+          await databaseService
+            .saveBookToCache(
+              JSON.parse(
+                JSON.stringify({
+                  ...dup,
+                  coverUrl: plainBook.coverUrl,
+                  localCover: plainBook.localCover,
+                  isLocallyEdited: true,
+                  updatedAt: plainBook.updatedAt
+                })
+              )
+            )
+            .catch(() => {});
+        }
+      }
     }
 
     // 4. Si de nouveaux genres ont été ajoutés sur un tome d'une série, les ajouter CUMULATIVEMENT aux autres tomes

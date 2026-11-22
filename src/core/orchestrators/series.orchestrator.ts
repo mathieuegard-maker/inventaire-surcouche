@@ -96,14 +96,20 @@ export const seriesOrchestrator = {
     }
 
     // 2B. Déduplication par Œuvre dans la série (même workUri, même n° de tome ou même titre normalisé)
-    // Priorité : owned > wish > none, tout en fusionnant numéro de tome, couvertures et knownIsbns
+    // Priorité : owned > wish > none, puis fiche éditée par l'utilisateur (`isLocallyEdited`) > couverture locale > couverture > plus récente
     const statusWeight = (s?: string) => (s === 'owned' ? 3 : s === 'wish' ? 2 : 1);
     const sortedForDedup = [...tomes].sort((a, b) => {
       const diff = statusWeight(b.ownershipStatus) - statusWeight(a.ownershipStatus);
       if (diff !== 0) return diff;
+      const editDiff = (b.isLocallyEdited ? 1 : 0) - (a.isLocallyEdited ? 1 : 0);
+      if (editDiff !== 0) return editDiff;
+      const localCoverDiff = (b.localCover ? 1 : 0) - (a.localCover ? 1 : 0);
+      if (localCoverDiff !== 0) return localCoverDiff;
       const aCover = a.localCover || a.coverUrl ? 1 : 0;
       const bCover = b.localCover || b.coverUrl ? 1 : 0;
       if (bCover !== aCover) return bCover - aCover;
+      const updatedDiff = (b.updatedAt || 0) - (a.updatedAt || 0);
+      if (updatedDiff !== 0) return updatedDiff;
       return (b.seriesNumber ? 1 : 0) - (a.seriesNumber ? 1 : 0);
     });
 
@@ -143,6 +149,7 @@ export const seriesOrchestrator = {
         numCandidate &&
         !numCandidate.isIntegral &&
         !tome.isIntegral &&
+        !(numCandidate.seriesId && tome.seriesId && numCandidate.seriesId !== tome.seriesId) &&
         !areDistinctSeriesWorkTitles(numCandidate.title, tome.title, seriesName || numCandidate.series || tome.series)
           ? numCandidate
           : undefined;
@@ -154,8 +161,18 @@ export const seriesOrchestrator = {
 
       if (existing) {
         if (!existing.seriesNumber && tome.seriesNumber) existing.seriesNumber = tome.seriesNumber;
-        if (!existing.localCover && tome.localCover) existing.localCover = tome.localCover;
-        if (!existing.coverUrl && tome.coverUrl) existing.coverUrl = tome.coverUrl;
+        // La couverture choisie manuellement sur la fiche livre (édition/création) est toujours prioritaire
+        const tomeCoverIsAuthoritative = Boolean(
+          tome.isLocallyEdited && !existing.isLocallyEdited && (tome.localCover || tome.coverUrl)
+        );
+        if (tomeCoverIsAuthoritative) {
+          existing.localCover = tome.localCover;
+          existing.coverUrl = tome.coverUrl;
+          existing.isLocallyEdited = true;
+        } else if (!existing.localCover && !existing.coverUrl) {
+          if (tome.localCover) existing.localCover = tome.localCover;
+          if (tome.coverUrl) existing.coverUrl = tome.coverUrl;
+        }
         const extraFallbacks = [tome.coverUrl, ...(tome.coverFallbackUrls || [])].filter(
           (u): u is string => Boolean(u)
         );

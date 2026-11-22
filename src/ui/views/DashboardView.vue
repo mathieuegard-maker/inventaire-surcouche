@@ -185,7 +185,7 @@ watch(
           <img
             v-for="book in previewCollection"
             :key="book.uri"
-            :src="imageUtil.resolveCoverUrl(book)"
+            :src="imageUtil.resolveBookCardCoverUrl(book)"
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"
@@ -204,7 +204,7 @@ watch(
           <img
             v-for="book in previewWishlist"
             :key="book.uri"
-            :src="imageUtil.resolveCoverUrl(book)"
+            :src="imageUtil.resolveBookCardCoverUrl(book)"
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"
@@ -223,7 +223,7 @@ watch(
           <img
             v-for="book in previewLoans"
             :key="book.uri"
-            :src="imageUtil.resolveCoverUrl(book)"
+            :src="imageUtil.resolveBookCardCoverUrl(book)"
             :alt="book.title"
             :title="book.title"
             class="home-preview-cover"

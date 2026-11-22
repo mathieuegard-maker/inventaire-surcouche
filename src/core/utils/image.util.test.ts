@@ -113,4 +113,37 @@ describe('Image Utility', () => {
       expect(exhausted).toBe(true);
     });
   });
+
+  describe('resolveBookCardCoverUrl & getCoverFingerprint', () => {
+    it('priorise localCover puis coverUrl exacte sans suffixe &isbn= pour respecter strictement la fiche livre', () => {
+      const bookWithLocal: Partial<HumanizedBook> = {
+        isbn13: '9782365770125',
+        localCover: 'data:image/webp;base64,CUSTOM_FABLES_T1',
+        coverUrl: 'https://example.com/old-default.jpg'
+      };
+      expect(imageUtil.resolveBookCardCoverUrl(bookWithLocal as HumanizedBook)).toBe(
+        'data:image/webp;base64,CUSTOM_FABLES_T1'
+      );
+
+      const bookWithChosenUrl: Partial<HumanizedBook> = {
+        isbn13: '9782365770125',
+        coverUrl: 'https://urban-comics.example/fables-t1-chosen.jpg'
+      };
+      const resolved = imageUtil.resolveBookCardCoverUrl(bookWithChosenUrl as HumanizedBook);
+      expect(resolved).toBe(
+        '/api/gateway?action=image-proxy&url=https%3A%2F%2Furban-comics.example%2Ffables-t1-chosen.jpg'
+      );
+      expect(resolved).not.toContain('&isbn=');
+    });
+
+    it('détecte le remplacement dun localCover par un autre localCover via getCoverFingerprint', () => {
+      const fpA = imageUtil.getCoverFingerprint({
+        localCover: 'data:image/webp;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_OLD'
+      });
+      const fpB = imageUtil.getCoverFingerprint({
+        localCover: 'data:image/webp;base64,BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB_NEW'
+      });
+      expect(fpA).not.toBe(fpB);
+    });
+  });
 });
