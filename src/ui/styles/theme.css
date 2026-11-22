@@ -25,14 +25,29 @@
 
   /* Statuts Doux (Pastels modernes) */
   --color-status-owned: #10b981;
-  /* Vert émeraude */
+  --color-status-owned-text: #065f46;
+  --color-status-owned-border: #a7f3d0;
   --color-status-owned-light: #ecfdf5;
   --color-status-wish: #f59e0b;
-  /* Ambre */
+  --color-status-wish-text: #92400e;
+  --color-status-wish-border: #fde68a;
   --color-status-wish-light: #fffbeb;
   --color-status-lent: #3b82f6;
-  /* Bleu */
+  --color-status-lent-text: #1d4ed8;
+  --color-status-lent-border: #bfdbfe;
   --color-status-lent-light: #eff6ff;
+  --color-status-integral: #4f46e5;
+  --color-status-integral-text: #3730a3;
+  --color-status-integral-border: #c7d2fe;
+  --color-status-integral-light: #eef2ff;
+  --color-status-covered: #0f766e;
+  --color-status-covered-border: #99f6e4;
+  --color-status-covered-light: #f0fdfa;
+  --color-danger: #dc2626;
+  --color-danger-text: #991b1b;
+  --color-danger-border: #fecaca;
+  --color-danger-light: #fef2f2;
+  --input-height-compact: 36px;
 
   /* Géométrie Moderne */
   --border-width: 1px;
@@ -2184,4 +2199,103 @@ h3.wireframe-title {
   background-color: var(--color-primary) !important;
   color: var(--color-text-inverse) !important;
   border-color: var(--color-primary) !important;
+}
+
+/* ==========================================================================
+   DESIGN SYSTEM UNIFIÉ (Chantier 4 — Primitives partagées DRY / KISS)
+   ========================================================================== */
+
+.ds-card {
+  background: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.9rem 1rem;
+  box-shadow: var(--shadow-sm);
+}
+
+.ds-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+
+.ds-input {
+  width: 100%;
+  min-height: var(--input-height-compact);
+  padding: 0.38rem 0.58rem;
+  border: var(--border-width) solid var(--color-border-hover);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-main);
+  color: var(--color-text-main);
+  font-size: 0.84rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ds-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px var(--color-primary-light);
+}
+
+.ds-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ds-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+}
+
+.ds-banner {
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid transparent;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.ds-banner-error {
+  background: var(--color-danger-light);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger-text);
+}
+
+.ds-banner-success {
+  background: var(--color-status-owned-light);
+  border-color: var(--color-status-owned-border);
+  color: var(--color-status-owned-text);
+}
+
+.ds-banner-info {
+  background: var(--color-status-integral-light);
+  border-color: var(--color-status-integral-border);
+  color: var(--color-status-integral-text);
+}
+
+.ds-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--color-status-covered);
+  background: var(--color-status-covered-light);
+  border: var(--border-width) solid var(--color-status-covered-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.ds-pill-btn:hover {
+  filter: brightness(0.97);
 }

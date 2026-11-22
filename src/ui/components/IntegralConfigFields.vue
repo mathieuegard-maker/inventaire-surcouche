@@ -94,20 +94,20 @@ const onTextInput = (event: Event) => {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.35rem;
-  background: #f1f5f9;
+  background: var(--color-bg-alt);
   padding: 0.25rem;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border-radius: var(--radius-sm);
+  border: var(--border-width) solid var(--color-border);
 }
 
 .integral-seg-btn {
-  border: 1px solid transparent;
+  border: var(--border-width) solid transparent;
   background: transparent;
-  color: #475569;
+  color: var(--color-text-muted);
   font-weight: 700;
   font-size: 0.8rem;
   padding: 0.42rem 0.55rem;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease;
 }
@@ -118,9 +118,9 @@ const onTextInput = (event: Event) => {
 }
 
 .integral-seg-btn.active {
-  background: #4f46e5;
-  color: #ffffff;
-  border-color: #4338ca;
+  background: var(--color-primary);
+  color: var(--color-text-inverse);
+  border-color: var(--color-primary-hover);
 }
 
 .integral-seg-btn:disabled {
@@ -133,26 +133,26 @@ const onTextInput = (event: Event) => {
   flex-direction: column;
   gap: 0.3rem;
   padding: 0.55rem 0.65rem;
-  background: #eef2ff;
-  border: 1px solid #c7d2fe;
-  border-radius: 8px;
+  background: var(--color-status-integral-light);
+  border: var(--border-width) solid var(--color-status-integral-border);
+  border-radius: var(--radius-sm);
 }
 
 .integral-volumes-label {
   font-size: 0.78rem;
-  color: #3730a3;
+  color: var(--color-status-integral-text);
 }
 
 .integral-volumes-input {
   width: 100%;
   box-sizing: border-box;
-  min-height: 34px;
+  min-height: var(--input-height-compact);
   padding: 0.35rem 0.55rem;
-  border: 1px solid #a5b4fc;
-  border-radius: 6px;
+  border: var(--border-width) solid var(--color-status-integral-border);
+  border-radius: var(--radius-sm);
   font-size: 0.84rem;
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--color-bg-main);
+  color: var(--color-text-main);
 }
 
 .integral-parsed-pills {
@@ -164,9 +164,9 @@ const onTextInput = (event: Event) => {
 .integral-parsed-pill {
   font-size: 0.72rem;
   font-weight: 700;
-  color: #4338ca;
-  background: #ffffff;
-  border: 1px solid #c7d2fe;
+  color: var(--color-status-integral-text);
+  background: var(--color-bg-main);
+  border: var(--border-width) solid var(--color-status-integral-border);
   border-radius: 999px;
   padding: 0.12rem 0.5rem;
 }

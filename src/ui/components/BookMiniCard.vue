@@ -183,34 +183,34 @@ const handleZoneClick = () => {
 }
 
 .row-mini-badge.info {
-  background: #e0f2fe;
-  color: #0369a1;
+  background: var(--color-status-lent-light);
+  color: var(--color-status-lent-text);
 }
 
 .row-mini-badge.consensus {
-  background: #ede9fe;
-  color: #5b21b6;
+  background: var(--color-status-integral-light);
+  color: var(--color-status-integral-text);
 }
 
 .row-mini-badge.warn {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--color-status-wish-light);
+  color: var(--color-status-wish-text);
 }
 
 .row-mini-badge.integral {
-  background: #e0e7ff;
-  color: #3730a3;
+  background: var(--color-status-integral-light);
+  color: var(--color-status-integral-text);
 }
 
 .row-mini-badge.integral-covered {
-  background: #ccfbf1;
-  color: #0f766e;
+  background: var(--color-status-covered-light);
+  color: var(--color-status-covered);
 }
 
 .status-text-label.integral-covered {
-  color: #0f766e;
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
+  color: var(--color-status-covered);
+  background: var(--color-status-covered-light);
+  border: var(--border-width) solid var(--color-status-covered-border);
   border-radius: 999px;
   padding: 0.12rem 0.5rem;
   font-size: 0.72rem;
