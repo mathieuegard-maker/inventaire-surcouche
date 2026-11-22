@@ -1,10 +1,11 @@
 <template>
-  <div class="view-container">
-    <BaseHeader />
+  <div :class="embedded ? 'friends-embedded' : 'view-container'">
+    <BaseHeader v-if="!embedded" />
 
     <div class="friends-page">
       <div class="friends-header-row">
-        <BaseTitle text="Mes Amis &amp; Collections suivies" level="h2" />
+        <BaseTitle v-if="!embedded" text="Mes Amis &amp; Collections suivies" level="h2" />
+        <h3 v-else class="embedded-section-title">Mes Amis &amp; Collections suivies</h3>
         <button type="button" class="wireframe-btn share-self-btn" @click="showShareModal = true">
           Mon QR Code Amis
         </button>
@@ -111,6 +112,8 @@ import {
   type FriendLibrarySummary,
   type PublicSharePayload
 } from '../../core/services/user.service';
+
+defineProps<{ embedded?: boolean }>();
 
 const friends = ref<FriendLibrarySummary[]>([]);
 const loading = ref(true);

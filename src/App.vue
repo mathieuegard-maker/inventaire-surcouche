@@ -118,42 +118,37 @@ onMounted(async () => {
 
     <div
       v-if="photoStats.totalPhotos > 0"
-      style="margin: 8px 16px 0; padding: 10px 14px; border: 1px solid #fde68a; border-radius: 12px; background: #fffbeb; color: #1e293b; font-size: 13px; display: flex; flex-direction: column; gap: 6px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);"
+      role="button"
+      tabindex="0"
+      class="photo-global-banner"
+      :class="photoProcessing ? 'is-processing' : 'is-ready'"
+      @click="scannerState.startScan(router, 'photo')"
+      @keydown.enter.prevent="scannerState.startScan(router, 'photo')"
+      @keydown.space.prevent="scannerState.startScan(router, 'photo')"
     >
-      <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-        <div>
-          <strong>
-            {{ photoProcessing ? 'Traitement photo en arrière-fond' : 'Lot photo prêt à valider' }}
-            — {{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }} photo(s) lue(s) par l'IA
-          </strong>
-          <div style="font-size: 12px; color: #475569; margin-top: 2px;">
-            {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • {{ photoStats.totalExternalLookups }} recherche(s) croisée(s) •
-            {{ photoStats.sureCount }} sûr(s) • {{ photoStats.doubtCount }} doute(s) • {{ photoStats.unresolvedCount }} non trouvé(s)
-          </div>
-          <div v-if="photoProcessing" style="font-size: 11px; color: #92400e; margin-top: 2px;">
-            {{ photoMsg || 'Analyse en cours...' }} — Gardez l'application allumée pendant le traitement.
-          </div>
+      <div class="photo-global-banner__content">
+        <strong class="photo-global-banner__title">
+          <template v-if="photoProcessing">
+            Analyse photo en cours ({{ photoStats.aiDonePhotos }}/{{ photoStats.totalPhotos }}) — traitement serveur en arrière-plan
+          </template>
+          <template v-else>
+            Lot photo prêt à valider ({{ photoStats.donePhotos }}/{{ photoStats.totalPhotos }}) — toucher pour ouvrir
+          </template>
+        </strong>
+        <div class="photo-global-banner__meta">
+          {{ photoStats.totalBooksDetected }} livre(s) détecté(s) • {{ photoStats.sureCount }} sûr(s) •
+          {{ photoStats.doubtCount }} doute(s) • {{ photoStats.unresolvedCount }} non trouvé(s)
+          <template v-if="photoProcessing && photoMsg"> • {{ photoMsg }}</template>
         </div>
-        <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-          <button
-            v-if="photoStats.donePhotos > 0"
-            type="button"
-            class="wireframe-btn"
-            style="width: auto; padding: 5px 10px; background: #16a34a; color: #fff; font-weight: 800; font-size: 12px;"
-            @click="scannerState.startScan(router, 'photo')"
-          >
-            Valider ({{ photoStats.donePhotos }})
-          </button>
-          <button
-            v-if="photoStats.errorPhotos > 0"
-            type="button"
-            class="wireframe-btn"
-            style="width: auto; padding: 5px 10px; background: #fef2f2; color: #991b1b; font-weight: 700; font-size: 12px;"
-            @click="photoBatchQueueService.retryFailedJobs()"
-          >
-            Relancer ({{ photoStats.errorPhotos }})
-          </button>
-        </div>
+      </div>
+      <div v-if="photoStats.errorPhotos > 0" class="photo-global-banner__actions">
+        <button
+          type="button"
+          class="wireframe-btn photo-global-banner__retry"
+          @click.stop="photoBatchQueueService.retryFailedJobs()"
+        >
+          Relancer ({{ photoStats.errorPhotos }})
+        </button>
       </div>
     </div>
 
@@ -165,3 +160,67 @@ onMounted(async () => {
 
   <PwaReloadPrompt />
 </template>
+
+<style scoped>
+.photo-global-banner {
+  margin: 8px 16px 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.15s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.photo-global-banner:hover {
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.1);
+}
+
+.photo-global-banner:active {
+  transform: scale(0.995);
+}
+
+.photo-global-banner.is-processing {
+  border: 1.5px solid #f59e0b;
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.photo-global-banner.is-ready {
+  border: 1.5px solid #16a34a;
+  background: #dcfce7;
+  color: #14532d;
+}
+
+.photo-global-banner__content {
+  flex: 1;
+  min-width: 220px;
+}
+
+.photo-global-banner__title {
+  display: block;
+  font-size: 13px;
+  line-height: 1.3;
+}
+
+.photo-global-banner__meta {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-top: 2px;
+}
+
+.photo-global-banner__retry {
+  width: auto;
+  padding: 5px 10px;
+  background: #fef2f2;
+  color: #991b1b;
+  border-color: #fecaca;
+  font-weight: 700;
+  font-size: 12px;
+}
+</style>

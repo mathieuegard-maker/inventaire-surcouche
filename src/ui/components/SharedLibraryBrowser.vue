@@ -104,7 +104,7 @@
               {{ item.wished_by_name ? `Wishlist · ${item.wished_by_name}` : 'Wishlist' }}
             </span>
             <span v-else-if="Boolean(item.is_lent)" class="status-pill lent">
-              {{ item.borrower_name ? `Prêté à ${item.borrower_name}` : 'Déjà prêté' }}
+              Prêté
             </span>
             <span v-else class="status-pill avail">Disponible</span>
           </div>

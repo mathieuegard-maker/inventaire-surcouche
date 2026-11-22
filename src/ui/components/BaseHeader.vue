@@ -12,9 +12,7 @@ const handleCollection = () => { isMenuOpen.value = false; router.push('/collect
 const handleWishlist = () => { isMenuOpen.value = false; router.push('/wishlist'); };
 const handleLoans = () => { isMenuOpen.value = false; router.push('/loans'); };
 const handleReleases = () => { isMenuOpen.value = false; router.push('/releases'); };
-const handleStats = () => { isMenuOpen.value = false; router.push('/stats'); };
-const handleFriends = () => { isMenuOpen.value = false; router.push('/friends'); };
-const handleFamilyShare = () => {
+const handleShareAndFriends = () => {
   isMenuOpen.value = false;
   router.push('/family');
 };
@@ -22,7 +20,6 @@ const handleProfile = () => {
   isMenuOpen.value = false;
   router.push('/profile');
 };
-const handleBack = () => { isMenuOpen.value = false; router.back(); };
 
 const toggleScan = () => {
   isMenuOpen.value = false;
@@ -48,20 +45,11 @@ const toggleScan = () => {
       <button class="wireframe-btn header-nav-btn" @click="handleReleases">
         NOUVEAUTÉS
       </button>
-      <button class="wireframe-btn header-nav-btn" @click="handleFriends">
-        MES AMIS
-      </button>
-      <button class="wireframe-btn header-nav-btn" @click="handleFamilyShare">
-        FOYER &amp; PARTAGE
-      </button>
-      <button class="wireframe-btn header-nav-btn" @click="handleStats">
-        STATISTIQUES
+      <button class="wireframe-btn header-nav-btn" @click="handleShareAndFriends">
+        PARTAGE &amp; AMIS
       </button>
       <button class="wireframe-btn header-nav-btn" @click="handleProfile">
         MON PROFIL
-      </button>
-      <button class="wireframe-btn header-nav-btn" @click="handleBack">
-        {{ TEXTS.header?.back || 'RETOUR' }}
       </button>
       <button
         class="wireframe-btn header-nav-btn btn-scan-global-trigger"
@@ -102,20 +90,11 @@ const toggleScan = () => {
         <button class="wireframe-btn menu-drawer-item" @click="handleReleases">
           NOUVEAUTÉS
         </button>
-        <button class="wireframe-btn menu-drawer-item" @click="handleFriends">
-          MES AMIS
-        </button>
-        <button class="wireframe-btn menu-drawer-item" @click="handleFamilyShare">
-          FOYER &amp; PARTAGE
-        </button>
-        <button class="wireframe-btn menu-drawer-item" @click="handleStats">
-          STATISTIQUES
+        <button class="wireframe-btn menu-drawer-item" @click="handleShareAndFriends">
+          PARTAGE &amp; AMIS
         </button>
         <button class="wireframe-btn menu-drawer-item" @click="handleProfile">
           MON PROFIL
-        </button>
-        <button class="wireframe-btn menu-drawer-item" @click="handleBack">
-          {{ TEXTS.header?.back || 'RETOUR' }}
         </button>
       </div>
     </div>

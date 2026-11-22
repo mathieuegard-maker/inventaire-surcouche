@@ -95,22 +95,7 @@ export async function handleFamilyShareGatewayAction(
                            AND (li2.edition_id = b.legacy_entity_uri OR li2.work_id = b.legacy_entity_uri)
                        )
                      )
-                  ) as is_lent,
-                  (SELECT ln.borrower_name FROM loans ln
-                   WHERE ln.library_id = lb.library_id
-                     AND ln.returned_at IS NULL
-                     AND ln.deleted_at IS NULL
-                     AND (
-                       ln.library_item_id IN (b.legacy_entity_uri, 'v4:' || b.id, 'book:' || b.id, 'itm_' || lb.library_id || '_' || b.id)
-                       OR EXISTS (SELECT 1 FROM book_isbn_index bi WHERE bi.book_id = b.id AND ln.library_item_id = 'isbn:' || bi.isbn13)
-                       OR ln.library_item_id IN (
-                         SELECT li2.id FROM library_items li2
-                         WHERE li2.library_id = lb.library_id AND li2.deleted_at IS NULL
-                           AND (li2.edition_id = b.legacy_entity_uri OR li2.work_id = b.legacy_entity_uri)
-                       )
-                     )
-                   ORDER BY ln.loaned_at DESC LIMIT 1
-                  ) as borrower_name
+                  ) as is_lent
            FROM v4_library_books lb
            JOIN books b ON b.id = lb.book_id
            LEFT JOIN users u ON u.id = lb.wished_by_user_id
@@ -127,8 +112,7 @@ export async function handleFamilyShareGatewayAction(
                   ce.label as title, ce.series_uri, se.label as series_name,
                   ce.series_number, ce.sort_order, ce.image_url, ce.main_category,
                   CASE WHEN li.ownership_status = 'wishlist' THEN u.display_name ELSE NULL END as wished_by_name,
-                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent,
-                  (SELECT ln.borrower_name FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL ORDER BY ln.loaned_at DESC LIMIT 1) as borrower_name
+                  (SELECT COUNT(*) FROM loans ln WHERE ln.library_item_id = li.id AND ln.returned_at IS NULL AND ln.deleted_at IS NULL) as is_lent
            FROM library_items li
            LEFT JOIN catalog_entities ce ON ce.uri = COALESCE(li.edition_id, li.work_id)
            LEFT JOIN catalog_entities se ON se.uri = ce.series_uri

@@ -54,12 +54,12 @@ export const router = createRouter({
     {
       path: '/stats',
       name: 'StatsView',
-      component: () => import('../ui/views/StatsView.vue')
+      redirect: '/profile?tab=stats'
     },
     {
       path: '/friends',
       name: 'FriendsView',
-      component: () => import('../ui/views/FriendsView.vue')
+      redirect: '/family?tab=friends'
     },
     {
       path: '/family',

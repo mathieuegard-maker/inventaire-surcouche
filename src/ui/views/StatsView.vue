@@ -8,6 +8,7 @@ import { TEXTS } from '../locales/fr';
 import { statsService, type DetailedStats } from '../../core/services/stats.service';
 import { scannerState } from '../../state/scanner';
 
+const props = defineProps<{ embedded?: boolean }>();
 const router = useRouter();
 const stats = ref<DetailedStats | null>(null);
 const selectedPeriod = ref(30);
@@ -37,11 +38,12 @@ const totalReadingTracked = computed(() => {
 </script>
 
 <template>
-  <div class="view-container">
-    <BaseHeader />
+  <div :class="props.embedded ? 'stats-embedded' : 'view-container'">
+    <BaseHeader v-if="!props.embedded" />
 
     <div class="kpi-page-top">
-      <BaseTitle text="Statistiques & KPIs" level="h2" />
+      <BaseTitle v-if="!props.embedded" text="Statistiques" level="h2" />
+      <h3 v-else class="stats-embedded-title">Statistiques</h3>
       <select v-model="selectedPeriod" @change="loadStats" class="wireframe-input kpi-period-select" aria-label="Période d'analyse">
         <option :value="30">{{ TEXTS.dashboardStats.period30 }}</option>
         <option :value="90">{{ TEXTS.dashboardStats.period90 }}</option>

@@ -1,13 +1,29 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, onMounted, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import BaseHeader from '../components/BaseHeader.vue';
 import BaseTitle from '../components/BaseTitle.vue';
+import StatsView from './StatsView.vue';
 import { userService } from '../../core/services/user.service';
 import { connectionService } from '../../core/orchestrators/connection.orchestrator';
 import { sessionStore } from '../../state/session';
 
+const route = useRoute();
 const router = useRouter();
+
+type ProfileTab = 'account' | 'stats' | 'notifications';
+
+const activeTab = computed<ProfileTab>(() => {
+  const q = String(route.query.tab || '').toLowerCase();
+  if (q === 'stats') return 'stats';
+  if (q === 'notifications') return 'notifications';
+  return 'account';
+});
+
+const setProfileTab = (tab: ProfileTab) => {
+  if (activeTab.value === tab) return;
+  router.replace({ path: '/profile', query: tab === 'account' ? {} : { tab } });
+};
 
 const username = ref(sessionStore.state.user?.username || '');
 const recoveryEmail = ref(sessionStore.state.user?.recoveryEmail || '');
@@ -220,186 +236,262 @@ const handleLogout = async () => {
 <template>
   <div class="view-container">
     <BaseHeader />
-    <BaseTitle text="Mon Profil" level="h2" />
+    <div class="profile-hub">
+      <BaseTitle text="Mon Profil" level="h2" />
 
-    <div v-if="loading" class="profile-card">
-      <p class="loading-text">Chargement du profil...</p>
-    </div>
-
-    <div v-else class="profile-card">
-      <div v-if="!recoveryEmail" class="warning-banner">
-        Aucune adresse e-mail de récupération enregistrée : ajoutez-en une dès maintenant pour pouvoir réinitialiser votre mot de passe en cas d'oubli.
+      <div class="profile-subnav" role="tablist" aria-label="Sections Mon Profil">
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'account'"
+          :class="['profile-subnav-tab', { active: activeTab === 'account' }]"
+          @click="setProfileTab('account')"
+        >
+          Compte &amp; Sécurité
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'stats'"
+          :class="['profile-subnav-tab', { active: activeTab === 'stats' }]"
+          @click="setProfileTab('stats')"
+        >
+          Statistiques
+        </button>
+        <button
+          type="button"
+          role="tab"
+          :aria-selected="activeTab === 'notifications'"
+          :class="['profile-subnav-tab', { active: activeTab === 'notifications' }]"
+          @click="setProfileTab('notifications')"
+        >
+          Notifications
+        </button>
+        <button
+          v-if="isAdmin"
+          type="button"
+          class="profile-subnav-tab admin-tab"
+          @click="router.push('/admin')"
+        >
+          Administration
+        </button>
       </div>
 
-      <form class="profile-form" @submit.prevent="handleSave">
-        <div class="field">
-          <label for="profile-username">Nom d'utilisateur</label>
-          <input
-            id="profile-username"
-            v-model="username"
-            type="text"
-            required
-            autocomplete="username"
-          />
+      <div v-if="activeTab === 'stats'" class="profile-stats-wrap">
+        <StatsView :embedded="true" />
+      </div>
+
+      <div v-else-if="loading" class="profile-card">
+        <p class="loading-text">Chargement du profil...</p>
+      </div>
+
+      <div v-else-if="activeTab === 'account'" class="profile-card">
+        <div v-if="!recoveryEmail" class="warning-banner">
+          Aucune adresse e-mail de récupération enregistrée : ajoutez-en une dès maintenant pour pouvoir réinitialiser votre mot de passe en cas d'oubli.
         </div>
 
-        <div class="field">
-          <label for="profile-email">Adresse e-mail de récupération (obligatoire)</label>
-          <input
-            id="profile-email"
-            v-model="recoveryEmail"
-            type="email"
-            required
-            autocomplete="email"
-            placeholder="exemple@domaine.fr"
-          />
-        </div>
-
-        <hr class="section-sep" />
-        <p class="section-hint">Changer de mot de passe (optionnel)</p>
-
-        <div class="field">
-          <label for="profile-current-password">Mot de passe actuel</label>
-          <input
-            id="profile-current-password"
-            v-model="currentPassword"
-            type="password"
-            autocomplete="current-password"
-            placeholder="Laissez vide si inchangé"
-          />
-        </div>
-
-        <div class="field">
-          <label for="profile-new-password">Nouveau mot de passe</label>
-          <input
-            id="profile-new-password"
-            v-model="newPassword"
-            type="password"
-            autocomplete="new-password"
-            placeholder="Minimum 4 caractères"
-          />
-        </div>
-
-        <div class="field">
-          <label for="profile-confirm-password">Confirmer le nouveau mot de passe</label>
-          <input
-            id="profile-confirm-password"
-            v-model="confirmPassword"
-            type="password"
-            autocomplete="new-password"
-            placeholder="Retapez le nouveau mot de passe"
-          />
-        </div>
-
-        <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
-        <p v-if="successMsg" class="success-msg">{{ successMsg }}</p>
-
-        <button type="submit" class="wireframe-btn primary save-btn" :disabled="saving">
-          {{ saving ? 'Enregistrement...' : 'Enregistrer les modifications' }}
-        </button>
-      </form>
-
-      <hr class="section-sep logout-sep" />
-      <h3 class="notif-title">Notifications &amp; Digest des nouveautés</h3>
-      <p class="notif-sub">
-        Recevez un récapitulatif des nouveaux tomes détectés dans les séries dont vous possédez au moins un tome.
-      </p>
-
-      <form class="profile-form" @submit.prevent="handleSaveNotifs">
-        <div class="field">
-          <label for="notif-freq">Fréquence des notifications</label>
-          <select id="notif-freq" v-model="digestFrequency">
-            <option value="off">Désactivé</option>
-            <option value="daily">Quotidien</option>
-            <option value="weekly">Hebdomadaire</option>
-            <option value="monthly">Mensuel</option>
-          </select>
-        </div>
-
-        <template v-if="digestFrequency !== 'off'">
-          <div v-if="digestFrequency === 'weekly'" class="field">
-            <label for="notif-weekday">Jour de la semaine</label>
-            <select id="notif-weekday" v-model.number="digestWeekday">
-              <option :value="1">Lundi</option>
-              <option :value="2">Mardi</option>
-              <option :value="3">Mercredi</option>
-              <option :value="4">Jeudi</option>
-              <option :value="5">Vendredi</option>
-              <option :value="6">Samedi</option>
-              <option :value="0">Dimanche</option>
-            </select>
-          </div>
-
-          <div v-if="digestFrequency === 'monthly'" class="field">
-            <label for="notif-dom">Jour du mois</label>
-            <select id="notif-dom" v-model.number="digestDayOfMonth">
-              <option v-for="d in 28" :key="d" :value="d">Le {{ d }}</option>
-            </select>
+        <form class="profile-form" @submit.prevent="handleSave">
+          <div class="field">
+            <label for="profile-username">Nom d'utilisateur</label>
+            <input
+              id="profile-username"
+              v-model="username"
+              type="text"
+              required
+              autocomplete="username"
+            />
           </div>
 
           <div class="field">
-            <label for="notif-hour">Heure d'envoi ({{ digestTimezone }})</label>
-            <select id="notif-hour" v-model.number="digestHour">
-              <option v-for="h in 24" :key="h - 1" :value="h - 1">
-                {{ String(h - 1).padStart(2, '0') }}h00
-              </option>
-            </select>
+            <label for="profile-email">Adresse e-mail de récupération (obligatoire)</label>
+            <input
+              id="profile-email"
+              v-model="recoveryEmail"
+              type="email"
+              required
+              autocomplete="email"
+              placeholder="exemple@domaine.fr"
+            />
+          </div>
+
+          <hr class="section-sep" />
+          <p class="section-hint">Changer de mot de passe (optionnel)</p>
+
+          <div class="field">
+            <label for="profile-current-password">Mot de passe actuel</label>
+            <input
+              id="profile-current-password"
+              v-model="currentPassword"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Laissez vide si inchangé"
+            />
           </div>
 
           <div class="field">
-            <label for="notif-channel">Canal de réception</label>
-            <select id="notif-channel" v-model="digestChannel">
-              <option value="push">Notification Push (PWA)</option>
-              <option value="email">E-mail</option>
-              <option value="both">Notification Push + E-mail</option>
-            </select>
+            <label for="profile-new-password">Nouveau mot de passe</label>
+            <input
+              id="profile-new-password"
+              v-model="newPassword"
+              type="password"
+              autocomplete="new-password"
+              placeholder="Minimum 4 caractères"
+            />
           </div>
 
-          <p v-if="digestChannel !== 'email'" class="notif-sub">
-            {{
-              hasPushSubscription
-                ? 'Notifications Push déjà actives sur cet appareil.'
-                : 'L’enregistrement activera automatiquement les notifications Push sur cet appareil.'
-            }}
-          </p>
-        </template>
+          <div class="field">
+            <label for="profile-confirm-password">Confirmer le nouveau mot de passe</label>
+            <input
+              id="profile-confirm-password"
+              v-model="confirmPassword"
+              type="password"
+              autocomplete="new-password"
+              placeholder="Retapez le nouveau mot de passe"
+            />
+          </div>
 
-        <p v-if="notifError" class="error-msg">{{ notifError }}</p>
-        <p v-if="notifMsg" class="success-msg">{{ notifMsg }}</p>
+          <p v-if="errorMsg" class="error-msg">{{ errorMsg }}</p>
+          <p v-if="successMsg" class="success-msg">{{ successMsg }}</p>
 
-        <button type="submit" class="wireframe-btn primary save-btn" :disabled="savingNotif">
-          {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences' }}
-        </button>
-      </form>
+          <button type="submit" class="wireframe-btn primary save-btn" :disabled="saving">
+            {{ saving ? 'Enregistrement...' : 'Enregistrer les modifications' }}
+          </button>
+        </form>
 
-      <template v-if="isAdmin">
         <hr class="section-sep logout-sep" />
         <button
           type="button"
-          class="wireframe-btn save-btn"
-          @click="router.push('/admin')"
+          class="wireframe-btn danger logout-btn"
+          :disabled="loggingOut"
+          @click="handleLogout"
         >
-          Interface Administrateur
+          {{ loggingOut ? 'Déconnexion...' : 'Se déconnecter' }}
         </button>
-      </template>
+      </div>
 
-      <hr class="section-sep logout-sep" />
-      <button
-        type="button"
-        class="wireframe-btn danger logout-btn"
-        :disabled="loggingOut"
-        @click="handleLogout"
-      >
-        {{ loggingOut ? 'Déconnexion...' : 'Se déconnecter' }}
-      </button>
+      <div v-else-if="activeTab === 'notifications'" class="profile-card">
+        <h3 class="notif-title">Notifications des nouveautés</h3>
+        <p class="notif-sub">
+          Recevez une alerte lorsque de nouveaux tomes paraissent dans les séries dont vous possédez au moins un tome.
+        </p>
+
+        <form class="profile-form" @submit.prevent="handleSaveNotifs">
+          <div class="field">
+            <label for="notif-freq">Fréquence des notifications</label>
+            <select id="notif-freq" v-model="digestFrequency">
+              <option value="off">Désactivé</option>
+              <option value="daily">Quotidien</option>
+              <option value="weekly">Hebdomadaire</option>
+              <option value="monthly">Mensuel</option>
+            </select>
+          </div>
+
+          <template v-if="digestFrequency !== 'off'">
+            <div v-if="digestFrequency === 'weekly'" class="field">
+              <label for="notif-weekday">Jour de la semaine</label>
+              <select id="notif-weekday" v-model.number="digestWeekday">
+                <option :value="1">Lundi</option>
+                <option :value="2">Mardi</option>
+                <option :value="3">Mercredi</option>
+                <option :value="4">Jeudi</option>
+                <option :value="5">Vendredi</option>
+                <option :value="6">Samedi</option>
+                <option :value="0">Dimanche</option>
+              </select>
+            </div>
+
+            <div v-if="digestFrequency === 'monthly'" class="field">
+              <label for="notif-dom">Jour du mois</label>
+              <select id="notif-dom" v-model.number="digestDayOfMonth">
+                <option v-for="d in 28" :key="d" :value="d">Le {{ d }}</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="notif-hour">Heure d'envoi ({{ digestTimezone }})</label>
+              <select id="notif-hour" v-model.number="digestHour">
+                <option v-for="h in 24" :key="h - 1" :value="h - 1">
+                  {{ String(h - 1).padStart(2, '0') }}h00
+                </option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="notif-channel">Canal de réception</label>
+              <select id="notif-channel" v-model="digestChannel">
+                <option value="push">Notification Push (application)</option>
+                <option value="email">E-mail</option>
+                <option value="both">Notification Push + E-mail</option>
+              </select>
+            </div>
+
+            <p v-if="digestChannel !== 'email'" class="notif-sub">
+              {{
+                hasPushSubscription
+                  ? 'Notifications Push déjà actives sur cet appareil.'
+                  : 'L’enregistrement activera automatiquement les notifications Push sur cet appareil.'
+              }}
+            </p>
+          </template>
+
+          <p v-if="notifError" class="error-msg">{{ notifError }}</p>
+          <p v-if="notifMsg" class="success-msg">{{ notifMsg }}</p>
+
+          <button type="submit" class="wireframe-btn primary save-btn" :disabled="savingNotif">
+            {{ savingNotif ? 'Enregistrement...' : 'Enregistrer les préférences' }}
+          </button>
+        </form>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.profile-hub {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto 2rem;
+}
+
+.profile-subnav {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.5rem 0 1rem;
+  flex-wrap: wrap;
+}
+
+.profile-subnav-tab {
+  min-block-size: 40px;
+  padding: 0.45rem 1rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border, #e2e8f0);
+  background: var(--color-surface, #fff);
+  color: var(--color-text-muted, #475569);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.profile-subnav-tab.active {
+  background: var(--color-primary, #4f46e5);
+  border-color: var(--color-primary, #4f46e5);
+  color: #fff;
+}
+
+.profile-subnav-tab.admin-tab {
+  margin-left: auto;
+  border-color: #c7d2fe;
+  background: #eef2ff;
+  color: #3730a3;
+}
+
+.profile-stats-wrap {
+  width: 100%;
+}
+
 .profile-card {
-  max-width: 520px;
-  margin: 1rem auto;
+  max-width: 560px;
+  margin: 0.75rem auto;
   background: var(--color-surface, #fff);
   border: 1px solid var(--color-border, #e2e8f0);
   border-radius: var(--radius-md, 12px);
