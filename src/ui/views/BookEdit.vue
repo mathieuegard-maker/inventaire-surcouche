@@ -10,6 +10,11 @@ import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import DedupModal from '../components/DedupModal.vue';
 import SeriesMergeModal from '../components/SeriesMergeModal.vue';
+import IntegralConfigFields from '../components/IntegralConfigFields.vue';
+import {
+  formatIncludedVolumeNumbers,
+  parseIncludedVolumeNumbers
+} from '../../core/bibliographic/integral.util';
 import { bookSemanticOrchestrator } from '../../core/orchestrators/book-semantic.orchestrator';
 import { SUGGESTED_GENRE_CHIPS } from '../../core/utils/category-classifier.util';
 import { imageUtil } from '../../core/utils/image.util';
@@ -37,6 +42,8 @@ const titleInput = ref('');
 const authorsInput = ref('');
 const seriesInput = ref('');
 const seriesNumberInput = ref('');
+const isIntegralInput = ref(false);
+const includedVolumesInput = ref('');
 const publisherInput = ref('');
 const publishDateInput = ref('');
 const pageCountInput = ref<number | undefined>(undefined);
@@ -253,6 +260,10 @@ const loadBookForEdit = async () => {
     authorsInput.value = currentBook.authors ? currentBook.authors.join(', ') : '';
     seriesInput.value = currentBook.series || '';
     seriesNumberInput.value = currentBook.seriesNumber || '';
+    isIntegralInput.value = Boolean(currentBook.isIntegral);
+    includedVolumesInput.value = formatIncludedVolumeNumbers(
+      currentBook.integralMetadata?.includedVolumeNumbers
+    );
     noSeries.value = !hadInitialSeries;
     publisherInput.value = currentBook.publisher || '';
     publishDateInput.value = currentBook.publishDate || '';
@@ -361,7 +372,11 @@ const saveChanges = async () => {
       title: titleInput.value.trim(),
       authors: authorsInput.value.split(',').map(a => a.trim()).filter(Boolean),
       series: cleanSeries,
-      seriesNumber: noSeries.value ? '' : seriesNumberInput.value.trim(),
+      seriesNumber: noSeries.value || isIntegralInput.value ? '' : seriesNumberInput.value.trim(),
+      isIntegral: isIntegralInput.value,
+      includedVolumeNumbers: isIntegralInput.value
+        ? parseIncludedVolumeNumbers(includedVolumesInput.value)
+        : [],
       publisher: publisherInput.value.trim(),
       publishDate: publishDateInput.value.trim(),
       pageCount: pageCountInput.value,
@@ -452,11 +467,21 @@ const saveChanges = async () => {
                 type="text"
                 v-model="seriesNumberInput"
                 placeholder="Ex: 39"
-                :disabled="noSeries"
+                :disabled="noSeries || isIntegralInput"
                 class="wireframe-input"
-                :class="{ 'disabled-input': noSeries }"
+                :class="{ 'disabled-input': noSeries || isIntegralInput }"
               />
             </div>
+          </div>
+
+          <!-- Format : Tome standard ou Intégrale / Coffret (composant partagé) -->
+          <div class="form-group">
+            <label class="form-label">Format &amp; Tomes inclus</label>
+            <IntegralConfigFields
+              v-model:is-integral="isIntegralInput"
+              v-model:included-volumes-text="includedVolumesInput"
+              input-id="book-edit-integral-vols"
+            />
           </div>
 
           <!-- Éditeur / Année / Pages -->

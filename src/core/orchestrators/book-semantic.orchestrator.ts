@@ -4,6 +4,11 @@ import { inventoryService } from '../services/inventory.service';
 import { bookCacheService } from '../services/book-cache.service';
 import { databaseService } from '../database/database.service';
 import { patchV4BookMetadata } from '../services/v4-client.service';
+import {
+  buildIntegralMetadata,
+  formatIntegralRangeLabel,
+  parseIncludedVolumeNumbers
+} from '../bibliographic/integral.util';
 import { scannerState } from '../../state/scanner';
 import type { HumanizedBook } from '../types';
 
@@ -112,6 +117,8 @@ export const bookSemanticOrchestrator = {
       authors: string[];
       series: string;
       seriesNumber: string;
+      isIntegral?: boolean;
+      includedVolumeNumbers?: string[];
       publisher: string;
       publishDate: string;
       pageCount?: number;
@@ -128,6 +135,14 @@ export const bookSemanticOrchestrator = {
     const effectiveSeriesId =
       resolvedSeriesUri ?? (updatedData.series ? (!hasSeriesNameChanged ? originalBook.seriesId : undefined) : null);
 
+    const isIntegral = updatedData.isIntegral !== undefined ? Boolean(updatedData.isIntegral) : Boolean(originalBook.isIntegral);
+    const parsedIncludedVols = isIntegral
+      ? parseIncludedVolumeNumbers(updatedData.includedVolumeNumbers ?? originalBook.integralMetadata?.includedVolumeNumbers)
+      : [];
+    const effectiveSeriesNumber = isIntegral
+      ? formatIntegralRangeLabel(parsedIncludedVols, updatedData.seriesNumber || originalBook.seriesNumber)
+      : updatedData.seriesNumber;
+
     // 1. Option B : Pour un livre V4, enregistrer uniquement les surcharges privées du foyer dans `v4_library_books`
     //    afin de ne jamais écraser le catalogue commun ni les choix des autres utilisateurs.
     const v4Updated = await patchV4BookMetadata({
@@ -138,7 +153,9 @@ export const bookSemanticOrchestrator = {
       authors: updatedData.authors,
       series: updatedData.series,
       seriesId: effectiveSeriesId,
-      seriesNumber: updatedData.seriesNumber,
+      seriesNumber: effectiveSeriesNumber,
+      isIntegral: updatedData.isIntegral !== undefined ? isIntegral : undefined,
+      includedVolumeNumbers: updatedData.isIntegral !== undefined ? parsedIncludedVols : undefined,
       publisher: updatedData.publisher,
       publishDate: updatedData.publishDate,
       coverUrl: updatedData.coverUrl,
@@ -167,7 +184,11 @@ export const bookSemanticOrchestrator = {
       authors: updatedData.authors,
       series: updatedData.series || undefined,
       seriesId: v4Updated?.seriesId || res.seriesUri || (updatedData.series ? originalBook.seriesId : undefined),
-      seriesNumber: updatedData.seriesNumber || undefined,
+      seriesNumber: effectiveSeriesNumber || undefined,
+      isIntegral,
+      integralMetadata: isIntegral
+        ? buildIntegralMetadata(parsedIncludedVols, v4Updated?.integralMetadata || originalBook.integralMetadata)
+        : { includedVolumeNumbers: [], includedWorkIds: [], includedIsbns: [] },
       publisher: updatedData.publisher || undefined,
       publishDate: updatedData.publishDate || undefined,
       pageCount: updatedData.pageCount,

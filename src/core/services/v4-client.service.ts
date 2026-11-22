@@ -490,6 +490,8 @@ export async function patchV4BookMetadata(params: {
   series?: string;
   seriesId?: string | null;
   seriesNumber?: string;
+  isIntegral?: boolean;
+  includedVolumeNumbers?: string[];
   publisher?: string;
   publishDate?: string;
   coverUrl?: string;

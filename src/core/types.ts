@@ -76,6 +76,7 @@ export interface HumanizedBook extends BaseBook {
   collection?: string;
   coverFallbackUrls?: string[];
   ownershipStatus: 'owned' | 'wish' | 'none';
+  ownedViaIntegral?: ParentIntegralRef;
   wishedByUserId?: string;
   wishedByName?: string;
   loan?: LoanRecord; // AJOUT : Attribut contextuel optionnel pour porter le prêt local

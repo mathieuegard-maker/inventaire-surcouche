@@ -375,6 +375,8 @@ export interface LibraryBookOverrides {
   volumeNumber?: number | null;
   volumeLabel?: string | null;
   isHorsSerie?: boolean;
+  isIntegral?: boolean;
+  integralMetadata?: IntegralMetadata;
   publisher?: string;
   publicationYear?: string;
   mainCategory?: string;
@@ -416,6 +418,8 @@ export function applyLibraryOverridesToBook(
     ...(ov.volumeNumber !== undefined ? { volumeNumber: ov.volumeNumber } : {}),
     ...(ov.volumeLabel !== undefined ? { volumeLabel: ov.volumeLabel } : {}),
     ...(ov.isHorsSerie !== undefined ? { isHorsSerie: ov.isHorsSerie } : {}),
+    ...(ov.isIntegral !== undefined ? { isIntegral: ov.isIntegral } : {}),
+    ...(ov.integralMetadata !== undefined ? { integralMetadata: ov.integralMetadata } : {}),
     ...(ov.mainCategory !== undefined ? { mainCategory: ov.mainCategory } : {}),
     ...(Array.isArray(ov.subgenres) ? { subgenres: ov.subgenres } : {}),
     ...(Array.isArray(ov.hiddenFromSeriesIds) && ov.hiddenFromSeriesIds.length > 0

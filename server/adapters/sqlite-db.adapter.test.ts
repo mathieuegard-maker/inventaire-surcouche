@@ -154,6 +154,17 @@ describe('Self-hosted adapters (SQLite + FS Cover Bucket)', () => {
         expect(syncedWish?.ownershipStatus).toBe('wish');
         expect(syncedWish?.book.wishedByUserId).toBe('u2');
         expect(syncedWish?.book.wishedByName).toBe('Alice');
+
+        // Chantier 1 : conversion Option B d'un livre en Intégrale (tomes 1 à 2)
+        const asIntegral = await updateV4BookMetadata(db, {
+          bookId: book.id,
+          libraryId: 'lib_1',
+          isIntegral: true,
+          includedVolumeNumbers: ['1', '2']
+        });
+        expect(asIntegral?.isIntegral).toBe(true);
+        expect(asIntegral?.integralMetadata.includedVolumeNumbers).toEqual(['1', '2']);
+        expect(asIntegral?.integralMetadata.includedWorkIds).toContain(wishedBook.id);
       } finally {
         vi.unstubAllGlobals();
       }

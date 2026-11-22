@@ -4,6 +4,7 @@ import type { RecognizedBookCandidate } from '../../core/services/byok-vision.se
 import type { PhotoResolutionOption, ResolvedPhotoItem } from '../../core/services/photo-book-resolution.service';
 import { imageUtil } from '../../core/utils/image.util';
 import { scannerState } from '../../state/scanner';
+import IntegralConfigFields from './IntegralConfigFields.vue';
 
 const props = defineProps<{
   show: boolean;
@@ -432,44 +433,12 @@ const handleConfirmClose = () => {
 
           <!-- Contrôle explicite Format & Tomes inclus (si Intégrale) & Sélection -->
           <div class="format-bar">
-            <div class="format-segmented" role="group" aria-label="Format du livre">
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ active: !localIsIntegral }"
-                @click="localIsIntegral = false; commitFieldChanges()"
-              >
-                Tome / Album standard
-              </button>
-              <button
-                type="button"
-                class="seg-btn"
-                :class="{ active: localIsIntegral }"
-                @click="localIsIntegral = true; commitFieldChanges()"
-              >
-                Intégrale / Coffret
-              </button>
-            </div>
-
-            <div v-if="localIsIntegral" class="integral-volumes-box">
-              <label class="integral-volumes-label" for="integral-vols-input">
-                <strong>Tomes inclus dans cette intégrale :</strong>
-              </label>
-              <input
-                id="integral-vols-input"
-                v-model="localIncludedVolumesText"
-                type="text"
-                class="cand-input"
-                placeholder="ex : 1 à 3  ou  4, 5, 6"
-                @input="commitFieldChanges"
-              />
-              <div v-if="parsedIncludedVolumes.length > 0" class="included-vols-chips">
-                <span v-for="v in parsedIncludedVolumes" :key="v" class="vol-chip">Tome {{ v }}</span>
-              </div>
-              <small v-else class="integral-vols-hint">
-                Précisez les numéros de tomes (ex: « 1 à 3 » ou « 4, 5, 6 ») pour que votre série sache exactement quels tomes vous possédez.
-              </small>
-            </div>
+            <IntegralConfigFields
+              v-model:is-integral="localIsIntegral"
+              v-model:included-volumes-text="localIncludedVolumesText"
+              input-id="photo-integral-vols-input"
+              @change="commitFieldChanges"
+            />
 
             <label class="include-check-row">
               <input v-model="localSelected" type="checkbox" class="wireframe-checkbox" @change="commitFieldChanges" />

@@ -2,6 +2,7 @@
 import { ref, onMounted, computed, watch } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { databaseService } from '../../core/database/database.service';
+import { annotateIntegralCoverage } from '../../core/bibliographic/integral.util';
 import { queueService } from '../../core/orchestrators/queue.orchestrator';
 import { wishlistService } from '../../core/services/wishlist.service';
 import BookMiniCard from '../components/BookMiniCard.vue';
@@ -113,7 +114,7 @@ const fetchWishlist = async (silent = false) => {
       }
     }
 
-    const nextWished = Array.from(dedupMap.values());
+    const nextWished = annotateIntegralCoverage(Array.from(dedupMap.values()), cached);
     const buildSig = (list: HumanizedBook[]) =>
       list
         .map((b) => `${b.uri}|${b.ownershipStatus}|${b.wishedByName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`)

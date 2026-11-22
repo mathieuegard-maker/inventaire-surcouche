@@ -204,6 +204,7 @@ export const seriesOrchestrator = {
         const covering = normV ? ownedIntegralByVol.get(normV) : undefined;
         if (covering) {
           tome.ownershipStatus = 'owned';
+          tome.ownedViaIntegral = covering;
           const existingParents = tome.parentIntegrals || [];
           if (!existingParents.some((p) => p.integralBookId === covering.integralBookId)) {
             tome.parentIntegrals = [...existingParents, covering];

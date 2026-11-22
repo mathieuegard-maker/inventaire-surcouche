@@ -5,6 +5,7 @@ import type { DatabaseBinding } from '../../adapters/storage-db.interface';
 import { cleanSeriesName, normalizeSeriesNumber, normalizeTextKey } from '../../resolvers/bnf.resolver';
 import { isbnUtil } from '../../utils/isbn.util';
 import { stripEditorialCollectionSuffixes } from '../../utils/series-matcher.util';
+import { formatIntegralRangeLabel, parseIncludedVolumeNumbers } from '../../bibliographic/integral.util';
 import { enqueueOrExpandSeriesLayer5 } from './v4-layer5-orchestrator';
 import {
   applyLibraryOverridesToBook,
@@ -259,6 +260,8 @@ export async function updateV4BookMetadata(
     series?: string;
     seriesId?: string | null;
     seriesNumber?: string;
+    isIntegral?: boolean;
+    includedVolumeNumbers?: string[];
     publisher?: string;
     publishDate?: string;
     coverUrl?: string;
@@ -423,6 +426,53 @@ export async function updateV4BookMetadata(
   if (Array.isArray(params.genres) && params.genres.length > 0) {
     nextOverrides.mainCategory = params.genres[0];
     nextOverrides.subgenres = params.genres.slice(1);
+  }
+
+  // Transformation explicite en Intégrale / Tome standard (Option B par foyer)
+  if (params.isIntegral !== undefined) {
+    const isInt = Boolean(params.isIntegral);
+    nextOverrides.isIntegral = isInt;
+    if (isInt) {
+      const parsedVols = parseIncludedVolumeNumbers(params.includedVolumeNumbers);
+      const includedWorkIds: string[] = [];
+      const includedIsbns: string[] = [];
+      if (nextSeriesId && parsedVols.length > 0) {
+        const sibRows = await db
+          .prepare(
+            `SELECT id, volume_number, volume_label, known_isbns_json
+             FROM books
+             WHERE series_id = ? AND id != ? AND is_integral = 0`
+          )
+          .bind(nextSeriesId, bookId)
+          .all<{ id: string; volume_number?: number | null; volume_label?: string | null; known_isbns_json?: string | null }>()
+          .catch(() => ({ results: [] as Array<{ id: string; volume_number?: number | null; volume_label?: string | null; known_isbns_json?: string | null }> }));
+        for (const sr of sibRows.results || []) {
+          const normVol = normalizeSeriesNumber(
+            sr.volume_label || (sr.volume_number !== null && sr.volume_number !== undefined ? String(sr.volume_number) : '')
+          );
+          if (normVol && parsedVols.includes(normVol)) {
+            includedWorkIds.push(String(sr.id));
+            const isbns = safeJsonParse<string[]>(sr.known_isbns_json, []);
+            for (const code of isbns) {
+              if (!includedIsbns.includes(code)) includedIsbns.push(code);
+            }
+          }
+        }
+      }
+      nextOverrides.integralMetadata = {
+        includedVolumeNumbers: parsedVols,
+        includedWorkIds,
+        includedIsbns
+      };
+      nextOverrides.volumeNumber = null;
+      nextOverrides.volumeLabel = formatIntegralRangeLabel(parsedVols);
+    } else {
+      nextOverrides.integralMetadata = {
+        includedVolumeNumbers: [],
+        includedWorkIds: [],
+        includedIsbns: []
+      };
+    }
   }
 
   const nextCoverUrl =

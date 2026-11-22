@@ -15,7 +15,10 @@ import BaseBanner from '../components/BaseBanner.vue';
 import BaseButton from '../components/BaseButton.vue';
 import LendModal from '../components/LendModal.vue';
 import SeriesMergeModal from '../components/SeriesMergeModal.vue';
+import IntegralConfigFields from '../components/IntegralConfigFields.vue';
 import BookActionButtons from '../components/BookActionButtons.vue';
+import { transformBookIntegralStatus } from '../../core/services/integral.service';
+import { formatIncludedVolumeNumbers } from '../../core/bibliographic/integral.util';
 import { TEXTS } from '../locales/fr';
 import type { HumanizedBook } from '../../core/types';
 import { entityHumanizer } from '../../core/resolvers/humanizer';
@@ -68,6 +71,43 @@ const onDetailCoverError = (event: Event) => {
 // Statut de lecture optionnel (stocké localement par URI d'œuvre/édition)
 const readingStatus = ref<string>('none');
 const readingRating = ref<number>(0);
+
+// Configuration rapide Intégrale (fonction métier autonome partagée)
+const showIntegralPanel = ref(false);
+const integralDraftIsIntegral = ref(false);
+const integralDraftVolumesText = ref('');
+const isSavingIntegral = ref(false);
+
+const openIntegralPanel = () => {
+  if (!book.value) return;
+  integralDraftIsIntegral.value = Boolean(book.value.isIntegral);
+  integralDraftVolumesText.value = formatIncludedVolumeNumbers(
+    book.value.integralMetadata?.includedVolumeNumbers
+  );
+  showIntegralPanel.value = !showIntegralPanel.value;
+};
+
+const saveIntegralConfig = async () => {
+  if (!book.value || isSavingIntegral.value) return;
+  isSavingIntegral.value = true;
+  errorMsg.value = '';
+  successMessage.value = '';
+  try {
+    const updated = await transformBookIntegralStatus(book.value, {
+      isIntegral: integralDraftIsIntegral.value,
+      includedVolumeNumbers: integralDraftVolumesText.value
+    });
+    book.value = updated;
+    showIntegralPanel.value = false;
+    successMessage.value = updated.isIntegral
+      ? 'Ouvrage enregistré en tant qu’intégrale.'
+      : 'Ouvrage repassé en tome standard.';
+  } catch (err: unknown) {
+    errorMsg.value = err instanceof Error ? err.message : 'Erreur lors de la mise à jour du format.';
+  } finally {
+    isSavingIntegral.value = false;
+  }
+};
 
 function loadLocalReadingMeta(uri: string) {
   try {
@@ -746,6 +786,15 @@ const confirmDelete = async () => {
               Rattacher / Changer de série
             </button>
             <button
+              type="button"
+              class="wireframe-btn"
+              style="flex: 1; min-width: 160px; background: #f0fdfa; color: #0f766e; border-color: #99f6e4; font-weight: 700;"
+              :disabled="connectionState.isOffline.value"
+              @click="openIntegralPanel"
+            >
+              {{ book.isIntegral ? 'Modifier l’intégrale' : 'Transformer en intégrale' }}
+            </button>
+            <button
               v-if="hasSeries"
               type="button"
               class="wireframe-btn"
@@ -755,6 +804,35 @@ const confirmDelete = async () => {
             >
               {{ isExcludingSeries ? 'Retrait en cours...' : 'Ne fait pas partie de cette série' }}
             </button>
+          </div>
+          <div
+            v-if="showIntegralPanel"
+            style="padding: 0.75rem; border: 1px solid #c7d2fe; border-radius: 10px; background: #ffffff; display: flex; flex-direction: column; gap: 0.6rem;"
+          >
+            <IntegralConfigFields
+              v-model:is-integral="integralDraftIsIntegral"
+              v-model:included-volumes-text="integralDraftVolumesText"
+              input-id="book-detail-integral-vols"
+              :disabled="isSavingIntegral"
+            />
+            <div style="display: flex; gap: 0.5rem;">
+              <button
+                type="button"
+                class="wireframe-btn primary"
+                :disabled="isSavingIntegral"
+                @click="saveIntegralConfig"
+              >
+                {{ isSavingIntegral ? 'Enregistrement...' : 'Enregistrer le format' }}
+              </button>
+              <button
+                type="button"
+                class="wireframe-btn"
+                :disabled="isSavingIntegral"
+                @click="showIntegralPanel = false"
+              >
+                Annuler
+              </button>
+            </div>
           </div>
         </div>
       </div>

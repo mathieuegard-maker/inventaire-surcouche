@@ -37,6 +37,12 @@ import BookMiniCard from '../components/BookMiniCard.vue';
 import WireframeTable from '../components/WireframeTable.vue';
 import BatchActionBar from '../components/BatchActionBar.vue';
 import LendModal from '../components/LendModal.vue';
+import IntegralConfigFields from '../components/IntegralConfigFields.vue';
+import {
+  annotateIntegralCoverage,
+  formatIncludedVolumeNumbers
+} from '../../core/bibliographic/integral.util';
+import { transformBookIntegralStatus } from '../../core/services/integral.service';
 
 const route = useRoute();
 const router = useRouter();
@@ -68,6 +74,42 @@ const selectTab = async (mode: ScannerMode) => {
   await scannerState.switchMode(mode);
   if (mode === 'burst' || mode === 'simple') {
     await scannerState.openCameraModal(router, mode);
+  }
+};
+
+// ============================================================================
+// ÉDITEUR RAPIDE D'INTÉGRALE PARTAGÉ (RAFALE, SCAN SIMPLE, RECHERCHE TEXTUELLE)
+// ============================================================================
+const editingIntegralBookUri = ref<string | null>(null);
+const inlineIntegralFlag = ref(false);
+const inlineIntegralVolsText = ref('');
+const inlineIntegralSaving = ref(false);
+
+const toggleInlineIntegralEditor = (book: HumanizedBook) => {
+  if (editingIntegralBookUri.value === book.uri) {
+    editingIntegralBookUri.value = null;
+    return;
+  }
+  editingIntegralBookUri.value = book.uri;
+  inlineIntegralFlag.value = Boolean(book.isIntegral);
+  inlineIntegralVolsText.value = formatIncludedVolumeNumbers(
+    book.integralMetadata?.includedVolumeNumbers
+  );
+};
+
+const applyInlineIntegralEditor = async (book: HumanizedBook) => {
+  if (inlineIntegralSaving.value) return;
+  inlineIntegralSaving.value = true;
+  try {
+    const updated = await transformBookIntegralStatus(book, {
+      isIntegral: inlineIntegralFlag.value,
+      includedVolumeNumbers: inlineIntegralVolsText.value,
+      persistToServer: book.ownershipStatus !== 'none' || Boolean(book.bookId)
+    });
+    Object.assign(book, updated);
+    editingIntegralBookUri.value = null;
+  } finally {
+    inlineIntegralSaving.value = false;
   }
 };
 
@@ -128,7 +170,17 @@ const dispatchSimpleBatchAction = async (
         const v4Res = await ingestIsbnsViaV4({
           isbns: [cleanIsbn],
           sourceChannel: 'canal_1_barcode',
-          action: v4Target
+          action: v4Target,
+          hints: {
+            [cleanIsbn]: {
+              title: book.title,
+              series: book.series,
+              volumeNumber: book.isIntegral ? undefined : book.seriesNumber,
+              isIntegral: Boolean(book.isIntegral),
+              includedVolumeNumbers: book.isIntegral ? book.integralMetadata?.includedVolumeNumbers : undefined,
+              coverUrl: book.coverUrl
+            }
+          }
         });
         if (v4Res?.results?.[0]?.book) {
           const humanized = v4BookRecordToHumanizedBook(v4Res.results[0].book, targetStatus);
@@ -231,7 +283,17 @@ const dispatchBurstBatchAction = async (
         const v4Res = await ingestIsbnsViaV4({
           isbns: [cleanIsbn],
           sourceChannel: 'canal_1_barcode',
-          action: v4Target
+          action: v4Target,
+          hints: {
+            [cleanIsbn]: {
+              title: book.title,
+              series: book.series,
+              volumeNumber: book.isIntegral ? undefined : book.seriesNumber,
+              isIntegral: Boolean(book.isIntegral),
+              includedVolumeNumbers: book.isIntegral ? book.integralMetadata?.includedVolumeNumbers : undefined,
+              coverUrl: book.coverUrl
+            }
+          }
         });
         if (v4Res?.results?.[0]?.book) {
           handledByV4 = true;
@@ -1075,7 +1137,8 @@ const handleMultiFieldSearch = async () => {
       await pushOption(alt);
     }
 
-    textSearchBooks.value = books;
+    const allCached = await databaseService.getAllBooksFromCache().catch(() => [] as HumanizedBook[]);
+    textSearchBooks.value = annotateIntegralCoverage(books, allCached);
     saveBookNavigationOrder(books.map((b) => b.uri), 'direct');
     textSearchDone.value = true;
   } catch (e: unknown) {
@@ -1129,7 +1192,9 @@ const dispatchTextSearchBatchAction = async (
               [cleanIsbn]: {
                 title: book.title,
                 series: book.series,
-                volumeNumber: book.seriesNumber,
+                volumeNumber: book.isIntegral ? undefined : book.seriesNumber,
+                isIntegral: Boolean(book.isIntegral),
+                includedVolumeNumbers: book.isIntegral ? book.integralMetadata?.includedVolumeNumbers : undefined,
                 coverUrl: book.coverUrl
               }
             }
@@ -1608,7 +1673,30 @@ const confirmTextSearchGroupLend = async (friendName: string) => {
                 if (idx > -1) burstSelectedUris.splice(idx, 1);
               }
             }"
-          />
+          >
+            <template #extra>
+              <button type="button" class="inline-integral-trigger" @click="toggleInlineIntegralEditor(livre)">
+                {{ livre.isIntegral ? 'Modifier intégrale' : 'Déclarer intégrale' }}
+              </button>
+              <div v-if="editingIntegralBookUri === livre.uri" class="inline-integral-panel">
+                <IntegralConfigFields
+                  v-model:is-integral="inlineIntegralFlag"
+                  v-model:included-volumes-text="inlineIntegralVolsText"
+                  :compact="true"
+                  :disabled="inlineIntegralSaving"
+                  :input-id="`burst-int-${livre.uri}`"
+                />
+                <div class="inline-integral-actions">
+                  <button type="button" class="wireframe-btn small-btn primary" :disabled="inlineIntegralSaving" @click="applyInlineIntegralEditor(livre)">
+                    Valider
+                  </button>
+                  <button type="button" class="wireframe-btn small-btn" :disabled="inlineIntegralSaving" @click="editingIntegralBookUri = null">
+                    Fermer
+                  </button>
+                </div>
+              </div>
+            </template>
+          </BookMiniCard>
         </WireframeTable>
 
         <BatchActionBar
@@ -1685,7 +1773,30 @@ const confirmTextSearchGroupLend = async (friendName: string) => {
                 if (idx > -1) simpleSelectedUris.splice(idx, 1);
               }
             }"
-          />
+          >
+            <template #extra>
+              <button type="button" class="inline-integral-trigger" @click="toggleInlineIntegralEditor(livre)">
+                {{ livre.isIntegral ? 'Modifier intégrale' : 'Déclarer intégrale' }}
+              </button>
+              <div v-if="editingIntegralBookUri === livre.uri" class="inline-integral-panel">
+                <IntegralConfigFields
+                  v-model:is-integral="inlineIntegralFlag"
+                  v-model:included-volumes-text="inlineIntegralVolsText"
+                  :compact="true"
+                  :disabled="inlineIntegralSaving"
+                  :input-id="`simple-int-${livre.uri}`"
+                />
+                <div class="inline-integral-actions">
+                  <button type="button" class="wireframe-btn small-btn primary" :disabled="inlineIntegralSaving" @click="applyInlineIntegralEditor(livre)">
+                    Valider
+                  </button>
+                  <button type="button" class="wireframe-btn small-btn" :disabled="inlineIntegralSaving" @click="editingIntegralBookUri = null">
+                    Fermer
+                  </button>
+                </div>
+              </div>
+            </template>
+          </BookMiniCard>
         </WireframeTable>
 
         <BatchActionBar
@@ -1837,7 +1948,30 @@ const confirmTextSearchGroupLend = async (friendName: string) => {
                 if (idx > -1) textSearchSelectedUris.splice(idx, 1);
               }
             }"
-          />
+          >
+            <template #extra>
+              <button type="button" class="inline-integral-trigger" @click="toggleInlineIntegralEditor(livre)">
+                {{ livre.isIntegral ? 'Modifier intégrale' : 'Déclarer intégrale' }}
+              </button>
+              <div v-if="editingIntegralBookUri === livre.uri" class="inline-integral-panel">
+                <IntegralConfigFields
+                  v-model:is-integral="inlineIntegralFlag"
+                  v-model:included-volumes-text="inlineIntegralVolsText"
+                  :compact="true"
+                  :disabled="inlineIntegralSaving"
+                  :input-id="`search-int-${livre.uri}`"
+                />
+                <div class="inline-integral-actions">
+                  <button type="button" class="wireframe-btn small-btn primary" :disabled="inlineIntegralSaving" @click="applyInlineIntegralEditor(livre)">
+                    Valider
+                  </button>
+                  <button type="button" class="wireframe-btn small-btn" :disabled="inlineIntegralSaving" @click="editingIntegralBookUri = null">
+                    Fermer
+                  </button>
+                </div>
+              </div>
+            </template>
+          </BookMiniCard>
         </WireframeTable>
 
         <BatchActionBar
@@ -2486,5 +2620,33 @@ const confirmTextSearchGroupLend = async (friendName: string) => {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.75rem;
+}
+
+.inline-integral-trigger {
+  margin-top: 0.3rem;
+  padding: 0.16rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.inline-integral-panel {
+  margin-top: 0.45rem;
+  padding: 0.55rem;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.inline-integral-actions {
+  display: flex;
+  gap: 0.4rem;
 }
 </style>

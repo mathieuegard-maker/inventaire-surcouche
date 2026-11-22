@@ -105,9 +105,22 @@ const handleZoneClick = () => {
         {{ book.authors.join(', ') }}
       </p>
 
-      <div v-if="extraBadges && extraBadges.length > 0" class="row-extra-badges">
+      <div
+        v-if="book.isIntegral || book.ownedViaIntegral || (extraBadges && extraBadges.length > 0)"
+        class="row-extra-badges"
+      >
+        <span v-if="book.isIntegral" class="row-mini-badge integral">
+          {{
+            book.integralMetadata?.includedVolumeNumbers?.length
+              ? `Intégrale · T.${book.integralMetadata.includedVolumeNumbers[0]}-${book.integralMetadata.includedVolumeNumbers[book.integralMetadata.includedVolumeNumbers.length - 1]}`
+              : 'Intégrale'
+          }}
+        </span>
+        <span v-else-if="book.ownedViaIntegral" class="row-mini-badge integral-covered">
+          Inclus dans {{ book.ownedViaIntegral.title }}
+        </span>
         <span
-          v-for="(badge, bi) in extraBadges"
+          v-for="(badge, bi) in extraBadges || []"
           :key="bi"
           :class="['row-mini-badge', badge.tone || 'info']"
         >
@@ -121,9 +134,19 @@ const handleZoneClick = () => {
     </div>
 
     <div class="row-status-text-column">
-      <span :class="['status-text-label', book.loan ? 'lent' : book.ownershipStatus]">
+      <span
+        :class="[
+          'status-text-label',
+          book.loan
+            ? 'lent'
+            : book.ownedViaIntegral
+              ? 'integral-covered'
+              : book.ownershipStatus
+        ]"
+      >
         {{ 
           book.loan ? TEXTS.bookStatus?.lent || 'Prêté' :
+          book.ownedViaIntegral ? 'Dans intégrale' :
           book.ownershipStatus === 'owned' ? TEXTS.bookStatus?.owned : 
           book.ownershipStatus === 'wish' ? (book.wishedByName ? `Souhaité · ${book.wishedByName}` : TEXTS.bookStatus?.wish) : 
           TEXTS.bookStatus?.none 
@@ -172,5 +195,25 @@ const handleZoneClick = () => {
 .row-mini-badge.warn {
   background: #fef3c7;
   color: #92400e;
+}
+
+.row-mini-badge.integral {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.row-mini-badge.integral-covered {
+  background: #ccfbf1;
+  color: #0f766e;
+}
+
+.status-text-label.integral-covered {
+  color: #0f766e;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 </style>

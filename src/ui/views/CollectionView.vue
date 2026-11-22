@@ -22,6 +22,7 @@ import { imageUtil } from '../../core/utils/image.util';
 import { normalizeTextKey } from '../../core/resolvers/bnf.resolver';
 import { scannerState } from '../../state/scanner';
 import { syncOrchestrator } from '../../core/orchestrators/sync.orchestrator';
+import { annotateIntegralCoverage } from '../../core/bibliographic/integral.util';
 import { saveBookNavigationOrder, sortBooksByCollectionMode, sortSeriesTomes } from '../../state/bookNavigation';
 
 const router = useRouter();
@@ -126,7 +127,7 @@ const fetchCatalogue = async (silent = false) => {
         dedupMap.set(key, book);
       }
     }
-    const owned = Array.from(dedupMap.values());
+    const owned = annotateIntegralCoverage(Array.from(dedupMap.values()), cached);
 
     const loans = await databaseService.getAllLoans();
     const loanByUri = new Map(loans.map((l) => [l.uri, l]));
@@ -139,7 +140,10 @@ const fetchCatalogue = async (silent = false) => {
 
     const buildSig = (list: HumanizedBook[]) =>
       list
-        .map((b) => `${b.uri}|${b.ownershipStatus}|${b.loan?.friendName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`)
+        .map(
+          (b) =>
+            `${b.uri}|${b.ownershipStatus}|${b.isIntegral ? '1' : '0'}|${(b.integralMetadata?.includedVolumeNumbers || []).join(',')}|${b.ownedViaIntegral?.integralBookId || ''}|${b.loan?.friendName || ''}|${b.localCover ? '1' : b.coverUrl || ''}`
+        )
         .sort()
         .join('\n');
 

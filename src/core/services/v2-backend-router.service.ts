@@ -311,6 +311,8 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         series?: string;
         seriesId?: string | null;
         seriesNumber?: string;
+        isIntegral?: boolean;
+        includedVolumeNumbers?: string[];
         publisher?: string;
         publishDate?: string;
         coverUrl?: string;
@@ -334,6 +336,10 @@ export async function handleV2ApiRequest(request: Request, env: AppBackendEnv): 
         series: payload.series,
         seriesId: payload.seriesId,
         seriesNumber: payload.seriesNumber,
+        isIntegral: payload.isIntegral,
+        includedVolumeNumbers: Array.isArray(payload.includedVolumeNumbers)
+          ? payload.includedVolumeNumbers.map(String)
+          : undefined,
         publisher: payload.publisher,
         publishDate: payload.publishDate,
         coverUrl: payload.coverUrl,
