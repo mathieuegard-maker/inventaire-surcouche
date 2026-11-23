@@ -14,16 +14,16 @@
 
 | # | Fonctionnalité UX | Écran / Bouton / Contrôle UI | Chaîne Technique Actuelle (Client → API → SQL) | Portée | V2 |
 | :-: | :--- | :--- | :--- | :--- | :-: |
-| 1.1 | **Connexion** | `LoginView` : `Nom d'utilisateur` + `Mot de passe` + bouton *Se connecter* | `connectionService.login` → `POST /api/gateway?action=auth-login` → `users`, `sessions`, `libraries` | Utilisateur + Local | ☐ |
-| 1.2 | **Inscription + RGPD** | `LoginView` : `Pseudo`, `E-mail`, `Mot de passe`, checkbox RGPD + *En savoir plus (RGPD)* + *Créer mon compte* | `auth-register` → `users` (`gdpr_accepted_at`), crée `libraries` + `share_tokens` (`FAM-`, `PUB-`), pose `biblio_show_notif_onboarding` | Utilisateur + Foyer + Local | ☐ |
-| 1.3 | **Inscription via lien Foyer / Ami** | `LoginView` (`?invite=CODE` / `?friend=TOKEN`) : checkboxes *Synchroniser avec la famille* / *Suivre cette bibliothèque* | `auth-register` / `auth-login` → `library_members` (si foyer) et/ou `friend_connections` (si ami) | Utilisateur / Foyer | ☐ |
-| 1.4 | **Mot de passe oublié** | `LoginView` : *Mot de passe oublié ?* → Étape 1 (*Envoyer le code*) → Étape 2 (*Code 6 chiffres + Nouveau mdp*) | `requestPasswordReset` / `resetPassword` → `auth-forgot-password` (Resend e-mail) / `auth-reset-password` → `password_reset_tokens`, `sessions` | Utilisateur | ☐ |
-| 1.5 | **Édition du profil** | `ProfileView` (`account`) : `Pseudo`, `E-mail de récupération`, `Mot de passe actuel`, `Nouveau mot de passe`, alerte e-mail manquant | `userService.updateProfile` → `profile-update` → `users` | Utilisateur | ☐ |
-| 1.6 | **Déconnexion** | `ProfileView` (`account`) : *Se déconnecter* | `connectionService.logout` → `auth-logout` → supprime `sessions` + purge `localStorage`/`IndexedDB` | Utilisateur + Local | ☐ |
-| 1.7 | **Suppression définitive de compte** | `ProfileView` (`account`) : *Supprimer définitivement mon compte* → Modale avec saisie du mot de passe | `connectionService.deleteAccount` → `account-delete` : supprime `users` + données perso ; supprime `libraries` **uniquement si seul membre** ; **ne touche jamais** au Catalogue Central | Utilisateur (+ Foyer si solo) | ☐ |
-| 1.8 | **Installation PWA** | `LoginView` / `PublicShareView` : *Installer l'application* + astuce iOS | `pwa-install.util.ts` (`beforeinstallprompt` / `promptPwaInstall`) | Local | ☐ |
-| 1.9 | **Mise à jour PWA** | `PwaReloadPrompt` : dialogue natif *Mettre à jour maintenant* / *Plus tard* | `useRegisterSW` + `SKIP_WAITING` + `controllerchange` + `window.location.reload()` | Local | ☐ |
-| 1.10 | **Auto-sélection texte au focus** | Global (`src/main.ts`) : tout `<input>` / `<textarea>` | Listener `focusin` / `mouseup` | Local | ☐ |
+| 1.1 | **Connexion** | `LoginView` : `Nom d'utilisateur` + `Mot de passe` + bouton *Se connecter* | `connectionService.login` → `POST /api/gateway?action=auth-login` → `users`, `sessions`, `libraries` | Utilisateur + Local | ☑ |
+| 1.2 | **Inscription + RGPD** | `LoginView` : `Pseudo`, `E-mail`, `Mot de passe`, checkbox RGPD + *En savoir plus (RGPD)* + *Créer mon compte* | `auth-register` → `users` (`gdpr_accepted_at`), crée `libraries` + `share_tokens` (`FAM-`, `PUB-`), pose `biblio_show_notif_onboarding` | Utilisateur + Foyer + Local | ☑ |
+| 1.3 | **Inscription via lien Foyer / Ami** | `LoginView` (`?invite=CODE` / `?friend=TOKEN`) : checkboxes *Synchroniser avec la famille* / *Suivre cette bibliothèque* | `auth-register` / `auth-login` → `library_members` (si foyer) et/ou `friend_connections` (si ami) | Utilisateur / Foyer | ☑ |
+| 1.4 | **Mot de passe oublié** | `LoginView` : *Mot de passe oublié ?* → Étape 1 (*Envoyer le code*) → Étape 2 (*Code 6 chiffres + Nouveau mdp*) | `requestPasswordReset` / `resetPassword` → `auth-forgot-password` (Resend e-mail) / `auth-reset-password` → `password_reset_tokens`, `sessions` | Utilisateur | ☑ |
+| 1.5 | **Édition du profil** | `ProfileView` (`account`) : `Pseudo`, `E-mail de récupération`, `Mot de passe actuel`, `Nouveau mot de passe`, alerte e-mail manquant | `userService.updateProfile` → `profile-update` → `users` | Utilisateur | ☑ |
+| 1.6 | **Déconnexion** | `ProfileView` (`account`) : *Se déconnecter* | `connectionService.logout` → `auth-logout` → supprime `sessions` + purge `localStorage`/`IndexedDB` | Utilisateur + Local | ☑ |
+| 1.7 | **Suppression définitive de compte** | `ProfileView` (`account`) : *Supprimer définitivement mon compte* → Modale avec saisie du mot de passe | `connectionService.deleteAccount` → `account-delete` : supprime `users` + données perso ; supprime `libraries` **uniquement si seul membre** ; **ne touche jamais** au Catalogue Central | Utilisateur (+ Foyer si solo) | ☑ |
+| 1.8 | **Installation PWA** | `LoginView` / `PublicShareView` : *Installer l'application* + astuce iOS | `pwa-install.util.ts` (`beforeinstallprompt` / `promptPwaInstall`) | Local | ☑ |
+| 1.9 | **Mise à jour PWA** | `PwaReloadPrompt` : dialogue natif *Mettre à jour maintenant* / *Plus tard* | `useRegisterSW` + `SKIP_WAITING` + `controllerchange` + `window.location.reload()` | Local | ☑ |
+| 1.10 | **Auto-sélection texte au focus** | Global (`src/main.ts`) : tout `<input>` / `<textarea>` | Listener `focusin` / `mouseup` | Local | ☑ |
 
 ---
 
@@ -31,7 +31,7 @@
 
 | # | Fonctionnalité UX | Écran / Bouton / Contrôle UI | Chaîne Technique Actuelle | Portée | V2 |
 | :-: | :--- | :--- | :--- | :--- | :-: |
-| 2.1 | **Menu principal 6+2 entrées** | `BaseHeader` : Desktop (`ACCUEIL`, `COLLECTION`, `WISHLIST`, `PRÊTS`, `NOUVEAUTÉS`, `PARTAGE & AMIS`, `MON PROFIL`, `RECHERCHE`) + Mobile tiroir accordéon | Vue Router + `scannerState.toggleScan(router)` | Local | ☐ |
+| 2.1 | **Menu principal 6+2 entrées** | `BaseHeader` : Desktop (`ACCUEIL`, `COLLECTION`, `WISHLIST`, `PRÊTS`, `NOUVEAUTÉS`, `PARTAGE & AMIS`, `MON PROFIL`, `RECHERCHE`) + Mobile tiroir accordéon | Vue Router + `scannerState.toggleScan(router)` | Local | ☑ |
 | 2.2 | **Accueil & compteurs** | `DashboardView` : 4 cartes (*Ma Collection*, *Ma Wishlist*, *Mes Prêts*, *Mes Nouveautés*) avec compteurs + 5 vignettes récentes cliquables | `statsService.getDashboardStats(30)` + `databaseService` + `seriesReleaseService.alerts` | Local + Foyer | ☐ |
 | 2.3 | **Détection & reprise hors-ligne** | `App.vue` + `connectionState` : bannière hors-ligne, heartbeat `/api/v2/health` (10s), reprise auto à la reconnexion | `queueService.processQueue()`, `backgroundCreationOrchestrator.resumePendingJobs()`, `photoBatchQueueService.initAndResume()`, `seriesReleaseService.checkNewReleasesOnOpen()` | Local | ☐ |
 | 2.4 | **Scans hors-ligne mémorisés** | `DashboardView` : carte *Scans hors-ligne mémorisés (N)*, *Consulter la fiche*, *✕ Retirer*, *Tout effacer* | `pendingScansStore` (`localStorage`) | Local | ☐ |
@@ -109,7 +109,7 @@
 | # | Fonctionnalité UX | Écran / Bouton / Contrôle UI | Chaîne Technique Actuelle | Portée | V2 |
 | :-: | :--- | :--- | :--- | :--- | :-: |
 | 8.1 | **Statistiques interactives** | `ProfileView` (`stats`) / `StatsView` : sélecteur période (`30j`, `90j`, `365j`, `Tout`), 4 KPIs cliquables, activité, lecture/notes, pages, Top 10 Genres/Auteurs/Sagas/Éditeurs cliquables, suivi prêts actifs | `statsService.getDetailedStats()` + `syncAllUserReadingStatuses()` | Foyer (collection/prêts) + Utilisateur (lecture/notes) | ☐ |
-| 8.2 | **Genres par défaut utilisateur** | `ProfileView` (`genres`) : ajout genre perso, suppression chip `×`, *Réinitialiser la liste standard* | `userService.updateDefaultGenres` → `POST /api/v2/user-genres` → `user_default_genres` | **Utilisateur** | ☐ |
+| 8.2 | **Genres par défaut utilisateur** | `ProfileView` (`genres`) : ajout genre perso, suppression chip `×`, *Réinitialiser la liste standard* | `userService.updateDefaultGenres` → `POST /api/v2/user-genres` → `user_default_genres` | **Utilisateur** | ☑ |
 | 8.3 | **Console Admin : Vue d'ensemble & Comptes** | `AdminView` (`stats` & `users`) : stats plateforme, liste comptes, *RAZ quota IA*, *Veille nouveautés manuelle*, *Ré-hydratation catalogue* | `admin-overview`, `admin-users-list`, `admin-reset-user-ai-quota`, `admin-run-release-sweep`, `admin-rehydrate-catalog` | Serveur / Catalogue Central | ☐ |
 | 8.4 | **Console Admin : Catalogue Maître (Unitaire & Lot)** | `AdminView` (`catalog`) : recherche, filtre (`all`/`no_cover`/`no_series`), type, taille page (`12..60`), pagination, édition unitaire, sélection multiple + *Modifier la sélection (N)* (6 champs opt-in) | `admin-catalog-list`, `admin-catalog-update`, `admin-catalog-bulk-update` (`catalog_entities` + `books` + `v4_series` + `book_isbn_index`) | **Catalogue Central** | ☐ |
 | 8.5 | **Console Admin : Logs Pipeline V4** | `AdminView` (`logs`) : filtres couche (`C1..C5`, `CRON`), statut, recherche ISBN/trace, dépliage étapes, *Exporter JSON*, *Purger TTL* | `admin-pipeline-logs`, `admin-pipeline-logs-purge` → `pipeline_logs` | Serveur | ☐ |
