@@ -1,7 +1,14 @@
 // src/server/connectors/wikidata.connector.ts
 // Connecteur Wikidata : wbgetentities (P179/P1545/P50/P18) + SPARQL d'expansion de série par le graphe.
 
-import { cleanPublishDate, cleanSeriesName, cleanTitle, normalizeSeriesNumber } from '../../shared/bibliographic/text-normalize.util';
+import {
+  cleanPublishDate,
+  cleanSeriesName,
+  cleanTitle,
+  extractAuthorLastNameForQuery,
+  normalizeSeriesNumber,
+  normalizeTextKey
+} from '../../shared/bibliographic/text-normalize.util';
 import type { HttpClient } from './http-client';
 import type { GraphSeriesWork, SourceCandidateRecord, WikidataConnector } from './types';
 
@@ -89,6 +96,55 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
     return data?.entities ?? {};
   }
 
+  function buildWorkCandidate(
+    qid: string,
+    work: WdEntity,
+    related: Record<string, WdEntity>,
+    fallbackIsbn13: string
+  ): SourceCandidateRecord | null {
+    const title = cleanTitle(getWdLabel(work));
+    if (!title) return null;
+
+    const seriesQids = getWdClaimQids(work, 'P179');
+    const authorQids = getWdClaimQids(work, 'P50');
+    const seriesQid = seriesQids[0];
+    const seriesName = seriesQid ? cleanSeriesName(getWdLabel(related[seriesQid])) : undefined;
+    const authors = authorQids.map((id) => getWdLabel(related[id])).filter(Boolean);
+
+    // Numéro de tome dans le qualificateur P1545 sur P179 ou directement P1545
+    const p179Stmt = work.claims?.P179?.[0];
+    const qualOrdinal = p179Stmt?.qualifiers?.P1545?.[0]?.datavalue?.value;
+    const directOrdinal = work.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
+    const volumeNumber = normalizeSeriesNumber(
+      qualOrdinal ?? (typeof directOrdinal === 'string' ? directOrdinal : '')
+    );
+
+    const pubTime = work.claims?.P577?.[0]?.mainsnak?.datavalue?.value;
+    const publishYear =
+      pubTime && typeof pubTime === 'object' && pubTime.time ? cleanPublishDate(pubTime.time) : undefined;
+
+    const imgVal = work.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
+    const coverUrl = typeof imgVal === 'string' ? commonsFilenameToUrl(imgVal) : undefined;
+
+    return {
+      source: 'wikidata',
+      isbn13: fallbackIsbn13,
+      title,
+      seriesName: seriesName || undefined,
+      seriesLinkKind: seriesName ? 'graph_p179' : undefined,
+      volumeNumber: volumeNumber || undefined,
+      wikidataSeriesQid: seriesQid,
+      wikidataWorkQid: qid,
+      authors,
+      scriptwriters: [],
+      illustrators: [],
+      publishYear: publishYear || undefined,
+      description: work.descriptions?.fr?.value || work.descriptions?.en?.value,
+      rawSubjects: [],
+      coverUrl
+    };
+  }
+
   return {
     async lookupWorkByQid(workQid: string, fallbackIsbn13 = ''): Promise<SourceCandidateRecord | null> {
       const qid = workQid.toUpperCase();
@@ -98,50 +154,108 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       const work = entities[qid];
       if (!work) return null;
 
-      const title = cleanTitle(getWdLabel(work));
-      if (!title) return null;
-
       const seriesQids = getWdClaimQids(work, 'P179');
       const authorQids = getWdClaimQids(work, 'P50');
       const relatedIds = [...seriesQids.slice(0, 1), ...authorQids.slice(0, 5)];
       const related = relatedIds.length > 0 ? await getEntities(relatedIds) : {};
 
-      const seriesQid = seriesQids[0];
-      const seriesName = seriesQid ? cleanSeriesName(getWdLabel(related[seriesQid])) : undefined;
-      const authors = authorQids.map((id) => getWdLabel(related[id])).filter(Boolean);
+      return buildWorkCandidate(qid, work, related, fallbackIsbn13);
+    },
 
-      // Numéro de tome dans le qualificateur P1545 sur P179 ou directement P1545
-      const p179Stmt = work.claims?.P179?.[0];
-      const qualOrdinal = p179Stmt?.qualifiers?.P1545?.[0]?.datavalue?.value;
-      const directOrdinal = work.claims?.P1545?.[0]?.mainsnak?.datavalue?.value;
-      const volumeNumber = normalizeSeriesNumber(
-        qualOrdinal ?? (typeof directOrdinal === 'string' ? directOrdinal : '')
-      );
+    /**
+     * Recherche une Œuvre canonique sur Wikidata par (Titre + Auteur) avec triple verrou strict :
+     *   1. Titre normalisé exactement égal au label FR ou EN de l'entité Wikidata ;
+     *   2. L'entité appartient à une série (P179 présent -> exclut les homonymes isolés et les séries elles-mêmes) ;
+     *   3. Le nom de famille normalisé de l'auteur correspond en mot entier à un créateur (P50 / P58 / P110).
+     */
+    async lookupWorkByTitleAndAuthor(
+      title: string,
+      author: string,
+      fallbackIsbn13 = ''
+    ): Promise<SourceCandidateRecord | null> {
+      const cleanT = cleanTitle(title);
+      const normTargetTitle = normalizeTextKey(cleanT);
+      const authorLast = extractAuthorLastNameForQuery(author);
+      const normAuthorLast = normalizeTextKey(authorLast);
 
-      const pubTime = work.claims?.P577?.[0]?.mainsnak?.datavalue?.value;
-      const publishYear =
-        pubTime && typeof pubTime === 'object' && pubTime.time ? cleanPublishDate(pubTime.time) : undefined;
+      if (normTargetTitle.length < 4 || normAuthorLast.length < 2) return null;
 
-      const imgVal = work.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
-      const coverUrl = typeof imgVal === 'string' ? commonsFilenameToUrl(imgVal) : undefined;
-
-      return {
+      const searchUrl = `${WD_API}?action=wbsearchentities&search=${encodeURIComponent(cleanT)}&language=fr&limit=6&format=json`;
+      const data = await http.fetchJson<WdSearchResponse>({
         source: 'wikidata',
-        isbn13: fallbackIsbn13,
-        title,
-        seriesName: seriesName || undefined,
-        seriesLinkKind: seriesName ? 'graph_p179' : undefined,
-        volumeNumber: volumeNumber || undefined,
-        wikidataSeriesQid: seriesQid,
-        wikidataWorkQid: qid,
-        authors,
-        scriptwriters: [],
-        illustrators: [],
-        publishYear: publishYear || undefined,
-        description: work.descriptions?.fr?.value || work.descriptions?.en?.value,
-        rawSubjects: [],
-        coverUrl
-      };
+        url: searchUrl,
+        timeoutMs: 7000,
+        minIntervalMs: 250,
+        cacheKey: `wd:search:work:${normTargetTitle}`,
+        cacheTtlSec: 60 * 60 * 24 * 7
+      });
+
+      const rawCandidates = (data?.search ?? []).filter((c): c is { id: string; label?: string } =>
+        Boolean(c.id && /^Q\d+$/i.test(c.id))
+      );
+      if (rawCandidates.length === 0) return null;
+
+      // Prioriser les candidats dont le libellé de recherche correspond exactement au titre normalisé
+      const exactFirst = [
+        ...rawCandidates.filter((c) => normalizeTextKey(cleanTitle(c.label ?? '')) === normTargetTitle),
+        ...rawCandidates.filter((c) => normalizeTextKey(cleanTitle(c.label ?? '')) !== normTargetTitle)
+      ].slice(0, 5);
+
+      const candidateQids = exactFirst.map((c) => c.id.toUpperCase());
+      const entities = await getEntities(candidateQids);
+
+      // Filtrer d'abord sur Verrou 1 (titre exact FR/EN) + Verrou 2 (présence de P179)
+      const eligible: Array<{ qid: string; work: WdEntity; seriesQids: string[]; creatorQids: string[] }> = [];
+      const relatedIdsToFetch = new Set<string>();
+
+      for (const qid of candidateQids) {
+        const work = entities[qid];
+        if (!work) continue;
+
+        const frNorm = normalizeTextKey(cleanTitle(work.labels?.fr?.value ?? ''));
+        const enNorm = normalizeTextKey(cleanTitle(work.labels?.en?.value ?? ''));
+        if (frNorm !== normTargetTitle && enNorm !== normTargetTitle) continue;
+
+        const seriesQids = getWdClaimQids(work, 'P179');
+        if (seriesQids.length === 0) continue;
+
+        const creatorQids = Array.from(
+          new Set([
+            ...getWdClaimQids(work, 'P50'),
+            ...getWdClaimQids(work, 'P58'),
+            ...getWdClaimQids(work, 'P110')
+          ])
+        ).slice(0, 8);
+        if (creatorQids.length === 0) continue;
+
+        eligible.push({ qid, work, seriesQids, creatorQids });
+        relatedIdsToFetch.add(seriesQids[0]);
+        for (const cid of creatorQids) relatedIdsToFetch.add(cid);
+      }
+
+      if (eligible.length === 0) return null;
+
+      const related = await getEntities(Array.from(relatedIdsToFetch));
+
+      // Verrou 3 : au moins un créateur (P50 / P58 / P110) porte exactement le nom de famille de l'auteur
+      for (const item of eligible) {
+        const authorMatches = item.creatorQids.some((cid) => {
+          const creatorEntity = related[cid];
+          const frLabel = normalizeTextKey(creatorEntity?.labels?.fr?.value ?? '');
+          const enLabel = normalizeTextKey(creatorEntity?.labels?.en?.value ?? '');
+          return [frLabel, enLabel].some((lbl) => {
+            if (!lbl) return false;
+            return lbl === normAuthorLast || lbl.split(' ').includes(normAuthorLast);
+          });
+        });
+
+        if (!authorMatches) continue;
+
+        const candidate = buildWorkCandidate(item.qid, item.work, related, fallbackIsbn13);
+        if (candidate?.seriesName) return candidate;
+      }
+
+      return null;
     },
 
     async fetchSeriesWorksByQid(seriesQid: string): Promise<GraphSeriesWork[]> {

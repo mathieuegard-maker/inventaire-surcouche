@@ -6,6 +6,8 @@ import { parseIncludedVolumeNumbers } from '../../../shared/bibliographic/integr
 import {
   cleanSeriesName,
   cleanTitle,
+  isCompatibleSeriesName,
+  isGenericVolumeTitle,
   normalizeSeriesNumber,
   normalizeTextKey
 } from '../../../shared/bibliographic/text-normalize.util';
@@ -133,7 +135,9 @@ export class ComparisonTableService {
       }
     }
 
-    // Enrichissement de la colonne Wikidata si un Q-ID d'œuvre a été découvert (ex. via Inventaire)
+    // Enrichissement de la colonne Wikidata :
+    // 1. Par Q-ID d'œuvre si découvert (ex. via Inventaire)
+    // 2. Sinon (ex. édition collector/réédition absente d'Inventaire), par (Titre distinctif + Auteur) avec triple verrou strict
     const discoveredWorkQid = columns.find((c) => c.wikidataWorkQid)?.wikidataWorkQid;
     if (discoveredWorkQid) {
       try {
@@ -141,6 +145,24 @@ export class ComparisonTableService {
         if (wdRecord) columns.push(wdRecord);
       } catch {
         // Wikidata optionnel
+      }
+    } else if (columns.length > 0 && this.connectors.wikidata.lookupWorkByTitleAndAuthor) {
+      const bestTitle = pickBestString(columns, (c) => c.title);
+      const bestSeries = pickBestString(columns, (c) => c.seriesName);
+      const bestAuthor = columns.flatMap((c) => c.authors).find((a) => a.trim().length >= 2);
+      const cleanedTitle = bestTitle ? cleanTitle(bestTitle) : '';
+      if (
+        cleanedTitle &&
+        bestAuthor &&
+        normalizeTextKey(cleanedTitle).length >= 4 &&
+        !isGenericVolumeTitle(cleanedTitle, bestSeries ?? '')
+      ) {
+        try {
+          const wdRecord = await this.connectors.wikidata.lookupWorkByTitleAndAuthor(cleanedTitle, bestAuthor, isbn13);
+          if (wdRecord) columns.push(wdRecord);
+        } catch {
+          // Wikidata optionnel
+        }
       }
     }
 
@@ -195,10 +217,19 @@ export class ComparisonTableService {
       }
     }
 
+    const compatibleSeriesCols = seriesName
+      ? columns.filter((c) => !c.seriesName || isCompatibleSeriesName(c.seriesName, seriesName))
+      : [];
+    const incompatibleEditorialSeries = seriesName
+      ? columns.find((c) => c.seriesName && !isCompatibleSeriesName(c.seriesName, seriesName))?.seriesName
+      : undefined;
+
     const explicitCollectionName = pickBestString(columns, (c) => c.collectionName);
     const collectionName =
       explicitCollectionName ??
-      (seriesName ? null : rejectedCollectionName);
+      (seriesName
+        ? (incompatibleEditorialSeries ? cleanSeriesName(incompatibleEditorialSeries) : null)
+        : rejectedCollectionName);
 
     // 2. Titre principal (nettoyé du préfixe série redondant si pertinent)
     const rawTitle = pickBestString(columns, (c) => c.title) ?? '';
@@ -206,13 +237,13 @@ export class ComparisonTableService {
     const title = cleanTitle(stripRedundantSeriesPrefix(rawTitle, seriesName));
     const normalizedTitle = normalizeTextKey(title);
 
-    // 3. Numéro de tome (uniquement si une vraie série est retenue — jamais le n° d'une collection poche)
+    // 3. Numéro de tome (uniquement depuis des colonnes compatibles avec la série retenue)
     let volumeLabel: string | null = null;
     let volumeNumber: number | null = null;
     let sortOrder: number | null = null;
 
     if (seriesName) {
-      const matchingSeriesCols = columns
+      const matchingSeriesCols = compatibleSeriesCols
         .filter((c) => c.seriesLinkKind === 'graph_p179' || c.seriesLinkKind === 'marc_ensemble_460' || c.volumeNumber)
         .sort((a, b) => {
           const ka = a.seriesLinkKind ? LINK_KIND_PRIORITY[a.seriesLinkKind] : 0;
@@ -272,9 +303,9 @@ export class ComparisonTableService {
         .sort((a, b) => b.length - a.length)[0] ?? null;
     const language = pickBestString(columns, (c) => c.language) ?? 'fr';
 
-    const bnfEnsembleId = seriesName ? pickBestString(columns, (c) => c.bnfEnsembleId) : null;
-    const wikidataSeriesQid = seriesName ? pickBestString(columns, (c) => c.wikidataSeriesQid) : null;
-    const inventaireSeriesUri = seriesName ? pickBestString(columns, (c) => c.inventaireSeriesUri) : null;
+    const bnfEnsembleId = seriesName ? pickBestString(compatibleSeriesCols, (c) => c.bnfEnsembleId) : null;
+    const wikidataSeriesQid = seriesName ? pickBestString(compatibleSeriesCols, (c) => c.wikidataSeriesQid) : null;
+    const inventaireSeriesUri = seriesName ? pickBestString(compatibleSeriesCols, (c) => c.inventaireSeriesUri) : null;
     const wikidataWorkQid = pickBestString(columns, (c) => c.wikidataWorkQid);
     const inventaireWorkUri = pickBestString(columns, (c) => c.inventaireWorkUri);
 

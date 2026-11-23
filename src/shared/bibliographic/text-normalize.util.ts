@@ -10,6 +10,8 @@ const STOP_WORDS = new Set([
 ]);
 
 const UNIMARC_100_CODED_RE = /^\d{8}[a-z|]\d{4}|y0frey\d{2}/i;
+const GENERIC_VOLUME_TITLE_RE = /^(?:tome|vol\.?|volume|t\.?|n°|#)?\s*\d+(?:\s*[-–]\s*\d+)?$/i;
+const SERIES_PREFIX_NOISE_RE = /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+)/i;
 
 export function normalizeTextKey(value: string): string {
   return (value || '')
@@ -158,4 +160,57 @@ export function extractAuthorLastNameForQuery(rawAuthor?: string): string {
     .map((w) => w.replace(/^[.'’]+|[.'’]+$/g, ''))
     .filter((w) => w.replace(/[^a-zA-ZÀ-ÿ]/g, '').length >= 2);
   return words.length > 0 ? words[words.length - 1] : '';
+}
+
+/**
+ * Extrait le tronc commun normalisé d'une franchise (ex: "Astérix, la grande collection" -> "asterix",
+ * "Les Aventures d'Astérix" -> "asterix") sans liste éditoriale codée en dur.
+ */
+export function extractFranchiseBaseName(rawSeriesName: string): { baseName: string; normalizedKey: string } {
+  const cleaned = cleanSeriesName(rawSeriesName);
+  const head = cleaned.split(/\s*[,—–]\s*/)[0].trim();
+  const stripped = head.replace(SERIES_PREFIX_NOISE_RE, '').trim();
+  const baseName = stripped.length >= 2 ? stripped : cleaned;
+  return {
+    baseName,
+    normalizedKey: normalizeTextKey(baseName)
+  };
+}
+
+/**
+ * Indique si un titre d'ouvrage est générique vis-à-vis de sa série (ex: "Tome 1", "Bug", "Bug, Tome 4")
+ * et ne permet donc pas à lui seul de distinguer deux tomes ou d'écraser un titre distinctif.
+ */
+export function isGenericVolumeTitle(title: string, seriesName: string): boolean {
+  const cleanT = normalizeTextKey(title);
+  const cleanS = normalizeTextKey(seriesName);
+  if (!cleanT) return true;
+  if (GENERIC_VOLUME_TITLE_RE.test(title.trim())) return true;
+  if (cleanS && cleanT === cleanS) return true;
+  if (cleanS && cleanT.startsWith(cleanS)) {
+    const rest = cleanT.slice(cleanS.length).trim();
+    if (!rest || GENERIC_VOLUME_TITLE_RE.test(rest)) return true;
+  }
+  return false;
+}
+
+/**
+ * Vérifie si un nom de série candidat (ex. issu d'une colonne BnF 460) est structurellement compatible
+ * avec la série retenue (même clé normalisée, même tronc de franchise ou fort recouvrement bilatéral).
+ * Empêche une collection éditoriale hétérogène (ex. "Les archives Tintin") de contaminer une série canonique ("Les Aventures de Tintin").
+ */
+export function isCompatibleSeriesName(candidateSeries: string | undefined, winningSeries: string): boolean {
+  if (!candidateSeries || !winningSeries) return false;
+  const cleanCand = cleanSeriesName(candidateSeries);
+  const cleanWin = cleanSeriesName(winningSeries);
+  const normCand = normalizeTextKey(cleanCand);
+  const normWin = normalizeTextKey(cleanWin);
+  if (!normCand || !normWin) return false;
+  if (normCand === normWin) return true;
+
+  const candBase = extractFranchiseBaseName(cleanCand).normalizedKey;
+  const winBase = extractFranchiseBaseName(cleanWin).normalizedKey;
+  if (candBase && winBase && candBase === winBase) return true;
+
+  return tokenOverlapRatio(cleanCand, cleanWin) >= 0.7 && tokenOverlapRatio(cleanWin, cleanCand) >= 0.7;
 }

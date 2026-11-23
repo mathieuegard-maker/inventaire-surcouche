@@ -3,9 +3,10 @@
 
 import crypto from 'node:crypto';
 import {
-  cleanSeriesName,
   cleanTitle,
+  extractFranchiseBaseName,
   getLevenshteinDistance,
+  isGenericVolumeTitle,
   normalizeTextKey,
   tokenOverlapRatio
 } from '../../../shared/bibliographic/text-normalize.util';
@@ -14,41 +15,10 @@ import type { BibliographicConnectors, GraphSeriesWork } from '../../connectors/
 import type { BookRow, CatalogRepository, FranchiseRow, SeriesRow } from '../../repositories/catalog.repo';
 import type { CoverService } from '../cover.service';
 
-const GENERIC_VOLUME_TITLE_RE = /^(?:tome|vol\.?|volume|t\.?|n°|#)?\s*\d+(?:\s*[-–]\s*\d+)?$/i;
-const SERIES_PREFIX_NOISE_RE = /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+)/i;
+export { extractFranchiseBaseName, isGenericVolumeTitle };
 
 function generateId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
-}
-
-/**
- * Extrait le tronc commun normalisé d'une franchise (ex: "Astérix, la grande collection" -> "asterix",
- * "Les Aventures d'Astérix" -> "asterix") sans liste éditoriale codée en dur.
- */
-export function extractFranchiseBaseName(rawSeriesName: string): { baseName: string; normalizedKey: string } {
-  const cleaned = cleanSeriesName(rawSeriesName);
-  // Si le nom contient une virgule ou un séparateur de sous-collection ("Astérix, la grande collection"),
-  // la tête avant la virgule porte le nom de la franchise
-  const head = cleaned.split(/\s*[,—–]\s*/)[0].trim();
-  const stripped = head.replace(SERIES_PREFIX_NOISE_RE, '').trim();
-  const baseName = stripped.length >= 2 ? stripped : cleaned;
-  return {
-    baseName,
-    normalizedKey: normalizeTextKey(baseName)
-  };
-}
-
-export function isGenericVolumeTitle(title: string, seriesName: string): boolean {
-  const cleanT = normalizeTextKey(title);
-  const cleanS = normalizeTextKey(seriesName);
-  if (!cleanT) return true;
-  if (GENERIC_VOLUME_TITLE_RE.test(title.trim())) return true;
-  if (cleanS && cleanT === cleanS) return true;
-  if (cleanS && cleanT.startsWith(cleanS)) {
-    const rest = cleanT.slice(cleanS.length).trim();
-    if (!rest || GENERIC_VOLUME_TITLE_RE.test(rest)) return true;
-  }
-  return false;
 }
 
 export interface ContentComparisonResult {
@@ -385,16 +355,23 @@ export class SeriesGraphService {
         const invWorks = await this.connectors.inventaire.fetchSeriesWorks(effectiveInventaireSeriesUri);
         if (invWorks.length > 0) {
           sourcesUsed.push('inventaire');
-          this.mergeGraphWorks(graphWorks, invWorks);
+          this.mergeGraphWorks(graphWorks, invWorks, series.canonical_name);
         }
       } catch {
         // continue
       }
     }
 
-    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) + découverte d'ensemble BnF par nom de série si absent
+    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) + découverte d'ensemble BnF par nom de série si nécessaire
     const bnfEnsembleIds = new Set<string>(this.parseJsonArray(series.bnf_ensemble_ids_json));
-    if (bnfEnsembleIds.size === 0 || graphWorks.length < 2) {
+    const incompleteGraphCount = graphWorks.filter(
+      (w) => w.volumeNumber === null || w.volumeNumber === undefined || w.isbn13s.length === 0
+    ).length;
+    const needsBnfDiscovery =
+      graphWorks.length < 2 ||
+      (bnfEnsembleIds.size === 0 && incompleteGraphCount > 0 && incompleteGraphCount * 2 >= graphWorks.length);
+
+    if (needsBnfDiscovery) {
       try {
         const discovery = await this.connectors.bnf.searchBySeriesName?.(
           series.canonical_name,
@@ -408,7 +385,7 @@ export class SeriesGraphService {
           }
           if (discovery.works.length > 0) {
             if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-            this.mergeGraphWorks(graphWorks, discovery.works);
+            this.mergeGraphWorks(graphWorks, discovery.works, series.canonical_name);
           }
         }
       } catch {
@@ -421,7 +398,7 @@ export class SeriesGraphService {
         const bnfWorks = await this.connectors.bnf.searchByEnsembleId(ensId, 80);
         if (bnfWorks.length > 0) {
           if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-          this.mergeGraphWorks(graphWorks, bnfWorks);
+          this.mergeGraphWorks(graphWorks, bnfWorks, series.canonical_name);
         }
       } catch {
         // continue
@@ -435,12 +412,36 @@ export class SeriesGraphService {
       const cleanT = cleanTitle(work.title);
       if (!cleanT) continue;
       const normT = normalizeTextKey(cleanT);
+      const isGenericT = isGenericVolumeTitle(cleanT, series.canonical_name);
 
-      // Recherche d'un tome déjà existant dans ce découpage (par Q-ID, ISBN, titre normalisé, ou n° de tome compatible)
+      const hasConflictingVolume = (candidate: BookRow | null): boolean => {
+        if (!candidate) return false;
+        if (Boolean(candidate.is_integral) !== Boolean(work.isIntegral)) return true;
+        if (
+          candidate.volume_number !== null &&
+          work.volumeNumber !== null &&
+          work.volumeNumber !== undefined &&
+          candidate.volume_number !== work.volumeNumber
+        ) {
+          return true;
+        }
+        return false;
+      };
+
+      // Recherche d'un tome déjà existant dans ce découpage :
+      // Invariant universel : deux tomes de numéros connus et différents ne fusionnent JAMAIS,
+      // et un titre générique (ex. "Bug", "Tome 1") ne matche JAMAIS uniquement sur son titre.
       let existingBook: BookRow | null =
         (work.wikidataQid ? this.catalogRepo.findBookByWikidataQid(work.wikidataQid) : null) ??
         work.isbn13s.map((isbn) => this.catalogRepo.findBookByIsbn13(isbn)).find((b): b is BookRow => Boolean(b)) ??
-        this.catalogRepo.findBookInSeriesByNormalizedTitle(series.id, normT);
+        null;
+
+      if (!existingBook && !isGenericT) {
+        const byTitle = this.catalogRepo.findBookInSeriesByNormalizedTitle(series.id, normT);
+        if (byTitle && !hasConflictingVolume(byTitle)) {
+          existingBook = byTitle;
+        }
+      }
 
       if (!existingBook && work.volumeNumber && !work.isHorsSerie && !work.isIntegral) {
         const volCandidate = this.catalogRepo.findBookInSeriesByVolume(series.id, work.volumeNumber);
@@ -462,6 +463,13 @@ export class SeriesGraphService {
         }
       }
 
+      // Ne jamais écraser un titre distinctif existant (ex. "Bug, Livre 4") par un titre générique ("Bug")
+      const effectiveTitle =
+        existingBook && !isGenericVolumeTitle(existingBook.title, series.canonical_name) && isGenericT
+          ? existingBook.title
+          : cleanT;
+      const effectiveNormTitle = normalizeTextKey(effectiveTitle);
+
       // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + ISBN) si pas encore de couverture
       let coverKey: string | null = existingBook?.cover_key ?? null;
       if (!coverKey && this.coverService && (work.coverUrl || work.isbn13s.length > 0)) {
@@ -480,10 +488,10 @@ export class SeriesGraphService {
           ? `wd:${work.wikidataQid}`
           : work.inventaireUri
             ? `inv:${work.inventaireUri}`
-            : `ser:${series.id}:vol:${work.volumeNumber ?? 'x'}:${normT.slice(0, 40)}`);
+            : `ser:${series.id}:vol:${work.volumeNumber ?? 'x'}:${effectiveNormTitle.slice(0, 40)}`);
 
       const classification = classifyBookMetadata({
-        title: cleanT,
+        title: effectiveTitle,
         series: series.canonical_name,
         publisher: work.publisher ?? undefined,
         collection: work.collectionName ?? undefined
@@ -493,8 +501,8 @@ export class SeriesGraphService {
         id: existingBook?.id ?? generateId('bk'),
         workCanonicalId,
         seriesId: series.id,
-        title: cleanT,
-        normalizedTitle: normT,
+        title: effectiveTitle,
+        normalizedTitle: effectiveNormTitle,
         volumeNumber: work.volumeNumber ?? null,
         volumeLabel: work.volumeLabel ?? (work.volumeNumber ? String(work.volumeNumber) : null),
         sortOrder: work.sortOrder ?? work.volumeNumber ?? null,
@@ -556,12 +564,37 @@ export class SeriesGraphService {
     };
   }
 
-  private mergeGraphWorks(target: GraphSeriesWork[], incoming: GraphSeriesWork[]): void {
+  private mergeGraphWorks(target: GraphSeriesWork[], incoming: GraphSeriesWork[], seriesName: string): void {
     for (const item of incoming) {
       const normTitle = normalizeTextKey(item.title);
+      const itemIsGeneric = isGenericVolumeTitle(item.title, seriesName);
+
       const match = target.find((existing) => {
+        // 1. Même Q-ID Wikidata -> même œuvre garantie
         if (item.wikidataQid && existing.wikidataQid === item.wikidataQid) return true;
-        if (normTitle && normalizeTextKey(existing.title) === normTitle) return true;
+
+        // 2. Invariants universels de non-collision :
+        //    - Une intégrale ne fusionne jamais avec un tome unitaire
+        //    - Deux tomes portant des numéros connus et différents ne fusionnent JAMAIS
+        if (Boolean(item.isIntegral) !== Boolean(existing.isIntegral)) return false;
+        const hasDistinctVolumes =
+          item.volumeNumber !== null &&
+          item.volumeNumber !== undefined &&
+          existing.volumeNumber !== null &&
+          existing.volumeNumber !== undefined &&
+          existing.volumeNumber !== item.volumeNumber;
+        if (hasDistinctVolumes) return false;
+
+        // 3. Correspondance par titre exact normalisé :
+        //    Un titre générique (ex. "Bug", "Tome 1") ne matche sur le titre que si les numéros de tome sont identiques
+        //    (évite toute collision entre un tome numéroté et une édition non numérotée du même titre générique).
+        if (normTitle && normalizeTextKey(existing.title) === normTitle) {
+          if (!itemIsGeneric || (item.volumeNumber ?? null) === (existing.volumeNumber ?? null)) {
+            return true;
+          }
+        }
+
+        // 4. Même numéro de tome (hors intégrales et hors-séries) :
         if (
           item.volumeNumber !== null &&
           item.volumeNumber !== undefined &&
@@ -571,7 +604,6 @@ export class SeriesGraphService {
           !existing.isHorsSerie &&
           !existing.isIntegral
         ) {
-          // Même numéro de tome : si titre proche OU si le tome Wikidata n'avait pas encore d'ISBN FR (ex: titre italien Wikidata vs titre FR BnF)
           if (tokenOverlapRatio(item.title, existing.title) >= 0.45) return true;
           if (existing.source === 'wikidata' && item.source === 'bnf' && existing.isbn13s.length === 0) {
             return true;
@@ -591,7 +623,7 @@ export class SeriesGraphService {
             match.authors.push(a);
           }
         }
-        // Fusion des numéros de tome & ordre de tri (ex: Wikidata sans P1545 complété par BnF 460$v)
+        // Complétion non destructive des champs manquants (ex. Wikidata sans P1545 complété par BnF 460$v)
         if ((match.volumeNumber === null || match.volumeNumber === undefined) && item.volumeNumber !== null && item.volumeNumber !== undefined) {
           match.volumeNumber = item.volumeNumber;
         }
@@ -601,11 +633,11 @@ export class SeriesGraphService {
         if ((match.sortOrder === null || match.sortOrder === undefined) && item.sortOrder !== null && item.sortOrder !== undefined) {
           match.sortOrder = item.sortOrder;
         }
-        // Préférer le titre FR officiel BnF si l'entrée initiale venait de Wikidata sans ISBN FR
-        if (match.source === 'wikidata' && item.source === 'bnf' && item.title) {
+        // Invariant titre : remplacer uniquement un titre générique par un titre distinctif (jamais l'inverse)
+        if (item.title && isGenericVolumeTitle(match.title, seriesName) && !itemIsGeneric) {
           match.title = item.title;
         }
-        // Préférer une vraie couverture BnF / Inventaire sur une image Wikimedia Commons générique
+        // Préférer une vraie couverture non-SVG BnF / Inventaire sur une image Wikimedia Commons générique
         const itemHasValidCover = Boolean(item.coverUrl && !/\.svg(?:[?#]|$)/i.test(item.coverUrl));
         const matchIsWikidataCover = Boolean(match.coverUrl && /wikimedia\.org/i.test(match.coverUrl));
         if (itemHasValidCover && (!match.coverUrl || (matchIsWikidataCover && item.source !== 'wikidata'))) {

@@ -103,6 +103,7 @@ export interface InventaireConnector {
 
 export interface WikidataConnector {
   lookupWorkByQid(workQid: string, fallbackIsbn13?: string): Promise<SourceCandidateRecord | null>;
+  lookupWorkByTitleAndAuthor?(title: string, author: string, fallbackIsbn13?: string): Promise<SourceCandidateRecord | null>;
   fetchSeriesWorksByQid(seriesQid: string): Promise<GraphSeriesWork[]>;
   searchSeriesQid?(seriesName: string): Promise<string | null>;
 }

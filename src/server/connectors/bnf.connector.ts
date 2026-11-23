@@ -2,7 +2,11 @@
 // Connecteur BnF SRU en HTTPS (`https://catalogue.bnf.fr/api/SRU`) via node:https IPv4 forcé + User-Agent navigateur.
 
 import { parseMarcRecord, type ParsedMarcRecord } from '../../shared/bibliographic/intermarc-parser';
-import { extractAuthorLastNameForQuery, normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  extractAuthorLastNameForQuery,
+  isCompatibleSeriesName,
+  normalizeTextKey
+} from '../../shared/bibliographic/text-normalize.util';
 import type { HttpClient } from './http-client';
 import type {
   BnfConnector,
@@ -146,18 +150,20 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       const works: GraphSeriesWork[] = [];
 
       for (const rec of records) {
-        const recSeriesNorm = normalizeTextKey(rec.ensembleSeriesName || '');
+        const ensembleCompatible = Boolean(
+          rec.ensembleSeriesName && isCompatibleSeriesName(rec.ensembleSeriesName, seriesName)
+        );
         const recTitleNorm = normalizeTextKey(rec.title || '');
-        const matchesSeries =
-          (recSeriesNorm && (recSeriesNorm === normSeries || recSeriesNorm.includes(normSeries) || normSeries.includes(recSeriesNorm))) ||
-          (recTitleNorm && recTitleNorm.includes(normSeries));
+        const titleMatchesExactly =
+          !rec.ensembleSeriesName &&
+          Boolean(recTitleNorm && (recTitleNorm === normSeries || recTitleNorm.startsWith(`${normSeries} `)));
 
-        if (!matchesSeries) continue;
+        if (!ensembleCompatible && !titleMatchesExactly) continue;
 
-        if (rec.bnfEnsembleId && recSeriesNorm && (recSeriesNorm === normSeries || recSeriesNorm.includes(normSeries))) {
+        if (rec.bnfEnsembleId && ensembleCompatible) {
           discoveredEnsembleIds.add(rec.bnfEnsembleId);
         }
-        if (rec.ensembleSeriesName || rec.ensembleVolumeNumber) {
+        if (ensembleCompatible || (titleMatchesExactly && rec.ensembleVolumeNumber)) {
           works.push(toGraphWork(rec));
         }
       }
