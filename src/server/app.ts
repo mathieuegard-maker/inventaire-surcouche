@@ -11,12 +11,17 @@ import { LibraryRepository } from './repositories/library.repo';
 import { CatalogRepository } from './repositories/catalog.repo';
 import { JobRepository } from './repositories/job.repo';
 import { LogRepository } from './repositories/log.repo';
+import { LoanRepository } from './repositories/loan.repo';
+import { ReadingRepository } from './repositories/reading.repo';
 import { AuthService } from './services/auth.service';
 import { CoverService } from './services/cover.service';
 import { CollectionGuardService } from './services/acquisition/collection-guard.service';
 import { ComparisonTableService } from './services/acquisition/comparison-table.service';
 import { SeriesGraphService } from './services/acquisition/series-graph.service';
 import { IngestionService } from './services/acquisition/ingestion.service';
+import { LoanService } from './services/loan.service';
+import { LibraryService } from './services/library.service';
+import { SyncService } from './services/sync.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { createApiRouter } from './routes';
 import { handleServerError } from './middleware/error.middleware';
@@ -53,6 +58,8 @@ export function createApp(options: CreateAppOptions) {
   const catalogRepo = new CatalogRepository(options.db);
   const jobRepo = new JobRepository(options.db);
   const logRepo = new LogRepository(options.db);
+  const loanRepo = new LoanRepository(options.db);
+  const readingRepo = new ReadingRepository(options.db);
 
   // Connecteurs isolés
   const mailSender =
@@ -92,6 +99,24 @@ export function createApp(options: CreateAppOptions) {
     onJobEnqueued: () => worker.nudge()
   });
 
+  const loanService = new LoanService({ loanRepo, libraryRepo });
+  const libraryService = new LibraryService({
+    db: options.db,
+    catalogRepo,
+    libraryRepo,
+    loanRepo,
+    readingRepo,
+    ingestionService,
+    loanService
+  });
+  const syncService = new SyncService({
+    libraryRepo,
+    loanRepo,
+    readingRepo,
+    ingestionService,
+    libraryService
+  });
+
   // Enregistrement des handlers du worker continu
   worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
@@ -126,6 +151,9 @@ export function createApp(options: CreateAppOptions) {
     authService,
     coverService,
     ingestionService,
+    syncService,
+    libraryService,
+    loanService,
     jobRepo,
     worker,
     startedAt
@@ -145,14 +173,17 @@ export function createApp(options: CreateAppOptions) {
 
   return {
     app,
-    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo },
+    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo },
     services: {
       authService,
       coverService,
       collectionGuard,
       comparisonService,
       seriesGraphService,
-      ingestionService
+      ingestionService,
+      loanService,
+      libraryService,
+      syncService
     },
     worker
   };

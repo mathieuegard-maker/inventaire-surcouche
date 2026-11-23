@@ -7,22 +7,37 @@ import PwaReloadPrompt from './components/base/PwaReloadPrompt.vue';
 import { useAuthStore } from './stores/auth.store';
 import { useUiStore } from './stores/ui.store';
 import { useJobsStore } from './stores/jobs.store';
+import { useLibraryStore } from './stores/library.store';
 import { t } from '../shared/locales';
 
 const authStore = useAuthStore();
 const uiStore = useUiStore();
 const jobsStore = useJobsStore();
+const libraryStore = useLibraryStore();
 
 watch(
   () => authStore.isAuthenticated,
-  (loggedIn) => {
+  async (loggedIn) => {
     if (loggedIn) {
+      await libraryStore.hydrateFromLocalCache();
+      void libraryStore.syncNow();
       jobsStore.connectStream();
     } else {
       jobsStore.disconnectStream();
     }
   },
   { immediate: true }
+);
+
+// Reprise automatique PUSH -> PULL dès le retour du réseau
+watch(
+  () => uiStore.isOffline,
+  async (offline, wasOffline) => {
+    if (wasOffline && !offline && authStore.isAuthenticated) {
+      uiStore.pushToast(t('app.onlineRestored'), 'info', 2500);
+      await libraryStore.syncNow();
+    }
+  }
 );
 
 onBeforeUnmount(() => {

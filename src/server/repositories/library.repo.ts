@@ -250,4 +250,100 @@ export class LibraryRepository {
     }
     return keys;
   }
+
+  listLibraryBooks(libraryId: string, since?: string): LibraryBookRow[] {
+    if (since) {
+      return this.db.all<LibraryBookRow>(
+        'SELECT * FROM library_books WHERE library_id = ? AND updated_at > ? ORDER BY updated_at DESC',
+        [libraryId, since]
+      );
+    }
+    return this.db.all<LibraryBookRow>(
+      "SELECT * FROM library_books WHERE library_id = ? AND deleted_at IS NULL AND status IN ('owned', 'wish') ORDER BY added_at DESC",
+      [libraryId]
+    );
+  }
+
+  /**
+   * Met à jour le statut avec arbitrage Last-Write-Wins (LWW) basé sur le timestamp fourni.
+   * Ne touche JAMAIS à `overrides_json` (Couche 3).
+   */
+  upsertLibraryBookStatusLww(input: {
+    libraryId: string;
+    bookId: string;
+    status: OwnershipStatus;
+    wishedByUserId?: string | null;
+    timestamp: string;
+  }): { applied: boolean; row: LibraryBookRow } {
+    const existing = this.findLibraryBook(input.libraryId, input.bookId);
+    if (existing && existing.updated_at > input.timestamp) {
+      return { applied: false, row: existing };
+    }
+
+    const deletedAt = input.status === 'none' ? input.timestamp : null;
+    if (!existing) {
+      this.db.run(
+        `INSERT INTO library_books (
+           library_id, book_id, status, wished_by_user_id, overrides_json,
+           overrides_updated_at, added_at, updated_at, deleted_at
+         ) VALUES (?, ?, ?, ?, '{}', NULL, ?, ?, ?)`,
+        [
+          input.libraryId,
+          input.bookId,
+          input.status,
+          input.status === 'wish' ? (input.wishedByUserId ?? null) : null,
+          input.timestamp,
+          input.timestamp,
+          deletedAt
+        ]
+      );
+    } else {
+      const nextWishedBy =
+        input.status === 'wish'
+          ? (input.wishedByUserId ?? existing.wished_by_user_id)
+          : null;
+      this.db.run(
+        `UPDATE library_books
+         SET status = ?, wished_by_user_id = ?, deleted_at = ?, updated_at = ?
+         WHERE library_id = ? AND book_id = ?`,
+        [input.status, nextWishedBy, deletedAt, input.timestamp, input.libraryId, input.bookId]
+      );
+    }
+
+    if (input.status === 'owned') {
+      this.db.run('DELETE FROM wishlist_reservations WHERE library_id = ? AND book_id = ?', [
+        input.libraryId,
+        input.bookId
+      ]);
+    }
+
+    return { applied: true, row: this.findLibraryBook(input.libraryId, input.bookId)! };
+  }
+
+  listFriendContactsForUser(userId: string): Array<{ libraryId: string; name: string }> {
+    return this.db.all<{ libraryId: string; name: string }>(
+      `SELECT l.id AS libraryId, u.username AS name
+       FROM friend_connections fc
+       JOIN libraries l ON l.id = fc.target_library_id
+       JOIN users u ON u.id = l.owner_user_id
+       WHERE fc.user_id = ?
+       ORDER BY u.username ASC`,
+      [userId]
+    );
+  }
+
+  mapUsernamesByIds(userIds: string[]): Map<string, string> {
+    const clean = Array.from(new Set(userIds.filter(Boolean)));
+    const map = new Map<string, string>();
+    if (clean.length === 0) return map;
+    const placeholders = clean.map(() => '?').join(', ');
+    const rows = this.db.all<{ id: string; username: string }>(
+      `SELECT id, username FROM users WHERE id IN (${placeholders})`,
+      clean
+    );
+    for (const r of rows) {
+      map.set(r.id, r.username);
+    }
+    return map;
+  }
 }

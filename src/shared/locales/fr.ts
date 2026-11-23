@@ -96,7 +96,12 @@ export const fr = {
     librarySummary: '{library} — {count} membre(s)',
     aiQuotaSummary: 'Quota Photo IA : {remaining} / {limit} restantes ce mois-ci',
     v2ReadyHint:
-      'Socle V2 actif : les vues Collection, Wishlist, Prêts, Nouveautés et Acquisition seront connectées aux prochains jalons.',
+      'Votre bibliothèque est synchronisée avec le serveur et consultable hors-ligne.',
+    recentAddedTitle: 'Derniers ajouts',
+    syncNowBtn: 'Synchroniser',
+    syncingLabel: 'Synchronisation...',
+    outboxPending: '{count} action(s) hors-ligne en attente de synchronisation',
+    debugCacheLink: 'Inspecter le cache local',
     myCollection: 'Ma Collection',
     myWishlist: 'Ma Wishlist',
     myLoans: 'Mes Prêts',
@@ -117,10 +122,16 @@ export const fr = {
     selectAll: 'Tout sélectionner',
     empty: 'Aucun ouvrage ne correspond à vos critères.',
     booksCount: '{count} livre(s)',
-    tomesCount: '{count} tome(s)'
+    tomesCount: '{count} tome(s)',
+    ownedProgress: '{owned} / {total} tomes',
+    pageInfo: 'Page {page} / {total}',
+    prevPage: 'Précédent',
+    nextPage: 'Suivant',
+    selectItem: 'Sélectionner {title}'
   },
   wishlist: {
     title: 'Ma Wishlist',
+    searchPlaceholder: 'Rechercher dans la wishlist...',
     seriesSection: 'Séries',
     standaloneSection: 'Livres indépendants',
     allGenres: 'Tous les genres',
@@ -130,16 +141,22 @@ export const fr = {
   },
   loans: {
     title: 'Mes Prêts',
+    searchPlaceholder: 'Rechercher par titre, emprunteur, série, auteur...',
     modeBorrower: 'Par emprunteur',
     modeChrono: 'Chronologique',
+    borrowerBooksCount: '{count} livre(s) prêté(s)',
     lentTo: 'Prêté à {name}',
     lentSince: 'Prêté le {date}',
     lendModalTitle: 'Prêter {count} ouvrage(s)',
     borrowerInputLabel: "Nom de l'emprunteur",
     borrowerInputPlaceholder: 'Choisir un contact ou saisir un nom...',
+    notesLabel: 'Note (optionnelle)',
+    notesPlaceholder: 'Ex : prêté lors du dîner...',
     friendTag: 'Ami',
     confirmLend: 'Confirmer le prêt',
     returnBook: 'Livre rendu',
+    returnedToast: 'Livre(s) marqué(s) comme rendu(s).',
+    lentToast: 'Prêt enregistré pour {name}.',
     empty: 'Aucun prêt en cours.'
   },
   batch: {
@@ -155,12 +172,20 @@ export const fr = {
     noActionAvailable: 'Aucune action disponible',
     confirmDeleteTitle: 'Confirmer la suppression',
     confirmDeleteMessage: 'Voulez-vous vraiment retirer {count} ouvrage(s) ?',
+    standardDeleteSummary: '{count} ouvrage(s) non prêté(s) seront retirés de votre foyer.',
     lentConflictTitle: 'Livres actuellement prêtés dans votre sélection',
     lentConflictDesc:
       'Choisissez individuellement l’action pour chaque livre actuellement prêté avant de poursuivre :',
     lentKeepAction: 'Annuler la suppression (garder en collection)',
     lentReturnAndDeleteAction: 'Marquer rendu et supprimer quand même',
-    confirmDeleteAction: 'Confirmer la suppression'
+    confirmDeleteAction: 'Confirmer la suppression',
+    genresModalTitle: 'Ajouter des genres ({count} livre(s))',
+    genresCustomPlaceholder: 'Saisir un genre personnalisé...',
+    genresAddToBatch: '+ Lot',
+    genresApplyBtn: 'Appliquer ({count})',
+    genresAppliedToast: 'Genres ajoutés à la sélection.',
+    statusUpdatedToast: 'Statut mis à jour.',
+    offlineQueuedToast: 'Action enregistrée hors-ligne : elle sera synchronisée dès le retour du réseau.'
   },
   book: {
     statusOwned: 'Possédé',
@@ -331,6 +356,19 @@ export const fr = {
     exportLogsBtn: 'Exporter JSON',
     purgeLogsBtn: 'Purger TTL',
     runNightlySweepBtn: 'Lancer la veille nouveautés'
+  },
+  debug: {
+    title: 'Cache Local (IndexedDB)',
+    searchPlaceholder: 'Filtrer les livres en cache...',
+    refreshBtn: 'Rafraîchir',
+    forceSyncBtn: 'Forcer Sync Complète',
+    clearBtn: 'Vider le cache local',
+    clearConfirmTitle: 'Vider le cache local ?',
+    clearConfirmDesc:
+      'Le miroir IndexedDB sera vidé localement puis rechargé depuis le serveur à la prochaine synchronisation.',
+    statsSummary: '{books} livre(s) · {series} série(s) · {loans} prêt(s) · {outbox} action(s) en attente',
+    lastSyncLabel: 'Dernière synchronisation : {date}',
+    neverSynced: 'Jamais'
   }
 } as const;
 

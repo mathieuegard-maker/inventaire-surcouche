@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { apiRequest } from '../api/client';
+import { clearAllLocalCache } from '../cache/indexeddb';
 import type { LibraryMemberRole, LocaleId, ThemeId } from '../../shared/types/domain.types';
 import { setLocale } from '../../shared/locales';
 
@@ -123,6 +124,7 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       await apiRequest('/api/auth/logout', { method: 'POST' });
     } finally {
+      await clearAllLocalCache().catch(() => undefined);
       hydrateProfile(null);
     }
   }
@@ -179,6 +181,7 @@ export const useAuthStore = defineStore('auth', () => {
       method: 'DELETE',
       body: { password }
     });
+    await clearAllLocalCache().catch(() => undefined);
     hydrateProfile(null);
   }
 

@@ -5,7 +5,11 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth.store';
 import LoginView from '../views/LoginView.vue';
 import DashboardView from '../views/DashboardView.vue';
+import CollectionView from '../views/CollectionView.vue';
+import WishlistView from '../views/WishlistView.vue';
+import LoansView from '../views/LoansView.vue';
 import ProfileView from '../views/ProfileView.vue';
+import DebugCacheView from '../views/DebugCacheView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -24,18 +28,41 @@ export const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/collection',
+      name: 'collection',
+      component: CollectionView,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/wishlist',
+      name: 'wishlist',
+      component: WishlistView,
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/loans',
+      name: 'loans',
+      component: LoansView,
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: ProfileView,
       meta: { requiresAuth: true }
     },
+    {
+      path: '/debug',
+      name: 'debug',
+      component: DebugCacheView,
+      meta: { requiresAuth: true }
+    },
     // Alias de rétrocompatibilité navigation
     { path: '/stats', redirect: { path: '/profile', query: { tab: 'stats' } } },
     { path: '/friends', redirect: { path: '/social', query: { tab: 'friends' } } },
-    // Coquilles Jalon 1 (remplacées par leurs vues dédiées aux Jalons 2 à 7)
-    { path: '/collection', name: 'collection', component: DashboardView, meta: { requiresAuth: true } },
-    { path: '/wishlist', name: 'wishlist', component: DashboardView, meta: { requiresAuth: true } },
-    { path: '/loans', name: 'loans', component: DashboardView, meta: { requiresAuth: true } },
+    // Coquilles en attente des Jalons 4 à 7
+    { path: '/book/:bookId', name: 'book-detail', component: DashboardView, meta: { requiresAuth: true } },
+    { path: '/series/:seriesId', name: 'series-detail', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/releases', name: 'releases', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/social', name: 'social', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/scan', name: 'scan', component: DashboardView, meta: { requiresAuth: true } },
