@@ -52,10 +52,10 @@ function normalizeToIsbn13(raw?: string): string | undefined {
 }
 
 async function fetchBnfByCql(cql: string, maxRecords = 18): Promise<ExternalBookMetadata[]> {
-  const url = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=${maxRecords}&startRecord=1`;
+  const url = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=${maxRecords}&startRecord=1`;
   try {
-    await scheduleBnfSruCall(260);
-    const res = await fetchWithTimeoutAndRetry(url, { timeoutMs: 5200, retriesOn5xx: 2 });
+    await scheduleBnfSruCall(160);
+    const res = await fetchWithTimeoutAndRetry(url, { timeoutMs: 3500, retriesOn5xx: 1 });
     if (!res.ok) {
       console.warn(`[BNF SRU] HTTP ${res.status} pour CQL: ${cql}`);
       return [];

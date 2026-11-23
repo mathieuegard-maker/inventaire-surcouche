@@ -728,6 +728,7 @@ describe('BNF Resolver & Parsers', () => {
         <record>
           <datafield tag="010"><subfield code="a">979-10-347-6595-9</subfield></datafield>
           <datafield tag="073"><subfield code="a">9791034765959</subfield></datafield>
+          <datafield tag="100"><subfield code="a">20220915d2022    m  y0frey50      ba</subfield></datafield>
           <datafield tag="200">
             <subfield code="a">Animal Jack</subfield>
             <subfield code="h">7</subfield>

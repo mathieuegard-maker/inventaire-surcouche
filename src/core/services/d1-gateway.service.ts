@@ -283,7 +283,7 @@ async function fetchExternalBookByIsbn(rawIsbn: string): Promise<ExternalResolve
   if (!isbn13) return null;
 
   // Utilisation de `bib.anywhere all` sur BnF SRU pour trouver aussi les EAN-13 stockés en zone 038$a (livres 1990-2007 dont le 020$a est en ISBN-10)
-  const bnfIntermarcUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn13)}%22&recordSchema=intermarcxchange&maximumRecords=1`;
+  const bnfIntermarcUrl = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn13)}%22&recordSchema=intermarcxchange&maximumRecords=1`;
   const gbUrl = `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn13)}&maxResults=2`;
   const olUrl = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn13)}&jscmd=data&format=json`;
   const invUrl = `https://inventaire.io/api/entities?action=by-uris&uris=isbn:${encodeURIComponent(isbn13)}&attributes=info|labels|descriptions|claims|image&relatives=wdt:P629|wdt:P179`;
@@ -763,7 +763,7 @@ export async function expandSeriesVolumesInD1(
       const cql = withAuthor
         ? `(bib.title all "${cleanSeriesQuery}") and (bib.author all "${withAuthor}") and (bib.recordtype all "ens")`
         : `(bib.title all "${cleanSeriesQuery}") and (bib.recordtype all "ens")`;
-      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=25&startRecord=1`;
+      const bnfUrl = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=25&startRecord=1`;
       const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
       if (!res.ok) return [];
       const xml = await res.text();
@@ -875,7 +875,7 @@ export async function expandSeriesVolumesInD1(
     if (ensembleIds.size > 0) {
       const ensList = Array.from(ensembleIds).slice(0, 18).join(' ');
       const cql = `bib.ens2bib any "${ensList}"`;
-      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=100&startRecord=1`;
+      const bnfUrl = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=100&startRecord=1`;
       const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
       if (res.ok) {
         const xml = await res.text();
@@ -887,7 +887,7 @@ export async function expandSeriesVolumesInD1(
       const cql = cleanAuthorQuery
         ? `(bib.title all "${cleanSeriesQuery}") and (bib.author all "${cleanAuthorQuery}")`
         : `bib.title all "${cleanSeriesQuery}"`;
-      const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=60&startRecord=1`;
+      const bnfUrl = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=60&startRecord=1`;
       const res = await fetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
       if (res.ok) {
         const xml = await res.text();

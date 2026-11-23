@@ -59,7 +59,7 @@ export const syncOrchestrator = {
     try {
       // 0. Voie V4 pure prioritaire : lecture directe des tomes consolidés (`books` + `v4_library_books` + expansion C5 auto)
       const v4Series = await fetchV4SeriesBooksToIndexedDb(seriesId).catch(() => null);
-      if (v4Series && v4Series.count > 1) {
+      if (v4Series && v4Series.count >= 1) {
         onProgress?.(v4Series.count, v4Series.count);
         scannerState.notifyCatalogChanged();
         console.log(`[BACKGROUND] ✅ Série ${seriesId} hydratée via V4 pure (${v4Series.count} tomes).`);
@@ -268,21 +268,25 @@ export const syncOrchestrator = {
         scannerState.lastUpdatedTick.value++;
       }
 
-      // 7. Aspiration préventive des séries (Sagas)
-      console.log(`[HYDRATATION] Analyse des sagas pour aspiration préventive...`);
+      // 7. Aspiration préventive des séries legacy V2 (uniquement celles qui n'ont aucun tome V4 déjà synchronisé par syncV4BooksToIndexedDb)
       const latestBooksForSeries = await databaseService.getAllBooksFromCache();
-      const seriesIds = new Set<string>();
-      
+      const v4CoveredSeriesIds = new Set<string>();
+      const legacySeriesIds = new Set<string>();
+
       for (const book of latestBooksForSeries) {
-        if (book.seriesId && (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish')) {
-          seriesIds.add(book.seriesId);
+        if (!book.seriesId) continue;
+        if (book.bookId) {
+          v4CoveredSeriesIds.add(book.seriesId);
+        } else if (book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish') {
+          legacySeriesIds.add(book.seriesId);
         }
       }
 
-      if (seriesIds.size > 0) {
-        console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesIds.size} séries...`);
+      const seriesToHydrate = Array.from(legacySeriesIds).filter((sid) => !v4CoveredSeriesIds.has(sid));
+      if (seriesToHydrate.length > 0) {
+        console.log(`[HYDRATATION] Amorçage du pré-chargement en arrière-plan pour ${seriesToHydrate.length} série(s) non-V4...`);
         (async () => {
-          for (const seriesId of seriesIds) {
+          for (const seriesId of seriesToHydrate) {
             await this.hydrateSeriesInBackground(seriesId);
           }
         })();

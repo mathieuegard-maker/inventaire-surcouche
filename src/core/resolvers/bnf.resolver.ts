@@ -296,6 +296,10 @@ export function cleanTitle(rawTitle: string): string {
  */
 export function cleanAuthor(rawAuthor: string): string {
   if (!rawAuthor) return '';
+  // 0. Rejeter la zone technique codée UNIMARC 100$a (ex: "20061115d2006    m  y0frey50      ba")
+  if (/^\d{8}[a-z|]\d{4}/i.test(rawAuthor.trim()) || /y0frey\d{2}/i.test(rawAuthor)) {
+    return '';
+  }
   // 1. Supprime uniquement un rôle bibliographique explicite à la fin (ex: ". Auteur du texte", ". Illustrateur")
   // sans tronquer les noms à initiales tels que "Rowling, J. K." ou "E. P. Jacobs".
   let cleaned = rawAuthor
@@ -304,8 +308,12 @@ export function cleanAuthor(rawAuthor: string): string {
       ''
     )
     .trim();
-  // 2. Supprime les parenthèses de dates (ex: "(1972-....)" ou "(1926-1977)")
-  cleaned = cleaned.replace(/\s*\([^)]*\)/g, '').trim();
+  // 2. Supprime les parenthèses de dates (ex: "(1972-....)" ou "(1926-1977)") et dates UNIMARC accolées ("1967- ")
+  cleaned = cleaned
+    .replace(/\s*\([^)]*\)/g, '')
+    .replace(/^\d{4}-\d{0,4}\s+/, '')
+    .replace(/\s+\d{4}-\d{0,4}$/, '')
+    .trim();
   // 3. Supprime tout point ou espace résiduel à la fin (sauf initiale d'une lettre majuscule)
   if (!/\b[A-Z]\.$/.test(cleaned)) {
     cleaned = cleaned.replace(/[.\s]+$/, '').trim();

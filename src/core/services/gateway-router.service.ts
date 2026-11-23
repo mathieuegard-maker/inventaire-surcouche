@@ -75,18 +75,19 @@ function validateImageProxyUrl(rawUrl: string): URL | null {
   }
 }
 
-async function resilientFetch(url: string, options?: RequestInit, retries = 3): Promise<Response> {
+async function resilientFetch(url: string, options?: RequestInit, retries = 2): Promise<Response> {
+  const targetUrl = url.replace(/^https:\/\/catalogue\.bnf\.fr\/api\/SRU\b/i, 'http://catalogue.bnf.fr/api/SRU');
   for (let i = 0; i < retries; i++) {
     try {
-      const res = await fetch(url, options);
+      const res = await fetch(targetUrl, options);
       if ((res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && i < retries - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 350 * (i + 1)));
+        await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
         continue;
       }
       return res;
     } catch (err) {
       if (i === retries - 1) throw err;
-      await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+      await new Promise((resolve) => setTimeout(resolve, 250 * (i + 1)));
     }
   }
   throw new Error('Unreachable');

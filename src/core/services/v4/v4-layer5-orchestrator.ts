@@ -205,15 +205,23 @@ export async function enqueueOrExpandSeriesLayer5(
   // - ou si < 30 tomes ET auteur connu : passe ciblée `(Série + Auteur)` pour récupérer les tomes récents oubliés du 460$3
   //   (ex: Animal Jack T.11 « Nuit sans sommeil » catalogué en 295$a / 295$v sans 460$3).
   if (discoveredByWorkKey.size < 30) {
-    const cleanSeriesQuery = book.seriesName.replace(/["()]/g, ' ').trim();
+    const cleanSeriesQuery = book.seriesName
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/["()[\]]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
     const primaryAuthors = safeJsonParse<string[]>(sRow.primary_authors_json, []);
-    const firstAuthorLast = extractAuthorLastNameForBnfCql(book.authors[0] || primaryAuthors[0]);
+    const validAuthors = [...book.authors, ...primaryAuthors].filter(
+      (a) => a && !/^\d{8}[a-z|]\d{4}|y0frey\d{2}|auteur\s+inconnu|^inconnu$/i.test(a.trim())
+    );
+    const firstAuthorLast = extractAuthorLastNameForBnfCql(validAuthors[0]);
     const prevEnsCount = validEnsembleIds.size;
 
     const runSeriesFallbackCql = async (cql: string) => {
       try {
-        const sruUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=45&startRecord=1`;
-        const res = await fetchWithTimeoutAndRetry(sruUrl, { timeoutMs: 4500, retriesOn5xx: 1 });
+        const sruUrl = `http://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=${encodeURIComponent(cql)}&recordSchema=intermarcxchange&maximumRecords=45&startRecord=1`;
+        const res = await fetchWithTimeoutAndRetry(sruUrl, { timeoutMs: 3800, retriesOn5xx: 1 });
         if (!res.ok) return;
         const xml = await res.text();
         for (const rec of xml.split('<srw:record>').slice(1)) {
@@ -230,7 +238,7 @@ export async function enqueueOrExpandSeriesLayer5(
           `(bib.anywhere all "${cleanSeriesQuery}") and (bib.author all "${firstAuthorLast}") and (bib.doctype all "a")`
         );
       }
-      if (discoveredByWorkKey.size < 3) {
+      if (discoveredByWorkKey.size < 3 || (options?.force && discoveredByWorkKey.size < 12)) {
         await runSeriesFallbackCql(`(bib.anywhere all "${cleanSeriesQuery}") and (bib.doctype all "a")`);
       }
       // Si la passe de repli a permis de découvrir de vrais 460$3 (ensemble bibliographique), aspirer tous les tomes rattachés !

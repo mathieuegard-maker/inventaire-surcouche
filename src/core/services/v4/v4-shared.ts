@@ -35,7 +35,10 @@ export async function fetchWithTimeoutAndRetry(
     headers?: Record<string, string>;
   }
 ): Promise<Response> {
-  const timeoutMs = options?.timeoutMs ?? 4500;
+  // Contournement du répartiteur SSL (port 443) de catalogue.bnf.fr qui bloque sur TLS ClientHello (6-13s),
+  // alors que le point de terminaison SRU en HTTP port 80 répond en 140-450 ms depuis le serveur.
+  const targetUrl = url.replace(/^https:\/\/catalogue\.bnf\.fr\/api\/SRU\b/i, 'http://catalogue.bnf.fr/api/SRU');
+  const timeoutMs = options?.timeoutMs ?? 3800;
   const maxRetries = options?.retriesOn5xx ?? 1;
   const headers = { 'User-Agent': USER_AGENT_BASE, ...(options?.headers || {}) };
 
@@ -44,7 +47,7 @@ export async function fetchWithTimeoutAndRetry(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const res = await fetch(url, { headers, signal: controller.signal });
+      const res = await fetch(targetUrl, { headers, signal: controller.signal });
       clearTimeout(timer);
       if ((res.status === 429 || res.status === 525 || res.status === 502 || res.status === 503 || res.status === 504) && attempt < maxRetries) {
         const delayMs = res.status === 429 ? 450 * (attempt + 1) : 250 * (attempt + 1);
@@ -95,6 +98,9 @@ export async function scheduleBnfSruCall(minIntervalMs = 260): Promise<void> {
 
 export function extractAuthorLastNameForBnfCql(rawAuthor?: string): string {
   if (!rawAuthor) return '';
+  if (/^\d{8}[a-z|]\d{4}|y0frey\d{2}|auteur\s+inconnu|^inconnu$/i.test(rawAuthor.trim())) {
+    return '';
+  }
   const cleaned = rawAuthor
     .replace(/\s*\([^)]*\)/g, '')
     .replace(/["()]/g, ' ')

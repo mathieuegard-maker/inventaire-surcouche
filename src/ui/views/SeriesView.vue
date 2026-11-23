@@ -62,11 +62,19 @@ const triggerImmediateEnrich = async () => {
   if (isForceEnriching.value || connectionState.isOffline.value) return;
   isForceEnriching.value = true;
   excludeFeedback.value = '';
+  const countBefore = seriesTomes.value.length;
   try {
-    await fetchV4SeriesBooksToIndexedDb(seriesId.value, { force: true });
-    seriesOrchestrator.startBackgroundHydration(seriesId.value);
+    const v4Res = await fetchV4SeriesBooksToIndexedDb(seriesId.value, { force: true });
+    if (!v4Res || v4Res.count === 0) {
+      seriesOrchestrator.startBackgroundHydration(seriesId.value);
+    }
     await loadLocalData();
-    excludeFeedback.value = 'Enrichissement de la série lancé : les nouveaux tomes détectés ont été mis à jour.';
+    const added = Math.max(0, seriesTomes.value.length - countBefore);
+    if (added > 0) {
+      excludeFeedback.value = `${added} nouveau${added > 1 ? 'x' : ''} tome${added > 1 ? 's' : ''} détecté${added > 1 ? 's' : ''} et ajouté${added > 1 ? 's' : ''} à la série (${seriesTomes.value.length} tomes au total).`;
+    } else {
+      excludeFeedback.value = `Vérification BnF terminée : aucun tome supplémentaire détecté (${seriesTomes.value.length} tome${seriesTomes.value.length > 1 ? 's' : ''} connu${seriesTomes.value.length > 1 ? 's' : ''}).`;
+    }
   } catch {
     excludeFeedback.value = 'Erreur lors de la recherche des tomes manquants.';
   } finally {
