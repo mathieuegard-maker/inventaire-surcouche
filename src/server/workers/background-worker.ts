@@ -69,6 +69,10 @@ export class BackgroundWorker {
     };
   }
 
+  notifyJobRow(row: BackgroundJobRow | null): void {
+    this.emitRow(row);
+  }
+
   private emitRow(row: BackgroundJobRow | null): void {
     if (!row) return;
     this.emitter.emit('job:updated', {

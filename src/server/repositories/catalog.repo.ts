@@ -650,4 +650,92 @@ export class CatalogRepository {
       ]
     );
   }
+
+  /**
+   * Recherche SQLite exhaustive et propre sur le Catalogue Central (`books` + `book_editions` + `series`).
+   * Zéro concaténation risquée : 100 % paramètres liés `?`.
+   */
+  searchLocalCatalog(criteria: {
+    titleNorm?: string;
+    seriesNorm?: string;
+    volumeNumber?: number | null;
+    authorNorm?: string;
+    collectionNorm?: string;
+    publisherNorm?: string;
+    limit?: number;
+  }): { series: SeriesRow[]; books: BookRow[] } {
+    const limit = criteria.limit ?? 40;
+
+    // 1. Recherche Séries
+    const seriesClauses: string[] = [];
+    const seriesParams: Array<string | number> = [];
+
+    const seriesNeedle = criteria.seriesNorm || criteria.titleNorm;
+    if (seriesNeedle) {
+      seriesClauses.push('(normalized_key LIKE ? OR lower(canonical_name) LIKE ? OR lower(aliases_json) LIKE ?)');
+      const pat = `%${seriesNeedle}%`;
+      seriesParams.push(pat, pat, pat);
+    }
+    if (criteria.authorNorm) {
+      seriesClauses.push('lower(primary_authors_json) LIKE ?');
+      seriesParams.push(`%${criteria.authorNorm}%`);
+    }
+
+    const seriesRows =
+      seriesClauses.length > 0
+        ? this.db.all<SeriesRow>(
+            `SELECT * FROM series WHERE ${seriesClauses.join(' AND ')} ORDER BY known_volumes_count DESC, canonical_name ASC LIMIT ?`,
+            [...seriesParams, 20]
+          )
+        : [];
+
+    // 2. Recherche Livres (jointure optionnelle sur series & editions)
+    const bookClauses: string[] = [];
+    const bookParams: Array<string | number> = [];
+
+    if (criteria.titleNorm) {
+      bookClauses.push('(b.normalized_title LIKE ? OR lower(b.title) LIKE ?)');
+      const pat = `%${criteria.titleNorm}%`;
+      bookParams.push(pat, pat);
+    }
+    if (criteria.seriesNorm) {
+      bookClauses.push('(s.normalized_key LIKE ? OR lower(s.canonical_name) LIKE ? OR lower(s.aliases_json) LIKE ?)');
+      const pat = `%${criteria.seriesNorm}%`;
+      bookParams.push(pat, pat, pat);
+    }
+    if (criteria.volumeNumber !== undefined && criteria.volumeNumber !== null) {
+      bookClauses.push('b.volume_number = ?');
+      bookParams.push(criteria.volumeNumber);
+    }
+    if (criteria.authorNorm) {
+      bookClauses.push('(lower(b.authors_json) LIKE ? OR lower(b.scriptwriters_json) LIKE ? OR lower(b.illustrators_json) LIKE ?)');
+      const pat = `%${criteria.authorNorm}%`;
+      bookParams.push(pat, pat, pat);
+    }
+    if (criteria.collectionNorm) {
+      bookClauses.push('(lower(COALESCE(b.collection_name, \'\')) LIKE ? OR EXISTS (SELECT 1 FROM book_editions be WHERE be.book_id = b.id AND lower(COALESCE(be.collection_name, \'\')) LIKE ?))');
+      const pat = `%${criteria.collectionNorm}%`;
+      bookParams.push(pat, pat);
+    }
+    if (criteria.publisherNorm) {
+      bookClauses.push('(lower(COALESCE(b.publisher, \'\')) LIKE ? OR EXISTS (SELECT 1 FROM book_editions be WHERE be.book_id = b.id AND lower(COALESCE(be.publisher, \'\')) LIKE ?))');
+      const pat = `%${criteria.publisherNorm}%`;
+      bookParams.push(pat, pat);
+    }
+
+    const bookRows =
+      bookClauses.length > 0
+        ? this.db.all<BookRow>(
+            `SELECT b.*
+             FROM books b
+             LEFT JOIN series s ON s.id = b.series_id
+             WHERE ${bookClauses.join(' AND ')}
+             ORDER BY b.updated_at DESC
+             LIMIT ?`,
+            [...bookParams, limit]
+          )
+        : [];
+
+    return { series: seriesRows, books: bookRows };
+  }
 }

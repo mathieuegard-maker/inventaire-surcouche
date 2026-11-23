@@ -6,6 +6,7 @@ import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
 import { createResendConnector, type MailSender } from './connectors/resend.connector';
 import { createBibliographicConnectors, type BibliographicConnectors } from './connectors';
+import { createGeminiConnector, type GeminiConnector } from './connectors/gemini.connector';
 import { UserRepository } from './repositories/user.repo';
 import { LibraryRepository } from './repositories/library.repo';
 import { CatalogRepository } from './repositories/catalog.repo';
@@ -23,6 +24,8 @@ import { LoanService } from './services/loan.service';
 import { LibraryService } from './services/library.service';
 import { SyncService } from './services/sync.service';
 import { ReadingService } from './services/reading.service';
+import { PhotoAiService } from './services/photo-ai.service';
+import { SearchService } from './services/search.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { createApiRouter } from './routes';
 import { handleServerError } from './middleware/error.middleware';
@@ -32,6 +35,7 @@ export interface CreateAppOptions {
   config: ServerConfig;
   mailSender?: MailSender;
   connectors?: BibliographicConnectors;
+  geminiConnector?: GeminiConnector;
   coverFetchImpl?: typeof fetch;
 }
 
@@ -66,6 +70,7 @@ export function createApp(options: CreateAppOptions) {
   const mailSender =
     options.mailSender ?? createResendConnector(options.config.resendApiKey, options.config.mailFrom);
   const connectors = options.connectors ?? createBibliographicConnectors({ jobRepo });
+  const gemini = options.geminiConnector ?? createGeminiConnector(options.config.geminiApiKey);
 
   // Services métier
   const authService = new AuthService({
@@ -124,7 +129,31 @@ export function createApp(options: CreateAppOptions) {
     libraryService
   });
 
+  const photoAiService = new PhotoAiService({
+    config: options.config,
+    gemini,
+    connectors,
+    userRepo,
+    catalogRepo,
+    libraryRepo,
+    jobRepo,
+    coverService,
+    ingestionService,
+    libraryService,
+    onJobChanged: (row) => worker.notifyJobRow(row)
+  });
+
+  const searchService = new SearchService({
+    catalogRepo,
+    libraryRepo,
+    connectors,
+    ingestionService
+  });
+
   // Enregistrement des handlers du worker continu
+  worker.registerHandler('photo_ocr', async (ctx) => {
+    return photoAiService.executePhotoOcrJob(ctx);
+  });
   worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {
@@ -162,6 +191,8 @@ export function createApp(options: CreateAppOptions) {
     libraryService,
     loanService,
     readingService,
+    photoAiService,
+    searchService,
     jobRepo,
     worker,
     startedAt
@@ -192,7 +223,9 @@ export function createApp(options: CreateAppOptions) {
       loanService,
       libraryService,
       syncService,
-      readingService
+      readingService,
+      photoAiService,
+      searchService
     },
     worker
   };

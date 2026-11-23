@@ -216,4 +216,34 @@ export class UserRepository {
   getAiUsage(userId: string): UserAiUsageRow | null {
     return this.db.get<UserAiUsageRow>('SELECT * FROM user_ai_usage WHERE user_id = ? LIMIT 1', [userId]);
   }
+
+  incrementAiUsage(userId: string, monthKey: string, now: string): UserAiUsageRow {
+    const existing = this.getAiUsage(userId);
+    if (!existing) {
+      this.db.run(
+        `INSERT INTO user_ai_usage (user_id, month_key, month_used, total_used, updated_at)
+         VALUES (?, ?, 1, 1, ?)`,
+        [userId, monthKey, now]
+      );
+    } else {
+      const nextMonthUsed = existing.month_key === monthKey ? existing.month_used + 1 : 1;
+      const nextTotal = existing.total_used + 1;
+      this.db.run(
+        `UPDATE user_ai_usage
+         SET month_key = ?, month_used = ?, total_used = ?, updated_at = ?
+         WHERE user_id = ?`,
+        [monthKey, nextMonthUsed, nextTotal, now, userId]
+      );
+    }
+    return this.getAiUsage(userId)!;
+  }
+
+  resetAiUsage(userId: string, monthKey: string, now: string): void {
+    this.db.run(
+      `INSERT INTO user_ai_usage (user_id, month_key, month_used, total_used, updated_at)
+       VALUES (?, ?, 0, 0, ?)
+       ON CONFLICT(user_id) DO UPDATE SET month_key = excluded.month_key, month_used = 0, updated_at = excluded.updated_at`,
+      [userId, monthKey, now]
+    );
+  }
 }

@@ -13,6 +13,7 @@ import DebugCacheView from '../views/DebugCacheView.vue';
 import BookDetailView from '../views/BookDetailView.vue';
 import BookEditView from '../views/BookEditView.vue';
 import BookCreateView from '../views/BookCreateView.vue';
+import ScanView from '../views/ScanView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -67,12 +68,13 @@ export const router = createRouter({
     { path: '/book/create', name: 'book-create', component: BookCreateView, meta: { requiresAuth: true } },
     { path: '/book/:bookId/edit', name: 'book-edit', component: BookEditView, meta: { requiresAuth: true } },
     { path: '/book/:bookId', name: 'book-detail', component: BookDetailView, meta: { requiresAuth: true } },
-    // Coquilles en attente des Jalons 5 à 7
+    // Acquisition 4 onglets (Jalon 5)
+    { path: '/scan', name: 'scan', component: ScanView, meta: { requiresAuth: true } },
+    // Coquilles en attente des Jalons 6 et 7
     { path: '/series/:seriesId', name: 'series-detail', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/author/:name', name: 'author-detail', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/releases', name: 'releases', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/social', name: 'social', component: DashboardView, meta: { requiresAuth: true } },
-    { path: '/scan', name: 'scan', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
   ]
 });

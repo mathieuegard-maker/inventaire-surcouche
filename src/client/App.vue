@@ -53,6 +53,24 @@ onBeforeUnmount(() => {
       {{ t('app.offlineBanner') }}
     </div>
 
+    <router-link
+      v-if="authStore.isAuthenticated && jobsStore.latestPhotoJob"
+      to="/scan?tab=photo"
+      class="app-photo-job-bar"
+    >
+      {{
+        jobsStore.latestPhotoJob.status === 'done'
+          ? t('scan.photoBannerDone', {
+              done: jobsStore.latestPhotoJob.progressDone,
+              total: jobsStore.latestPhotoJob.progressTotal
+            })
+          : t('scan.photoBannerRunning', {
+              done: jobsStore.latestPhotoJob.progressDone,
+              total: jobsStore.latestPhotoJob.progressTotal
+            })
+      }}
+    </router-link>
+
     <main class="app-main">
       <router-view />
     </main>
@@ -71,5 +89,21 @@ onBeforeUnmount(() => {
   font-size: 0.875rem;
   font-weight: 600;
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.app-photo-job-bar {
+  display: block;
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-align: center;
+  padding: var(--space-2) var(--space-4);
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-subtle);
+  text-decoration: none;
+}
+
+.app-photo-job-bar:hover {
+  text-decoration: underline;
 }
 </style>
