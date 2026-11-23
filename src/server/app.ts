@@ -177,7 +177,8 @@ export function createApp(options: CreateAppOptions) {
     loanRepo,
     readingRepo,
     ingestionService,
-    seriesGraphService
+    seriesGraphService,
+    connectors
   });
 
   const notificationService = new NotificationService({
@@ -223,6 +224,9 @@ export function createApp(options: CreateAppOptions) {
   // Enregistrement des handlers du worker continu
   worker.registerHandler('photo_ocr', async (ctx) => {
     return photoAiService.executePhotoOcrJob(ctx);
+  });
+  worker.registerHandler('photo_commit', async (ctx) => {
+    return photoAiService.executePhotoCommitJob(ctx);
   });
   worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';

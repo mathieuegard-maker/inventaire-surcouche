@@ -98,6 +98,15 @@ export class LoanRepository {
     return res.changes > 0;
   }
 
+  transferActiveLoans(libraryId: string, fromBookId: string, toBookId: string, now: string): number {
+    if (fromBookId === toBookId) return 0;
+    const res = this.db.run(
+      'UPDATE loans SET book_id = ?, updated_at = ? WHERE library_id = ? AND book_id = ? AND returned_at IS NULL',
+      [toBookId, now, libraryId, fromBookId]
+    );
+    return res.changes;
+  }
+
   upsertContact(libraryId: string, name: string, now: string): void {
     const clean = name.trim();
     if (!clean) return;

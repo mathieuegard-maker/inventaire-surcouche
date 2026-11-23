@@ -3,8 +3,15 @@
 
 import crypto from 'node:crypto';
 import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
-import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  cleanSeriesName,
+  cleanTitle,
+  extractFranchiseBaseName,
+  matchesAuthorName,
+  normalizeTextKey
+} from '../../shared/bibliographic/text-normalize.util';
 import type { BookView, LibraryBookOverrides, SeriesView } from '../../shared/types/domain.types';
+import type { BibliographicConnectors } from '../connectors/types';
 import type { DatabaseAdapter } from '../db/database.adapter';
 import type { CatalogRepository, SeriesRow } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
@@ -22,10 +29,32 @@ export interface SeriesDetailPayload {
   books: BookView[];
 }
 
+export interface AuthorExternalSeriesHit {
+  seriesName: string;
+  normalizedKey: string;
+  sampleIsbn13: string;
+  volumesCount: number;
+  sampleTitles: string[];
+  coverUrl: string | null;
+  source: string;
+}
+
+export interface AuthorExternalBookHit {
+  isbn13: string;
+  title: string;
+  authors: string[];
+  publisher: string | null;
+  publishYear: string | null;
+  coverUrl: string | null;
+  source: string;
+}
+
 export interface AuthorDetailPayload {
   authorName: string;
   series: SeriesView[];
   books: BookView[];
+  externalSeries: AuthorExternalSeriesHit[];
+  externalBooks: AuthorExternalBookHit[];
 }
 
 function parseJsonArray(raw: string | null | undefined): string[] {
@@ -56,6 +85,7 @@ export class SeriesManagementService {
   private readonly readingRepo: ReadingRepository;
   private readonly ingestionService: IngestionService;
   private readonly seriesGraphService: SeriesGraphService;
+  private readonly connectors?: BibliographicConnectors;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -65,6 +95,7 @@ export class SeriesManagementService {
     readingRepo: ReadingRepository;
     ingestionService: IngestionService;
     seriesGraphService: SeriesGraphService;
+    connectors?: BibliographicConnectors;
   }) {
     this.db = deps.db;
     this.catalogRepo = deps.catalogRepo;
@@ -73,6 +104,7 @@ export class SeriesManagementService {
     this.readingRepo = deps.readingRepo;
     this.ingestionService = deps.ingestionService;
     this.seriesGraphService = deps.seriesGraphService;
+    this.connectors = deps.connectors;
   }
 
   private buildBookViewsForSeries(libraryId: string, userId: string, seriesId: string): BookView[] {
@@ -323,18 +355,17 @@ export class SeriesManagementService {
   }
 
   /**
-   * Profil Auteur : toutes les séries et œuvres de l'auteur dans le Catalogue Central enrichies des statuts Foyer.
+   * Profil Auteur : œuvres et séries locales (priorisées possédées/souhaitées) + découverte externe BnF/Inventaire
+   * triée en séries puis œuvres indépendantes.
    */
-  getAuthorDetail(libraryId: string, userId: string, authorName: string): AuthorDetailPayload {
+  async getAuthorDetail(libraryId: string, userId: string, authorName: string): Promise<AuthorDetailPayload> {
     const cleanName = authorName.trim();
     const authorNorm = normalizeTextKey(cleanName);
     if (!authorNorm) {
-      return { authorName: cleanName, series: [], books: [] };
+      return { authorName: cleanName, series: [], books: [], externalSeries: [], externalBooks: [] };
     }
 
-    const found = this.catalogRepo.searchLocalCatalog({ authorNorm, limit: 100 });
-    const seriesViews = found.series.map((s) => this.buildSeriesSummary(libraryId, userId, s).view);
-
+    const found = this.catalogRepo.searchLocalCatalog({ authorNorm, limit: 200 });
     const activeLoans = this.loanRepo.listActiveLoans(libraryId);
     const loanByBookId = new Map(activeLoans.map((l) => [l.book_id, mapLoanRowToView(l)]));
 
@@ -345,12 +376,136 @@ export class SeriesManagementService {
       return merged;
     });
 
-    const annotatedBooks = annotateIntegralCoverage(rawBooks, rawBooks);
+    // Inclure également les séries des livres locaux trouvés (même si primary_authors_json de la série était incomplet)
+    const seriesById = new Map<string, SeriesRow>();
+    for (const s of found.series) seriesById.set(s.id, s);
+    for (const b of rawBooks) {
+      if (b.seriesId && !seriesById.has(b.seriesId)) {
+        const sRow = this.catalogRepo.findSeriesById(b.seriesId);
+        if (sRow) seriesById.set(sRow.id, sRow);
+      }
+    }
+
+    const seriesViews = Array.from(seriesById.values())
+      .map((s) => this.buildSeriesSummary(libraryId, userId, s).view)
+      .sort((a, b) => {
+        const aOwned = a.ownedCount > 0 ? 1 : 0;
+        const bOwned = b.ownedCount > 0 ? 1 : 0;
+        if (bOwned !== aOwned) return bOwned - aOwned;
+        return a.canonicalName.localeCompare(b.canonicalName, 'fr', { sensitivity: 'base' });
+      });
+
+    const annotatedBooks = annotateIntegralCoverage(rawBooks, rawBooks).sort((a, b) => {
+      const rank = (s: BookView['ownershipStatus']) => (s === 'owned' ? 2 : s === 'wish' ? 1 : 0);
+      const diff = rank(b.ownershipStatus) - rank(a.ownershipStatus);
+      if (diff !== 0) return diff;
+      return a.title.localeCompare(b.title, 'fr', { sensitivity: 'base' });
+    });
+
+    // Découverte externe légère (BnF par auteur + Inventaire) pour montrer les autres séries & œuvres indépendantes
+    const externalSeries: AuthorExternalSeriesHit[] = [];
+    const externalBooks: AuthorExternalBookHit[] = [];
+
+    if (this.connectors) {
+      const knownIsbns = new Set<string>();
+      const knownBookTitles = new Set<string>();
+      for (const b of annotatedBooks) {
+        for (const isbn of b.knownIsbns) knownIsbns.add(isbn);
+        knownBookTitles.add(normalizeTextKey(b.title));
+      }
+      const knownSeriesKeys = new Set<string>();
+      for (const s of seriesViews) {
+        knownSeriesKeys.add(extractFranchiseBaseName(s.canonicalName).normalizedKey);
+        for (const al of s.aliases) knownSeriesKeys.add(extractFranchiseBaseName(al).normalizedKey);
+      }
+
+      const [bnfRes, invRes] = await Promise.allSettled([
+        this.connectors.bnf.searchByTitleAndAuthor('', cleanName, 30),
+        this.connectors.inventaire.searchByText
+          ? this.connectors.inventaire.searchByText(cleanName, 15)
+          : Promise.resolve([])
+      ]);
+
+      const rawExternal = [
+        ...(bnfRes.status === 'fulfilled' ? bnfRes.value : []),
+        ...(invRes.status === 'fulfilled' ? invRes.value : [])
+      ];
+
+      const extSeriesMap = new Map<string, AuthorExternalSeriesHit>();
+      const seenExtBookTitles = new Set<string>();
+
+      for (const hit of rawExternal) {
+        if (!hit.isbn13 || !hit.title) continue;
+        if (knownIsbns.has(hit.isbn13)) continue;
+        // Vérifier que cet auteur figure bien parmi les créateurs du livre trouvé
+        const allCreators = [...hit.authors, ...hit.scriptwriters, ...hit.illustrators];
+        if (allCreators.length > 0 && !allCreators.some((a) => matchesAuthorName(a, cleanName))) {
+          continue;
+        }
+
+        const isTrueSeries =
+          Boolean(hit.seriesName?.trim()) &&
+          (hit.seriesLinkKind === 'graph_p179' || hit.seriesLinkKind === 'marc_ensemble_460');
+
+        if (isTrueSeries && hit.seriesName) {
+          const cleanedSer = cleanSeriesName(hit.seriesName);
+          const serKey = extractFranchiseBaseName(cleanedSer).normalizedKey;
+          if (!serKey || knownSeriesKeys.has(serKey)) continue;
+
+          const existing = extSeriesMap.get(serKey);
+          const cleanT = cleanTitle(hit.title);
+          if (!existing) {
+            extSeriesMap.set(serKey, {
+              seriesName: cleanedSer,
+              normalizedKey: serKey,
+              sampleIsbn13: hit.isbn13,
+              volumesCount: 1,
+              sampleTitles: cleanT ? [cleanT] : [],
+              coverUrl: hit.coverUrl && !/\.svg(?:[?#]|$)/i.test(hit.coverUrl) ? hit.coverUrl : null,
+              source: hit.source
+            });
+          } else {
+            existing.volumesCount++;
+            if (cleanT && !existing.sampleTitles.includes(cleanT) && existing.sampleTitles.length < 3) {
+              existing.sampleTitles.push(cleanT);
+            }
+            if (!existing.coverUrl && hit.coverUrl && !/\.svg(?:[?#]|$)/i.test(hit.coverUrl)) {
+              existing.coverUrl = hit.coverUrl;
+            }
+          }
+        } else {
+          const cleanT = cleanTitle(hit.title);
+          const normT = normalizeTextKey(cleanT);
+          if (!normT || knownBookTitles.has(normT) || seenExtBookTitles.has(normT)) continue;
+          seenExtBookTitles.add(normT);
+          knownIsbns.add(hit.isbn13);
+
+          externalBooks.push({
+            isbn13: hit.isbn13,
+            title: cleanT,
+            authors: hit.authors,
+            publisher: hit.publisher ?? null,
+            publishYear: hit.publishYear ?? null,
+            coverUrl: hit.coverUrl && !/\.svg(?:[?#]|$)/i.test(hit.coverUrl) ? hit.coverUrl : null,
+            source: hit.source
+          });
+        }
+      }
+
+      externalSeries.push(
+        ...Array.from(extSeriesMap.values()).sort((a, b) =>
+          a.seriesName.localeCompare(b.seriesName, 'fr', { sensitivity: 'base' })
+        )
+      );
+      externalBooks.sort((a, b) => a.title.localeCompare(b.title, 'fr', { sensitivity: 'base' }));
+    }
 
     return {
       authorName: cleanName,
       series: seriesViews,
-      books: annotatedBooks
+      books: annotatedBooks,
+      externalSeries,
+      externalBooks
     };
   }
 }

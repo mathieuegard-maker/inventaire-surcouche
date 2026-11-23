@@ -79,7 +79,15 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.route('/auth', createAuthRoutes(deps.authService, deps.config));
   api.route('/me', createProfileRoutes(deps.authService, deps.statsExportService));
   api.route('/covers', createCoversRoutes({ coverService: deps.coverService, requireAuth }));
-  api.route('/books', createBooksRoutes({ ingestionService: deps.ingestionService, libraryService: deps.libraryService, requireAuth }));
+  api.route(
+    '/books',
+    createBooksRoutes({
+      ingestionService: deps.ingestionService,
+      libraryService: deps.libraryService,
+      photoAiService: deps.photoAiService,
+      requireAuth
+    })
+  );
   api.route('/jobs', createJobsRoutes({ jobRepo: deps.jobRepo, worker: deps.worker, photoAiService: deps.photoAiService, requireAuth }));
   api.route('/search', createSearchRoutes({ searchService: deps.searchService, requireAuth }));
   api.route('/sync', createSyncRoutes({ syncService: deps.syncService, requireAuth }));

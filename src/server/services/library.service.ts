@@ -791,4 +791,86 @@ export class LibraryService {
     const detail = this.getBookDetail(input.libraryId, input.userId, savedBookId);
     return { book: detail.book, enqueuedSeriesExpandJobId };
   }
+
+  /**
+   * Remplace une fiche erronée dans le Foyer par le bon ouvrage identifié via son ISBN-13
+   * ("Ce n'est pas le bon livre") : ne corrompt jamais l'ancien livre du Catalogue Central,
+   * transfère statut foyer, état de lecture/notes perso et prêts actifs vers le nouveau livre,
+   * puis retire l'ancien livre du foyer.
+   */
+  async replaceBookInLibrary(input: {
+    libraryId: string;
+    userId: string;
+    oldBookId: string;
+    targetIsbn13: string;
+  }): Promise<{ oldBookId: string; book: BookView }> {
+    const oldBook = this.catalogRepo.findBookById(input.oldBookId);
+    if (!oldBook) {
+      throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage d’origine introuvable.');
+    }
+
+    const oldLib = this.libraryRepo.findLibraryBook(input.libraryId, input.oldBookId);
+    const targetStatus: 'owned' | 'wish' =
+      oldLib && !oldLib.deleted_at && oldLib.status === 'wish' ? 'wish' : 'owned';
+
+    const resolved = await this.ingestionService.resolveIsbns({
+      rawIsbns: [input.targetIsbn13],
+      channel: 'manual_isbn',
+      action: targetStatus,
+      userId: input.userId,
+      libraryId: input.libraryId
+    });
+
+    const newBook = resolved.results[0]?.book;
+    if (!newBook) {
+      throw new AppError(404, 'REPLACEMENT_BOOK_NOT_FOUND', 'Impossible de résoudre le nouvel ISBN sélectionné.');
+    }
+
+    if (newBook.id !== input.oldBookId) {
+      const now = new Date().toISOString();
+      this.db.transaction(() => {
+        if (targetStatus === 'wish' && oldLib?.wished_by_user_id) {
+          this.libraryRepo.upsertLibraryBookStatusLww({
+            libraryId: input.libraryId,
+            bookId: newBook.id,
+            status: 'wish',
+            wishedByUserId: oldLib.wished_by_user_id,
+            timestamp: now
+          });
+        }
+
+        // Transférer un éventuel prêt actif vers le nouveau livre
+        this.loanRepo.transferActiveLoans(input.libraryId, input.oldBookId, newBook.id, now);
+
+        // Transférer l'état de lecture individuel de l'utilisateur s'il existe et que le nouveau livre n'en a pas
+        const oldReading = this.readingRepo.findByUserAndBook(input.userId, input.oldBookId);
+        const existingNewReading = this.readingRepo.findByUserAndBook(input.userId, newBook.id);
+        if (
+          oldReading &&
+          !existingNewReading &&
+          (oldReading.status !== 'none' || oldReading.rating > 0 || oldReading.notes.trim().length > 0)
+        ) {
+          this.readingRepo.upsertReadingState({
+            userId: input.userId,
+            bookId: newBook.id,
+            status: oldReading.status,
+            rating: oldReading.rating,
+            notes: oldReading.notes,
+            timestamp: now
+          });
+        }
+
+        // Retirer l'ancien livre du foyer (Couche 3)
+        this.libraryRepo.upsertLibraryBookStatusLww({
+          libraryId: input.libraryId,
+          bookId: input.oldBookId,
+          status: 'none',
+          timestamp: now
+        });
+      });
+    }
+
+    const detail = this.getBookDetail(input.libraryId, input.userId, newBook.id);
+    return { oldBookId: input.oldBookId, book: detail.book };
+  }
 }

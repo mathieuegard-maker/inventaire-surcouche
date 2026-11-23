@@ -214,3 +214,21 @@ export function isCompatibleSeriesName(candidateSeries: string | undefined, winn
 
   return tokenOverlapRatio(cleanCand, cleanWin) >= 0.7 && tokenOverlapRatio(cleanWin, cleanCand) >= 0.7;
 }
+
+/**
+ * Compare un nom d'auteur candidat à une cible de manière insensible aux accents, tirets,
+ * majuscules et ordre "Prénom Nom" vs "Nom, Prénom" (corrige le LIKE SQLite qui échoue sur Hergé, Jean-Pierre, etc.).
+ */
+export function matchesAuthorName(candidateAuthor: string, targetAuthor: string): boolean {
+  const cand = normalizeTextKey(candidateAuthor);
+  const target = normalizeTextKey(targetAuthor);
+  if (!cand || !target) return false;
+  if (cand === target) return true;
+  if (target.length >= 3 && cand.includes(target)) return true;
+  if (cand.length >= 3 && target.includes(cand)) return true;
+
+  const targetTokens = target.split(' ').filter((tok) => tok.length >= 2);
+  if (targetTokens.length === 0) return false;
+  const candTokens = new Set(cand.split(' ').filter((tok) => tok.length >= 2));
+  return targetTokens.every((tok) => candTokens.has(tok));
+}

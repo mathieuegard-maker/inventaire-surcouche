@@ -3,14 +3,21 @@
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { manualBookCreateSchema, resolveIsbnSchema } from '../../shared/schemas';
+import {
+  manualBookCreateSchema,
+  replaceBookSchema,
+  resolveIsbnSchema,
+  retryPhotoItemBnfSchema
+} from '../../shared/schemas';
 import type { AppVariables } from '../middleware/auth.middleware';
 import type { IngestionService } from '../services/acquisition/ingestion.service';
 import type { LibraryService } from '../services/library.service';
+import type { PhotoAiService } from '../services/photo-ai.service';
 
 export function createBooksRoutes(deps: {
   ingestionService: IngestionService;
   libraryService: LibraryService;
+  photoAiService?: PhotoAiService;
   requireAuth: MiddlewareHandler<{ Variables: AppVariables }>;
 }) {
   const router = new Hono<{ Variables: AppVariables }>();
@@ -39,6 +46,25 @@ export function createBooksRoutes(deps: {
       ...body
     });
     return c.json({ ok: true, ...outcome }, 201);
+  });
+
+  router.post('/lookup', zValidator('json', retryPhotoItemBnfSchema), async (c) => {
+    const hints = c.req.valid('json');
+    const options = deps.photoAiService ? await deps.photoAiService.searchBookCandidates(hints) : [];
+    return c.json({ ok: true, options });
+  });
+
+  router.post('/:bookId/replace', zValidator('json', replaceBookSchema), async (c) => {
+    const auth = c.get('auth')!;
+    const bookId = c.req.param('bookId');
+    const body = c.req.valid('json');
+    const outcome = await deps.libraryService.replaceBookInLibrary({
+      libraryId: auth.libraryId,
+      userId: auth.userId,
+      oldBookId: bookId,
+      targetIsbn13: body.targetIsbn13
+    });
+    return c.json({ ok: true, ...outcome });
   });
 
   router.get('/:bookId/covers', async (c) => {

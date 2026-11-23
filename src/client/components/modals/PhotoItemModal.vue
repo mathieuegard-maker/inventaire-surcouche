@@ -3,7 +3,7 @@
 import { computed, ref, watch } from 'vue';
 import BaseModal from '../base/BaseModal.vue';
 import PhotoLightboxModal from '../base/PhotoLightboxModal.vue';
-import CameraBarcodeModal from './CameraBarcodeModal.vue';
+import BookLookupModal, { type BookLookupHints } from './BookLookupModal.vue';
 import IntegralFields from '../books/IntegralFields.vue';
 import { useScanStore, type PhotoJobItem } from '../../stores/scan.store';
 import { useUiStore } from '../../stores/ui.store';
@@ -28,17 +28,9 @@ const zoomPercent = ref(100);
 const lightboxOpen = ref(false);
 const saving = ref(false);
 
-// Sous-modale 6 champs vides pour relance BnF serveur
+// Sous-modale partagée 6 champs vides pour relance BnF serveur
 const manualModalOpen = ref(false);
-const pickerCameraOpen = ref(false);
 const retryingBnf = ref(false);
-
-const manualTitle = ref('');
-const manualSeries = ref('');
-const manualVolume = ref('');
-const manualAuthor = ref('');
-const manualPublisher = ref('');
-const manualIsbn = ref('');
 
 const confidenceLabel = computed(() => {
   const conf = props.item?.hint.confidence;
@@ -94,33 +86,14 @@ async function patchItem(patch: {
 }
 
 function openManualBnfModal(): void {
-  // 6 champs volontairement vides pour repartir sur des critères propres
-  manualTitle.value = '';
-  manualSeries.value = '';
-  manualVolume.value = '';
-  manualAuthor.value = '';
-  manualPublisher.value = '';
-  manualIsbn.value = '';
   manualModalOpen.value = true;
 }
 
-function handlePickerDetected(isbn13: string): void {
-  manualIsbn.value = isbn13;
-  pickerCameraOpen.value = false;
-}
-
-async function submitManualBnf(): Promise<void> {
+async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   if (!props.item) return;
   retryingBnf.value = true;
   try {
-    const res = await scanStore.retryPhotoItemBnf(props.jobId, props.item.id, {
-      title: manualTitle.value.trim() || undefined,
-      series: manualSeries.value.trim() || undefined,
-      volumeNumber: manualVolume.value.trim() || undefined,
-      author: manualAuthor.value.trim() || undefined,
-      publisher: manualPublisher.value.trim() || undefined,
-      isbn: manualIsbn.value.trim() || undefined
-    });
+    const res = await scanStore.retryPhotoItemBnf(props.jobId, props.item.id, hints);
     manualModalOpen.value = false;
     uiStore.pushToast(
       res.item.options.length > 0 ? t('scan.photoRetryBnfSuccess') : t('scan.photoRetryBnfNone'),
@@ -295,145 +268,13 @@ async function submitManualBnf(): Promise<void> {
     @close="lightboxOpen = false"
   />
 
-  <!-- Sous-modale 6 champs vides + caméra ISBN (relance BnF 100 % serveur) -->
-  <BaseModal
+  <!-- Sous-modale partagée 6 champs + caméra ISBN -->
+  <BookLookupModal
     :open="manualModalOpen"
-    :title="t('scan.manualSearchTitle')"
-    max-width="560px"
+    mode="retry"
+    :busy="retryingBnf"
     @close="manualModalOpen = false"
-  >
-    <form id="manual-bnf-retry-form" class="ds-stack" @submit.prevent="submitManualBnf">
-      <p class="ds-text-muted">{{ t('scan.photoManualHintDesc') }}</p>
-
-      <div class="manual-field-row">
-        <div class="ds-field manual-field-grow">
-          <label class="ds-label" for="m-bnf-title">{{ t('scan.fieldTitle') }}</label>
-          <input id="m-bnf-title" v-model="manualTitle" type="text" class="ds-input" />
-        </div>
-        <button
-          v-if="manualTitle"
-          type="button"
-          class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-          :aria-label="t('scan.clearField')"
-          @click="manualTitle = ''"
-        >
-          ✕
-        </button>
-      </div>
-
-      <div class="ds-grid-2">
-        <div class="manual-field-row">
-          <div class="ds-field manual-field-grow">
-            <label class="ds-label" for="m-bnf-series">{{ t('scan.fieldSeries') }}</label>
-            <input id="m-bnf-series" v-model="manualSeries" type="text" class="ds-input" />
-          </div>
-          <button
-            v-if="manualSeries"
-            type="button"
-            class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-            :aria-label="t('scan.clearField')"
-            @click="manualSeries = ''"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div class="manual-field-row">
-          <div class="ds-field manual-field-grow">
-            <label class="ds-label" for="m-bnf-vol">{{ t('scan.fieldVolume') }}</label>
-            <input id="m-bnf-vol" v-model="manualVolume" type="text" class="ds-input" />
-          </div>
-          <button
-            v-if="manualVolume"
-            type="button"
-            class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-            :aria-label="t('scan.clearField')"
-            @click="manualVolume = ''"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      <div class="ds-grid-2">
-        <div class="manual-field-row">
-          <div class="ds-field manual-field-grow">
-            <label class="ds-label" for="m-bnf-author">{{ t('scan.fieldAuthor') }}</label>
-            <input id="m-bnf-author" v-model="manualAuthor" type="text" class="ds-input" />
-          </div>
-          <button
-            v-if="manualAuthor"
-            type="button"
-            class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-            :aria-label="t('scan.clearField')"
-            @click="manualAuthor = ''"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div class="manual-field-row">
-          <div class="ds-field manual-field-grow">
-            <label class="ds-label" for="m-bnf-pub">{{ t('scan.fieldPublisher') }}</label>
-            <input id="m-bnf-pub" v-model="manualPublisher" type="text" class="ds-input" />
-          </div>
-          <button
-            v-if="manualPublisher"
-            type="button"
-            class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-            :aria-label="t('scan.clearField')"
-            @click="manualPublisher = ''"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-
-      <div class="manual-field-row">
-        <div class="ds-field manual-field-grow">
-          <label class="ds-label" for="m-bnf-isbn">{{ t('scan.fieldIsbn') }}</label>
-          <input id="m-bnf-isbn" v-model="manualIsbn" type="text" class="ds-input" />
-        </div>
-        <button
-          type="button"
-          class="ds-btn ds-btn--sm manual-clear-btn"
-          :aria-label="t('scan.cameraTitlePicker')"
-          @click="pickerCameraOpen = true"
-        >
-          📷
-        </button>
-        <button
-          v-if="manualIsbn"
-          type="button"
-          class="ds-btn ds-btn--ghost ds-btn--sm manual-clear-btn"
-          :aria-label="t('scan.clearField')"
-          @click="manualIsbn = ''"
-        >
-          ✕
-        </button>
-      </div>
-    </form>
-
-    <template #footer>
-      <button type="button" class="ds-btn" :disabled="retryingBnf" @click="manualModalOpen = false">
-        {{ t('app.cancel') }}
-      </button>
-      <button
-        type="submit"
-        form="manual-bnf-retry-form"
-        class="ds-btn ds-btn--primary"
-        :disabled="retryingBnf"
-      >
-        {{ retryingBnf ? t('app.loading') : t('scan.launchBnfSearch') }}
-      </button>
-    </template>
-  </BaseModal>
-
-  <CameraBarcodeModal
-    :open="pickerCameraOpen"
-    mode="picker"
-    @close="pickerCameraOpen = false"
-    @detected="handlePickerDetected"
+    @submit-hints="submitManualBnf"
   />
 </template>
 

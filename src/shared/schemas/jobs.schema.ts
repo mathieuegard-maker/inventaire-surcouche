@@ -26,5 +26,6 @@ export const retryPhotoItemBnfSchema = z.object({
 
 export const commitPhotoJobSchema = z.object({
   targetStatus: z.enum(['owned', 'wish']).default('owned'),
-  itemIds: z.array(z.string().trim().min(1)).optional()
+  itemIds: z.array(z.string().trim().min(1)).optional(),
+  async: z.boolean().optional()
 });

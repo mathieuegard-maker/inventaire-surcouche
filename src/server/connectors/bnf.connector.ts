@@ -80,6 +80,7 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
     collectionName: rec.collectionName ?? null,
     publishYear: rec.publishYear ?? null,
     pageCount: rec.pageCount ?? null,
+    language: rec.language ?? null,
     coverUrl: rec.bnfCoverUrl ?? null,
     isIntegral: rec.isIntegralHint,
     source: 'bnf'
@@ -191,11 +192,17 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
 
     async searchByTitleAndAuthor(title: string, author?: string, maxRecords = 10): Promise<SourceCandidateRecord[]> {
       const safeTitle = title.replace(/"/g, ' ').trim();
-      if (!safeTitle) return [];
       const lastName = extractAuthorLastNameForQuery(author);
-      const cql = lastName
-        ? `bib.title all "${safeTitle}" and bib.author all "${lastName}" and bib.doctype any "a"`
-        : `bib.title all "${safeTitle}" and bib.doctype any "a"`;
+      if (!safeTitle && !lastName) return [];
+
+      let cql: string;
+      if (safeTitle && lastName) {
+        cql = `bib.title all "${safeTitle}" and bib.author all "${lastName}" and bib.doctype any "a"`;
+      } else if (safeTitle) {
+        cql = `bib.title all "${safeTitle}" and bib.doctype any "a"`;
+      } else {
+        cql = `bib.author all "${lastName}" and bib.doctype any "a"`;
+      }
       const records = await querySru(cql, maxRecords, `bnf:search:${cql.toLowerCase()}:${maxRecords}`);
       return records.map((r) => toCandidate(r, r.isbn13));
     }

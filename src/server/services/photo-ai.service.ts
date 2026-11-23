@@ -4,7 +4,12 @@
 import crypto from 'node:crypto';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
-import { normalizeSeriesNumber, normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  matchesAuthorName,
+  normalizeSeriesNumber,
+  normalizeTextKey,
+  tokenOverlapRatio
+} from '../../shared/bibliographic/text-normalize.util';
 import type { BackgroundJobView, OwnershipStatus } from '../../shared/types/domain.types';
 import type { ServerConfig } from '../config';
 import type { BibliographicConnectors, SourceCandidateRecord } from '../connectors/types';
@@ -211,18 +216,80 @@ export class PhotoAiService {
       }
     }
 
-    // 3. Recherche BnF SRU ciblée (HTTP port 80)
-    const searchTitle = [hint.series, hint.title, volNumStr].filter(Boolean).join(' ').trim();
-    if (searchTitle) {
-      const bnfHits = await this.connectors.bnf.searchByTitleAndAuthor(searchTitle, hint.author, 8);
-      const normPub = hint.publisher ? normalizeTextKey(hint.publisher) : '';
-      const filtered = normPub
-        ? bnfHits.filter((h) => !h.publisher || normalizeTextKey(h.publisher).includes(normPub))
-        : bnfHits;
-      for (const hit of filtered.length > 0 ? filtered : bnfHits) {
+    // 3. Cascade externe progressive (BnF SRU + Inventaire.io) sans jamais coller le n° de tome dans bib.title all :
+    //    Passe A : Série + Titre + Auteur
+    //    Passe B (si < 2 options et série connue) : Série + Auteur (rattrape "Le vol du corbeau T.1/2", "SOS Bonheur S2", ou sous-titre OCR imparfait)
+    //    Passe C (si 0 option et titre distinct de la série) : Titre + Auteur
+    const cleanSeries = hint.series?.trim() || '';
+    const cleanTitle = hint.title?.trim() || '';
+    const cleanAuthor = hint.author?.trim() || undefined;
+    const normSeries = normalizeTextKey(cleanSeries);
+    const normTitle = normalizeTextKey(cleanTitle);
+    const normPub = hint.publisher ? normalizeTextKey(hint.publisher) : '';
+
+    const runExternalPass = async (titleQuery: string, authorQuery?: string, bnfLimit = 10) => {
+      if (!titleQuery && !authorQuery) return;
+      const [bnfRes, invRes] = await Promise.allSettled([
+        this.connectors.bnf.searchByTitleAndAuthor(titleQuery, authorQuery, bnfLimit),
+        titleQuery && this.connectors.inventaire.searchByText
+          ? this.connectors.inventaire.searchByText(titleQuery, 8)
+          : Promise.resolve([])
+      ]);
+      const hits = [
+        ...(bnfRes.status === 'fulfilled' ? bnfRes.value : []),
+        ...(invRes.status === 'fulfilled' ? invRes.value : [])
+      ];
+      for (const hit of hits) {
+        if (authorQuery && hit.authors.length > 0 && !hit.authors.some((a) => matchesAuthorName(a, authorQuery))) {
+          continue;
+        }
         pushOpt(toOption(hit));
       }
+    };
+
+    const combinedTitle =
+      cleanSeries && cleanTitle && !normTitle.includes(normSeries)
+        ? `${cleanSeries} ${cleanTitle}`
+        : cleanTitle || cleanSeries;
+
+    if (combinedTitle) {
+      await runExternalPass(combinedTitle, cleanAuthor, 10);
     }
+
+    if (options.length < 2 && cleanSeries) {
+      await runExternalPass(cleanSeries, cleanAuthor, 15);
+    }
+
+    if (options.length === 0 && cleanTitle && cleanTitle !== combinedTitle) {
+      await runExternalPass(cleanTitle, cleanAuthor, 10);
+    }
+
+    // Scoring déterministe pour placer la meilleure édition (tome exact > titre proche > éditeur > auteur) en #1
+    const scoreOption = (opt: PhotoCandidateOption): number => {
+      let score = 0;
+      const optVol = normalizeSeriesNumber(opt.volumeNumber);
+      if (volNumStr) {
+        if (optVol && optVol === volNumStr) score += 55;
+        else if (optVol && optVol !== volNumStr) score -= 25;
+        else if (new RegExp(`\\b${volNumStr}\\b`).test(opt.title)) score += 20;
+      }
+      if (cleanTitle) {
+        score += Math.round(tokenOverlapRatio(cleanTitle, `${opt.seriesName ?? ''} ${opt.title}`) * 30);
+      }
+      if (cleanSeries) {
+        score += Math.round(tokenOverlapRatio(cleanSeries, `${opt.seriesName ?? ''} ${opt.title}`) * 20);
+      }
+      if (normPub && opt.publisher && normalizeTextKey(opt.publisher).includes(normPub)) {
+        score += 15;
+      }
+      if (cleanAuthor && opt.authors.some((a) => matchesAuthorName(a, cleanAuthor))) {
+        score += 10;
+      }
+      if (opt.source === 'local') score += 5;
+      return score;
+    };
+
+    options.sort((a, b) => scoreOption(b) - scoreOption(a));
 
     const topOptions = options.slice(0, 6);
 
@@ -499,7 +566,22 @@ export class PhotoAiService {
   }
 
   /**
+   * Recherche publique réutilisable (utilisée par Photo IA et par "Ce n'est pas le bon livre" sur une fiche).
+   */
+  async searchBookCandidates(hints: {
+    title?: string;
+    series?: string;
+    volumeNumber?: string;
+    author?: string;
+    publisher?: string;
+    isbn?: string;
+  }): Promise<PhotoCandidateOption[]> {
+    return this.resolveHintOptions(hints);
+  }
+
+  /**
    * Valide les items cochés du lot Photo IA vers la Collection (`owned`) ou la Wishlist (`wish`).
+   * Exécution parallélisée par lots de 4 (rapide), ou en tâche de fond `photo_commit` pour les gros lots (> 3 livres ou async=true).
    */
   async commitJobItems(input: {
     userId: string;
@@ -507,7 +589,14 @@ export class PhotoAiService {
     jobId: string;
     targetStatus: 'owned' | 'wish';
     itemIds?: string[];
-  }): Promise<{ committedCount: number; job: BackgroundJobView }> {
+    async?: boolean;
+  }): Promise<{
+    committedCount: number;
+    queued: boolean;
+    targetCount: number;
+    commitJob?: BackgroundJobView;
+    job: BackgroundJobView;
+  }> {
     const row = this.assertOwnedJob(input.jobId, input.userId, input.libraryId);
     const result = this.parseResult(row);
 
@@ -517,38 +606,144 @@ export class PhotoAiService {
       return it.selected;
     });
 
-    let committedCount = 0;
-    for (const item of targets) {
-      if (!item.selectedOptionIsbn13) continue;
-      const resolved = await this.ingestionService.resolveIsbns({
-        rawIsbns: [item.selectedOptionIsbn13],
-        channel: 'photo_ai',
-        action: input.targetStatus,
+    // Pour les lots > 3 livres (ou demande explicite async), confier au BackgroundWorker existant -> réponse immédiate (< 50 ms, zéro timeout)
+    if (targets.length > 0 && (input.async || targets.length > 3)) {
+      const now = new Date().toISOString();
+      const commitRow = this.jobRepo.createJob({
+        id: generateId('pcom'),
+        type: 'photo_commit',
         userId: input.userId,
-        libraryId: input.libraryId
+        libraryId: input.libraryId,
+        payload: {
+          photoJobId: row.id,
+          targetStatus: input.targetStatus,
+          itemIds: targets.map((t) => t.id)
+        },
+        progressTotal: targets.length,
+        now
       });
+      this.onJobChanged?.(commitRow);
+      return {
+        committedCount: 0,
+        queued: true,
+        targetCount: targets.length,
+        commitJob: mapJobRowToView(commitRow),
+        job: mapJobRowToView(row)
+      };
+    }
 
-      const book = resolved.results[0]?.book;
-      if (book) {
-        if (item.isIntegral) {
-          this.libraryService.updateBookOverrides(input.libraryId, input.userId, book.id, {
-            isIntegral: true,
-            includedVolumes: item.includedVolumes
-          });
-        }
-        item.committedBookId = book.id;
-        item.alreadyStatus = input.targetStatus;
-        item.selected = false;
-        committedCount++;
+    const { committedCount, updatedJob } = await this.commitTargetsWithConcurrency({
+      row,
+      result,
+      targets,
+      userId: input.userId,
+      libraryId: input.libraryId,
+      targetStatus: input.targetStatus
+    });
+
+    return {
+      committedCount,
+      queued: false,
+      targetCount: targets.length,
+      job: updatedJob
+    };
+  }
+
+  /**
+   * Handler BackgroundWorker pour `photo_commit` (concurrence 4, progression temps réel SSE).
+   */
+  async executePhotoCommitJob(ctx: JobHandlerContext): Promise<{ result: { photoJobId: string; committedCount: number }; total: number }> {
+    const photoJobId = typeof ctx.payload.photoJobId === 'string' ? ctx.payload.photoJobId : '';
+    const targetStatus: 'owned' | 'wish' = ctx.payload.targetStatus === 'wish' ? 'wish' : 'owned';
+    const itemIds = Array.isArray(ctx.payload.itemIds)
+      ? ctx.payload.itemIds.filter((x): x is string => typeof x === 'string')
+      : [];
+    const userId = ctx.job.user_id ?? '';
+    const libraryId = ctx.job.library_id ?? '';
+
+    const row = this.assertOwnedJob(photoJobId, userId, libraryId);
+    const result = this.parseResult(row);
+    const targets = result.items.filter((it) => {
+      if (it.ignored || !it.selectedOptionIsbn13) return false;
+      if (itemIds.length > 0) return itemIds.includes(it.id);
+      return it.selected;
+    });
+
+    const total = Math.max(1, targets.length);
+    ctx.reportProgress(0, total, { photoJobId, committedCount: 0 });
+
+    const { committedCount } = await this.commitTargetsWithConcurrency({
+      row,
+      result,
+      targets,
+      userId,
+      libraryId,
+      targetStatus,
+      onItemDone: (done, committed) => {
+        ctx.reportProgress(done, total, { photoJobId, committedCount: committed });
       }
+    });
+
+    return {
+      result: { photoJobId, committedCount },
+      total
+    };
+  }
+
+  private async commitTargetsWithConcurrency(params: {
+    row: BackgroundJobRow;
+    result: PhotoJobResultPayload;
+    targets: PhotoJobItem[];
+    userId: string;
+    libraryId: string;
+    targetStatus: 'owned' | 'wish';
+    onItemDone?: (doneCount: number, committedCount: number) => void;
+  }): Promise<{ committedCount: number; updatedJob: BackgroundJobView }> {
+    let committedCount = 0;
+    let doneCount = 0;
+    const CONCURRENCY = 4;
+
+    for (let i = 0; i < params.targets.length; i += CONCURRENCY) {
+      const batch = params.targets.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map(async (item) => {
+          if (!item.selectedOptionIsbn13) return;
+          try {
+            const resolved = await this.ingestionService.resolveIsbns({
+              rawIsbns: [item.selectedOptionIsbn13],
+              channel: 'photo_ai',
+              action: params.targetStatus,
+              userId: params.userId,
+              libraryId: params.libraryId
+            });
+
+            const book = resolved.results[0]?.book;
+            if (book) {
+              if (item.isIntegral) {
+                this.libraryService.updateBookOverrides(params.libraryId, params.userId, book.id, {
+                  isIntegral: true,
+                  includedVolumes: item.includedVolumes
+                });
+              }
+              item.committedBookId = book.id;
+              item.alreadyStatus = params.targetStatus;
+              item.selected = false;
+              committedCount++;
+            }
+          } finally {
+            doneCount++;
+            params.onItemDone?.(doneCount, committedCount);
+          }
+        })
+      );
     }
 
     const now = new Date().toISOString();
-    this.jobRepo.updateJobProgress(row.id, row.progress_done, row.progress_total, now, result);
-    const updated = this.jobRepo.findJobById(row.id)!;
+    this.jobRepo.updateJobProgress(params.row.id, params.row.progress_done, params.row.progress_total, now, params.result);
+    const updated = this.jobRepo.findJobById(params.row.id)!;
     this.onJobChanged?.(updated);
 
-    return { committedCount, job: mapJobRowToView(updated) };
+    return { committedCount, updatedJob: mapJobRowToView(updated) };
   }
 
   deletePhotoJob(input: { userId: string; libraryId: string; jobId: string }): void {

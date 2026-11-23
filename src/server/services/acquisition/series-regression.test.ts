@@ -29,7 +29,7 @@ import type {
   GraphSeriesWork,
   SourceCandidateRecord
 } from '../../connectors/types';
-import { isCompatibleSeriesName } from '../../../shared/bibliographic/text-normalize.util';
+import { isCompatibleSeriesName, matchesAuthorName } from '../../../shared/bibliographic/text-normalize.util';
 
 function createMockConnectors(overrides?: {
   bnfByIsbn?: Record<string, SourceCandidateRecord>;
@@ -595,5 +595,182 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(isCompatibleSeriesName('Astérix, la grande collection', "Les Aventures d'Astérix")).toBe(true);
     expect(isCompatibleSeriesName('Mortelle Adèle', 'Mortelle Adèle')).toBe(true);
     expect(isCompatibleSeriesName('Folio', 'Les Misérables')).toBe(false);
+  });
+
+  it('Cas 7 (Auteurs avec accents & tirets) : retrouve Hergé et Jean-Pierre Gibrat en base locale SQLite', () => {
+    const now = new Date().toISOString();
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_herge_1',
+      workCanonicalId: 'wd:Q636870',
+      seriesId: null,
+      title: 'Tintin au Congo',
+      normalizedTitle: 'tintin au congo',
+      volumeNumber: 2,
+      volumeLabel: '2',
+      sortOrder: 2,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Hergé'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Casterman',
+      collectionName: null,
+      publishYear: '1931',
+      pageCount: 62,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: 'Q636870',
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_gibrat_1',
+      workCanonicalId: 'ser:matteo:1',
+      seriesId: null,
+      title: 'Première époque (1914-1915)',
+      normalizedTitle: 'premiere epoque 1914 1915',
+      volumeNumber: 1,
+      volumeLabel: '1',
+      sortOrder: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Jean-Pierre Gibrat'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Futuropolis',
+      collectionName: null,
+      publishYear: '2008',
+      pageCount: 64,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    expect(matchesAuthorName('Hergé', 'herge')).toBe(true);
+    expect(matchesAuthorName('Jean-Pierre Gibrat', 'Gibrat, Jean-Pierre')).toBe(true);
+
+    const hergeRes = catalogRepo.searchLocalCatalog({ authorNorm: 'herge' });
+    expect(hergeRes.books.map((b) => b.id)).toEqual(['bk_herge_1']);
+
+    const gibratRes = catalogRepo.searchLocalCatalog({ authorNorm: 'jean pierre gibrat' });
+    expect(gibratRes.books.map((b) => b.id)).toEqual(['bk_gibrat_1']);
+  });
+
+  it('Cas 8 (Anti-doublon Nom (Nom) & non-pollution BnF sur graphe Wikidata) : ignore collection identique à la série et notices étrangères/non numérotées', async () => {
+    const connectors = createMockConnectors({
+      wikidataSeries: {
+        Q744536: [
+          { title: 'Tintin au Congo', volumeNumber: 2, volumeLabel: '2', sortOrder: 2, wikidataQid: 'Q636870', authors: ['Hergé'], isbn13s: ['9782203001015'], source: 'wikidata' },
+          { title: 'Tintin en Amérique', volumeNumber: 3, volumeLabel: '3', sortOrder: 3, wikidataQid: 'Q10003', authors: ['Hergé'], isbn13s: ['9782203001022'], source: 'wikidata' }
+        ]
+      },
+      bnfEnsemble: {
+        '9990001': [
+          { title: 'Le singe', volumeNumber: null, authors: ['Hergé'], isbn13s: ['9782874240805'], language: 'fr', source: 'bnf' },
+          { title: "La templo de l'suno", volumeNumber: 14, authors: ['Hergé'], isbn13s: ['9782203060678'], language: 'epo', source: 'bnf' },
+          { title: 'Les Cigares du pharaon', volumeNumber: 4, volumeLabel: '4', sortOrder: 4, authors: ['Hergé'], isbn13s: ['9782203003064'], language: 'fr', source: 'bnf' }
+        ]
+      }
+    });
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const now = new Date().toISOString();
+
+    // 1. collectionName === seriesName ne doit JAMAIS créer un 2e découpage "De cape et de crocs (De cape et de crocs)"
+    const firstCut = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'De cape et de crocs',
+      bookTitle: 'Le secret du janissaire',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      collectionName: null,
+      publisher: 'Delcourt',
+      authors: ['Alain Ayroles', 'Jean-Luc Masbou'],
+      now
+    });
+    const secondCut = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'De cape et de crocs',
+      bookTitle: 'Pavillon noir !',
+      volumeNumber: 2,
+      isHorsSerie: false,
+      isIntegral: false,
+      collectionName: 'De cape et de crocs',
+      publisher: 'Delcourt',
+      authors: ['Alain Ayroles', 'Jean-Luc Masbou'],
+      now
+    });
+    expect(secondCut.series.id).toBe(firstCut.series.id);
+
+    // 2. Sur une série ancrée Wikidata, BnF enrichit les tomes FR numérotés sans ajouter espéranto ni imagiers non numérotés
+    const { series: tintinSeries } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Les Aventures de Tintin',
+      wikidataSeriesQid: 'Q744536',
+      bnfEnsembleId: '9990001',
+      bookTitle: 'Tintin au Congo',
+      volumeNumber: 2,
+      isHorsSerie: false,
+      isIntegral: false,
+      authors: ['Hergé'],
+      now
+    });
+    await seriesGraph.expandSeriesByGraph(tintinSeries.id);
+    const books = catalogRepo.listBooksBySeriesId(tintinSeries.id);
+    expect(books.map((b) => b.title)).toEqual([
+      'Tintin au Congo',
+      'Tintin en Amérique',
+      'Les Cigares du pharaon'
+    ]);
+  });
+
+  it('Cas 9 (Priorité couvertures) : relègue commons.wikimedia.org après la cascade ISBN éditeur', async () => {
+    const calledUrls: string[] = [];
+    const customCoverService = new CoverService({
+      coversDir: tmpCoversDir,
+      catalogRepo,
+      libraryRepo,
+      fetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        calledUrls.push(url);
+        if (url.includes('images-eu.ssl-images-amazon.com')) {
+          const sharp = (await import('sharp')).default;
+          const buf = await sharp({
+            create: {
+              width: 240,
+              height: 360,
+              channels: 3,
+              background: { r: 20, g: 80, b: 140 },
+              noise: { type: 'gaussian', mean: 128, sigma: 40 }
+            }
+          })
+            .png()
+            .toBuffer();
+          return new Response(new Uint8Array(buf), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        return new Response('', { status: 404 });
+      }) as typeof fetch
+    });
+
+    const stored = await customCoverService.resolveBestCoverFromCascade({
+      isbn13: '9782203003057',
+      candidateUrls: ['https://commons.wikimedia.org/wiki/Special:FilePath/Gare_Du_Midi.jpg?width=400'],
+      skipTitleFallback: true
+    });
+
+    expect(stored).not.toBeNull();
+    // La cascade Amazon ISBN doit avoir été testée et retenue AVANT Wikimedia Commons !
+    expect(calledUrls.some((u) => u.includes('images-eu.ssl-images-amazon.com'))).toBe(true);
+    expect(calledUrls.some((u) => u.includes('commons.wikimedia.org'))).toBe(false);
   });
 });

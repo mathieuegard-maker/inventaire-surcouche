@@ -307,8 +307,13 @@ export class CoverService {
    * 5. Apple Books / iTunes Search API FR (par ISBN puis Titre + Auteur)
    */
   async resolveBestCoverFromCascade(input: CoverCascadeInput): Promise<StoredCoverResult | null> {
-    // 1. Candidats directs déjà collectés (BnF, Inventaire, Wikidata, etc.)
-    for (const rawUrl of input.candidateUrls ?? []) {
+    const isWikimediaUrl = (u: string): boolean => /(?:wikimedia|wikipedia)\.org/i.test(u);
+    const allCandidates = (input.candidateUrls ?? []).filter((u) => Boolean(u && !/\.svg(?:[?#]|$)/i.test(u)));
+    const primaryCandidates = allCandidates.filter((u) => !isWikimediaUrl(u));
+    const wikimediaFallbackCandidates = allCandidates.filter((u) => isWikimediaUrl(u));
+
+    // 1. Candidats directs éditeurs/catalogues (BnF, Inventaire, Google Books, Open Library) — hors Wikimedia P18
+    for (const rawUrl of primaryCandidates) {
       const stored = await this.ingestFromExternalUrl(rawUrl, {
         minBytes: 500,
         rejectExactBytes: EYROLLES_PLACEHOLDER_BYTES
@@ -376,6 +381,15 @@ export class CoverService {
           // continue
         }
       }
+    }
+
+    // 6. Tout dernier recours (uniquement si aucun ISBN/CDN éditeur n'a retourné de couverture) : Wikimedia P18
+    for (const rawUrl of wikimediaFallbackCandidates) {
+      const stored = await this.ingestFromExternalUrl(rawUrl, {
+        minBytes: 500,
+        rejectExactBytes: EYROLLES_PLACEHOLDER_BYTES
+      });
+      if (stored) return stored;
     }
 
     return null;

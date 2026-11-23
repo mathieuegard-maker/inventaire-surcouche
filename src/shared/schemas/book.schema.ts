@@ -66,3 +66,7 @@ export const readingStateUpsertSchema = z.object({
   rating: z.number().int().min(0).max(5),
   notes: z.string().max(5000).default('')
 });
+
+export const replaceBookSchema = z.object({
+  targetIsbn13: z.string().trim().min(10).max(20)
+});

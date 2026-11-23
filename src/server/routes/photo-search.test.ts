@@ -318,4 +318,104 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
     expect(body.books.map((b) => b.title)).toContain('Le Secret du Pape');
     expect(body.externalBooks.map((e) => e.isbn13)).toContain('9782871293019');
   });
+
+  it('gère POST /api/books/lookup, POST /api/books/:id/replace (transfert statut/lecture/prêt) et commit asynchrone photo_commit', async () => {
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'ReplaceTester',
+        email: 'replace@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const cookie = extractCookie(reg);
+
+    // 1. Ingestion initiale du mauvais livre (Le Scorpion) avec note de lecture + prêt actif
+    const resolveRes = await appCtx.app.request('/api/books/resolve-isbn', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ isbns: ['9782871293019'], channel: 'barcode_simple', action: 'owned' })
+    });
+    const resolvedBody = (await resolveRes.json()) as { results: Array<{ book: { id: string } }> };
+    const oldBookId = resolvedBody.results[0].book.id;
+
+    await appCtx.app.request(`/api/reading/${oldBookId}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ status: 'read', rating: 5, notes: 'Super album !' })
+    });
+    await appCtx.app.request('/api/loans', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ bookIds: [oldBookId], borrowerName: 'Alice' })
+    });
+
+    // 2. Recherche partagée POST /api/books/lookup -> retrouve Blacksad
+    const lookupRes = await appCtx.app.request('/api/books/lookup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ title: 'Blacksad' })
+    });
+    expect(lookupRes.status).toBe(200);
+    const lookupBody = (await lookupRes.json()) as { options: Array<{ isbn13: string }> };
+    expect(lookupBody.options[0]?.isbn13).toBe('9782205051230');
+
+    // 3. Remplacement dans le foyer POST /api/books/:oldBookId/replace -> transfère statut, lecture/notes et prêt actif !
+    const replaceRes = await appCtx.app.request(`/api/books/${oldBookId}/replace`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ targetIsbn13: '9782205051230' })
+    });
+    expect(replaceRes.status).toBe(200);
+    const replaceBody = (await replaceRes.json()) as {
+      oldBookId: string;
+      book: {
+        id: string;
+        ownershipStatus: string;
+        readingState: { status: string; rating: number; notes: string } | null;
+        activeLoan: { borrowerName: string } | null;
+      };
+    };
+    expect(replaceBody.book.id).not.toBe(oldBookId);
+    expect(replaceBody.book.ownershipStatus).toBe('owned');
+    expect(replaceBody.book.readingState).toMatchObject({ status: 'read', rating: 5, notes: 'Super album !' });
+    expect(replaceBody.book.activeLoan?.borrowerName).toBe('Alice');
+
+    // L'ancien livre n'est plus dans le foyer mais reste intact dans le Catalogue Central
+    const oldDetail = await appCtx.app.request(`/api/books/${oldBookId}`, { headers: { cookie } });
+    const oldDetailBody = (await oldDetail.json()) as { book: { ownershipStatus: string; activeLoan: unknown } };
+    expect(oldDetailBody.book.ownershipStatus).toBe('none');
+    expect(oldDetailBody.book.activeLoan).toBeNull();
+
+    // 4. Commit asynchrone `photo_commit` (réponse immédiate queued: true -> exécuté par BackgroundWorker)
+    const dataUrl = await makeShelfPhotoDataUrl();
+    const photoCreate = await appCtx.app.request('/api/jobs/photo', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ mode: 'shelf', imageDataUrl: dataUrl, mimeType: 'image/png' })
+    });
+    const photoJobId = ((await photoCreate.json()) as { job: { id: string } }).job.id;
+    while (await appCtx.worker.processNextJob()) {
+      // dépiler les jobs series_expand + photo_ocr en attente
+    }
+
+    const asyncCommitRes = await appCtx.app.request(`/api/jobs/photo/${photoJobId}/commit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ targetStatus: 'owned', async: true })
+    });
+    expect(asyncCommitRes.status).toBe(200);
+    const asyncCommitBody = (await asyncCommitRes.json()) as { queued: boolean; commitJob: { id: string; type: string } };
+    expect(asyncCommitBody.queued).toBe(true);
+    expect(asyncCommitBody.commitJob.type).toBe('photo_commit');
+
+    while (await appCtx.worker.processNextJob()) {
+      // exécuter photo_commit
+    }
+    const jobsRes = await appCtx.app.request('/api/jobs', { headers: { cookie } });
+    const jobsList = ((await jobsRes.json()) as { jobs: Array<{ id: string; status: string }> }).jobs;
+    expect(jobsList.find((j) => j.id === asyncCommitBody.commitJob.id)?.status).toBe('done');
+  });
 });

@@ -3,6 +3,7 @@
 
 import type { DatabaseAdapter } from '../db/database.adapter';
 import type { BookMainCategory, BookSourceOrigin } from '../../shared/types/domain.types';
+import { matchesAuthorName } from '../../shared/bibliographic/text-normalize.util';
 
 export interface CoverRow {
   cover_key: string;
@@ -676,18 +677,25 @@ export class CatalogRepository {
       const pat = `%${seriesNeedle}%`;
       seriesParams.push(pat, pat, pat);
     }
-    if (criteria.authorNorm) {
-      seriesClauses.push('lower(primary_authors_json) LIKE ?');
-      seriesParams.push(`%${criteria.authorNorm}%`);
+
+    let seriesRows: SeriesRow[] = [];
+    if (seriesClauses.length > 0) {
+      seriesRows = this.db.all<SeriesRow>(
+        `SELECT * FROM series WHERE ${seriesClauses.join(' AND ')} ORDER BY known_volumes_count DESC, canonical_name ASC LIMIT ?`,
+        [...seriesParams, criteria.authorNorm ? 200 : 20]
+      );
+    } else if (criteria.authorNorm) {
+      seriesRows = this.db.all<SeriesRow>(
+        'SELECT * FROM series ORDER BY known_volumes_count DESC, canonical_name ASC LIMIT 500'
+      );
     }
 
-    const seriesRows =
-      seriesClauses.length > 0
-        ? this.db.all<SeriesRow>(
-            `SELECT * FROM series WHERE ${seriesClauses.join(' AND ')} ORDER BY known_volumes_count DESC, canonical_name ASC LIMIT ?`,
-            [...seriesParams, 20]
-          )
-        : [];
+    if (criteria.authorNorm) {
+      const targetAuthor = criteria.authorNorm;
+      seriesRows = seriesRows
+        .filter((s) => parseJsonStringArray(s.primary_authors_json).some((a) => matchesAuthorName(a, targetAuthor)))
+        .slice(0, 40);
+    }
 
     // 2. Recherche Livres (jointure optionnelle sur series & editions)
     const bookClauses: string[] = [];
@@ -707,11 +715,6 @@ export class CatalogRepository {
       bookClauses.push('b.volume_number = ?');
       bookParams.push(criteria.volumeNumber);
     }
-    if (criteria.authorNorm) {
-      bookClauses.push('(lower(b.authors_json) LIKE ? OR lower(b.scriptwriters_json) LIKE ? OR lower(b.illustrators_json) LIKE ?)');
-      const pat = `%${criteria.authorNorm}%`;
-      bookParams.push(pat, pat, pat);
-    }
     if (criteria.collectionNorm) {
       bookClauses.push('(lower(COALESCE(b.collection_name, \'\')) LIKE ? OR EXISTS (SELECT 1 FROM book_editions be WHERE be.book_id = b.id AND lower(COALESCE(be.collection_name, \'\')) LIKE ?))');
       const pat = `%${criteria.collectionNorm}%`;
@@ -723,18 +726,35 @@ export class CatalogRepository {
       bookParams.push(pat, pat);
     }
 
-    const bookRows =
-      bookClauses.length > 0
-        ? this.db.all<BookRow>(
-            `SELECT b.*
-             FROM books b
-             LEFT JOIN series s ON s.id = b.series_id
-             WHERE ${bookClauses.join(' AND ')}
-             ORDER BY b.updated_at DESC
-             LIMIT ?`,
-            [...bookParams, limit]
-          )
-        : [];
+    let bookRows: BookRow[] = [];
+    if (bookClauses.length > 0) {
+      bookRows = this.db.all<BookRow>(
+        `SELECT b.*
+         FROM books b
+         LEFT JOIN series s ON s.id = b.series_id
+         WHERE ${bookClauses.join(' AND ')}
+         ORDER BY b.updated_at DESC
+         LIMIT ?`,
+        [...bookParams, criteria.authorNorm ? Math.max(limit * 4, 300) : limit]
+      );
+    } else if (criteria.authorNorm) {
+      // Filtrage auteur en TypeScript via matchesAuthorName (insensible aux accents/tirets/ordre, ex: Hergé, Jean-Pierre Gibrat)
+      bookRows = this.db.all<BookRow>('SELECT * FROM books ORDER BY updated_at DESC LIMIT 2000');
+    }
+
+    if (criteria.authorNorm) {
+      const targetAuthor = criteria.authorNorm;
+      bookRows = bookRows
+        .filter((b) => {
+          const allCreators = [
+            ...parseJsonStringArray(b.authors_json),
+            ...parseJsonStringArray(b.scriptwriters_json),
+            ...parseJsonStringArray(b.illustrators_json)
+          ];
+          return allCreators.some((a) => matchesAuthorName(a, targetAuthor));
+        })
+        .slice(0, limit);
+    }
 
     return { series: seriesRows, books: bookRows };
   }

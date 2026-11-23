@@ -12,10 +12,10 @@ export function createAuthorsRoutes(deps: {
   const router = new Hono<{ Variables: AppVariables }>();
   router.use('*', deps.requireAuth);
 
-  router.get('/:name', (c) => {
+  router.get('/:name', async (c) => {
     const auth = c.get('auth')!;
     const name = decodeURIComponent(c.req.param('name'));
-    const detail = deps.seriesManagementService.getAuthorDetail(auth.libraryId, auth.userId, name);
+    const detail = await deps.seriesManagementService.getAuthorDetail(auth.libraryId, auth.userId, name);
     return c.json({ ok: true, ...detail });
   });
 

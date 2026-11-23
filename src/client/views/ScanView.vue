@@ -214,8 +214,12 @@ async function handleCommitPhoto(target: 'owned' | 'wish'): Promise<void> {
   if (!latestPhotoJob.value || selectedPhotoCount.value === 0) return;
   photoCommitting.value = true;
   try {
-    const count = await scanStore.commitPhotoJob(latestPhotoJob.value.id, target);
-    uiStore.pushToast(t('scan.photoCommittedToast', { count }), 'success');
+    const outcome = await scanStore.commitPhotoJob(latestPhotoJob.value.id, target);
+    if (outcome.queued) {
+      uiStore.pushToast(t('scan.photoCommitStartedToast', { count: outcome.targetCount }), 'info');
+    } else {
+      uiStore.pushToast(t('scan.photoCommittedToast', { count: outcome.committedCount }), 'success');
+    }
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -562,6 +566,15 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           {{ latestPhotoJob.errorMessage }}
         </div>
 
+        <div v-if="jobsStore.activePhotoCommitJob" class="ds-banner ds-banner--info" role="status">
+          {{
+            t('scan.photoCommitBannerRunning', {
+              done: jobsStore.activePhotoCommitJob.progressDone,
+              total: jobsStore.activePhotoCommitJob.progressTotal
+            })
+          }}
+        </div>
+
         <!-- Aperçu cliquable de la photo analysée (ouvre la visionneuse plein écran zoom 2 doigts) -->
         <div v-if="photoResult?.previewUrl" class="ds-card ds-row ds-row--between photo-analyzed-bar">
           <div class="ds-row">
@@ -680,6 +693,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   <strong>{{ item.hint.title }}</strong>
                   <span class="ds-text-muted">
                     {{ getPhotoItemSubtitle(item) !== '—' ? getPhotoItemSubtitle(item) : t('scan.wrongReferenceBtn') }}
+                    <template v-if="item.fallbackCoverUrl"> · {{ t('scan.photoFallbackCoverHint') }}</template>
                   </span>
                 </span>
               </button>
@@ -698,7 +712,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           <button
             type="button"
             class="ds-btn ds-btn--primary"
-            :disabled="photoCommitting"
+            :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
             @click="handleCommitPhoto('owned')"
           >
             {{ t('scan.photoCommitOwnedBtn', { count: selectedPhotoCount }) }}
@@ -706,7 +720,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           <button
             type="button"
             class="ds-btn"
-            :disabled="photoCommitting"
+            :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
             @click="handleCommitPhoto('wish')"
           >
             {{ t('scan.photoCommitWishBtn', { count: selectedPhotoCount }) }}

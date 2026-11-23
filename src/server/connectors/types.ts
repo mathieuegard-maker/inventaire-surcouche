@@ -62,6 +62,7 @@ export interface GraphSeriesWork {
   collectionName?: string | null;
   publishYear?: string | null;
   pageCount?: number | null;
+  language?: string | null;
   coverUrl?: string | null;
   isHorsSerie?: boolean;
   isIntegral?: boolean;

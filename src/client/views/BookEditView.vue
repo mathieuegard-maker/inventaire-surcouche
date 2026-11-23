@@ -3,12 +3,14 @@
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
+import BookLookupModal from '../components/modals/BookLookupModal.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
 import CoverPicker from '../components/books/CoverPicker.vue';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
-import { ApiClientError } from '../api/client';
+import { apiRequest, ApiClientError } from '../api/client';
+import type { PhotoCandidateOption } from '../stores/scan.store';
 import type { BookMainCategory, BookView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
@@ -33,8 +35,10 @@ const uiStore = useUiStore();
 
 const loading = ref(true);
 const saving = ref(false);
+const replacing = ref(false);
 const book = ref<BookView | null>(null);
 const resetModalOpen = ref(false);
+const replaceModalOpen = ref(false);
 
 const title = ref('');
 const authorsText = ref('');
@@ -148,6 +152,29 @@ async function confirmReset(): Promise<void> {
   }
 }
 
+async function handleReplaceBook(option: PhotoCandidateOption): Promise<void> {
+  if (!book.value) return;
+  replacing.value = true;
+  try {
+    const res = await apiRequest<{ ok: true; oldBookId: string; book: BookView }>(
+      `/api/books/${encodeURIComponent(book.value.id)}/replace`,
+      {
+        method: 'POST',
+        body: { targetIsbn13: option.isbn13 },
+        timeoutMs: 45000
+      }
+    );
+    replaceModalOpen.value = false;
+    await libraryStore.syncNow();
+    uiStore.pushToast(t('book.replaceSuccessToast'), 'success');
+    await router.replace(`/book/${encodeURIComponent(res.book.id)}`);
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    replacing.value = false;
+  }
+}
+
 onMounted(() => {
   void load();
 });
@@ -159,14 +186,24 @@ onMounted(() => {
       <button type="button" class="ds-btn ds-btn--sm" @click="router.back()">
         ← {{ t('app.back') }}
       </button>
-      <button
-        v-if="book?.hasUserOverrides"
-        type="button"
-        class="ds-btn ds-btn--ghost ds-btn--sm"
-        @click="resetModalOpen = true"
-      >
-        {{ t('book.resetOverridesBtn') }}
-      </button>
+      <div class="ds-row">
+        <button
+          v-if="book"
+          type="button"
+          class="ds-btn ds-btn--sm"
+          @click="replaceModalOpen = true"
+        >
+          {{ t('book.wrongBookBtn') }}
+        </button>
+        <button
+          v-if="book?.hasUserOverrides"
+          type="button"
+          class="ds-btn ds-btn--ghost ds-btn--sm"
+          @click="resetModalOpen = true"
+        >
+          {{ t('book.resetOverridesBtn') }}
+        </button>
+      </div>
     </div>
 
     <h1>{{ t('book.editViewTitle') }}</h1>
@@ -282,6 +319,15 @@ onMounted(() => {
         </button>
       </template>
     </BaseModal>
+    <BookLookupModal
+      :open="replaceModalOpen"
+      mode="pick"
+      :title="t('book.replaceModalTitle')"
+      :description="t('book.replaceModalDesc')"
+      :busy="replacing"
+      @close="replaceModalOpen = false"
+      @select-option="handleReplaceBook"
+    />
   </section>
 </template>
 

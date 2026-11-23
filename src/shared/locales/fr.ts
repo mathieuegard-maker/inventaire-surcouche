@@ -266,7 +266,13 @@ export const fr = {
     ratingStarLabel: '{n} étoile(s)',
     ratingClear: 'Aucune note',
     overridesActiveBadge: 'Personnalisé (Foyer)',
-    manualCreateBtn: 'Créer un livre manuellement'
+    manualCreateBtn: 'Créer un livre manuellement',
+    wrongBookBtn: "Ce n'est pas le bon livre",
+    replaceModalTitle: 'Rechercher le bon livre',
+    replaceModalDesc:
+      'Saisissez un ou plusieurs critères (ou scannez le code-barres) pour remplacer cette fiche dans votre foyer en conservant votre statut, vos notes et vos prêts :',
+    replaceConfirmBtn: 'Choisir ce livre',
+    replaceSuccessToast: 'Livre remplacé dans votre foyer (statut, notes et prêts conservés).'
   },
   scan: {
     tabPhoto: 'Photo IA',
@@ -344,7 +350,10 @@ export const fr = {
     photoNoCoverShort: 'Sans couv.',
     photoPositionLabel: 'N° {left} depuis la gauche · N° {right} depuis la droite (sur {total})',
     photoPositionShort: '#{left} gauche · #{right} droite',
-    photoRawTextLabel: 'Texte brut lu sur la tranche'
+    photoRawTextLabel: 'Texte brut lu sur la tranche',
+    photoCommitStartedToast: 'Ajout de {count} ouvrage(s) lancé en arrière-plan...',
+    photoCommitBannerRunning: 'Ajout en collection — {done}/{total} traité(s)',
+    photoFallbackCoverHint: 'Aperçu indicatif (ISBN non trouvé)'
   },
   series: {
     filterAll: 'Tout ({count})',
@@ -376,6 +385,14 @@ export const fr = {
     authorTitle: 'Profil auteur : {name}',
     authorSeriesHeader: 'Séries ({count})',
     authorBooksHeader: 'Œuvres & albums ({count})',
+    authorOwnedSection: 'Dans votre bibliothèque',
+    authorOwnedSeriesHeader: 'Vos séries ({count})',
+    authorOwnedStandaloneHeader: 'Vos œuvres indépendantes ({count})',
+    authorOtherSection: 'Autres œuvres de cet auteur',
+    authorOtherSeriesHeader: 'Autres séries ({count})',
+    authorOtherStandaloneHeader: 'Autres œuvres indépendantes ({count})',
+    authorExternalSeriesVolumes: '{count} notice(s) repérée(s)',
+    authorImportBtn: 'Consulter / Importer',
     authorSearchPlaceholder: 'Filtrer les œuvres de cet auteur...',
     authorEmpty: 'Aucune œuvre trouvée pour cet auteur.'
   },

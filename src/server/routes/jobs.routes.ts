@@ -161,8 +161,12 @@ export function createJobsRoutes(deps: {
       libraryId: auth.libraryId,
       jobId,
       targetStatus: body.targetStatus,
-      itemIds: body.itemIds
+      itemIds: body.itemIds,
+      async: body.async
     });
+    if (outcome.queued) {
+      deps.worker.nudge();
+    }
     return c.json({ ok: true, ...outcome });
   });
 

@@ -142,11 +142,11 @@ export class SearchService {
     const primaryQuery = [input.series, input.title, volStr].filter(Boolean).join(' ').trim();
 
     if (primaryQuery || input.author?.trim()) {
-      const searchStr = primaryQuery || input.author!.trim();
+      const authorQuery = input.author?.trim() || undefined;
       const [bnfRes, invRes] = await Promise.allSettled([
-        this.connectors.bnf.searchByTitleAndAuthor(searchStr, input.author?.trim() || undefined, 15),
+        this.connectors.bnf.searchByTitleAndAuthor(primaryQuery, authorQuery, primaryQuery ? 15 : 25),
         this.connectors.inventaire.searchByText
-          ? this.connectors.inventaire.searchByText(searchStr, 10)
+          ? this.connectors.inventaire.searchByText(primaryQuery || authorQuery!, 12)
           : Promise.resolve([])
       ]);
 

@@ -21,7 +21,7 @@ export type ReadingStatus = 'none' | 'to_read' | 'reading' | 'read' | 'abandoned
 export type LibraryMemberRole = 'owner' | 'member';
 export type BookSourceOrigin = 'auto' | 'manual';
 
-export type BackgroundJobType = 'photo_ocr' | 'photo_retry_item' | 'series_expand' | 'book_enrich';
+export type BackgroundJobType = 'photo_ocr' | 'photo_retry_item' | 'photo_commit' | 'series_expand' | 'book_enrich';
 export type BackgroundJobStatus = 'pending' | 'running' | 'done' | 'error';
 
 export type NotificationFrequency = 'off' | 'daily' | 'weekly' | 'monthly';

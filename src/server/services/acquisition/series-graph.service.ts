@@ -6,6 +6,7 @@ import {
   cleanTitle,
   extractFranchiseBaseName,
   getLevenshteinDistance,
+  isCompatibleSeriesName,
   isGenericVolumeTitle,
   normalizeTextKey,
   tokenOverlapRatio
@@ -55,8 +56,14 @@ export function compareSameVolumeContent(
       ? Math.max(existing.page_count, incoming.pageCount) / Math.min(existing.page_count, incoming.pageCount)
       : 1;
 
-  const existingCol = normalizeTextKey(existing.collection_name || '');
-  const incomingCol = normalizeTextKey(incoming.collectionName || '');
+  const existingCol =
+    existing.collection_name && !isCompatibleSeriesName(existing.collection_name, incoming.seriesName)
+      ? normalizeTextKey(existing.collection_name)
+      : '';
+  const incomingCol =
+    incoming.collectionName && !isCompatibleSeriesName(incoming.collectionName, incoming.seriesName)
+      ? normalizeTextKey(incoming.collectionName)
+      : '';
   const hasDistinctCollection = Boolean(incomingCol && existingCol !== incomingCol);
   const hasDistinctPublisher = Boolean(
     incoming.publisher &&
@@ -182,7 +189,11 @@ export class SeriesGraphService {
       return { franchise, series: created };
     }
 
-    const incomingSig = normalizeTextKey(input.collectionName || '');
+    const effectiveCollectionName =
+      input.collectionName && !isCompatibleSeriesName(input.collectionName, baseName)
+        ? input.collectionName.trim()
+        : null;
+    const incomingSig = normalizeTextKey(effectiveCollectionName || '');
 
     // 3. Test de compatibilité par CONTENU sur chaque découpage existant
     // Priorité au découpage dont la signature éditoriale correspond déjà si plusieurs découpages coexistent
@@ -256,7 +267,7 @@ export class SeriesGraphService {
       return { franchise, series: existingWithSig };
     }
 
-    const labelSuffix = input.collectionName?.trim() || input.publisher?.trim() || `Édition ${existingCuts.length + 1}`;
+    const labelSuffix = effectiveCollectionName || input.publisher?.trim() || `Édition ${existingCuts.length + 1}`;
     const newCut = this.catalogRepo.createSeries({
       id: generateId('ser'),
       franchiseId: franchise.id,
@@ -371,6 +382,8 @@ export class SeriesGraphService {
       graphWorks.length < 2 ||
       (bnfEnsembleIds.size === 0 && incompleteGraphCount > 0 && incompleteGraphCount * 2 >= graphWorks.length);
 
+    const hasCanonicalWikidataGraph = sourcesUsed.includes('wikidata') && graphWorks.length >= 2;
+
     if (needsBnfDiscovery) {
       try {
         const discovery = await this.connectors.bnf.searchBySeriesName?.(
@@ -385,7 +398,7 @@ export class SeriesGraphService {
           }
           if (discovery.works.length > 0) {
             if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-            this.mergeGraphWorks(graphWorks, discovery.works, series.canonical_name);
+            this.mergeGraphWorks(graphWorks, discovery.works, series.canonical_name, hasCanonicalWikidataGraph);
           }
         }
       } catch {
@@ -398,7 +411,7 @@ export class SeriesGraphService {
         const bnfWorks = await this.connectors.bnf.searchByEnsembleId(ensId, 80);
         if (bnfWorks.length > 0) {
           if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-          this.mergeGraphWorks(graphWorks, bnfWorks, series.canonical_name);
+          this.mergeGraphWorks(graphWorks, bnfWorks, series.canonical_name, hasCanonicalWikidataGraph);
         }
       } catch {
         // continue
@@ -470,16 +483,19 @@ export class SeriesGraphService {
           : cleanT;
       const effectiveNormTitle = normalizeTextKey(effectiveTitle);
 
-      // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + ISBN) si pas encore de couverture
+      // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + jusqu'à 2 ISBNs) si pas encore de couverture
       let coverKey: string | null = existingBook?.cover_key ?? null;
       if (!coverKey && this.coverService && (work.coverUrl || work.isbn13s.length > 0)) {
         const candidateUrls = work.coverUrl && !/\.svg(?:[?#]|$)/i.test(work.coverUrl) ? [work.coverUrl] : [];
-        const stored = await this.coverService.resolveBestCoverFromCascade({
-          isbn13: work.isbn13s[0] ?? null,
-          candidateUrls,
-          skipTitleFallback: true
-        });
-        if (stored) coverKey = stored.coverKey;
+        const isbnAttempts = work.isbn13s.length > 0 ? work.isbn13s.slice(0, 2) : [null];
+        for (let idx = 0; idx < isbnAttempts.length && !coverKey; idx++) {
+          const stored = await this.coverService.resolveBestCoverFromCascade({
+            isbn13: isbnAttempts[idx],
+            candidateUrls: idx === 0 ? candidateUrls : [],
+            skipTitleFallback: true
+          });
+          if (stored) coverKey = stored.coverKey;
+        }
       }
 
       const workCanonicalId =
@@ -564,7 +580,12 @@ export class SeriesGraphService {
     };
   }
 
-  private mergeGraphWorks(target: GraphSeriesWork[], incoming: GraphSeriesWork[], seriesName: string): void {
+  private mergeGraphWorks(
+    target: GraphSeriesWork[],
+    incoming: GraphSeriesWork[],
+    seriesName: string,
+    restrictNewAdditionsToFrNumbered = false
+  ): void {
     for (const item of incoming) {
       const normTitle = normalizeTextKey(item.title);
       const itemIsGeneric = isGenericVolumeTitle(item.title, seriesName);
@@ -613,6 +634,16 @@ export class SeriesGraphService {
       });
 
       if (!match) {
+        // Quand un graphe canonique Wikidata (P179) est déjà présent, les notices BnF qui ne matchent
+        // aucun tome existant ne sont ajoutées que si elles sont numérotées et en français (évite traductions régionales/imagiers).
+        if (restrictNewAdditionsToFrNumbered) {
+          const lang = (item.language ?? '').toLowerCase();
+          const isForeignLang = Boolean(lang && lang !== 'fr' && lang !== 'fre');
+          const hasNumber = item.volumeNumber !== null && item.volumeNumber !== undefined;
+          if (isForeignLang || !hasNumber) {
+            continue;
+          }
+        }
         target.push({ ...item, isbn13s: [...item.isbn13s], authors: [...item.authors] });
       } else {
         for (const isbn of item.isbn13s) {

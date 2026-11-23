@@ -4,6 +4,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { apiRequest } from '../api/client';
+import { useLibraryStore } from './library.store';
 import type { BackgroundJobView } from '../../shared/types/domain.types';
 
 export const useJobsStore = defineStore('jobs', () => {
@@ -23,12 +24,24 @@ export const useJobsStore = defineStore('jobs', () => {
     jobs.value.find((j) => j.type === 'photo_ocr') ?? null
   );
 
+  const activePhotoCommitJob = computed(() =>
+    jobs.value.find((j) => j.type === 'photo_commit' && (j.status === 'pending' || j.status === 'running')) ?? null
+  );
+
   function upsertJob(incoming: BackgroundJobView): void {
     const idx = jobs.value.findIndex((j) => j.id === incoming.id);
+    const prevStatus = idx >= 0 ? jobs.value[idx].status : null;
     if (idx >= 0) {
       jobs.value[idx] = incoming;
     } else {
       jobs.value.unshift(incoming);
+    }
+    if (
+      (incoming.type === 'photo_commit' || incoming.type === 'series_expand') &&
+      incoming.status === 'done' &&
+      prevStatus !== 'done'
+    ) {
+      void useLibraryStore().syncNow();
     }
   }
 
@@ -102,6 +115,7 @@ export const useJobsStore = defineStore('jobs', () => {
     activeJobs,
     hasRunningJobs,
     latestPhotoJob,
+    activePhotoCommitJob,
     isStreamConnected,
     upsertJob,
     refreshJobs,

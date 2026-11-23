@@ -186,23 +186,41 @@ export const useScanStore = defineStore('scan', () => {
   async function retryPhotoJobFailed(jobId: string): Promise<BackgroundJobView> {
     const res = await apiRequest<{ ok: true; job: BackgroundJobView }>(
       `/api/jobs/photo/${encodeURIComponent(jobId)}/retry-failed`,
-      { method: 'POST' }
+      { method: 'POST', timeoutMs: 45000 }
     );
     useJobsStore().upsertJob(res.job);
     return res.job;
   }
 
-  async function commitPhotoJob(jobId: string, targetStatus: 'owned' | 'wish'): Promise<number> {
-    const res = await apiRequest<{ ok: true; committedCount: number; job: BackgroundJobView }>(
-      `/api/jobs/photo/${encodeURIComponent(jobId)}/commit`,
-      {
-        method: 'POST',
-        body: { targetStatus }
-      }
-    );
-    useJobsStore().upsertJob(res.job);
-    await useLibraryStore().syncNow();
-    return res.committedCount;
+  async function commitPhotoJob(
+    jobId: string,
+    targetStatus: 'owned' | 'wish'
+  ): Promise<{ committedCount: number; queued: boolean; targetCount: number }> {
+    const res = await apiRequest<{
+      ok: true;
+      committedCount: number;
+      queued?: boolean;
+      targetCount?: number;
+      commitJob?: BackgroundJobView;
+      job: BackgroundJobView;
+    }>(`/api/jobs/photo/${encodeURIComponent(jobId)}/commit`, {
+      method: 'POST',
+      body: { targetStatus },
+      timeoutMs: 30000
+    });
+    const jobsStore = useJobsStore();
+    jobsStore.upsertJob(res.job);
+    if (res.commitJob) {
+      jobsStore.upsertJob(res.commitJob);
+    }
+    if (!res.queued) {
+      await useLibraryStore().syncNow();
+    }
+    return {
+      committedCount: res.committedCount,
+      queued: Boolean(res.queued),
+      targetCount: res.targetCount ?? res.committedCount
+    };
   }
 
   async function deletePhotoJob(jobId: string): Promise<void> {
