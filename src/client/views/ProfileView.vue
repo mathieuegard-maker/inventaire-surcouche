@@ -5,9 +5,9 @@ import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
-import { ApiClientError } from '../api/client';
+import { apiRequest, ApiClientError } from '../api/client';
 import { t } from '../../shared/locales';
-import type { ThemeId } from '../../shared/types/domain.types';
+import type { NotificationChannel, NotificationFrequency, ThemeId } from '../../shared/types/domain.types';
 
 type ProfileTab = 'account' | 'stats' | 'genres' | 'notifications';
 
@@ -177,6 +177,154 @@ async function confirmDeleteAccount(): Promise<void> {
 
 function handleAdminClick(): void {
   uiStore.pushToast(t('profile.comingSoonAdmin'), 'info');
+}
+
+// Notifications & Web Push VAPID
+const notifLoaded = ref(false);
+const notifBusy = ref(false);
+const notifFreq = ref<NotificationFrequency>('weekly');
+const notifDayOfWeek = ref(6);
+const notifDayOfMonth = ref(1);
+const notifHour = ref(9);
+const notifTimezone = ref('Europe/Paris');
+const notifChannel = ref<NotificationChannel>('push');
+const vapidPublicKey = ref('');
+const hasPushSub = ref(false);
+
+const weekdayOptions = computed(() => [
+  { value: 0, label: t('profile.weekday0') },
+  { value: 1, label: t('profile.weekday1') },
+  { value: 2, label: t('profile.weekday2') },
+  { value: 3, label: t('profile.weekday3') },
+  { value: 4, label: t('profile.weekday4') },
+  { value: 5, label: t('profile.weekday5') },
+  { value: 6, label: t('profile.weekday6') }
+]);
+
+async function loadNotificationPrefs(): Promise<void> {
+  if (notifLoaded.value) return;
+  try {
+    const res = await apiRequest<{
+      ok: true;
+      prefs: {
+        frequency: NotificationFrequency;
+        dayOfWeek: number;
+        dayOfMonth: number;
+        hour: number;
+        timezone: string;
+        channel: NotificationChannel;
+        vapidPublicKey: string;
+        hasPushSubscription: boolean;
+      };
+    }>('/api/notifications/prefs');
+    notifFreq.value = res.prefs.frequency;
+    notifDayOfWeek.value = res.prefs.dayOfWeek;
+    notifDayOfMonth.value = res.prefs.dayOfMonth;
+    notifHour.value = res.prefs.hour;
+    notifTimezone.value = res.prefs.timezone;
+    notifChannel.value = res.prefs.channel;
+    vapidPublicKey.value = res.prefs.vapidPublicKey;
+    hasPushSub.value = res.prefs.hasPushSubscription;
+    notifLoaded.value = true;
+  } catch {
+    // ignore
+  }
+}
+
+watch(
+  activeTab,
+  (tab) => {
+    if (tab === 'notifications') {
+      void loadNotificationPrefs();
+    }
+  },
+  { immediate: true }
+);
+
+async function saveNotificationPrefs(): Promise<void> {
+  notifBusy.value = true;
+  try {
+    await apiRequest('/api/notifications/prefs', {
+      method: 'PUT',
+      body: {
+        frequency: notifFreq.value,
+        dayOfWeek: notifDayOfWeek.value,
+        dayOfMonth: notifDayOfMonth.value,
+        hour: notifHour.value,
+        timezone: notifTimezone.value,
+        channel: notifChannel.value
+      }
+    });
+    uiStore.pushToast(t('profile.notifSavedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    notifBusy.value = false;
+  }
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const out = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) out[i] = rawData.charCodeAt(i);
+  return out;
+}
+
+async function enableWebPush(): Promise<void> {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !vapidPublicKey.value) {
+    uiStore.pushToast(t('profile.notifPushNotSupported'), 'warning');
+    return;
+  }
+  notifBusy.value = true;
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const keyBytes = urlBase64ToUint8Array(vapidPublicKey.value);
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes.buffer as ArrayBuffer
+    });
+    const json = sub.toJSON();
+    if (json.endpoint && json.keys?.p256dh && json.keys?.auth) {
+      await apiRequest('/api/notifications/push', {
+        method: 'POST',
+        body: {
+          endpoint: json.endpoint,
+          keys: { p256dh: json.keys.p256dh, auth: json.keys.auth }
+        }
+      });
+      hasPushSub.value = true;
+      uiStore.pushToast(t('profile.notifPushEnabledToast'), 'success');
+    }
+  } catch {
+    uiStore.pushToast(t('profile.notifPushNotSupported'), 'warning');
+  } finally {
+    notifBusy.value = false;
+  }
+}
+
+async function disableWebPush(): Promise<void> {
+  notifBusy.value = true;
+  try {
+    let endpoint: string | undefined;
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        endpoint = sub.endpoint;
+        await sub.unsubscribe();
+      }
+    }
+    await apiRequest('/api/notifications/push', {
+      method: 'DELETE',
+      body: { endpoint }
+    });
+    hasPushSub.value = false;
+    uiStore.pushToast(t('profile.notifPushDisabledToast'), 'info');
+  } finally {
+    notifBusy.value = false;
+  }
 }
 </script>
 
@@ -375,10 +523,86 @@ function handleAdminClick(): void {
       <p class="ds-text-muted">{{ t('profile.comingSoonStats') }}</p>
     </div>
 
-    <!-- Onglet Notifications (Jalon 6) -->
+    <!-- Onglet Notifications -->
     <div v-else class="ds-card ds-stack">
       <h2>{{ t('profile.tabNotifications') }}</h2>
-      <p class="ds-text-muted">{{ t('profile.comingSoonNotifs') }}</p>
+
+      <form class="ds-stack" @submit.prevent="saveNotificationPrefs">
+        <div class="ds-grid-2">
+          <div class="ds-field">
+            <label class="ds-label" for="notif-freq">{{ t('profile.notifFrequencyLabel') }}</label>
+            <select id="notif-freq" v-model="notifFreq" class="ds-input">
+              <option value="off">{{ t('profile.notifOff') }}</option>
+              <option value="daily">{{ t('profile.notifDaily') }}</option>
+              <option value="weekly">{{ t('profile.notifWeekly') }}</option>
+              <option value="monthly">{{ t('profile.notifMonthly') }}</option>
+            </select>
+          </div>
+
+          <div class="ds-field">
+            <label class="ds-label" for="notif-channel">{{ t('profile.notifChannelLabel') }}</label>
+            <select id="notif-channel" v-model="notifChannel" class="ds-input">
+              <option value="push">{{ t('profile.notifChannelPush') }}</option>
+              <option value="email">{{ t('profile.notifChannelEmail') }}</option>
+              <option value="both">{{ t('profile.notifChannelBoth') }}</option>
+            </select>
+          </div>
+        </div>
+
+        <div v-if="notifFreq !== 'off'" class="ds-grid-3">
+          <div v-if="notifFreq === 'weekly'" class="ds-field">
+            <label class="ds-label" for="notif-dow">{{ t('profile.notifDayOfWeekLabel') }}</label>
+            <select id="notif-dow" v-model.number="notifDayOfWeek" class="ds-input">
+              <option v-for="w in weekdayOptions" :key="w.value" :value="w.value">{{ w.label }}</option>
+            </select>
+          </div>
+
+          <div v-if="notifFreq === 'monthly'" class="ds-field">
+            <label class="ds-label" for="notif-dom">{{ t('profile.notifDayOfMonthLabel') }}</label>
+            <input id="notif-dom" v-model.number="notifDayOfMonth" type="number" min="1" max="28" class="ds-input" />
+          </div>
+
+          <div class="ds-field">
+            <label class="ds-label" for="notif-hour">{{ t('profile.notifHourLabel') }}</label>
+            <input id="notif-hour" v-model.number="notifHour" type="number" min="0" max="23" class="ds-input" />
+          </div>
+
+          <div class="ds-field">
+            <label class="ds-label" for="notif-tz">{{ t('profile.notifTimezoneLabel') }}</label>
+            <input id="notif-tz" v-model="notifTimezone" type="text" class="ds-input" />
+          </div>
+        </div>
+
+        <div class="ds-panel ds-row ds-row--between">
+          <span v-if="hasPushSub" class="ds-badge ds-badge--accent">{{ t('profile.notifPushActive') }}</span>
+          <span v-else class="ds-text-muted">{{ t('profile.notifChannelPush') }}</span>
+
+          <button
+            v-if="hasPushSub"
+            type="button"
+            class="ds-btn ds-btn--sm"
+            :disabled="notifBusy"
+            @click="disableWebPush"
+          >
+            {{ t('profile.notifPushDisableBtn') }}
+          </button>
+          <button
+            v-else
+            type="button"
+            class="ds-btn ds-btn--sm"
+            :disabled="notifBusy"
+            @click="enableWebPush"
+          >
+            {{ t('profile.notifPushEnableBtn') }}
+          </button>
+        </div>
+
+        <div class="ds-row profile-actions-end">
+          <button type="submit" class="ds-btn ds-btn--primary" :disabled="notifBusy">
+            {{ notifBusy ? t('app.loading') : t('profile.saveNotifsBtn') }}
+          </button>
+        </div>
+      </form>
     </div>
 
     <!-- Modale de confirmation de suppression définitive -->

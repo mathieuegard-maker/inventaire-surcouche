@@ -14,6 +14,8 @@ import type { LoanService } from '../services/loan.service';
 import type { ReadingService } from '../services/reading.service';
 import type { PhotoAiService } from '../services/photo-ai.service';
 import type { SearchService } from '../services/search.service';
+import type { SeriesManagementService } from '../services/series-management.service';
+import type { NotificationService } from '../services/notification.service';
 import { createRequireAuthMiddleware, type AppVariables } from '../middleware/auth.middleware';
 import { createAuthRoutes } from './auth.routes';
 import { createProfileRoutes } from './profile.routes';
@@ -25,6 +27,9 @@ import { createLibraryRoutes } from './library.routes';
 import { createLoansRoutes } from './loans.routes';
 import { createReadingRoutes } from './reading.routes';
 import { createSearchRoutes } from './search.routes';
+import { createSeriesRoutes } from './series.routes';
+import { createAuthorsRoutes } from './authors.routes';
+import { createNotificationsRoutes, createReleasesRoutes } from './notifications.routes';
 
 export interface ApiRouterDeps {
   config: ServerConfig;
@@ -37,6 +42,8 @@ export interface ApiRouterDeps {
   readingService: ReadingService;
   photoAiService: PhotoAiService;
   searchService: SearchService;
+  seriesManagementService: SeriesManagementService;
+  notificationService: NotificationService;
   jobRepo: JobRepository;
   worker: BackgroundWorker;
   startedAt: number;
@@ -65,6 +72,10 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.route('/library', createLibraryRoutes({ libraryService: deps.libraryService, requireAuth }));
   api.route('/loans', createLoansRoutes({ loanService: deps.loanService, requireAuth }));
   api.route('/reading', createReadingRoutes({ readingService: deps.readingService, requireAuth }));
+  api.route('/series', createSeriesRoutes({ seriesManagementService: deps.seriesManagementService, requireAuth }));
+  api.route('/authors', createAuthorsRoutes({ seriesManagementService: deps.seriesManagementService, requireAuth }));
+  api.route('/releases', createReleasesRoutes({ notificationService: deps.notificationService, requireAuth }));
+  api.route('/notifications', createNotificationsRoutes({ notificationService: deps.notificationService, requireAuth }));
 
   return api;
 }

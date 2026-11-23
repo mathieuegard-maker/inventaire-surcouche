@@ -4,6 +4,7 @@ import { onBeforeUnmount, watch } from 'vue';
 import AppHeader from './components/base/AppHeader.vue';
 import ToastHost from './components/base/ToastHost.vue';
 import PwaReloadPrompt from './components/base/PwaReloadPrompt.vue';
+import NotificationOnboardingModal from './components/modals/NotificationOnboardingModal.vue';
 import { useAuthStore } from './stores/auth.store';
 import { useUiStore } from './stores/ui.store';
 import { useJobsStore } from './stores/jobs.store';
@@ -77,6 +78,9 @@ onBeforeUnmount(() => {
 
     <ToastHost />
     <PwaReloadPrompt />
+    <NotificationOnboardingModal
+      :open="Boolean(authStore.isAuthenticated && authStore.profile && !authStore.profile.user.onboardingNotifSeen)"
+    />
   </div>
 </template>
 

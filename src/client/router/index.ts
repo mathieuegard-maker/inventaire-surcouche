@@ -14,6 +14,9 @@ import BookDetailView from '../views/BookDetailView.vue';
 import BookEditView from '../views/BookEditView.vue';
 import BookCreateView from '../views/BookCreateView.vue';
 import ScanView from '../views/ScanView.vue';
+import SeriesDetailView from '../views/SeriesDetailView.vue';
+import AuthorDetailView from '../views/AuthorDetailView.vue';
+import ReleasesView from '../views/ReleasesView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -70,10 +73,11 @@ export const router = createRouter({
     { path: '/book/:bookId', name: 'book-detail', component: BookDetailView, meta: { requiresAuth: true } },
     // Acquisition 4 onglets (Jalon 5)
     { path: '/scan', name: 'scan', component: ScanView, meta: { requiresAuth: true } },
-    // Coquilles en attente des Jalons 6 et 7
-    { path: '/series/:seriesId', name: 'series-detail', component: DashboardView, meta: { requiresAuth: true } },
-    { path: '/author/:name', name: 'author-detail', component: DashboardView, meta: { requiresAuth: true } },
-    { path: '/releases', name: 'releases', component: DashboardView, meta: { requiresAuth: true } },
+    // Séries, Auteurs & Nouveautés (Jalon 6)
+    { path: '/series/:seriesId', name: 'series-detail', component: SeriesDetailView, meta: { requiresAuth: true } },
+    { path: '/author/:name', name: 'author-detail', component: AuthorDetailView, meta: { requiresAuth: true } },
+    { path: '/releases', name: 'releases', component: ReleasesView, meta: { requiresAuth: true } },
+    // Coquille en attente du Jalon 7
     { path: '/social', name: 'social', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
   ]

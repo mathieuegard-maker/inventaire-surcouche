@@ -7,6 +7,7 @@ import type { ServerConfig } from './config';
 import { createResendConnector, type MailSender } from './connectors/resend.connector';
 import { createBibliographicConnectors, type BibliographicConnectors } from './connectors';
 import { createGeminiConnector, type GeminiConnector } from './connectors/gemini.connector';
+import { createWebPushConnector, type WebPushSender } from './connectors/webpush.connector';
 import { UserRepository } from './repositories/user.repo';
 import { LibraryRepository } from './repositories/library.repo';
 import { CatalogRepository } from './repositories/catalog.repo';
@@ -14,6 +15,7 @@ import { JobRepository } from './repositories/job.repo';
 import { LogRepository } from './repositories/log.repo';
 import { LoanRepository } from './repositories/loan.repo';
 import { ReadingRepository } from './repositories/reading.repo';
+import { NotificationRepository } from './repositories/notification.repo';
 import { AuthService } from './services/auth.service';
 import { CoverService } from './services/cover.service';
 import { CollectionGuardService } from './services/acquisition/collection-guard.service';
@@ -26,7 +28,10 @@ import { SyncService } from './services/sync.service';
 import { ReadingService } from './services/reading.service';
 import { PhotoAiService } from './services/photo-ai.service';
 import { SearchService } from './services/search.service';
+import { SeriesManagementService } from './services/series-management.service';
+import { NotificationService } from './services/notification.service';
 import { BackgroundWorker } from './workers/background-worker';
+import { CronScheduler } from './workers/cron-scheduler';
 import { createApiRouter } from './routes';
 import { handleServerError } from './middleware/error.middleware';
 
@@ -34,6 +39,7 @@ export interface CreateAppOptions {
   db: DatabaseAdapter;
   config: ServerConfig;
   mailSender?: MailSender;
+  webPushSender?: WebPushSender;
   connectors?: BibliographicConnectors;
   geminiConnector?: GeminiConnector;
   coverFetchImpl?: typeof fetch;
@@ -65,10 +71,18 @@ export function createApp(options: CreateAppOptions) {
   const logRepo = new LogRepository(options.db);
   const loanRepo = new LoanRepository(options.db);
   const readingRepo = new ReadingRepository(options.db);
+  const notifRepo = new NotificationRepository(options.db);
 
   // Connecteurs isolés
   const mailSender =
     options.mailSender ?? createResendConnector(options.config.resendApiKey, options.config.mailFrom);
+  const webPushSender =
+    options.webPushSender ??
+    createWebPushConnector({
+      vapidPublicKey: options.config.vapidPublicKey,
+      vapidPrivateJwk: options.config.vapidPrivateJwk,
+      vapidSubject: options.config.vapidSubject
+    });
   const connectors = options.connectors ?? createBibliographicConnectors({ jobRepo });
   const gemini = options.geminiConnector ?? createGeminiConnector(options.config.geminiApiKey);
 
@@ -150,6 +164,36 @@ export function createApp(options: CreateAppOptions) {
     ingestionService
   });
 
+  const seriesManagementService = new SeriesManagementService({
+    db: options.db,
+    catalogRepo,
+    libraryRepo,
+    loanRepo,
+    readingRepo,
+    ingestionService,
+    seriesGraphService
+  });
+
+  const notificationService = new NotificationService({
+    config: options.config,
+    notifRepo,
+    catalogRepo,
+    libraryRepo,
+    ingestionService,
+    seriesGraphService,
+    mailSender,
+    webPushSender
+  });
+
+  const cronScheduler = new CronScheduler({
+    config: options.config,
+    jobRepo,
+    logRepo,
+    notifRepo,
+    notificationService,
+    coverService
+  });
+
   // Enregistrement des handlers du worker continu
   worker.registerHandler('photo_ocr', async (ctx) => {
     return photoAiService.executePhotoOcrJob(ctx);
@@ -193,6 +237,8 @@ export function createApp(options: CreateAppOptions) {
     readingService,
     photoAiService,
     searchService,
+    seriesManagementService,
+    notificationService,
     jobRepo,
     worker,
     startedAt
@@ -212,7 +258,7 @@ export function createApp(options: CreateAppOptions) {
 
   return {
     app,
-    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo },
+    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo, notifRepo },
     services: {
       authService,
       coverService,
@@ -225,8 +271,11 @@ export function createApp(options: CreateAppOptions) {
       syncService,
       readingService,
       photoAiService,
-      searchService
+      searchService,
+      seriesManagementService,
+      notificationService
     },
-    worker
+    worker,
+    cronScheduler
   };
 }

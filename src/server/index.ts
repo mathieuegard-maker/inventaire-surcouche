@@ -19,8 +19,9 @@ console.info(
   `[SERVER V2] SQLite prêt (${config.dbPath}) — migrations appliquées: ${migrationReport.applied.length}, déjà présentes: ${migrationReport.skipped}`
 );
 
-const { app, worker } = createApp({ db, config });
+const { app, worker, cronScheduler } = createApp({ db, config });
 worker.start();
+cronScheduler.start();
 
 // En-têtes stricts PWA (ne jamais mettre /sw.js ou /sw-push.js en cache)
 const staticRootRel = path.relative(process.cwd(), config.staticDir) || '.';
@@ -77,6 +78,7 @@ const server = serve(
 
 const shutdown = () => {
   console.info('[SERVER V2] Arrêt gracieux...');
+  cronScheduler.stop();
   worker.stop();
   server.close(() => {
     db.close();

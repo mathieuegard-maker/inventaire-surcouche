@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
 import BookActions from '../components/books/BookActions.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
+import SeriesAttachModal from '../components/modals/SeriesAttachModal.vue';
 import { useLibraryStore, type BookSeriesContext } from '../stores/library.store';
 import { useUiStore } from '../stores/ui.store';
 import { formatIntegralRangeLabel } from '../../shared/bibliographic/integral.util';
@@ -32,8 +33,9 @@ const draftIsIntegral = ref(false);
 const draftIncludedVolumes = ref<string[]>([]);
 const savingOverrides = ref(false);
 
-// Modale confirmation Réinitialiser Couche 3
+// Modale confirmation Réinitialiser Couche 3 & Rattachement série
 const resetModalOpen = ref(false);
+const attachModalOpen = ref(false);
 
 const readingOptions = computed<Array<{ value: ReadingStatus; label: string }>>(() => [
   { value: 'none', label: t('book.readingNone') },
@@ -257,6 +259,9 @@ async function confirmResetOverrides(): Promise<void> {
             <router-link :to="`/book/${encodeURIComponent(book.id)}/edit`" class="ds-btn ds-btn--sm">
               {{ t('book.editBtn') }}
             </router-link>
+            <button type="button" class="ds-btn ds-btn--sm" @click="attachModalOpen = true">
+              {{ t('book.attachSeriesBtn') }}
+            </button>
             <button type="button" class="ds-btn ds-btn--sm" @click="openIntegralModal">
               {{ book.isIntegral ? t('book.editIntegralBtn') : t('book.integralBtn') }}
             </button>
@@ -388,6 +393,13 @@ async function confirmResetOverrides(): Promise<void> {
           </button>
         </template>
       </BaseModal>
+      <SeriesAttachModal
+        :open="attachModalOpen"
+        :book-ids="[book.id]"
+        :source-series-id="book.seriesId"
+        @close="attachModalOpen = false"
+        @attached="loadBook"
+      />
     </template>
   </section>
 </template>

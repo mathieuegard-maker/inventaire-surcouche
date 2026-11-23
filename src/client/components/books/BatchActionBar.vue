@@ -5,13 +5,20 @@ import type { BookView } from '../../../shared/types/domain.types';
 import { computeCommonBatchActions, type BatchActionType } from '../../../shared/bibliographic/batch-actions.util';
 import { t } from '../../../shared/locales';
 
-const props = defineProps<{
-  selectedBooks: BookView[];
-}>();
+const props = withDefaults(
+  defineProps<{
+    selectedBooks: BookView[];
+    showAttachSeries?: boolean;
+  }>(),
+  {
+    showAttachSeries: false
+  }
+);
 
 const emit = defineEmits<{
   (e: 'action', action: BatchActionType): void;
   (e: 'open-genres'): void;
+  (e: 'open-attach-series'): void;
   (e: 'clear'): void;
 }>();
 
@@ -60,6 +67,15 @@ const summary = computed(() => computeCommonBatchActions(props.selectedBooks));
           @click="emit('action', 'RETURN')"
         >
           {{ t('batch.returnBtn') }} ({{ summary.eligibleCounts.RETURN }})
+        </button>
+
+        <button
+          v-if="showAttachSeries"
+          type="button"
+          class="ds-btn ds-btn--sm"
+          @click="emit('open-attach-series')"
+        >
+          {{ t('batch.attachSeries') }} ({{ summary.count }})
         </button>
 
         <button
