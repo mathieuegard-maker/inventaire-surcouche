@@ -1,0 +1,50 @@
+// src/shared/schemas/auth.schema.ts
+import { z } from 'zod';
+
+export const themeIdSchema = z.enum(['editorial-light', 'dark', 'warm']);
+export const localeIdSchema = z.enum(['fr']);
+
+export const registerSchema = z.object({
+  username: z.string().trim().min(2).max(50),
+  email: z.string().trim().email().max(150),
+  password: z.string().min(6).max(128),
+  gdprAccepted: z.literal(true),
+  inviteCode: z.string().trim().optional(),
+  friendToken: z.string().trim().optional()
+});
+
+export const loginSchema = z.object({
+  identifier: z.string().trim().min(2).max(150),
+  password: z.string().min(1).max(128),
+  inviteCode: z.string().trim().optional(),
+  friendToken: z.string().trim().optional()
+});
+
+export const forgotPasswordSchema = z.object({
+  identifier: z.string().trim().min(2).max(150)
+});
+
+export const resetPasswordSchema = z.object({
+  identifier: z.string().trim().min(2).max(150),
+  code: z.string().trim().regex(/^\d{6}$/),
+  newPassword: z.string().min(6).max(128)
+});
+
+export const updateProfileSchema = z.object({
+  username: z.string().trim().min(2).max(50).optional(),
+  email: z.string().trim().email().max(150).optional(),
+  currentPassword: z.string().min(1).max(128).optional(),
+  newPassword: z.string().min(6).max(128).optional(),
+  theme: themeIdSchema.optional(),
+  locale: localeIdSchema.optional(),
+  onboardingNotifSeen: z.boolean().optional()
+});
+
+export const deleteAccountSchema = z.object({
+  password: z.string().min(1).max(128)
+});
+
+export const updateDefaultGenresSchema = z.object({
+  action: z.enum(['add', 'remove', 'reset']),
+  genre: z.string().trim().min(1).max(60).optional()
+});

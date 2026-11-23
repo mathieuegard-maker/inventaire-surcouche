@@ -2,7 +2,6 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// https://vitejs.dev/config/
 export default defineConfig({
   server: {
     proxy: {
@@ -17,21 +16,36 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       devOptions: {
-        enabled: true, // Permet de tester le Service Worker en local via `vercel dev`
+        enabled: true,
         type: 'module'
       },
-      // Ajout de cette section pour corriger l'avertissement
       workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'], // On retire .wasm de la liste
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
         importScripts: ['/sw-push.js'],
         clientsClaim: true,
-        cleanupOutdatedCaches: true
+        cleanupOutdatedCaches: true,
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/covers/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'biblio-covers-v2',
+              expiration: {
+                maxEntries: 5000,
+                maxAgeSeconds: 60 * 60 * 24 * 90
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          }
+        ]
       },
       manifest: {
         name: 'Ma Bibliothèque Cloud',
         short_name: 'Ma Biblio',
         description: 'Gestionnaire de bibliothèque personnelle et familiale',
-        theme_color: '#4f46e5',
+        theme_color: '#1e293b',
         background_color: '#ffffff',
         display: 'standalone',
         icons: [

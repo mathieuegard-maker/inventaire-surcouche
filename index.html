@@ -1,23 +1,20 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="fr" data-theme="editorial-light">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <link rel="icon" type="image/png" href="/icon-192-v2.png" />
     <link rel="apple-touch-icon" href="/icon-192-v2.png" />
     <title>Ma Bibliothèque Cloud</title>
-    <style>
-      html, body { 
-        background-color: #fafafa; 
-        margin: 0; 
-        padding: 0; 
-        overflow-x: hidden; 
-      }
-    </style>
+    <script>
+      try {
+        var t = localStorage.getItem('biblio_theme_v2');
+        if (t) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="app"></div>
-    
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="/src/client/main.ts"></script>
   </body>
 </html>
