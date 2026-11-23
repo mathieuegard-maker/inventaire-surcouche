@@ -5,9 +5,19 @@ import { Hono } from 'hono';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
 import { createResendConnector, type MailSender } from './connectors/resend.connector';
+import { createBibliographicConnectors, type BibliographicConnectors } from './connectors';
 import { UserRepository } from './repositories/user.repo';
 import { LibraryRepository } from './repositories/library.repo';
+import { CatalogRepository } from './repositories/catalog.repo';
+import { JobRepository } from './repositories/job.repo';
+import { LogRepository } from './repositories/log.repo';
 import { AuthService } from './services/auth.service';
+import { CoverService } from './services/cover.service';
+import { CollectionGuardService } from './services/acquisition/collection-guard.service';
+import { ComparisonTableService } from './services/acquisition/comparison-table.service';
+import { SeriesGraphService } from './services/acquisition/series-graph.service';
+import { IngestionService } from './services/acquisition/ingestion.service';
+import { BackgroundWorker } from './workers/background-worker';
 import { createApiRouter } from './routes';
 import { handleServerError } from './middleware/error.middleware';
 
@@ -15,6 +25,8 @@ export interface CreateAppOptions {
   db: DatabaseAdapter;
   config: ServerConfig;
   mailSender?: MailSender;
+  connectors?: BibliographicConnectors;
+  coverFetchImpl?: typeof fetch;
 }
 
 export function createApp(options: CreateAppOptions) {
@@ -35,11 +47,19 @@ export function createApp(options: CreateAppOptions) {
     }
   });
 
+  // Repositories SQL standard
   const userRepo = new UserRepository(options.db);
   const libraryRepo = new LibraryRepository(options.db);
+  const catalogRepo = new CatalogRepository(options.db);
+  const jobRepo = new JobRepository(options.db);
+  const logRepo = new LogRepository(options.db);
+
+  // Connecteurs isolés
   const mailSender =
     options.mailSender ?? createResendConnector(options.config.resendApiKey, options.config.mailFrom);
+  const connectors = options.connectors ?? createBibliographicConnectors({ jobRepo });
 
+  // Services métier
   const authService = new AuthService({
     db: options.db,
     userRepo,
@@ -48,9 +68,66 @@ export function createApp(options: CreateAppOptions) {
     mailSender
   });
 
+  const coverService = new CoverService({
+    coversDir: options.config.coversDir,
+    catalogRepo,
+    libraryRepo,
+    fetchImpl: options.coverFetchImpl
+  });
+
+  const collectionGuard = new CollectionGuardService({ bnf: connectors.bnf });
+  const comparisonService = new ComparisonTableService({ connectors, collectionGuard });
+  const seriesGraphService = new SeriesGraphService({ catalogRepo, connectors, coverService });
+
+  const worker = new BackgroundWorker({ jobRepo, logRepo });
+
+  const ingestionService = new IngestionService({
+    catalogRepo,
+    libraryRepo,
+    jobRepo,
+    logRepo,
+    comparisonService,
+    seriesGraphService,
+    coverService,
+    onJobEnqueued: () => worker.nudge()
+  });
+
+  // Enregistrement des handlers du worker continu
+  worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
+    const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
+    if (!seriesId) {
+      return { result: { addedCount: 0, totalVolumes: 0 }, total: 1 };
+    }
+    reportProgress(0, 1);
+    const report = await seriesGraphService.expandSeriesByGraph(seriesId);
+    return { result: report, total: 1 };
+  });
+
+  worker.registerHandler('book_enrich', async ({ payload }) => {
+    const isbn13 = typeof payload.isbn13 === 'string' ? payload.isbn13 : '';
+    const userId = typeof payload.userId === 'string' ? payload.userId : '';
+    const libraryId = typeof payload.libraryId === 'string' ? payload.libraryId : '';
+    if (!isbn13) {
+      return { result: { enriched: false }, total: 1 };
+    }
+    const res = await ingestionService.resolveIsbns({
+      rawIsbns: [isbn13],
+      channel: 'manual_isbn',
+      action: 'preview',
+      userId,
+      libraryId,
+      forceRefresh: true
+    });
+    return { result: res, total: 1 };
+  });
+
   const api = createApiRouter({
     config: options.config,
     authService,
+    coverService,
+    ingestionService,
+    jobRepo,
+    worker,
     startedAt
   });
 
@@ -66,5 +143,17 @@ export function createApp(options: CreateAppOptions) {
     })
   );
 
-  return { app, services: { authService } };
+  return {
+    app,
+    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo },
+    services: {
+      authService,
+      coverService,
+      collectionGuard,
+      comparisonService,
+      seriesGraphService,
+      ingestionService
+    },
+    worker
+  };
 }

@@ -1,14 +1,33 @@
 <!-- src/client/App.vue -->
 <script setup lang="ts">
+import { onBeforeUnmount, watch } from 'vue';
 import AppHeader from './components/base/AppHeader.vue';
 import ToastHost from './components/base/ToastHost.vue';
 import PwaReloadPrompt from './components/base/PwaReloadPrompt.vue';
 import { useAuthStore } from './stores/auth.store';
 import { useUiStore } from './stores/ui.store';
+import { useJobsStore } from './stores/jobs.store';
 import { t } from '../shared/locales';
 
 const authStore = useAuthStore();
 const uiStore = useUiStore();
+const jobsStore = useJobsStore();
+
+watch(
+  () => authStore.isAuthenticated,
+  (loggedIn) => {
+    if (loggedIn) {
+      jobsStore.connectStream();
+    } else {
+      jobsStore.disconnectStream();
+    }
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  jobsStore.disconnectStream();
+});
 </script>
 
 <template>

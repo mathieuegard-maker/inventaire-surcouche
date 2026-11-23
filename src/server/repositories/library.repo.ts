@@ -2,7 +2,7 @@
 // Repository SQL pur pour l'espace Foyer (libraries, library_members, friend_connections).
 
 import type { DatabaseAdapter } from '../db/database.adapter';
-import type { LibraryMemberRole } from '../../shared/types/domain.types';
+import type { LibraryBookOverrides, LibraryMemberRole, OwnershipStatus } from '../../shared/types/domain.types';
 
 export interface LibraryRow {
   id: string;
@@ -20,6 +20,18 @@ export interface LibraryMemberRow {
   role: LibraryMemberRole;
   joined_at: string;
   username?: string;
+}
+
+export interface LibraryBookRow {
+  library_id: string;
+  book_id: string;
+  status: OwnershipStatus;
+  wished_by_user_id: string | null;
+  overrides_json: string;
+  overrides_updated_at: string | null;
+  added_at: string;
+  updated_at: string;
+  deleted_at: string | null;
 }
 
 export class LibraryRepository {
@@ -138,5 +150,104 @@ export class LibraryRepository {
       [libraryId]
     );
     return Number(row?.cnt ?? 0);
+  }
+
+  // ==================== LIBRARY BOOKS (Espace Foyer — Couche 3) ====================
+
+  findLibraryBook(libraryId: string, bookId: string): LibraryBookRow | null {
+    return this.db.get<LibraryBookRow>(
+      'SELECT * FROM library_books WHERE library_id = ? AND book_id = ? LIMIT 1',
+      [libraryId, bookId]
+    );
+  }
+
+  /**
+   * Met à jour le statut de possession/wishlist d'un livre dans le foyer
+   * SANS JAMAIS écraser `overrides_json` (primauté absolue Couche 3).
+   */
+  upsertLibraryBookStatus(input: {
+    libraryId: string;
+    bookId: string;
+    status: OwnershipStatus;
+    wishedByUserId?: string | null;
+    now: string;
+  }): LibraryBookRow {
+    const existing = this.findLibraryBook(input.libraryId, input.bookId);
+    if (!existing) {
+      this.db.run(
+        `INSERT INTO library_books (
+           library_id, book_id, status, wished_by_user_id, overrides_json,
+           overrides_updated_at, added_at, updated_at, deleted_at
+         ) VALUES (?, ?, ?, ?, '{}', NULL, ?, ?, NULL)`,
+        [
+          input.libraryId,
+          input.bookId,
+          input.status,
+          input.status === 'wish' ? (input.wishedByUserId ?? null) : null,
+          input.now,
+          input.now
+        ]
+      );
+    } else {
+      const nextWishedBy =
+        input.status === 'wish'
+          ? (input.wishedByUserId ?? existing.wished_by_user_id)
+          : null;
+      this.db.run(
+        `UPDATE library_books
+         SET status = ?, wished_by_user_id = ?, deleted_at = NULL, updated_at = ?
+         WHERE library_id = ? AND book_id = ?`,
+        [input.status, nextWishedBy, input.now, input.libraryId, input.bookId]
+      );
+    }
+
+    // Purge automatique de toute réservation cadeau dès que le livre passe en Possédé
+    if (input.status === 'owned') {
+      this.db.run('DELETE FROM wishlist_reservations WHERE library_id = ? AND book_id = ?', [
+        input.libraryId,
+        input.bookId
+      ]);
+    }
+
+    return this.findLibraryBook(input.libraryId, input.bookId)!;
+  }
+
+  setLibraryBookOverrides(libraryId: string, bookId: string, overrides: LibraryBookOverrides, now: string): LibraryBookRow {
+    const existing = this.findLibraryBook(libraryId, bookId);
+    if (!existing) {
+      this.db.run(
+        `INSERT INTO library_books (
+           library_id, book_id, status, wished_by_user_id, overrides_json,
+           overrides_updated_at, added_at, updated_at, deleted_at
+         ) VALUES (?, ?, 'none', NULL, ?, ?, ?, ?, NULL)`,
+        [libraryId, bookId, JSON.stringify(overrides), now, now, now]
+      );
+    } else {
+      this.db.run(
+        `UPDATE library_books
+         SET overrides_json = ?, overrides_updated_at = ?, updated_at = ?
+         WHERE library_id = ? AND book_id = ?`,
+        [JSON.stringify(overrides), now, now, libraryId, bookId]
+      );
+    }
+    return this.findLibraryBook(libraryId, bookId)!;
+  }
+
+  listReferencedCoverKeysInOverrides(): Set<string> {
+    const rows = this.db.all<{ overrides_json: string }>(
+      "SELECT overrides_json FROM library_books WHERE overrides_json LIKE '%coverKey%'"
+    );
+    const keys = new Set<string>();
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.overrides_json) as LibraryBookOverrides;
+        if (parsed.coverKey && typeof parsed.coverKey === 'string') {
+          keys.add(parsed.coverKey);
+        }
+      } catch {
+        // ignore invalid json
+      }
+    }
+    return keys;
   }
 }

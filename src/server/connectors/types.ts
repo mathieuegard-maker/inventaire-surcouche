@@ -1,0 +1,116 @@
+// src/server/connectors/types.ts
+// Contrats normalisés des 6 connecteurs bibliographiques externes (isolés et 100 % mockables).
+
+export type SourceName = 'bnf' | 'sudoc' | 'inventaire' | 'wikidata' | 'google_books' | 'openlibrary';
+
+export type SeriesLinkKind =
+  | 'graph_p179'
+  | 'marc_ensemble_460'
+  | 'marc_collection_225'
+  | 'heuristic_text';
+
+/**
+ * Une colonne normalisée du Tableau Comparatif (Étage 2) produite par une source externe.
+ */
+export interface SourceCandidateRecord {
+  source: SourceName;
+  isbn13: string;
+  title?: string;
+  subtitle?: string;
+  seriesName?: string;
+  seriesLinkKind?: SeriesLinkKind;
+  volumeNumber?: string;
+  bnfEnsembleId?: string;
+  wikidataSeriesQid?: string;
+  inventaireSeriesUri?: string;
+  collectionName?: string;
+  collectionNumber?: string;
+  authors: string[];
+  scriptwriters: string[];
+  illustrators: string[];
+  publisher?: string;
+  publishYear?: string;
+  pageCount?: number;
+  description?: string;
+  language?: string;
+  deweyCode?: string;
+  rawSubjects: string[];
+  wikidataWorkQid?: string;
+  inventaireWorkUri?: string;
+  sudocPpn?: string;
+  coverUrl?: string;
+  isNonBook?: boolean;
+  isIntegralHint?: boolean;
+}
+
+/**
+ * Œuvre officielle d'une série retournée par le Graphe (Wikidata P179/P1545 ou Inventaire)
+ * ou par le filet de sécurité BnF 460$3.
+ */
+export interface GraphSeriesWork {
+  title: string;
+  volumeNumber?: number | null;
+  volumeLabel?: string | null;
+  sortOrder?: number | null;
+  wikidataQid?: string | null;
+  inventaireUri?: string | null;
+  authors: string[];
+  scriptwriters?: string[];
+  illustrators?: string[];
+  isbn13s: string[];
+  publisher?: string | null;
+  collectionName?: string | null;
+  publishYear?: string | null;
+  pageCount?: number | null;
+  coverUrl?: string | null;
+  isHorsSerie?: boolean;
+  isIntegral?: boolean;
+  source: SourceName;
+}
+
+/**
+ * Échantillon léger utilisé par CollectionGuardService pour le test d'hétérogénéité des auteurs.
+ */
+export interface CollectionSampleItem {
+  title: string;
+  authors: string[];
+  volumeNumber?: string;
+}
+
+export interface BnfConnector {
+  lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+  searchByEnsembleId(bnfEnsembleId: string, maxRecords?: number): Promise<GraphSeriesWork[]>;
+  sampleByCollectionName(collectionName: string, maxRecords?: number): Promise<CollectionSampleItem[]>;
+  searchByTitleAndAuthor(title: string, author?: string, maxRecords?: number): Promise<SourceCandidateRecord[]>;
+}
+
+export interface SudocConnector {
+  lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+}
+
+export interface InventaireConnector {
+  lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+  fetchSeriesWorks(seriesUri: string): Promise<GraphSeriesWork[]>;
+}
+
+export interface WikidataConnector {
+  lookupWorkByQid(workQid: string, fallbackIsbn13?: string): Promise<SourceCandidateRecord | null>;
+  fetchSeriesWorksByQid(seriesQid: string): Promise<GraphSeriesWork[]>;
+}
+
+export interface GoogleBooksConnector {
+  lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+}
+
+export interface OpenLibraryConnector {
+  lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+}
+
+export interface BibliographicConnectors {
+  bnf: BnfConnector;
+  sudoc: SudocConnector;
+  inventaire: InventaireConnector;
+  wikidata: WikidataConnector;
+  googleBooks: GoogleBooksConnector;
+  openLibrary: OpenLibraryConnector;
+}
