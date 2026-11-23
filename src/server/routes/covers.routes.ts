@@ -12,6 +12,10 @@ const uploadCoverSchema = z.object({
   imageDataUrl: z.string().startsWith('data:image/')
 });
 
+const importCoverUrlSchema = z.object({
+  url: z.string().url()
+});
+
 export function createCoversRoutes(deps: {
   coverService: CoverService;
   requireAuth: MiddlewareHandler<{ Variables: AppVariables }>;
@@ -38,6 +42,15 @@ export function createCoversRoutes(deps: {
   router.post('/upload', deps.requireAuth, zValidator('json', uploadCoverSchema), async (c) => {
     const { imageDataUrl } = c.req.valid('json');
     const stored = await deps.coverService.storeDataUrlAsWebp(imageDataUrl);
+    return c.json({ ok: true, ...stored }, 201);
+  });
+
+  router.post('/import-url', deps.requireAuth, zValidator('json', importCoverUrlSchema), async (c) => {
+    const { url } = c.req.valid('json');
+    const stored = await deps.coverService.ingestFromExternalUrl(url);
+    if (!stored) {
+      throw new AppError(400, 'COVER_IMPORT_FAILED', "Impossible d'importer cette image.");
+    }
     return c.json({ ok: true, ...stored }, 201);
   });
 

@@ -7,8 +7,39 @@ import { apiRequest } from '../api/client';
 import { clearAllLocalCache, localDb, type CachedLoanContact, type PendingOfflineScan } from '../cache/indexeddb';
 import { enqueueOutboxOp, runSyncCycle } from '../cache/sync-engine';
 import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
-import type { ActiveLoanView, BookView, OwnershipStatus, SeriesView } from '../../shared/types/domain.types';
+import type {
+  ActiveLoanView,
+  BookMainCategory,
+  BookView,
+  LibraryBookOverrides,
+  OwnershipStatus,
+  ReadingStatus,
+  SeriesView,
+  UserReadingStateView
+} from '../../shared/types/domain.types';
 import { useAuthStore } from './auth.store';
+
+export interface BookSeriesContext {
+  seriesId: string;
+  seriesName: string;
+  totalVolumes: number;
+  ownedCount: number;
+  prevBookId: string | null;
+  nextBookId: string | null;
+}
+
+export interface BookDetailResponse {
+  book: BookView;
+  seriesContext: BookSeriesContext | null;
+}
+
+export interface CoverCandidateItem {
+  id: string;
+  kind: 'local' | 'external';
+  coverKey?: string;
+  url: string;
+  label: string;
+}
 
 export interface CollectionViewMemory {
   tab: 'books' | 'series' | 'oneshots';
@@ -298,6 +329,165 @@ export const useLibraryStore = defineStore('library', () => {
     lastSyncAt.value = null;
   }
 
+  // ==================== FICHE LIVRE, COUCHES 3, COUVERTURES, LECTURE & CRÉATION MANUELLE ====================
+
+  async function fetchBookDetail(bookId: string): Promise<BookDetailResponse | null> {
+    try {
+      const res = await apiRequest<{ ok: true } & BookDetailResponse>(
+        `/api/books/${encodeURIComponent(bookId)}`
+      );
+      await localDb.mirror_books.put(res.book);
+      await hydrateFromLocalCache();
+      return { book: res.book, seriesContext: res.seriesContext };
+    } catch {
+      // Repli cache local hors-ligne
+      const cached =
+        (await localDb.mirror_books.get(bookId)) ??
+        books.value.find((b) => b.id === bookId) ??
+        null;
+      return cached ? { book: cached, seriesContext: null } : null;
+    }
+  }
+
+  async function saveBookOverrides(
+    bookId: string,
+    patch: LibraryBookOverrides & { propagateGenresToSeries?: boolean }
+  ): Promise<BookView> {
+    const res = await apiRequest<{ ok: true; book: BookView }>(
+      `/api/library/books/${encodeURIComponent(bookId)}`,
+      {
+        method: 'PATCH',
+        body: patch
+      }
+    );
+    await localDb.mirror_books.put(res.book);
+    await syncNow();
+    return res.book;
+  }
+
+  async function resetBookOverrides(bookId: string): Promise<BookView> {
+    const res = await apiRequest<{ ok: true; book: BookView }>(
+      `/api/library/books/${encodeURIComponent(bookId)}/overrides`,
+      { method: 'DELETE' }
+    );
+    await localDb.mirror_books.put(res.book);
+    await syncNow();
+    return res.book;
+  }
+
+  async function saveReadingState(
+    bookId: string,
+    payload: { status: ReadingStatus; rating: number; notes: string }
+  ): Promise<{ readingState: UserReadingStateView; offlineQueued: boolean }> {
+    const now = new Date().toISOString();
+    const optimistic: UserReadingStateView = {
+      status: payload.status,
+      rating: payload.rating,
+      notes: payload.notes,
+      updatedAt: now
+    };
+
+    const existing = await localDb.mirror_books.get(bookId);
+    if (existing) {
+      await localDb.mirror_books.put({ ...existing, readingState: optimistic, updatedAt: now });
+      await hydrateFromLocalCache();
+    }
+
+    try {
+      const res = await apiRequest<{ ok: true; readingState: UserReadingStateView }>(
+        `/api/reading/${encodeURIComponent(bookId)}`,
+        {
+          method: 'PUT',
+          body: payload
+        }
+      );
+      if (existing) {
+        await localDb.mirror_books.put({ ...existing, readingState: res.readingState });
+        await hydrateFromLocalCache();
+      }
+      return { readingState: res.readingState, offlineQueued: false };
+    } catch {
+      await enqueueOutboxOp({
+        id: makeOpId(),
+        op: 'SET_READING',
+        bookId,
+        status: payload.status,
+        rating: payload.rating,
+        notes: payload.notes,
+        timestamp: now
+      });
+      await hydrateFromLocalCache();
+      return { readingState: optimistic, offlineQueued: true };
+    }
+  }
+
+  async function fetchCoverCandidates(bookId: string, includeExternal = false): Promise<CoverCandidateItem[]> {
+    const q = includeExternal ? '?external=1' : '';
+    const res = await apiRequest<{ ok: true; covers: CoverCandidateItem[] }>(
+      `/api/books/${encodeURIComponent(bookId)}/covers${q}`
+    );
+    return res.covers;
+  }
+
+  async function uploadCoverDataUrl(imageDataUrl: string): Promise<{ coverKey: string; coverUrl: string }> {
+    const res = await apiRequest<{ ok: true; coverKey: string; coverUrl: string }>('/api/covers/upload', {
+      method: 'POST',
+      body: { imageDataUrl }
+    });
+    return { coverKey: res.coverKey, coverUrl: res.coverUrl };
+  }
+
+  async function importCoverUrl(url: string): Promise<{ coverKey: string; coverUrl: string }> {
+    const res = await apiRequest<{ ok: true; coverKey: string; coverUrl: string }>('/api/covers/import-url', {
+      method: 'POST',
+      body: { url }
+    });
+    return { coverKey: res.coverKey, coverUrl: res.coverUrl };
+  }
+
+  async function resolveIsbnPreview(isbn: string): Promise<BookView | null> {
+    const res = await apiRequest<{
+      ok: true;
+      results: Array<{ found: boolean; book: BookView | null }>;
+    }>('/api/books/resolve-isbn', {
+      method: 'POST',
+      body: { isbns: [isbn], channel: 'manual_isbn', action: 'preview' }
+    });
+    return res.results[0]?.book ?? null;
+  }
+
+  async function createManualBook(input: {
+    isbn13?: string;
+    title: string;
+    authors: string[];
+    seriesName?: string | null;
+    seriesId?: string | null;
+    volumeNumber?: number | null;
+    volumeLabel?: string | null;
+    oneShot: boolean;
+    expandSeries: boolean;
+    isIntegral: boolean;
+    includedVolumes: string[];
+    publisher?: string | null;
+    publishYear?: string | null;
+    pageCount?: number | null;
+    mainCategory?: BookMainCategory;
+    genres: string[];
+    coverKey?: string | null;
+    ownershipStatus: OwnershipStatus;
+  }): Promise<{ book: BookView; enqueuedSeriesExpandJobId: string | null }> {
+    const res = await apiRequest<{ ok: true; book: BookView; enqueuedSeriesExpandJobId: string | null }>(
+      '/api/books/manual',
+      {
+        method: 'POST',
+        body: input
+      }
+    );
+    await localDb.mirror_books.put(res.book);
+    await syncNow();
+    return { book: res.book, enqueuedSeriesExpandJobId: res.enqueuedSeriesExpandJobId };
+  }
+
   return {
     books,
     series,
@@ -325,6 +515,15 @@ export const useLibraryStore = defineStore('library', () => {
     addPendingOfflineScan,
     removePendingOfflineScan,
     clearPendingOfflineScans,
-    clearCache
+    clearCache,
+    fetchBookDetail,
+    saveBookOverrides,
+    resetBookOverrides,
+    saveReadingState,
+    fetchCoverCandidates,
+    uploadCoverDataUrl,
+    importCoverUrl,
+    resolveIsbnPreview,
+    createManualBook
   };
 });

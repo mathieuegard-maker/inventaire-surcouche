@@ -22,6 +22,7 @@ import { IngestionService } from './services/acquisition/ingestion.service';
 import { LoanService } from './services/loan.service';
 import { LibraryService } from './services/library.service';
 import { SyncService } from './services/sync.service';
+import { ReadingService } from './services/reading.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { createApiRouter } from './routes';
 import { handleServerError } from './middleware/error.middleware';
@@ -100,14 +101,20 @@ export function createApp(options: CreateAppOptions) {
   });
 
   const loanService = new LoanService({ loanRepo, libraryRepo });
+  const readingService = new ReadingService({ readingRepo });
   const libraryService = new LibraryService({
     db: options.db,
     catalogRepo,
     libraryRepo,
     loanRepo,
     readingRepo,
+    jobRepo,
     ingestionService,
-    loanService
+    comparisonService,
+    seriesGraphService,
+    coverService,
+    loanService,
+    onJobEnqueued: () => worker.nudge()
   });
   const syncService = new SyncService({
     libraryRepo,
@@ -154,6 +161,7 @@ export function createApp(options: CreateAppOptions) {
     syncService,
     libraryService,
     loanService,
+    readingService,
     jobRepo,
     worker,
     startedAt
@@ -183,7 +191,8 @@ export function createApp(options: CreateAppOptions) {
       ingestionService,
       loanService,
       libraryService,
-      syncService
+      syncService,
+      readingService
     },
     worker
   };

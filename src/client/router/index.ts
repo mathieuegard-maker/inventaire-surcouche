@@ -10,6 +10,9 @@ import WishlistView from '../views/WishlistView.vue';
 import LoansView from '../views/LoansView.vue';
 import ProfileView from '../views/ProfileView.vue';
 import DebugCacheView from '../views/DebugCacheView.vue';
+import BookDetailView from '../views/BookDetailView.vue';
+import BookEditView from '../views/BookEditView.vue';
+import BookCreateView from '../views/BookCreateView.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -60,9 +63,13 @@ export const router = createRouter({
     // Alias de rétrocompatibilité navigation
     { path: '/stats', redirect: { path: '/profile', query: { tab: 'stats' } } },
     { path: '/friends', redirect: { path: '/social', query: { tab: 'friends' } } },
-    // Coquilles en attente des Jalons 4 à 7
-    { path: '/book/:bookId', name: 'book-detail', component: DashboardView, meta: { requiresAuth: true } },
+    // Fiches Livres, Édition Couche 3 & Création Manuelle (Jalon 4)
+    { path: '/book/create', name: 'book-create', component: BookCreateView, meta: { requiresAuth: true } },
+    { path: '/book/:bookId/edit', name: 'book-edit', component: BookEditView, meta: { requiresAuth: true } },
+    { path: '/book/:bookId', name: 'book-detail', component: BookDetailView, meta: { requiresAuth: true } },
+    // Coquilles en attente des Jalons 5 à 7
     { path: '/series/:seriesId', name: 'series-detail', component: DashboardView, meta: { requiresAuth: true } },
+    { path: '/author/:name', name: 'author-detail', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/releases', name: 'releases', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/social', name: 'social', component: DashboardView, meta: { requiresAuth: true } },
     { path: '/scan', name: 'scan', component: DashboardView, meta: { requiresAuth: true } },

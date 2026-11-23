@@ -1,9 +1,14 @@
 // src/server/services/library.service.ts
 // Service métier Foyer : vues fusionnées (Couche 3 > Couche 2 > Couche 1), actions par lot (avec choix livres prêtés) et genres en lot.
 
-import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
+import crypto from 'node:crypto';
+import { annotateIntegralCoverage, parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
+import { isbnUtil } from '../../shared/bibliographic/isbn.util';
+import { classifyBookMetadata } from '../../shared/bibliographic/category-classifier';
+import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type {
   ActiveLoanView,
+  BookMainCategory,
   BookView,
   LibraryBookOverrides,
   OwnershipStatus,
@@ -15,8 +20,35 @@ import type { BookRow, CatalogRepository } from '../repositories/catalog.repo';
 import type { LibraryBookRow, LibraryRepository } from '../repositories/library.repo';
 import type { LoanRepository } from '../repositories/loan.repo';
 import type { ReadingRepository } from '../repositories/reading.repo';
+import type { JobRepository } from '../repositories/job.repo';
 import type { IngestionService } from './acquisition/ingestion.service';
+import type { ComparisonTableService } from './acquisition/comparison-table.service';
+import type { SeriesGraphService } from './acquisition/series-graph.service';
+import type { CoverService } from './cover.service';
 import { mapLoanRowToView, type LoanContactSuggestion, type LoanService } from './loan.service';
+import { AppError } from '../middleware/error.middleware';
+
+export interface BookSeriesContext {
+  seriesId: string;
+  seriesName: string;
+  totalVolumes: number;
+  ownedCount: number;
+  prevBookId: string | null;
+  nextBookId: string | null;
+}
+
+export interface BookDetailPayload {
+  book: BookView;
+  seriesContext: BookSeriesContext | null;
+}
+
+export interface CoverCandidateItem {
+  id: string;
+  kind: 'local' | 'external';
+  coverKey?: string;
+  url: string;
+  label: string;
+}
 
 export interface SyncPullPayload {
   serverTime: string;
@@ -62,8 +94,13 @@ export class LibraryService {
   private readonly libraryRepo: LibraryRepository;
   private readonly loanRepo: LoanRepository;
   private readonly readingRepo: ReadingRepository;
+  private readonly jobRepo: JobRepository;
   private readonly ingestionService: IngestionService;
+  private readonly comparisonService: ComparisonTableService;
+  private readonly seriesGraphService: SeriesGraphService;
+  private readonly coverService: CoverService;
   private readonly loanService: LoanService;
+  private readonly onJobEnqueued?: () => void;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -71,16 +108,26 @@ export class LibraryService {
     libraryRepo: LibraryRepository;
     loanRepo: LoanRepository;
     readingRepo: ReadingRepository;
+    jobRepo: JobRepository;
     ingestionService: IngestionService;
+    comparisonService: ComparisonTableService;
+    seriesGraphService: SeriesGraphService;
+    coverService: CoverService;
     loanService: LoanService;
+    onJobEnqueued?: () => void;
   }) {
     this.db = deps.db;
     this.catalogRepo = deps.catalogRepo;
     this.libraryRepo = deps.libraryRepo;
     this.loanRepo = deps.loanRepo;
     this.readingRepo = deps.readingRepo;
+    this.jobRepo = deps.jobRepo;
     this.ingestionService = deps.ingestionService;
+    this.comparisonService = deps.comparisonService;
+    this.seriesGraphService = deps.seriesGraphService;
+    this.coverService = deps.coverService;
     this.loanService = deps.loanService;
+    this.onJobEnqueued = deps.onJobEnqueued;
   }
 
   /**
@@ -328,5 +375,420 @@ export class LibraryService {
     });
 
     return { updatedCount };
+  }
+
+  // ==================== FICHE LIVRE, COUCHES 3, COUVERTURES & CRÉATION MANUELLE (JALON 4) ====================
+
+  private resolveBookRowByIdOrIsbn(bookIdOrIsbn: string): BookRow | null {
+    const clean = bookIdOrIsbn.trim();
+    if (clean.toLowerCase().startsWith('isbn:')) {
+      const isbn13 = isbnUtil.normalizeToIsbn13(clean.slice(5));
+      return isbn13 ? this.catalogRepo.findBookByIsbn13(isbn13) : null;
+    }
+    return this.catalogRepo.findBookById(clean);
+  }
+
+  private enrichSingleBookView(libraryId: string, userId: string, bookRow: BookRow): BookView {
+    const libRow = this.libraryRepo.findLibraryBook(libraryId, bookRow.id);
+    const merged = this.ingestionService.buildMergedBookView(bookRow, libRow);
+    const activeLoan = this.loanRepo.findActiveLoanByBook(libraryId, bookRow.id);
+    merged.activeLoan = activeLoan ? mapLoanRowToView(activeLoan) : null;
+
+    const readingRow = this.readingRepo.findByUserAndBook(userId, bookRow.id);
+    merged.readingState = readingRow
+      ? {
+          status: readingRow.status,
+          rating: readingRow.rating,
+          notes: readingRow.notes,
+          updatedAt: readingRow.updated_at
+        }
+      : null;
+
+    if (libRow?.wished_by_user_id) {
+      const names = this.libraryRepo.mapUsernamesByIds([libRow.wished_by_user_id]);
+      merged.wishedByName = names.get(libRow.wished_by_user_id) ?? null;
+    }
+
+    // Calcul de la couverture par intégrale possédée dans le foyer
+    if (!merged.isIntegral && (merged.seriesId || merged.seriesName)) {
+      const allLibRows = this.libraryRepo.listLibraryBooks(libraryId);
+      const ownedIntegrals: BookView[] = [];
+      for (const lr of allLibRows) {
+        if (lr.status !== 'owned' || lr.deleted_at) continue;
+        const br = this.catalogRepo.findBookById(lr.book_id);
+        if (!br) continue;
+        const mv = this.ingestionService.buildMergedBookView(br, lr);
+        if (mv.isIntegral && mv.includedVolumes.length > 0) {
+          ownedIntegrals.push(mv);
+        }
+      }
+      const [annotated] = annotateIntegralCoverage([merged], ownedIntegrals);
+      merged.ownedViaIntegral = annotated.ownedViaIntegral;
+    }
+
+    return merged;
+  }
+
+  getBookDetail(libraryId: string, userId: string, bookIdOrIsbn: string): BookDetailPayload {
+    const bookRow = this.resolveBookRowByIdOrIsbn(bookIdOrIsbn);
+    if (!bookRow) {
+      throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage introuvable.');
+    }
+
+    const book = this.enrichSingleBookView(libraryId, userId, bookRow);
+    let seriesContext: BookSeriesContext | null = null;
+
+    if (book.seriesId && !book.hiddenSeriesIds.includes(book.seriesId)) {
+      const seriesRow = this.catalogRepo.findSeriesById(book.seriesId);
+      if (seriesRow) {
+        const seriesBooks = this.catalogRepo.listBooksBySeriesId(seriesRow.id);
+        const visibleInSeries = seriesBooks.filter((sb) => {
+          const lr = this.libraryRepo.findLibraryBook(libraryId, sb.id);
+          const ov = parseOverrides(lr?.overrides_json);
+          return !ov.oneShotForced && !(ov.hiddenSeriesIds ?? []).includes(seriesRow.id);
+        });
+
+        const idx = visibleInSeries.findIndex((sb) => sb.id === book.id);
+        const prevBookId = idx > 0 ? visibleInSeries[idx - 1].id : null;
+        const nextBookId = idx >= 0 && idx < visibleInSeries.length - 1 ? visibleInSeries[idx + 1].id : null;
+
+        let ownedCount = 0;
+        for (const sb of visibleInSeries) {
+          const lr = this.libraryRepo.findLibraryBook(libraryId, sb.id);
+          if (lr && !lr.deleted_at && lr.status === 'owned') ownedCount++;
+        }
+
+        seriesContext = {
+          seriesId: seriesRow.id,
+          seriesName: seriesRow.canonical_name,
+          totalVolumes: visibleInSeries.length,
+          ownedCount,
+          prevBookId,
+          nextBookId
+        };
+      }
+    }
+
+    return { book, seriesContext };
+  }
+
+  /**
+   * Met à jour les surcharges souveraines Couche 3 du foyer (`library_books.overrides_json`).
+   * Ne modifie JAMAIS le Catalogue Central (`books` — séparation stricte Moi ≠ Admin).
+   */
+  updateBookOverrides(
+    libraryId: string,
+    userId: string,
+    bookId: string,
+    patch: LibraryBookOverrides & { propagateGenresToSeries?: boolean }
+  ): BookView {
+    const bookRow = this.catalogRepo.findBookById(bookId);
+    if (!bookRow) {
+      throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage introuvable.');
+    }
+
+    const now = new Date().toISOString();
+    const existingLib = this.libraryRepo.findLibraryBook(libraryId, bookId);
+    const current = parseOverrides(existingLib?.overrides_json);
+
+    const { propagateGenresToSeries, ...fields } = patch;
+    const nextOverrides: LibraryBookOverrides = { ...current };
+
+    if (fields.title !== undefined) nextOverrides.title = fields.title.trim();
+    if (fields.authors !== undefined) nextOverrides.authors = fields.authors;
+    if (fields.scriptwriters !== undefined) nextOverrides.scriptwriters = fields.scriptwriters;
+    if (fields.illustrators !== undefined) nextOverrides.illustrators = fields.illustrators;
+    if (fields.oneShotForced !== undefined) {
+      nextOverrides.oneShotForced = fields.oneShotForced;
+      if (fields.oneShotForced) {
+        nextOverrides.seriesId = null;
+        nextOverrides.seriesName = null;
+      }
+    }
+    if (!nextOverrides.oneShotForced) {
+      if (fields.seriesId !== undefined) nextOverrides.seriesId = fields.seriesId;
+      if (fields.seriesName !== undefined) nextOverrides.seriesName = fields.seriesName;
+    }
+    if (fields.volumeNumber !== undefined) nextOverrides.volumeNumber = fields.volumeNumber;
+    if (fields.volumeLabel !== undefined) nextOverrides.volumeLabel = fields.volumeLabel;
+    if (fields.sortOrder !== undefined) nextOverrides.sortOrder = fields.sortOrder;
+    if (fields.isHorsSerie !== undefined) nextOverrides.isHorsSerie = fields.isHorsSerie;
+    if (fields.isIntegral !== undefined) {
+      nextOverrides.isIntegral = fields.isIntegral;
+      if (!fields.isIntegral) {
+        nextOverrides.includedVolumes = [];
+      }
+    }
+    if (fields.includedVolumes !== undefined) {
+      nextOverrides.includedVolumes = parseIncludedVolumeNumbers(fields.includedVolumes);
+    }
+    if (fields.publisher !== undefined) nextOverrides.publisher = fields.publisher;
+    if (fields.publishYear !== undefined) nextOverrides.publishYear = fields.publishYear;
+    if (fields.pageCount !== undefined) nextOverrides.pageCount = fields.pageCount;
+    if (fields.mainCategory !== undefined) nextOverrides.mainCategory = fields.mainCategory;
+    if (fields.genres !== undefined) nextOverrides.genres = fields.genres;
+    if (fields.coverKey !== undefined) nextOverrides.coverKey = fields.coverKey;
+    if (fields.hiddenSeriesIds !== undefined) {
+      nextOverrides.hiddenSeriesIds = Array.from(new Set(fields.hiddenSeriesIds));
+    }
+
+    this.db.transaction(() => {
+      this.libraryRepo.setLibraryBookOverrides(libraryId, bookId, nextOverrides, now);
+
+      // Propagation optionnelle des genres Couche 3 aux autres tomes possédés/souhaités de la même série
+      if (propagateGenresToSeries && fields.genres && fields.genres.length > 0) {
+        const targetSeriesId = nextOverrides.seriesId ?? bookRow.series_id;
+        if (targetSeriesId) {
+          const siblingBooks = this.catalogRepo.listBooksBySeriesId(targetSeriesId);
+          for (const sib of siblingBooks) {
+            if (sib.id === bookId) continue;
+            const sibLib = this.libraryRepo.findLibraryBook(libraryId, sib.id);
+            if (!sibLib || sibLib.deleted_at) continue;
+            const sibOv = parseOverrides(sibLib.overrides_json);
+            const merged = Array.from(new Set([...(sibOv.genres ?? []), ...fields.genres]));
+            this.libraryRepo.setLibraryBookOverrides(libraryId, sib.id, { ...sibOv, genres: merged }, now);
+          }
+        }
+      }
+    });
+
+    return this.enrichSingleBookView(libraryId, userId, bookRow);
+  }
+
+  /**
+   * Lève toutes les surcharges Couche 3 sur un livre (clic explicite "Réinitialiser avec les données automatiques").
+   */
+  resetBookOverrides(libraryId: string, userId: string, bookId: string): BookView {
+    const bookRow = this.catalogRepo.findBookById(bookId);
+    if (!bookRow) {
+      throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage introuvable.');
+    }
+    const now = new Date().toISOString();
+    this.libraryRepo.setLibraryBookOverrides(libraryId, bookId, {}, now);
+    return this.enrichSingleBookView(libraryId, userId, bookRow);
+  }
+
+  /**
+   * Galerie dédupliquée des couvertures disponibles pour un livre (Couche 3 + Catalogue + Éditions sœurs + Sources externes).
+   */
+  async listBookCoverCandidates(
+    libraryId: string,
+    bookId: string,
+    includeExternal = false
+  ): Promise<CoverCandidateItem[]> {
+    const bookRow = this.catalogRepo.findBookById(bookId);
+    if (!bookRow) {
+      throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage introuvable.');
+    }
+
+    const candidates: CoverCandidateItem[] = [];
+    const seenUrls = new Set<string>();
+
+    const pushLocal = (coverKey: string | null | undefined, label: string) => {
+      if (!coverKey) return;
+      const url = `/api/covers/${coverKey}`;
+      if (seenUrls.has(url)) return;
+      seenUrls.add(url);
+      candidates.push({ id: coverKey, kind: 'local', coverKey, url, label });
+    };
+
+    const libRow = this.libraryRepo.findLibraryBook(libraryId, bookId);
+    const overrides = parseOverrides(libRow?.overrides_json);
+
+    pushLocal(overrides.coverKey, 'Couverture personnalisée (Foyer)');
+    pushLocal(bookRow.cover_key, 'Couverture principale (Catalogue)');
+
+    const editions = this.catalogRepo.listEditionsByBookId(bookId);
+    for (const ed of editions) {
+      pushLocal(ed.cover_key, `Édition ${ed.publisher || ed.isbn13}`);
+    }
+
+    if (includeExternal && editions.length > 0) {
+      const draft = await this.comparisonService.collectAndArbitrate(editions[0].isbn13);
+      if (draft) {
+        for (const extUrl of draft.coverCandidates) {
+          if (!extUrl || seenUrls.has(extUrl)) continue;
+          seenUrls.add(extUrl);
+          candidates.push({
+            id: `ext_${crypto.createHash('md5').update(extUrl).digest('hex').slice(0, 10)}`,
+            kind: 'external',
+            url: extUrl,
+            label: 'Source externe'
+          });
+        }
+      }
+    }
+
+    return candidates;
+  }
+
+  async importExternalCoverUrl(url: string): Promise<{ coverKey: string; coverUrl: string }> {
+    const stored = await this.coverService.ingestFromExternalUrl(url);
+    if (!stored) {
+      throw new AppError(400, 'COVER_IMPORT_FAILED', "Impossible de télécharger ou convertir cette image.");
+    }
+    return { coverKey: stored.coverKey, coverUrl: stored.coverUrl };
+  }
+
+  /**
+   * Création manuelle d'un ouvrage inconnu (`source_origin = 'manual'`, zéro dépendance Inventaire.io).
+   */
+  createManualBook(input: {
+    libraryId: string;
+    userId: string;
+    isbn13?: string;
+    title: string;
+    authors: string[];
+    seriesName?: string | null;
+    seriesId?: string | null;
+    volumeNumber?: number | null;
+    volumeLabel?: string | null;
+    oneShot: boolean;
+    expandSeries: boolean;
+    isIntegral: boolean;
+    includedVolumes: string[];
+    publisher?: string | null;
+    publishYear?: string | null;
+    pageCount?: number | null;
+    mainCategory?: BookMainCategory;
+    genres: string[];
+    coverKey?: string | null;
+    ownershipStatus: OwnershipStatus;
+  }): { book: BookView; enqueuedSeriesExpandJobId: string | null } {
+    const now = new Date().toISOString();
+    const cleanTitle = input.title.trim();
+    const normTitle = normalizeTextKey(cleanTitle);
+    const cleanIsbn13 = input.isbn13 ? isbnUtil.normalizeToIsbn13(input.isbn13) : null;
+
+    let enqueuedSeriesExpandJobId: string | null = null;
+    let savedBookId = '';
+
+    this.db.transaction(() => {
+      // Si ISBN déjà présent dans le Catalogue Central, on le réutilise proprement
+      const existingByIsbn = cleanIsbn13 ? this.catalogRepo.findBookByIsbn13(cleanIsbn13) : null;
+
+      let resolvedSeriesId: string | null = null;
+      if (!input.oneShot) {
+        if (input.seriesId) {
+          const foundSeries = this.catalogRepo.findSeriesById(input.seriesId);
+          resolvedSeriesId = foundSeries?.id ?? null;
+        } else if (input.seriesName?.trim()) {
+          const { series } = this.seriesGraphService.resolveOrCreateSeriesCut({
+            seriesName: input.seriesName.trim(),
+            bookTitle: cleanTitle,
+            volumeNumber: input.volumeNumber ?? null,
+            isHorsSerie: false,
+            isIntegral: input.isIntegral,
+            pageCount: input.pageCount ?? null,
+            publisher: input.publisher ?? null,
+            authors: input.authors,
+            now
+          });
+          resolvedSeriesId = series.id;
+        }
+      }
+
+      const parsedIncluded = input.isIntegral ? parseIncludedVolumeNumbers(input.includedVolumes) : [];
+      const classification = classifyBookMetadata({
+        title: cleanTitle,
+        series: input.seriesName ?? undefined,
+        publisher: input.publisher ?? undefined,
+        rawSubjects: input.genres
+      });
+
+      const effectiveCategory = input.mainCategory ?? classification.mainCategory;
+      const effectiveSubgenres = Array.from(
+        new Set(input.genres.filter((g) => g.toLowerCase() !== effectiveCategory.toLowerCase()))
+      );
+
+      const bookRow = existingByIsbn
+        ? existingByIsbn
+        : this.catalogRepo.upsertBookAutomatic({
+            id: `bk_${crypto.randomBytes(6).toString('hex')}`,
+            workCanonicalId: cleanIsbn13
+              ? `manual:isbn:${cleanIsbn13}`
+              : `manual:${crypto.randomBytes(6).toString('hex')}`,
+            seriesId: resolvedSeriesId,
+            title: cleanTitle,
+            normalizedTitle: normTitle,
+            volumeNumber: input.volumeNumber ?? null,
+            volumeLabel: input.volumeLabel?.trim() || (input.volumeNumber ? String(input.volumeNumber) : null),
+            sortOrder: input.volumeNumber ?? null,
+            isHorsSerie: false,
+            isIntegral: input.isIntegral,
+            includedVolumes: parsedIncluded,
+            authors: input.authors,
+            scriptwriters: [],
+            illustrators: [],
+            publisher: input.publisher?.trim() || null,
+            collectionName: null,
+            publishYear: input.publishYear?.trim() || null,
+            pageCount: input.pageCount ?? null,
+            description: null,
+            language: 'fr',
+            mainCategory: effectiveCategory,
+            subgenres: effectiveSubgenres,
+            coverKey: input.coverKey ?? null,
+            wikidataQid: null,
+            inventaireUri: null,
+            sourceOrigin: 'manual',
+            now
+          });
+
+      savedBookId = bookRow.id;
+
+      if (cleanIsbn13) {
+        this.catalogRepo.upsertBookEdition({
+          isbn13: cleanIsbn13,
+          bookId: bookRow.id,
+          publisher: input.publisher?.trim() || null,
+          collectionName: null,
+          publishYear: input.publishYear?.trim() || null,
+          pageCount: input.pageCount ?? null,
+          coverKey: input.coverKey ?? null,
+          source: 'manual',
+          now
+        });
+      }
+
+      if (resolvedSeriesId) {
+        this.catalogRepo.recountSeriesVolumes(resolvedSeriesId, now);
+      }
+
+      if (input.ownershipStatus === 'owned' || input.ownershipStatus === 'wish') {
+        this.libraryRepo.upsertLibraryBookStatusLww({
+          libraryId: input.libraryId,
+          bookId: bookRow.id,
+          status: input.ownershipStatus,
+          wishedByUserId: input.ownershipStatus === 'wish' ? input.userId : null,
+          timestamp: now
+        });
+      }
+
+      if (input.expandSeries && resolvedSeriesId) {
+        const activeJob = this.jobRepo.findActiveJobByTypeAndPayloadKey('series_expand', resolvedSeriesId);
+        if (activeJob) {
+          enqueuedSeriesExpandJobId = activeJob.id;
+        } else {
+          const job = this.jobRepo.createJob({
+            id: `job_${crypto.randomBytes(6).toString('hex')}`,
+            type: 'series_expand',
+            userId: input.userId,
+            libraryId: input.libraryId,
+            payload: { seriesId: resolvedSeriesId },
+            progressTotal: 1,
+            now
+          });
+          enqueuedSeriesExpandJobId = job.id;
+        }
+      }
+    });
+
+    if (enqueuedSeriesExpandJobId) {
+      this.onJobEnqueued?.();
+    }
+
+    const detail = this.getBookDetail(input.libraryId, input.userId, savedBookId);
+    return { book: detail.book, enqueuedSeriesExpandJobId };
   }
 }

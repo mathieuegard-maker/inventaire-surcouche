@@ -21,6 +21,7 @@ export const libraryBookOverridePatchSchema = z.object({
   mainCategory: bookMainCategorySchema.optional(),
   genres: z.array(z.string().trim().min(1).max(60)).optional(),
   coverKey: z.string().trim().nullable().optional(),
+  hiddenSeriesIds: z.array(z.string().trim().min(1)).optional(),
   oneShotForced: z.boolean().optional(),
   propagateGenresToSeries: z.boolean().optional()
 });

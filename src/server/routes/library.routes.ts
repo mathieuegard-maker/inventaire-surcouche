@@ -1,9 +1,9 @@
 // src/server/routes/library.routes.ts
-// Routes Espace Foyer : POST /api/library/books/batch-status & POST /api/library/books/batch-genres.
+// Routes Espace Foyer : batch-status, batch-genres, PATCH /books/:bookId (Couche 3) & DELETE /books/:bookId/overrides.
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { batchGenresSchema, batchStatusSchema } from '../../shared/schemas';
+import { batchGenresSchema, batchStatusSchema, libraryBookOverridePatchSchema } from '../../shared/schemas';
 import type { AppVariables } from '../middleware/auth.middleware';
 import type { LibraryService } from '../services/library.service';
 
@@ -36,6 +36,21 @@ export function createLibraryRoutes(deps: {
       genres: body.genres
     });
     return c.json({ ok: true, ...result });
+  });
+
+  router.patch('/books/:bookId', zValidator('json', libraryBookOverridePatchSchema), (c) => {
+    const auth = c.get('auth')!;
+    const bookId = c.req.param('bookId');
+    const patch = c.req.valid('json');
+    const book = deps.libraryService.updateBookOverrides(auth.libraryId, auth.userId, bookId, patch);
+    return c.json({ ok: true, book });
+  });
+
+  router.delete('/books/:bookId/overrides', (c) => {
+    const auth = c.get('auth')!;
+    const bookId = c.req.param('bookId');
+    const book = deps.libraryService.resetBookOverrides(auth.libraryId, auth.userId, bookId);
+    return c.json({ ok: true, book });
   });
 
   return router;
