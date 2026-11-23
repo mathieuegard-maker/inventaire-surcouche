@@ -233,14 +233,14 @@ export class CoverService {
       let rawBuf: Buffer | null = null;
 
       if (!this.hasCustomFetch && /^https?:\/\/catalogue\.bnf\.fr\b/i.test(cleanUrl)) {
-        const res = await fetchBinaryIpv4(cleanUrl, 8000);
+        const res = await fetchBinaryIpv4(cleanUrl, 4500);
         if (!res) return null;
         contentType = res.contentType;
         rawBuf = res.buffer;
       } else {
         const res = await this.fetchImpl(cleanUrl, {
           headers: { 'User-Agent': BROWSER_USER_AGENT, Accept: 'image/*,*/*;q=0.8' },
-          signal: AbortSignal.timeout(7500)
+          signal: AbortSignal.timeout(4000)
         });
         if (!res.ok) return null;
         contentType = (res.headers.get('content-type') || '').toLowerCase();
@@ -293,31 +293,35 @@ export class CoverService {
     const cleanIsbn13 = input.isbn13 ? isbnUtil.normalizeToIsbn13(input.isbn13) : null;
 
     if (cleanIsbn13) {
-      // 2. CDN Amazon Direct ISBN-10 (uniquement sur 978...)
+      // 2-4. Fallbacks CDN ISBN en PARALLÈLE (priorité conservée : Amazon EU -> Amazon Media -> Eyrolles H1400 -> OpenLibrary)
       const isbn10 = isbnUtil.toIsbn10(cleanIsbn13);
+      const parallelTasks: Array<Promise<StoredCoverResult | null>> = [];
       if (isbn10) {
-        const amazonUrls = [
-          `https://images-eu.ssl-images-amazon.com/images/P/${isbn10}.08.LZZZZZZZ.jpg`,
-          `https://m.media-amazon.com/images/P/${isbn10}.01._SCLZZZZZZZ_SX500_.jpg`
-        ];
-        for (const url of amazonUrls) {
-          const stored = await this.ingestFromExternalUrl(url, { minBytes: 1500 });
-          if (stored) return stored;
+        parallelTasks.push(
+          this.ingestFromExternalUrl(`https://images-eu.ssl-images-amazon.com/images/P/${isbn10}.08.LZZZZZZZ.jpg`, {
+            minBytes: 1500
+          }),
+          this.ingestFromExternalUrl(`https://m.media-amazon.com/images/P/${isbn10}.01._SCLZZZZZZZ_SX500_.jpg`, {
+            minBytes: 1500
+          })
+        );
+      }
+      parallelTasks.push(
+        this.ingestFromExternalUrl(
+          `https://servimg.eyrolles.com/static/media/${cleanIsbn13.slice(-4)}/${cleanIsbn13}_internet_h1400.jpg`,
+          { minBytes: 2000, rejectExactBytes: EYROLLES_PLACEHOLDER_BYTES }
+        ),
+        this.ingestFromExternalUrl(`https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg?default=false`, {
+          minBytes: 1500
+        })
+      );
+
+      const settled = await Promise.allSettled(parallelTasks);
+      for (const item of settled) {
+        if (item.status === 'fulfilled' && item.value) {
+          return item.value;
         }
       }
-
-      // 3. CDN Librairies Françaises Eyrolles / Dilicom H1400 (978... et 97910...)
-      const eyrollesUrl = `https://servimg.eyrolles.com/static/media/${cleanIsbn13.slice(-4)}/${cleanIsbn13}_internet_h1400.jpg`;
-      const eyrollesStored = await this.ingestFromExternalUrl(eyrollesUrl, {
-        minBytes: 2000,
-        rejectExactBytes: EYROLLES_PLACEHOLDER_BYTES
-      });
-      if (eyrollesStored) return eyrollesStored;
-
-      // 4. OpenLibrary Covers par ISBN
-      const olUrl = `https://covers.openlibrary.org/b/isbn/${cleanIsbn13}-L.jpg?default=false`;
-      const olStored = await this.ingestFromExternalUrl(olUrl, { minBytes: 1500 });
-      if (olStored) return olStored;
     }
 
     // 5. Apple Books / iTunes FR (ISBN puis Titre + Auteur)
@@ -332,7 +336,7 @@ export class CoverService {
           const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=fr&entity=ebook&limit=1`;
           const res = await this.fetchImpl(itunesUrl, {
             headers: { 'User-Agent': BROWSER_USER_AGENT },
-            signal: AbortSignal.timeout(5000)
+            signal: AbortSignal.timeout(3500)
           });
           if (!res.ok) continue;
           const data = (await res.json()) as { results?: Array<{ artworkUrl100?: string }> };

@@ -32,7 +32,7 @@ export function createGoogleBooksConnector(http: HttpClient): GoogleBooksConnect
       const data = await http.fetchJson<GoogleBooksResponse>({
         source: 'google_books',
         url,
-        timeoutMs: 6000,
+        timeoutMs: 4000,
         minIntervalMs: 250,
         cacheKey: `gb:isbn:${isbn13}`,
         cacheTtlSec: 60 * 60 * 24 * 14

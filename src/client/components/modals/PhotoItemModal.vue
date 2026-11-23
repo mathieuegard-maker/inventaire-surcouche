@@ -1,7 +1,8 @@
 <!-- src/client/components/modals/PhotoItemModal.vue -->
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import BaseModal from '../base/BaseModal.vue';
+import PhotoLightboxModal from '../base/PhotoLightboxModal.vue';
 import CameraBarcodeModal from './CameraBarcodeModal.vue';
 import IntegralFields from '../books/IntegralFields.vue';
 import { useScanStore, type PhotoJobItem } from '../../stores/scan.store';
@@ -24,6 +25,7 @@ const scanStore = useScanStore();
 const uiStore = useUiStore();
 
 const zoomPercent = ref(100);
+const lightboxOpen = ref(false);
 const saving = ref(false);
 
 // Sous-modale 6 champs vides pour relance BnF serveur
@@ -38,11 +40,19 @@ const manualAuthor = ref('');
 const manualPublisher = ref('');
 const manualIsbn = ref('');
 
+const confidenceLabel = computed(() => {
+  const conf = props.item?.hint.confidence;
+  if (conf === 'high') return t('scan.photoConfidenceHigh');
+  if (conf === 'low') return t('scan.photoConfidenceLow');
+  return t('scan.photoConfidenceMedium');
+});
+
 watch(
   () => [props.open, props.item?.id] as const,
   ([isOpen]) => {
     if (isOpen) {
       zoomPercent.value = 100;
+      lightboxOpen.value = false;
     }
   }
 );
@@ -124,16 +134,57 @@ async function submitManualBnf(): Promise<void> {
     @close="emit('close')"
   >
     <div v-if="item" class="ds-stack">
-      <!-- Aperçu zoomable (100 % à 450 %) -->
-      <div v-if="previewUrl" class="ds-stack">
+      <!-- Retour brut de l'analyse IA (pour comparer avec la photo et les éditions proposées) -->
+      <div class="ds-panel ds-stack ai-hint-panel">
         <div class="ds-row ds-row--between">
+          <strong>{{ t('scan.photoAiReadTitle') }}</strong>
+          <span class="ds-badge ds-badge--accent">
+            {{ t('scan.photoConfidenceLabel') }} : {{ confidenceLabel }}
+          </span>
+        </div>
+
+        <dl class="ai-hint-grid">
+          <div v-if="item.hint.title" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldTitle') }}</dt>
+            <dd>{{ item.hint.title }}</dd>
+          </div>
+          <div v-if="item.hint.series" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldSeries') }}</dt>
+            <dd>{{ item.hint.series }}</dd>
+          </div>
+          <div v-if="item.hint.volumeNumber" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldVolume') }}</dt>
+            <dd>{{ item.hint.volumeNumber }}</dd>
+          </div>
+          <div v-if="item.hint.author" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldAuthor') }}</dt>
+            <dd>{{ item.hint.author }}</dd>
+          </div>
+          <div v-if="item.hint.publisher" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldPublisher') }}</dt>
+            <dd>{{ item.hint.publisher }}</dd>
+          </div>
+          <div v-if="item.hint.isbn" class="ai-hint-field">
+            <dt class="ds-text-muted">{{ t('scan.fieldIsbn') }}</dt>
+            <dd>{{ item.hint.isbn }}</dd>
+          </div>
+        </dl>
+      </div>
+
+      <!-- Aperçu photo cliquable -> plein écran tactile (zoom 2 doigts + déplacement) -->
+      <div v-if="previewUrl" class="ds-stack">
+        <div class="ds-row ds-row--between photo-controls-bar">
           <div class="ds-row">
             <button type="button" class="ds-btn ds-btn--sm" @click="adjustZoom(-50)">−</button>
             <button type="button" class="ds-btn ds-btn--sm" @click="zoomPercent = 100">
               {{ zoomPercent }} %
             </button>
             <button type="button" class="ds-btn ds-btn--sm" @click="adjustZoom(50)">+</button>
+            <button type="button" class="ds-btn ds-btn--primary ds-btn--sm" @click="lightboxOpen = true">
+              {{ t('scan.photoOpenFullscreenBtn') }}
+            </button>
           </div>
+
           <label class="ds-checkbox">
             <input
               type="checkbox"
@@ -145,17 +196,24 @@ async function submitManualBnf(): Promise<void> {
           </label>
         </div>
 
-        <div class="photo-zoom-box" @wheel="handleWheelZoom">
+        <button
+          type="button"
+          class="photo-zoom-box"
+          :aria-label="t('scan.photoOpenFullscreenBtn')"
+          @click="lightboxOpen = true"
+          @wheel="handleWheelZoom"
+        >
           <img
             :src="previewUrl"
             :alt="item.hint.title"
             class="photo-zoom-img"
             :style="{ width: `${zoomPercent}%` }"
           />
-        </div>
+        </button>
+        <p class="ds-text-muted photo-tap-hint">{{ t('scan.photoTapToExpandHint') }}</p>
       </div>
 
-      <!-- Éditions candidates (radio) -->
+      <!-- Éditions candidates avec miniatures de couverture -->
       <div v-if="item.options.length > 0" class="ds-stack">
         <strong class="ds-label">{{ t('scan.photoSelectOptionLabel') }}</strong>
         <label
@@ -172,6 +230,12 @@ async function submitManualBnf(): Promise<void> {
             :disabled="saving"
             @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false })"
           />
+
+          <div class="photo-option-cover">
+            <img v-if="opt.coverUrl" :src="opt.coverUrl" :alt="opt.title" loading="lazy" />
+            <span v-else class="photo-option-cover__empty">{{ opt.title.slice(0, 2).toUpperCase() }}</span>
+          </div>
+
           <div class="photo-option-row__meta">
             <strong>{{ opt.title }}</strong>
             <p class="ds-text-muted">
@@ -179,6 +243,7 @@ async function submitManualBnf(): Promise<void> {
               <span v-if="opt.volumeNumber"> T.{{ opt.volumeNumber }}</span>
               <span v-if="opt.authors.length > 0"> · {{ opt.authors.join(', ') }}</span>
               <span v-if="opt.publisher"> · {{ opt.publisher }}</span>
+              <span v-if="opt.publishYear"> ({{ opt.publishYear }})</span>
               <span> · {{ opt.isbn13 }}</span>
             </p>
           </div>
@@ -205,6 +270,14 @@ async function submitManualBnf(): Promise<void> {
       </button>
     </template>
   </BaseModal>
+
+  <!-- Visionneuse photo plein écran tactile (pinch-to-zoom 2 doigts + pan) -->
+  <PhotoLightboxModal
+    :open="lightboxOpen"
+    :src="previewUrl"
+    :alt="item?.hint.title"
+    @close="lightboxOpen = false"
+  />
 
   <!-- Sous-modale 6 champs vides + caméra ISBN (relance BnF 100 % serveur) -->
   <BaseModal
@@ -349,17 +422,51 @@ async function submitManualBnf(): Promise<void> {
 </template>
 
 <style scoped>
+.ai-hint-panel {
+  gap: var(--space-2);
+}
+
+.ai-hint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.ai-hint-field dt {
+  font-size: 0.75rem;
+}
+
+.ai-hint-field dd {
+  margin: 0;
+  font-weight: 600;
+}
+
+.photo-controls-bar {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .photo-zoom-box {
-  max-height: 280px;
+  display: block;
+  width: 100%;
+  padding: 0;
+  max-height: 260px;
   overflow: auto;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
+  cursor: zoom-in;
 }
 
 .photo-zoom-img {
   display: block;
   height: auto;
+}
+
+.photo-tap-hint {
+  font-size: 0.8rem;
+  margin: 0;
 }
 
 .photo-option-row {
@@ -374,8 +481,35 @@ async function submitManualBnf(): Promise<void> {
   background: var(--accent-soft);
 }
 
+.photo-option-cover {
+  width: 48px;
+  min-width: 48px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.photo-option-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-option-cover__empty {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
 .photo-option-row__meta {
   flex: 1;
+  min-width: 0;
 }
 
 .manual-field-row {

@@ -152,7 +152,8 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       db,
       config,
       connectors: mockConnectors,
-      geminiConnector: mockGemini
+      geminiConnector: mockGemini,
+      coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
     });
   });
 

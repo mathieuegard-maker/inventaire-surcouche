@@ -454,7 +454,8 @@ export const useLibraryStore = defineStore('library', () => {
       results: Array<{ found: boolean; book: BookView | null }>;
     }>('/api/books/resolve-isbn', {
       method: 'POST',
-      body: { isbns: [isbn], channel: 'manual_isbn', action: 'preview' }
+      body: { isbns: [isbn], channel: 'manual_isbn', action: 'preview' },
+      timeoutMs: 45000
     });
     return res.results[0]?.book ?? null;
   }

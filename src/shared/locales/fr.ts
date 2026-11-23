@@ -331,7 +331,17 @@ export const fr = {
     searchExternalHeader: 'Catalogue externe BnF ({count})',
     searchEmpty: 'Aucun résultat trouvé pour cette recherche.',
     searchImportBtn: 'Consulter / Importer',
-    clearField: 'Effacer ce champ'
+    clearField: 'Effacer ce champ',
+    photoAiReadTitle: "Ce que l'IA a lu sur la photo",
+    photoConfidenceLabel: 'Confiance',
+    photoConfidenceHigh: 'Élevée',
+    photoConfidenceMedium: 'Moyenne',
+    photoConfidenceLow: 'Faible',
+    photoOpenFullscreenBtn: 'Agrandir (zoom à 2 doigts)',
+    photoTapToExpandHint: 'Touchez la photo pour l’ouvrir en plein écran et zoomer à deux doigts.',
+    photoLightboxHint: 'Pincez à 2 doigts pour zoomer, glissez pour vous déplacer, double-touchez pour réinitialiser.',
+    photoAnalyzedPreviewTitle: 'Photo analysée',
+    photoNoCoverShort: 'Sans couv.'
   },
   series: {
     filterAll: 'Tout ({count})',

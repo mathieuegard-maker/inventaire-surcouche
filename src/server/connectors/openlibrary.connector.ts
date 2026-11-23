@@ -24,7 +24,7 @@ export function createOpenLibraryConnector(http: HttpClient): OpenLibraryConnect
       const data = await http.fetchJson<Record<string, OpenLibraryBookEntry>>({
         source: 'openlibrary',
         url,
-        timeoutMs: 6500,
+        timeoutMs: 4000,
         minIntervalMs: 200,
         cacheKey: `ol:isbn:${isbn13}`,
         cacheTtlSec: 60 * 60 * 24 * 14

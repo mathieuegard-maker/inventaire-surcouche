@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import PhotoLightboxModal from '../components/base/PhotoLightboxModal.vue';
 import CameraBarcodeModal from '../components/modals/CameraBarcodeModal.vue';
 import PhotoItemModal from '../components/modals/PhotoItemModal.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
@@ -72,6 +73,26 @@ const galleryPhotoInputRef = ref<HTMLInputElement | null>(null);
 const photoUploading = ref(false);
 const photoCommitting = ref(false);
 const activePhotoItemId = ref<string | null>(null);
+const previewLightboxOpen = ref(false);
+
+function getPhotoItemCoverUrl(item: PhotoJobItem): string | null {
+  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
+  return chosen?.coverUrl || item.fallbackCoverUrl || null;
+}
+
+function getPhotoItemDisplayTitle(item: PhotoJobItem): string {
+  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
+  return chosen?.title || item.hint.title;
+}
+
+function getPhotoItemSubtitle(item: PhotoJobItem): string {
+  const parts: string[] = [];
+  if (item.hint.series) parts.push(item.hint.series);
+  if (item.hint.volumeNumber) parts.push(`T.${item.hint.volumeNumber}`);
+  if (item.hint.author) parts.push(item.hint.author);
+  if (item.selectedOptionIsbn13) parts.push(item.selectedOptionIsbn13);
+  return parts.join(' · ') || '—';
+}
 
 const latestPhotoJob = computed(() => jobsStore.latestPhotoJob);
 const photoResult = computed<PhotoJobResultPayload | null>(() => {
@@ -526,6 +547,27 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           {{ latestPhotoJob.errorMessage }}
         </div>
 
+        <!-- Aperçu cliquable de la photo analysée (ouvre la visionneuse plein écran zoom 2 doigts) -->
+        <div v-if="photoResult?.previewUrl" class="ds-card ds-row ds-row--between photo-analyzed-bar">
+          <div class="ds-row">
+            <button
+              type="button"
+              class="photo-analyzed-thumb"
+              :aria-label="t('scan.photoOpenFullscreenBtn')"
+              @click="previewLightboxOpen = true"
+            >
+              <img :src="photoResult.previewUrl" :alt="t('scan.photoAnalyzedPreviewTitle')" />
+            </button>
+            <div class="ds-stack photo-analyzed-meta">
+              <strong>{{ t('scan.photoAnalyzedPreviewTitle') }}</strong>
+              <span class="ds-text-muted">{{ t('scan.photoTapToExpandHint') }}</span>
+            </div>
+          </div>
+          <button type="button" class="ds-btn ds-btn--sm" @click="previewLightboxOpen = true">
+            {{ t('scan.photoOpenFullscreenBtn') }}
+          </button>
+        </div>
+
         <!-- Identifiés -->
         <div v-if="identifiedItems.length > 0" class="ds-card ds-stack">
           <h2>{{ t('scan.identifiedSection', { count: identifiedItems.length }) }}</h2>
@@ -538,10 +580,23 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                 @change="togglePhotoItemSelected(item)"
               />
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
-                <strong>{{ item.options[0]?.title || item.hint.title }}</strong>
-                <span class="ds-text-muted">
-                  {{ item.selectedOptionIsbn13 || '—' }}
-                  <template v-if="item.ignored"> · {{ t('scan.photoIgnoredBadge') }}</template>
+                <span class="photo-item-cover">
+                  <img
+                    v-if="getPhotoItemCoverUrl(item)"
+                    :src="getPhotoItemCoverUrl(item)!"
+                    :alt="getPhotoItemDisplayTitle(item)"
+                    loading="lazy"
+                  />
+                  <span v-else class="photo-item-cover__placeholder">
+                    {{ getPhotoItemDisplayTitle(item).slice(0, 2).toUpperCase() }}
+                  </span>
+                </span>
+                <span class="photo-item-text">
+                  <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
+                  <span class="ds-text-muted">
+                    {{ getPhotoItemSubtitle(item) }}
+                    <template v-if="item.ignored"> · {{ t('scan.photoIgnoredBadge') }}</template>
+                  </span>
                 </span>
               </button>
             </div>
@@ -560,8 +615,21 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                 @change="togglePhotoItemSelected(item)"
               />
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
-                <strong>{{ item.hint.title }}</strong>
-                <span class="ds-text-muted">{{ item.selectedOptionIsbn13 || '—' }}</span>
+                <span class="photo-item-cover">
+                  <img
+                    v-if="getPhotoItemCoverUrl(item)"
+                    :src="getPhotoItemCoverUrl(item)!"
+                    :alt="getPhotoItemDisplayTitle(item)"
+                    loading="lazy"
+                  />
+                  <span v-else class="photo-item-cover__placeholder">
+                    {{ item.hint.title.slice(0, 2).toUpperCase() }}
+                  </span>
+                </span>
+                <span class="photo-item-text">
+                  <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
+                  <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
+                </span>
               </button>
             </div>
           </div>
@@ -573,12 +641,34 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           <div class="ds-stack">
             <div v-for="item in unresolvedItems" :key="item.id" class="ds-panel photo-item-row">
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
-                <strong>{{ item.hint.title }}</strong>
-                <span class="ds-text-muted">{{ item.hint.author || t('scan.wrongReferenceBtn') }}</span>
+                <span class="photo-item-cover">
+                  <img
+                    v-if="getPhotoItemCoverUrl(item)"
+                    :src="getPhotoItemCoverUrl(item)!"
+                    :alt="item.hint.title"
+                    loading="lazy"
+                  />
+                  <span v-else class="photo-item-cover__placeholder">
+                    {{ item.hint.title.slice(0, 2).toUpperCase() }}
+                  </span>
+                </span>
+                <span class="photo-item-text">
+                  <strong>{{ item.hint.title }}</strong>
+                  <span class="ds-text-muted">
+                    {{ getPhotoItemSubtitle(item) !== '—' ? getPhotoItemSubtitle(item) : t('scan.wrongReferenceBtn') }}
+                  </span>
+                </span>
               </button>
             </div>
           </div>
         </div>
+
+        <PhotoLightboxModal
+          :open="previewLightboxOpen"
+          :src="photoResult?.previewUrl ?? null"
+          :alt="t('scan.photoAnalyzedPreviewTitle')"
+          @close="previewLightboxOpen = false"
+        />
 
         <div v-if="selectedPhotoCount > 0" class="ds-row">
           <button
@@ -882,6 +972,34 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
   min-width: 180px;
 }
 
+.photo-analyzed-bar {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.photo-analyzed-thumb {
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  cursor: zoom-in;
+  flex-shrink: 0;
+}
+
+.photo-analyzed-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-analyzed-meta {
+  gap: 2px;
+}
+
 .photo-item-row {
   display: flex;
   align-items: center;
@@ -891,13 +1009,48 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 .photo-item-btn {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: var(--space-3);
   border: none;
   background: transparent;
   padding: 0;
   text-align: left;
   cursor: pointer;
   color: var(--text-primary);
+  min-width: 0;
+}
+
+.photo-item-cover {
+  width: 44px;
+  min-width: 44px;
+  aspect-ratio: 2 / 3;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.photo-item-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-item-cover__placeholder {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+
+.photo-item-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 </style>

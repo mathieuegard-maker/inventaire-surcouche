@@ -114,7 +114,8 @@ describe('Jalon 2 — Couvertures WebP disque, Jobs Serveur & Routes Acquisition
     appCtx = createApp({
       db,
       config,
-      connectors: mockConnectors
+      connectors: mockConnectors,
+      coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
     });
   });
 

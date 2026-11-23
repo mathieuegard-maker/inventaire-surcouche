@@ -36,6 +36,8 @@ export interface PhotoJobItem {
   hint: GeminiExtractedBookHint;
   status: 'identified' | 'doubt' | 'unresolved';
   options: PhotoCandidateOption[];
+  /** Couverture indicative WebP (ex. trouvée par titre/auteur si aucune option ISBN n'a été identifiée). */
+  fallbackCoverUrl?: string | null;
   selectedOptionIsbn13: string | null;
   selected: boolean;
   ignored: boolean;
@@ -219,7 +221,29 @@ export class PhotoAiService {
       }
     }
 
-    return options.slice(0, 6);
+    const topOptions = options.slice(0, 6);
+
+    // 4. Enrichissement couverture WebP locale (/api/covers/...) en parallèle pour les 4 premières options
+    await Promise.allSettled(
+      topOptions.slice(0, 4).map(async (opt) => {
+        if (opt.coverUrl && opt.coverUrl.startsWith('/api/covers/')) return;
+        const existingBook = this.catalogRepo.findBookByIsbn13(opt.isbn13);
+        if (existingBook?.cover_key) {
+          opt.coverUrl = `/api/covers/${existingBook.cover_key}`;
+          return;
+        }
+        const stored = await this.coverService.resolveBestCoverFromCascade({
+          isbn13: opt.isbn13,
+          candidateUrls: opt.coverUrl ? [opt.coverUrl] : [],
+          skipTitleFallback: true
+        });
+        if (stored) {
+          opt.coverUrl = stored.coverUrl;
+        }
+      })
+    );
+
+    return topOptions;
   }
 
   /**
@@ -323,11 +347,24 @@ export class PhotoAiService {
         status = hint.confidence === 'high' ? 'identified' : 'doubt';
       }
 
+      // Pour les éléments non identifiés (0 option ISBN), tenter une couverture indicative par titre + auteur
+      let fallbackCoverUrl: string | null = null;
+      if (options.length === 0 && hint.title) {
+        const storedHintCover = await this.coverService.resolveBestCoverFromCascade({
+          title: [hint.series, hint.title].filter(Boolean).join(' '),
+          author: hint.author
+        });
+        if (storedHintCover) {
+          fallbackCoverUrl = storedHintCover.coverUrl;
+        }
+      }
+
       items.push({
         id: generateId('pit'),
         hint,
         status,
         options,
+        fallbackCoverUrl,
         selectedOptionIsbn13: bestIsbn,
         selected: status === 'identified' && alreadyStatus === 'none',
         ignored: false,

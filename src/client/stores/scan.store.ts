@@ -37,6 +37,7 @@ export interface PhotoJobItem {
   };
   status: 'identified' | 'doubt' | 'unresolved';
   options: PhotoCandidateOption[];
+  fallbackCoverUrl?: string | null;
   selectedOptionIsbn13: string | null;
   selected: boolean;
   ignored: boolean;
@@ -118,7 +119,8 @@ export const useScanStore = defineStore('scan', () => {
       quota: { monthKey: string; used: number; limit: number; remaining: number };
     }>('/api/jobs/photo', {
       method: 'POST',
-      body: input
+      body: input,
+      timeoutMs: 45000
     });
 
     const jobsStore = useJobsStore();
@@ -169,7 +171,8 @@ export const useScanStore = defineStore('scan', () => {
       `/api/jobs/photo/${encodeURIComponent(jobId)}/items/${encodeURIComponent(itemId)}/retry-bnf`,
       {
         method: 'POST',
-        body: hints
+        body: hints,
+        timeoutMs: 45000
       }
     );
     useJobsStore().upsertJob(res.job);
@@ -226,19 +229,28 @@ export const useScanStore = defineStore('scan', () => {
   }
 
   async function resolveBurstEntry(isbn13: string): Promise<void> {
-    try {
-      const book = await useLibraryStore().resolveIsbnPreview(isbn13);
-      const target = burstItems.value.find((it) => it.isbn13 === isbn13);
-      if (!target) return;
-      if (book) {
-        target.status = 'found';
-        target.book = book;
-      } else {
-        target.status = 'not_found';
+    const libraryStore = useLibraryStore();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const book = await libraryStore.resolveIsbnPreview(isbn13);
+        const target = burstItems.value.find((it) => it.isbn13 === isbn13);
+        if (!target) return;
+        if (book) {
+          target.status = 'found';
+          target.book = book;
+        } else {
+          target.status = 'not_found';
+        }
+        return;
+      } catch {
+        if (attempt === 1) {
+          // Si la 1re tentative a expiré pendant un job IA lourd, retenter 1 fois (le serveur aura souvent déjà mis en cache l'ISBN)
+          await new Promise((r) => setTimeout(r, 1200));
+          continue;
+        }
+        const target = burstItems.value.find((it) => it.isbn13 === isbn13);
+        if (target) target.status = 'not_found';
       }
-    } catch {
-      const target = burstItems.value.find((it) => it.isbn13 === isbn13);
-      if (target) target.status = 'not_found';
     }
   }
 
@@ -275,7 +287,8 @@ export const useScanStore = defineStore('scan', () => {
           collection: f.collection.trim() || undefined,
           publisher: f.publisher.trim() || undefined,
           isbn: f.isbn.trim() || undefined
-        }
+        },
+        timeoutMs: 45000
       });
       searchSeries.value = res.series;
       searchBooks.value = res.books;
