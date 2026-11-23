@@ -33,6 +33,9 @@ export interface PhotoCandidateOption {
 
 export interface PhotoJobItem {
   id: string;
+  /** Position visuelle sur l'étagère (1 = le plus à gauche) et nombre total détecté. */
+  spineIndex?: number;
+  totalSpines?: number;
   hint: GeminiExtractedBookHint;
   status: 'identified' | 'doubt' | 'unresolved';
   options: PhotoCandidateOption[];
@@ -272,10 +275,10 @@ export class PhotoAiService {
 
     const now = new Date().toISOString();
 
-    // Compresse la photo en WebP sur disque (/data/covers/) pour l'aperçu zoomable multi-appareils (zéro gros base64 en SQLite)
+    // Compresse la photo d'étagère en WebP haute définition (1800 px) sur disque (/data/covers/) pour un zoom 2 doigts net
     let previewCoverKey: string | null = null;
     try {
-      const storedPreview = await this.coverService.storeDataUrlAsWebp(input.imageDataUrl);
+      const storedPreview = await this.coverService.storePreviewDataUrlAsWebp(input.imageDataUrl);
       previewCoverKey = storedPreview.coverKey;
     } catch {
       // si image minimaliste en test, continue sans aperçu disque
@@ -361,6 +364,8 @@ export class PhotoAiService {
 
       items.push({
         id: generateId('pit'),
+        spineIndex: hint.spineIndex ?? i + 1,
+        totalSpines: hints.length,
         hint,
         status,
         options,

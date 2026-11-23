@@ -47,6 +47,14 @@ const confidenceLabel = computed(() => {
   return t('scan.photoConfidenceMedium');
 });
 
+const positionLabel = computed(() => {
+  const idx = props.item?.spineIndex ?? props.item?.hint.spineIndex;
+  const total = props.item?.totalSpines;
+  if (!idx || !total || total <= 1) return '';
+  const fromRight = Math.max(1, total - idx + 1);
+  return t('scan.photoPositionLabel', { left: idx, right: fromRight, total });
+});
+
 watch(
   () => [props.open, props.item?.id] as const,
   ([isOpen]) => {
@@ -143,7 +151,15 @@ async function submitManualBnf(): Promise<void> {
           </span>
         </div>
 
+        <div v-if="positionLabel" class="ds-badge">
+          {{ positionLabel }}
+        </div>
+
         <dl class="ai-hint-grid">
+          <div v-if="item.hint.rawText" class="ai-hint-field ai-hint-field--full">
+            <dt class="ds-text-muted">{{ t('scan.photoRawTextLabel') }}</dt>
+            <dd>{{ item.hint.rawText }}</dd>
+          </div>
           <div v-if="item.hint.title" class="ai-hint-field">
             <dt class="ds-text-muted">{{ t('scan.fieldTitle') }}</dt>
             <dd>{{ item.hint.title }}</dd>
@@ -440,6 +456,10 @@ async function submitManualBnf(): Promise<void> {
 .ai-hint-field dd {
   margin: 0;
   font-weight: 600;
+}
+
+.ai-hint-field--full {
+  grid-column: 1 / -1;
 }
 
 .photo-controls-bar {

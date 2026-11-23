@@ -2,6 +2,17 @@
 // Tests de non-régression terrain V2 : Inventaire inv: + invp:P2, Gemini cascade 404/503, découverte séries sans Q-ID.
 
 import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
+import sharp from 'sharp';
+import { SqliteDatabaseAdapter } from '../db/sqlite.adapter';
+import { applySqlMigrations } from '../db/migrator';
+import { CatalogRepository } from '../repositories/catalog.repo';
+import { LibraryRepository } from '../repositories/library.repo';
+import { CoverService } from '../services/cover.service';
+import { SeriesGraphService } from '../services/acquisition/series-graph.service';
+import type { BibliographicConnectors } from './types';
 import { HttpClient } from './http-client';
 import { createInventaireConnector } from './inventaire.connector';
 import { createGeminiConnector, PREFERRED_GEMINI_MODELS } from './gemini.connector';
@@ -113,5 +124,108 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     expect(calledModels).toEqual(PREFERRED_GEMINI_MODELS.slice(0, 3));
     expect(hints).toHaveLength(1);
     expect(hints[0].title).toBe('Tintin au Congo');
+    expect(hints[0].spineIndex).toBe(1);
+  });
+
+  it('rejette les couvertures .svg (Asterix.svg), conserve la HD 1800px sur preview Photo IA et fusionne les numéros de tomes BnF sur Wikidata', async () => {
+    const db = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(db, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-cov-fix-'));
+    try {
+      const catalogRepo = new CatalogRepository(db);
+      const libraryRepo = new LibraryRepository(db);
+      const coverService = new CoverService({
+        coversDir: tmpDir,
+        catalogRepo,
+        libraryRepo,
+        fetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
+      });
+
+      // 1. Rejet strict des .svg (ex: Asterix.svg sur Wikimedia Commons)
+      const svgRes = await coverService.ingestFromExternalUrl(
+        'http://commons.wikimedia.org/wiki/Special:FilePath/Asterix.svg?width=400'
+      );
+      expect(svgRes).toBeNull();
+
+      // 2. Preview Photo IA conservée en haute définition (ex: 1200x900 > 420px miniature couverture)
+      const hdPng = await sharp({
+        create: { width: 1200, height: 900, channels: 3, background: { r: 20, g: 80, b: 140 } }
+      })
+        .png()
+        .toBuffer();
+      const hdDataUrl = `data:image/png;base64,${hdPng.toString('base64')}`;
+      const preview = await coverService.storePreviewDataUrlAsWebp(hdDataUrl);
+      const storedBin = await coverService.readCoverBinary(preview.coverKey);
+      expect(storedBin).not.toBeNull();
+      const meta = await sharp(storedBin!.buffer).metadata();
+      expect(meta.width).toBe(1200);
+      expect(meta.height).toBe(900);
+
+      // 3. Fusion numéros de tomes BnF sur tomes Wikidata sans P1545 (cas Mortelle Adèle)
+      const mockConnectors: BibliographicConnectors = {
+        bnf: {
+          async lookupByIsbn() { return null; },
+          async searchByEnsembleId() {
+            return [
+              {
+                title: "C'est pas ma faute !",
+                volumeNumber: 1,
+                volumeLabel: '1',
+                sortOrder: 1,
+                authors: ['Mr Tan'],
+                isbn13s: ['9782848018690'],
+                source: 'bnf'
+              }
+            ];
+          },
+          async sampleByCollectionName() { return []; },
+          async searchByTitleAndAuthor() { return []; }
+        },
+        sudoc: { async lookupByIsbn() { return null; } },
+        inventaire: {
+          async lookupByIsbn() { return null; },
+          async fetchSeriesWorks() { return []; }
+        },
+        wikidata: {
+          async lookupWorkByQid() { return null; },
+          async fetchSeriesWorksByQid() {
+            return [
+              {
+                title: "C'est pas ma faute !",
+                volumeNumber: null,
+                volumeLabel: null,
+                sortOrder: null,
+                wikidataQid: 'Q101871200',
+                authors: ['Mr Tan'],
+                isbn13s: [],
+                source: 'wikidata'
+              }
+            ];
+          }
+        },
+        googleBooks: { async lookupByIsbn() { return null; } },
+        openLibrary: { async lookupByIsbn() { return null; } }
+      };
+
+      const graph = new SeriesGraphService({ catalogRepo, connectors: mockConnectors, coverService });
+      const { series } = graph.resolveOrCreateSeriesCut({
+        seriesName: 'Mortelle Adèle',
+        wikidataSeriesQid: 'Q3324557',
+        bnfEnsembleId: '43805008',
+        bookTitle: 'Un talent monstre !',
+        volumeNumber: 6,
+        isHorsSerie: false,
+        isIntegral: false,
+        authors: ['Mr Tan']
+      });
+      await graph.expandSeriesByGraph(series.id);
+      const savedBooks = catalogRepo.listBooksBySeriesId(series.id);
+      const tome1 = savedBooks.find((b) => b.title.includes('faute'));
+      expect(tome1?.volume_number).toBe(1);
+      expect(tome1?.sort_order).toBe(1);
+    } finally {
+      db.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

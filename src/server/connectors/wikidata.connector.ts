@@ -68,7 +68,7 @@ function getWdClaimQids(entity: WdEntity | undefined, prop: string): string[] {
 function commonsFilenameToUrl(filename?: string): string | undefined {
   if (!filename) return undefined;
   const clean = filename.replace(/^Special:FilePath\//i, '').trim();
-  if (!clean) return undefined;
+  if (!clean || /\.svg$/i.test(clean)) return undefined;
   return `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(clean)}?width=400`;
 }
 
@@ -199,7 +199,8 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
           .map((a) => a.trim())
           .filter(Boolean);
         const publishYear = cleanPublishDate(row.date?.value ?? '') || null;
-        const coverUrl = row.image?.value ? `${row.image.value}?width=400` : null;
+        const rawImg = row.image?.value ?? '';
+        const coverUrl = rawImg && !/\.svg(?:[?#]|$)/i.test(rawImg) ? `${rawImg}?width=400` : null;
 
         works.push({
           title,

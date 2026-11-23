@@ -465,9 +465,10 @@ export class SeriesGraphService {
       // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + ISBN) si pas encore de couverture
       let coverKey: string | null = existingBook?.cover_key ?? null;
       if (!coverKey && this.coverService && (work.coverUrl || work.isbn13s.length > 0)) {
+        const candidateUrls = work.coverUrl && !/\.svg(?:[?#]|$)/i.test(work.coverUrl) ? [work.coverUrl] : [];
         const stored = await this.coverService.resolveBestCoverFromCascade({
           isbn13: work.isbn13s[0] ?? null,
-          candidateUrls: work.coverUrl ? [work.coverUrl] : [],
+          candidateUrls,
           skipTitleFallback: true
         });
         if (stored) coverKey = stored.coverKey;
@@ -558,15 +559,26 @@ export class SeriesGraphService {
   private mergeGraphWorks(target: GraphSeriesWork[], incoming: GraphSeriesWork[]): void {
     for (const item of incoming) {
       const normTitle = normalizeTextKey(item.title);
-      const match = target.find(
-        (existing) =>
-          (item.wikidataQid && existing.wikidataQid === item.wikidataQid) ||
-          (normTitle && normalizeTextKey(existing.title) === normTitle) ||
-          (item.volumeNumber !== null &&
-            item.volumeNumber !== undefined &&
-            existing.volumeNumber === item.volumeNumber &&
-            tokenOverlapRatio(item.title, existing.title) >= 0.5)
-      );
+      const match = target.find((existing) => {
+        if (item.wikidataQid && existing.wikidataQid === item.wikidataQid) return true;
+        if (normTitle && normalizeTextKey(existing.title) === normTitle) return true;
+        if (
+          item.volumeNumber !== null &&
+          item.volumeNumber !== undefined &&
+          existing.volumeNumber === item.volumeNumber &&
+          !item.isHorsSerie &&
+          !item.isIntegral &&
+          !existing.isHorsSerie &&
+          !existing.isIntegral
+        ) {
+          // Même numéro de tome : si titre proche OU si le tome Wikidata n'avait pas encore d'ISBN FR (ex: titre italien Wikidata vs titre FR BnF)
+          if (tokenOverlapRatio(item.title, existing.title) >= 0.45) return true;
+          if (existing.source === 'wikidata' && item.source === 'bnf' && existing.isbn13s.length === 0) {
+            return true;
+          }
+        }
+        return false;
+      });
 
       if (!match) {
         target.push({ ...item, isbn13s: [...item.isbn13s], authors: [...item.authors] });
@@ -579,7 +591,26 @@ export class SeriesGraphService {
             match.authors.push(a);
           }
         }
-        if (!match.coverUrl && item.coverUrl) match.coverUrl = item.coverUrl;
+        // Fusion des numéros de tome & ordre de tri (ex: Wikidata sans P1545 complété par BnF 460$v)
+        if ((match.volumeNumber === null || match.volumeNumber === undefined) && item.volumeNumber !== null && item.volumeNumber !== undefined) {
+          match.volumeNumber = item.volumeNumber;
+        }
+        if (!match.volumeLabel && item.volumeLabel) {
+          match.volumeLabel = item.volumeLabel;
+        }
+        if ((match.sortOrder === null || match.sortOrder === undefined) && item.sortOrder !== null && item.sortOrder !== undefined) {
+          match.sortOrder = item.sortOrder;
+        }
+        // Préférer le titre FR officiel BnF si l'entrée initiale venait de Wikidata sans ISBN FR
+        if (match.source === 'wikidata' && item.source === 'bnf' && item.title) {
+          match.title = item.title;
+        }
+        // Préférer une vraie couverture BnF / Inventaire sur une image Wikimedia Commons générique
+        const itemHasValidCover = Boolean(item.coverUrl && !/\.svg(?:[?#]|$)/i.test(item.coverUrl));
+        const matchIsWikidataCover = Boolean(match.coverUrl && /wikimedia\.org/i.test(match.coverUrl));
+        if (itemHasValidCover && (!match.coverUrl || (matchIsWikidataCover && item.source !== 'wikidata'))) {
+          match.coverUrl = item.coverUrl;
+        }
         if (!match.publisher && item.publisher) match.publisher = item.publisher;
         if (!match.publishYear && item.publishYear) match.publishYear = item.publishYear;
         if (!match.pageCount && item.pageCount) match.pageCount = item.pageCount;

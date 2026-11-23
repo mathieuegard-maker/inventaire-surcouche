@@ -26,7 +26,11 @@ export interface PhotoCandidateOption {
 
 export interface PhotoJobItem {
   id: string;
+  spineIndex?: number;
+  totalSpines?: number;
   hint: {
+    spineIndex?: number;
+    rawText?: string;
     title: string;
     series?: string;
     volumeNumber?: string;

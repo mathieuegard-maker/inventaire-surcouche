@@ -85,11 +85,26 @@ function getPhotoItemDisplayTitle(item: PhotoJobItem): string {
   return chosen?.title || item.hint.title;
 }
 
+function getPhotoItemPositionShort(item: PhotoJobItem): string {
+  const idx = item.spineIndex ?? item.hint.spineIndex;
+  const total = item.totalSpines ?? photoResult.value?.items.length ?? 0;
+  if (!idx || total <= 1) return '';
+  const fromRight = Math.max(1, total - idx + 1);
+  return t('scan.photoPositionShort', { left: idx, right: fromRight });
+}
+
 function getPhotoItemSubtitle(item: PhotoJobItem): string {
+  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
   const parts: string[] = [];
-  if (item.hint.series) parts.push(item.hint.series);
-  if (item.hint.volumeNumber) parts.push(`T.${item.hint.volumeNumber}`);
-  if (item.hint.author) parts.push(item.hint.author);
+  const series = chosen?.seriesName || item.hint.series;
+  const vol = chosen?.volumeNumber || item.hint.volumeNumber;
+  const publisher = chosen?.publisher || item.hint.publisher;
+  const author = (chosen?.authors.length ? chosen.authors.join(', ') : '') || item.hint.author;
+
+  if (series) parts.push(series);
+  if (vol) parts.push(`T.${vol}`);
+  if (publisher) parts.push(publisher);
+  else if (author) parts.push(author);
   if (item.selectedOptionIsbn13) parts.push(item.selectedOptionIsbn13);
   return parts.join(' · ') || '—';
 }
@@ -133,7 +148,7 @@ async function compressPhotoForUpload(file: File): Promise<string> {
       const dataUrl = String(reader.result || '');
       const img = new Image();
       img.onload = () => {
-        const maxDim = photoMode.value === 'shelf' ? 1600 : 1200;
+        const maxDim = photoMode.value === 'shelf' ? 1800 : 1400;
         const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -144,7 +159,7 @@ async function compressPhotoForUpload(file: File): Promise<string> {
           return;
         }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/webp', 0.82));
+        resolve(canvas.toDataURL('image/webp', 0.86));
       };
       img.onerror = () => resolve(dataUrl);
       img.src = dataUrl;
@@ -592,6 +607,9 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
+                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
+                    {{ getPhotoItemPositionShort(item) }}
+                  </span>
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
                   <span class="ds-text-muted">
                     {{ getPhotoItemSubtitle(item) }}
@@ -627,6 +645,9 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
+                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
+                    {{ getPhotoItemPositionShort(item) }}
+                  </span>
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
                   <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
                 </span>
@@ -653,6 +674,9 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
+                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
+                    {{ getPhotoItemPositionShort(item) }}
+                  </span>
                   <strong>{{ item.hint.title }}</strong>
                   <span class="ds-text-muted">
                     {{ getPhotoItemSubtitle(item) !== '—' ? getPhotoItemSubtitle(item) : t('scan.wrongReferenceBtn') }}
@@ -1050,7 +1074,12 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
   flex: 1;
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 2px;
   min-width: 0;
+}
+
+.photo-item-pos {
+  font-size: 0.72rem;
 }
 </style>

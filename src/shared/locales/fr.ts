@@ -341,7 +341,10 @@ export const fr = {
     photoTapToExpandHint: 'Touchez la photo pour l’ouvrir en plein écran et zoomer à deux doigts.',
     photoLightboxHint: 'Pincez à 2 doigts pour zoomer, glissez pour vous déplacer, double-touchez pour réinitialiser.',
     photoAnalyzedPreviewTitle: 'Photo analysée',
-    photoNoCoverShort: 'Sans couv.'
+    photoNoCoverShort: 'Sans couv.',
+    photoPositionLabel: 'N° {left} depuis la gauche · N° {right} depuis la droite (sur {total})',
+    photoPositionShort: '#{left} gauche · #{right} droite',
+    photoRawTextLabel: 'Texte brut lu sur la tranche'
   },
   series: {
     filterAll: 'Tout ({count})',

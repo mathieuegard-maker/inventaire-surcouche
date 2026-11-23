@@ -121,17 +121,20 @@ export class CoverService {
     await fs.mkdir(this.coversDir, { recursive: true });
   }
 
-  private async compressToWebp(inputBuffer: Buffer): Promise<Buffer> {
+  private async compressToWebp(
+    inputBuffer: Buffer,
+    options?: { maxWidth?: number; maxHeight?: number; quality?: number }
+  ): Promise<Buffer> {
     try {
       return await sharp(inputBuffer, { failOn: 'none' })
         .rotate()
         .resize({
-          width: 420,
-          height: 640,
+          width: options?.maxWidth ?? 420,
+          height: options?.maxHeight ?? 640,
           fit: 'inside',
           withoutEnlargement: true
         })
-        .webp({ quality: 78, effort: 4 })
+        .webp({ quality: options?.quality ?? 78, effort: 4 })
         .toBuffer();
     } catch {
       throw new AppError(400, 'INVALID_IMAGE', 'Image invalide ou non décodable.');
@@ -141,7 +144,11 @@ export class CoverService {
   /**
    * Compresse un buffer brut en WebP, déduplique par SHA-256 et persiste sur `/data/covers/`.
    */
-  async storeBufferAsWebp(rawBuffer: Buffer, sourceUrl: string | null = null): Promise<StoredCoverResult> {
+  async storeBufferAsWebp(
+    rawBuffer: Buffer,
+    sourceUrl: string | null = null,
+    resizeOptions?: { maxWidth?: number; maxHeight?: number; quality?: number }
+  ): Promise<StoredCoverResult> {
     if (!rawBuffer || rawBuffer.length === 0) {
       throw new AppError(400, 'EMPTY_IMAGE', 'Image vide.');
     }
@@ -149,7 +156,7 @@ export class CoverService {
       throw new AppError(413, 'IMAGE_TOO_LARGE', 'Image trop volumineuse (max 12 Mo).');
     }
 
-    const webpBuffer = await this.compressToWebp(rawBuffer);
+    const webpBuffer = await this.compressToWebp(rawBuffer, resizeOptions);
     const sha256 = crypto.createHash('sha256').update(webpBuffer).digest('hex');
     const now = new Date().toISOString();
 
@@ -192,7 +199,7 @@ export class CoverService {
   }
 
   /**
-   * Stocke une couverture uploadée depuis le client (Data URL base64).
+   * Stocke une couverture uploadée depuis le client (Data URL base64, format couverture 420×640).
    */
   async storeDataUrlAsWebp(dataUrl: string): Promise<StoredCoverResult> {
     const match = dataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\s]+)$/);
@@ -204,8 +211,21 @@ export class CoverService {
   }
 
   /**
+   * Stocke une photo d'étagère / couverture Photo IA en haute définition (jusqu'à 1800 px, qualité 86)
+   * pour qu'elle reste parfaitement lisible au zoom tactile à 2 doigts.
+   */
+  async storePreviewDataUrlAsWebp(dataUrl: string): Promise<StoredCoverResult> {
+    const match = dataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\s]+)$/);
+    if (!match) {
+      throw new AppError(400, 'INVALID_DATA_URL', 'Format data URL image invalide.');
+    }
+    const rawBuffer = Buffer.from(match[1], 'base64');
+    return this.storeBufferAsWebp(rawBuffer, null, { maxWidth: 1800, maxHeight: 1800, quality: 86 });
+  }
+
+  /**
    * Télécharge une couverture externe une seule fois, la compresse en WebP et la stocke sur disque.
-   * Retourne `null` si l'URL distante est indisponible, placeholder (< 1000 o ou 63601 o Eyrolles) ou trop petite.
+   * Rejette les logos vectoriels `.svg` (ex: Asterix.svg sur Wikimedia Commons), les placeholders et images trop petites.
    */
   async ingestFromExternalUrl(
     url: string,
@@ -213,6 +233,9 @@ export class CoverService {
   ): Promise<StoredCoverResult | null> {
     const cleanUrl = (url || '').trim();
     if (!cleanUrl || (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://'))) {
+      return null;
+    }
+    if (/\.svg(?:[?#]|$)/i.test(cleanUrl)) {
       return null;
     }
 
@@ -249,6 +272,9 @@ export class CoverService {
       }
 
       if (!rawBuf) return null;
+      if (contentType.includes('svg')) {
+        return null;
+      }
       if (contentType && !contentType.startsWith('image/') && !contentType.includes('octet-stream')) {
         return null;
       }
