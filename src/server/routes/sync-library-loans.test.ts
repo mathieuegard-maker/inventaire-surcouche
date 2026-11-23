@@ -256,4 +256,58 @@ describe('Jalon 3 — Sync Offline (PUSH -> PULL LWW), Prêts & Actions par Lot'
     expect(pullBody.contacts.map((c) => c.name)).toContain('Claire');
     expect(pullBody.contacts.map((c) => c.name)).toContain('Marc');
   });
+
+  it('ne bloque jamais POST /api/sync/push sur un bookId inexistant (book_not_found au lieu de 500 FK)', async () => {
+    const [validBookId] = seedCentralBooks(db, 1);
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'SyncResilience',
+        email: 'syncres@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const cookie = extractCookie(reg);
+
+    const pushRes = await appCtx.app.request('/api/sync/push', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        operations: [
+          {
+            id: 'op_orphan_1',
+            op: 'SET_STATUS',
+            bookId: 'bk_old_deleted_id',
+            status: 'owned',
+            timestamp: '2026-11-23T10:00:00.000Z'
+          },
+          {
+            id: 'op_valid_2',
+            op: 'SET_STATUS',
+            bookId: validBookId,
+            status: 'owned',
+            timestamp: '2026-11-23T10:01:00.000Z'
+          }
+        ]
+      })
+    });
+
+    expect(pushRes.status).toBe(200);
+    const pushBody = (await pushRes.json()) as {
+      results: Array<{ id: string; applied: boolean; reason?: string }>;
+    };
+    expect(pushBody.results).toEqual([
+      { id: 'op_orphan_1', applied: false, reason: 'book_not_found' },
+      { id: 'op_valid_2', applied: true }
+    ]);
+
+    const pull = await appCtx.app.request('/api/sync/pull', { headers: { cookie } });
+    expect(pull.status).toBe(200);
+    const pullBody = (await pull.json()) as { books: Array<{ id: string; ownershipStatus: string }> };
+    expect(pullBody.books).toHaveLength(1);
+    expect(pullBody.books[0].id).toBe(validBookId);
+    expect(pullBody.books[0].ownershipStatus).toBe('owned');
+  });
 });

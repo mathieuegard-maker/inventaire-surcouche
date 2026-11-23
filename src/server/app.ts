@@ -141,6 +141,7 @@ export function createApp(options: CreateAppOptions) {
     onJobEnqueued: () => worker.nudge()
   });
   const syncService = new SyncService({
+    catalogRepo,
     libraryRepo,
     loanRepo,
     readingRepo,

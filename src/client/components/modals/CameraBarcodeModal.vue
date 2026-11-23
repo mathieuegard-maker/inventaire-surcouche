@@ -29,6 +29,17 @@ const lastDetectedAt = new Map<string, number>();
 
 let scanner: Html5Qrcode | null = null;
 let isRunning = false;
+let isStarting = false;
+
+async function waitForReaderElement(maxAttempts = 12): Promise<HTMLElement | null> {
+  for (let i = 0; i < maxAttempts; i++) {
+    await nextTick();
+    const el = document.getElementById(readerElementId);
+    if (el) return el;
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+  return null;
+}
 
 const modalTitle = computed(() => {
   if (props.mode === 'burst') return t('scan.cameraTitleBurst');
@@ -37,6 +48,7 @@ const modalTitle = computed(() => {
 });
 
 async function stopScanner(): Promise<void> {
+  isStarting = false;
   if (!scanner) return;
   const instance = scanner;
   scanner = null;
@@ -56,11 +68,15 @@ async function stopScanner(): Promise<void> {
 }
 
 async function startScanner(): Promise<void> {
+  if (isRunning || isStarting) return;
+  isStarting = true;
   cameraError.value = '';
-  await nextTick();
 
-  const container = document.getElementById(readerElementId);
-  if (!container) return;
+  const container = await waitForReaderElement();
+  if (!container || !props.open) {
+    isStarting = false;
+    return;
+  }
 
   try {
     const instance = new Html5Qrcode(readerElementId, {
@@ -101,7 +117,9 @@ async function startScanner(): Promise<void> {
       }
     );
     isRunning = true;
+    isStarting = false;
   } catch {
+    isStarting = false;
     cameraError.value = t('scan.cameraInitError');
   }
 }
@@ -115,7 +133,8 @@ watch(
     } else {
       void stopScanner();
     }
-  }
+  },
+  { immediate: true }
 );
 
 onBeforeUnmount(() => {

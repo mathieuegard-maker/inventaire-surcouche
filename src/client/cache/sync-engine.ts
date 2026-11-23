@@ -25,6 +25,7 @@ interface SyncPullResponse {
 }
 
 const LAST_SYNC_META_KEY = 'last_sync_at';
+const LAST_LIBRARY_ID_META_KEY = 'last_library_id';
 
 export async function enqueueOutboxOp(op: SyncOutboxOperation): Promise<void> {
   await localDb.outbox.put(op);
@@ -32,15 +33,34 @@ export async function enqueueOutboxOp(op: SyncOutboxOperation): Promise<void> {
 
 /**
  * Exécute un cycle complet `PUSH -> PULL` contre le serveur.
+ * 0. Si le foyer actif a changé (nouveau compte / base réinitialisée), purge l'ancien cache local avant un full pull.
  * 1. Pousse toute l'`outbox` datée au serveur (avant tout pull).
  * 2. Tire le delta depuis `last_sync_at` (ou snapshot complet au premier chargement).
  * 3. Met à jour le miroir IndexedDB (sans images base64).
  */
-export async function runSyncCycle(options?: { forceFullPull?: boolean }): Promise<{
+export async function runSyncCycle(options?: { forceFullPull?: boolean; libraryId?: string }): Promise<{
   pushedCount: number;
   pulledBooksCount: number;
   unreadAlertsCount: number;
 }> {
+  let forceFullPull = Boolean(options?.forceFullPull);
+
+  if (options?.libraryId) {
+    const prevLib = await localDb.meta.get(LAST_LIBRARY_ID_META_KEY);
+    if (prevLib?.value && prevLib.value !== options.libraryId) {
+      await Promise.all([
+        localDb.mirror_books.clear(),
+        localDb.mirror_series.clear(),
+        localDb.mirror_loans.clear(),
+        localDb.mirror_contacts.clear(),
+        localDb.outbox.clear(),
+        localDb.meta.delete(LAST_SYNC_META_KEY)
+      ]);
+      forceFullPull = true;
+    }
+    await localDb.meta.put({ key: LAST_LIBRARY_ID_META_KEY, value: options.libraryId });
+  }
+
   // ÉTAPE 1 : PUSH outbox d'abord
   const pendingOps = await localDb.outbox.orderBy('timestamp').toArray();
   let pushedCount = 0;
@@ -58,7 +78,7 @@ export async function runSyncCycle(options?: { forceFullPull?: boolean }): Promi
   }
 
   // ÉTAPE 2 : PULL delta ensuite
-  const lastMeta = options?.forceFullPull ? undefined : await localDb.meta.get(LAST_SYNC_META_KEY);
+  const lastMeta = forceFullPull ? undefined : await localDb.meta.get(LAST_SYNC_META_KEY);
   const query = lastMeta?.value ? `?since=${encodeURIComponent(lastMeta.value)}` : '';
   const pullRes = await apiRequest<SyncPullResponse>(`/api/sync/pull${query}`);
 

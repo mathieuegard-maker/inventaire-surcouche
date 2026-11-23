@@ -138,9 +138,12 @@ export const useLibraryStore = defineStore('library', () => {
     if (isSyncing.value) return false;
     isSyncing.value = true;
     try {
-      const outcome = await runSyncCycle(options);
-      await hydrateFromLocalCache();
       const authStore = useAuthStore();
+      const outcome = await runSyncCycle({
+        ...options,
+        libraryId: authStore.profile?.library.id
+      });
+      await hydrateFromLocalCache();
       if (authStore.profile) {
         authStore.profile = { ...authStore.profile, unreadAlertsCount: outcome.unreadAlertsCount };
       }

@@ -1,8 +1,9 @@
 // src/server/services/sync.service.ts
-// Protocole de synchronisation hors-ligne strict : PUSH outbox d'abord (LWW par timestamp), PULL delta ensuite.
+// Protocole de synchronisation hors-ligne strict : PUSH outbox d'abord (LWW par timestamp, tolérant aux bookId supprimés), PULL delta ensuite.
 
 import crypto from 'node:crypto';
 import type { SyncOutboxOperation } from '../../shared/schemas';
+import type { CatalogRepository } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
 import type { LoanRepository } from '../repositories/loan.repo';
 import type { ReadingRepository } from '../repositories/reading.repo';
@@ -21,6 +22,7 @@ export interface SyncPushResult {
 }
 
 export class SyncService {
+  private readonly catalogRepo: CatalogRepository;
   private readonly libraryRepo: LibraryRepository;
   private readonly loanRepo: LoanRepository;
   private readonly readingRepo: ReadingRepository;
@@ -28,12 +30,14 @@ export class SyncService {
   private readonly libraryService: LibraryService;
 
   constructor(deps: {
+    catalogRepo: CatalogRepository;
     libraryRepo: LibraryRepository;
     loanRepo: LoanRepository;
     readingRepo: ReadingRepository;
     ingestionService: IngestionService;
     libraryService: LibraryService;
   }) {
+    this.catalogRepo = deps.catalogRepo;
     this.libraryRepo = deps.libraryRepo;
     this.loanRepo = deps.loanRepo;
     this.readingRepo = deps.readingRepo;
@@ -44,6 +48,7 @@ export class SyncService {
   /**
    * Étape 1 à la reconnexion : applique toute l'outbox offline dans l'ordre chronologique.
    * En cas de conflit simultané entre 2 membres sur le même champ, le timestamp le plus récent gagne (Last-Write-Wins).
+   * Une opération pointant vers un `bookId` inexistant est proprement marquée `book_not_found` sans jamais bloquer le lot.
    */
   async pushOutbox(input: {
     libraryId: string;
@@ -54,61 +59,77 @@ export class SyncService {
     const results: SyncPushOpOutcome[] = [];
 
     for (const op of ordered) {
-      if (op.op === 'SET_STATUS') {
-        const res = this.libraryRepo.upsertLibraryBookStatusLww({
-          libraryId: input.libraryId,
-          bookId: op.bookId,
-          status: op.status,
-          wishedByUserId: op.status === 'wish' ? input.userId : null,
-          timestamp: op.timestamp
-        });
-        results.push({
-          id: op.id,
-          applied: res.applied,
-          reason: res.applied ? undefined : 'stale_timestamp_lww'
-        });
-      } else if (op.op === 'LEND') {
-        const latest = this.loanRepo.findLatestLoanByBook(input.libraryId, op.bookId);
-        if (latest && latest.updated_at > op.timestamp) {
-          results.push({ id: op.id, applied: false, reason: 'stale_timestamp_lww' });
-        } else {
-          this.loanRepo.createLoan({
-            id: `ln_${crypto.randomBytes(6).toString('hex')}`,
+      try {
+        if (op.op === 'SET_STATUS') {
+          if (!this.catalogRepo.findBookById(op.bookId)) {
+            results.push({ id: op.id, applied: false, reason: 'book_not_found' });
+            continue;
+          }
+          const res = this.libraryRepo.upsertLibraryBookStatusLww({
             libraryId: input.libraryId,
             bookId: op.bookId,
-            borrowerName: op.borrowerName,
-            now: op.timestamp
+            status: op.status,
+            wishedByUserId: op.status === 'wish' ? input.userId : null,
+            timestamp: op.timestamp
           });
-          results.push({ id: op.id, applied: true });
-        }
-      } else if (op.op === 'RETURN') {
-        const latest = this.loanRepo.findLatestLoanByBook(input.libraryId, op.bookId);
-        if (latest && latest.updated_at > op.timestamp) {
-          results.push({ id: op.id, applied: false, reason: 'stale_timestamp_lww' });
-        } else {
-          const changed = this.loanRepo.markReturnedByBook(input.libraryId, op.bookId, op.timestamp);
           results.push({
             id: op.id,
-            applied: changed,
-            reason: changed ? undefined : 'no_active_loan'
+            applied: res.applied,
+            reason: res.applied ? undefined : 'stale_timestamp_lww'
           });
-        }
-      } else if (op.op === 'SET_READING') {
-        const res = this.readingRepo.upsertReadingState({
-          userId: input.userId,
-          bookId: op.bookId,
-          status: op.status,
-          rating: op.rating,
-          notes: op.notes,
-          timestamp: op.timestamp
-        });
-        results.push({
-          id: op.id,
-          applied: res.applied,
-          reason: res.applied ? undefined : 'stale_timestamp_lww'
-        });
-      } else if (op.op === 'OFFLINE_SCAN') {
-        try {
+        } else if (op.op === 'LEND') {
+          if (!this.catalogRepo.findBookById(op.bookId)) {
+            results.push({ id: op.id, applied: false, reason: 'book_not_found' });
+            continue;
+          }
+          const latest = this.loanRepo.findLatestLoanByBook(input.libraryId, op.bookId);
+          if (latest && latest.updated_at > op.timestamp) {
+            results.push({ id: op.id, applied: false, reason: 'stale_timestamp_lww' });
+          } else {
+            this.loanRepo.createLoan({
+              id: `ln_${crypto.randomBytes(6).toString('hex')}`,
+              libraryId: input.libraryId,
+              bookId: op.bookId,
+              borrowerName: op.borrowerName,
+              now: op.timestamp
+            });
+            results.push({ id: op.id, applied: true });
+          }
+        } else if (op.op === 'RETURN') {
+          if (!this.catalogRepo.findBookById(op.bookId)) {
+            results.push({ id: op.id, applied: false, reason: 'book_not_found' });
+            continue;
+          }
+          const latest = this.loanRepo.findLatestLoanByBook(input.libraryId, op.bookId);
+          if (latest && latest.updated_at > op.timestamp) {
+            results.push({ id: op.id, applied: false, reason: 'stale_timestamp_lww' });
+          } else {
+            const changed = this.loanRepo.markReturnedByBook(input.libraryId, op.bookId, op.timestamp);
+            results.push({
+              id: op.id,
+              applied: changed,
+              reason: changed ? undefined : 'no_active_loan'
+            });
+          }
+        } else if (op.op === 'SET_READING') {
+          if (!this.catalogRepo.findBookById(op.bookId)) {
+            results.push({ id: op.id, applied: false, reason: 'book_not_found' });
+            continue;
+          }
+          const res = this.readingRepo.upsertReadingState({
+            userId: input.userId,
+            bookId: op.bookId,
+            status: op.status,
+            rating: op.rating,
+            notes: op.notes,
+            timestamp: op.timestamp
+          });
+          results.push({
+            id: op.id,
+            applied: res.applied,
+            reason: res.applied ? undefined : 'stale_timestamp_lww'
+          });
+        } else if (op.op === 'OFFLINE_SCAN') {
           await this.ingestionService.resolveIsbns({
             rawIsbns: [op.isbn13],
             channel: 'barcode_simple',
@@ -117,9 +138,9 @@ export class SyncService {
             libraryId: input.libraryId
           });
           results.push({ id: op.id, applied: true });
-        } catch {
-          results.push({ id: op.id, applied: false, reason: 'resolve_failed' });
         }
+      } catch {
+        results.push({ id: op.id, applied: false, reason: 'op_failed' });
       }
     }
 

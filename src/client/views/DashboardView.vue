@@ -31,7 +31,10 @@ const spaceCards = computed(() => [
 ]);
 
 async function handleSync(): Promise<void> {
-  await libraryStore.syncNow();
+  const ok = await libraryStore.syncNow({ forceFullPull: true });
+  if (!ok) {
+    uiStore.pushToast(t('app.retry'), 'danger');
+  }
 }
 
 function openBook(bookId: string): void {
