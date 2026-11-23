@@ -84,20 +84,15 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
 
 export function createBnfConnector(http: HttpClient): BnfConnector {
   async function querySru(cqlQuery: string, maxRecords: number, cacheKey?: string): Promise<ParsedMarcRecord[]> {
-    const params = new URLSearchParams({
-      version: '1.2',
-      operation: 'searchRetrieve',
-      recordSchema: 'intermarcxchange',
-      maximumRecords: String(maxRecords),
-      query: cqlQuery
-    });
-    const url = `${BNF_SRU_BASE}?${params.toString()}`;
+    const url =
+      `${BNF_SRU_BASE}?version=1.2&operation=searchRetrieve&recordSchema=intermarcxchange` +
+      `&maximumRecords=${maxRecords}&startRecord=1&query=${encodeURIComponent(cqlQuery)}`;
     const xml = await http.fetchText({
       source: 'bnf',
       url,
       forceIpv4: true,
       headers: { Accept: 'application/xml, text/xml' },
-      timeoutMs: 10000,
+      timeoutMs: 15000,
       minIntervalMs: 250,
       cacheKey,
       cacheTtlSec: 60 * 60 * 24 * 7
@@ -143,8 +138,8 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       const normSeries = normalizeTextKey(safeSeries);
       const lastName = extractAuthorLastNameForQuery(author);
       const cql = lastName
-        ? `bib.title all "${safeSeries}" and bib.author all "${lastName}"`
-        : `bib.title all "${safeSeries}"`;
+        ? `bib.title all "${safeSeries}" and bib.author all "${lastName}" and bib.doctype any "a"`
+        : `bib.title all "${safeSeries}" and bib.doctype any "a"`;
 
       const records = await querySru(cql, maxRecords, `bnf:sername:${cql.toLowerCase()}:${maxRecords}`);
       const discoveredEnsembleIds = new Set<string>();
@@ -193,8 +188,8 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       if (!safeTitle) return [];
       const lastName = extractAuthorLastNameForQuery(author);
       const cql = lastName
-        ? `bib.title all "${safeTitle}" and bib.author all "${lastName}"`
-        : `bib.title all "${safeTitle}"`;
+        ? `bib.title all "${safeTitle}" and bib.author all "${lastName}" and bib.doctype any "a"`
+        : `bib.title all "${safeTitle}" and bib.doctype any "a"`;
       const records = await querySru(cql, maxRecords, `bnf:search:${cql.toLowerCase()}:${maxRecords}`);
       return records.map((r) => toCandidate(r, r.isbn13));
     }

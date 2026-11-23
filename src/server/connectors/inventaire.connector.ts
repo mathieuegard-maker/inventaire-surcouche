@@ -92,7 +92,7 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
     // Lots de 30 URIs max pour respecter l'API Inventaire
     for (let i = 0; i < clean.length; i += 30) {
       const slice = clean.slice(i, i + 30);
-      const url = `${INV_API}?action=by-uris&uris=${encodeURIComponent(slice.join('|'))}&relatives=wdt:P629,wdt:P179,wdt:P50,wdt:P123`;
+      const url = `${INV_API}?action=by-uris&uris=${encodeURIComponent(slice.join('|'))}&relatives=${encodeURIComponent('wdt:P629|wdt:P179|wdt:P50|wdt:P123')}`;
       const data = await http.fetchJson<InvByUrisResponse>({
         source: 'inventaire',
         url,
