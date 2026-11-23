@@ -12,8 +12,9 @@ Ce document s'applique à **toute session de travail** sur ce dépôt. Son but e
 * **Documents V2 de référence :**
   * [`documentation/v2/01_CARTOGRAPHIE_V1.md`](./documentation/v2/01_CARTOGRAPHIE_V1.md) — État des lieux V1, doublons et couplages à éliminer.
   * [`documentation/v2/02_PRINCIPES_ARCHITECTURE_V2.md`](./documentation/v2/02_PRINCIPES_ARCHITECTURE_V2.md) — Principes d'architecture, algorithmes et arbitrages CEO/CTO validés.
-  * [`documentation/v2/03_MATRICE_BIJECTION_V1_V2.md`](./documentation/v2/03_MATRICE_BIJECTION_V1_V2.md) — Inventaire exhaustif des 51 fonctionnalités et portées de données à garantir.
-  * `documentation/v2/04_PLAN_EXECUTION_V2.md` — Feuille de route et jalons V2 (dès création).
+  * [`documentation/v2/03_MATRICE_BIJECTION_V1_V2.md`](./documentation/v2/03_MATRICE_BIJECTION_V1_V2.md) — Inventaire exhaustif des 52 fonctionnalités et portées de données à garantir.
+  * [`documentation/v2/04_ARCHITECTURE_TECHNIQUE_V2.md`](./documentation/v2/04_ARCHITECTURE_TECHNIQUE_V2.md) — Blueprint technique : arborescence `shared`/`server`/`client`, schéma SQLite V2 (25 tables), contrat API unique `/api/*`.
+  * [`documentation/v2/05_PLAN_EXECUTION_V2.md`](./documentation/v2/05_PLAN_EXECUTION_V2.md) — Feuille de route et jalons V2 (Jalon 0 → Jalon 7).
 * **Suivi de bijection :** dès qu'une fonctionnalité est implémentée et testée en V2, cocher sa ligne (`☑`) dans `documentation/v2/03_MATRICE_BIJECTION_V1_V2.md`.
 * **Capturer le « pourquoi » :** tout nouvel arbitrage produit, technique ou résolution de bug métier important est consigné (contexte, décision, alternatives écartées) dans `documentation/v2/02_PRINCIPES_ARCHITECTURE_V2.md`.
 * **Workflow strict (`.agents/skills/language_rules.md`) :** toujours communiquer en français et présenter un plan clair avant de modifier du code ou de lancer des commandes structurantes.

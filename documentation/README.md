@@ -5,7 +5,9 @@ La documentation est strictement segmentée par version afin de distinguer la **
 ## 1. Référence Active — `documentation/v2/` (À consulter en priorité)
 * [`v2/01_CARTOGRAPHIE_V1.md`](./v2/01_CARTOGRAPHIE_V1.md) — Cartographie exhaustive de la V1 (workflows UX, routes, tables SQLite, doublons et dettes à ne pas reproduire).
 * [`v2/02_PRINCIPES_ARCHITECTURE_V2.md`](./v2/02_PRINCIPES_ARCHITECTURE_V2.md) — Principes d'architecture Clean Room V2, pipeline 3 étages, algorithmes anti-collections poche et séries à redécoupage, primauté utilisateur, stack, sécurité, multi-thèmes et `i18n`.
-* [`v2/03_MATRICE_BIJECTION_V1_V2.md`](./v2/03_MATRICE_BIJECTION_V1_V2.md) — Matrice exhaustive des 51 fonctionnalités UX et portées de données (`Local`, `Utilisateur`, `Foyer`, `Catalogue Central`) servant de checklist de bijection V1 → V2.
+* [`v2/03_MATRICE_BIJECTION_V1_V2.md`](./v2/03_MATRICE_BIJECTION_V1_V2.md) — Matrice exhaustive des 52 fonctionnalités UX et portées de données (`Local`, `Utilisateur`, `Foyer`, `Catalogue Central`) servant de checklist de bijection V1 → V2.
+* [`v2/04_ARCHITECTURE_TECHNIQUE_V2.md`](./v2/04_ARCHITECTURE_TECHNIQUE_V2.md) — Blueprint technique complet : arborescence étanche `shared`/`server`/`client`, règles de dépendance, schéma SQLite V2 (25 tables), contrat API unique `/api/*` et 4 moteurs clés.
+* [`v2/05_PLAN_EXECUTION_V2.md`](./v2/05_PLAN_EXECUTION_V2.md) — Feuille de route Clean Room V2 en 8 jalons incrémentaux et testables (Jalon 0 → Jalon 7) avec preuve de couverture 52/52.
 
 ## 2. Exploitation Serveur (Commun V1 & V2)
 * [`DEPLOIEMENT_SERVEUR_DEBIAN.md`](./DEPLOIEMENT_SERVEUR_DEBIAN.md) — Procédures d'exploitation du serveur Debian 13 (OptiPlex 3060 Micro, Docker + Cloudflare Tunnel, sauvegardes).
