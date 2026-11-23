@@ -193,6 +193,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAdmin,
     activeTheme,
     applyTheme,
+    hydrateProfile,
     initSession,
     register,
     login,

@@ -1,5 +1,5 @@
 // src/client/router/index.ts
-// Routeur SPA Vue Router V2 avec garde d'authentification stricte (cookie HttpOnly via /api/me).
+// Routeur SPA Vue Router V2 avec garde d'authentification stricte (cookie HttpOnly via /api/me) + garde Admin.
 
 import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth.store';
@@ -13,7 +13,6 @@ import DebugCacheView from '../views/DebugCacheView.vue';
 import BookDetailView from '../views/BookDetailView.vue';
 import BookEditView from '../views/BookEditView.vue';
 import BookCreateView from '../views/BookCreateView.vue';
-import ScanView from '../views/ScanView.vue';
 import SeriesDetailView from '../views/SeriesDetailView.vue';
 import AuthorDetailView from '../views/AuthorDetailView.vue';
 import ReleasesView from '../views/ReleasesView.vue';
@@ -67,18 +66,39 @@ export const router = createRouter({
     // Alias de rétrocompatibilité navigation
     { path: '/stats', redirect: { path: '/profile', query: { tab: 'stats' } } },
     { path: '/friends', redirect: { path: '/social', query: { tab: 'friends' } } },
-    // Fiches Livres, Édition Couche 3 & Création Manuelle (Jalon 4)
+    // Fiches Livres, Édition Couche 3 & Création Manuelle
     { path: '/book/create', name: 'book-create', component: BookCreateView, meta: { requiresAuth: true } },
     { path: '/book/:bookId/edit', name: 'book-edit', component: BookEditView, meta: { requiresAuth: true } },
     { path: '/book/:bookId', name: 'book-detail', component: BookDetailView, meta: { requiresAuth: true } },
-    // Acquisition 4 onglets (Jalon 5)
-    { path: '/scan', name: 'scan', component: ScanView, meta: { requiresAuth: true } },
-    // Séries, Auteurs & Nouveautés (Jalon 6)
+    // Acquisition 4 onglets (lazy-loaded pour isoler html5-qrcode du bundle principal)
+    {
+      path: '/scan',
+      name: 'scan',
+      component: () => import('../views/ScanView.vue'),
+      meta: { requiresAuth: true }
+    },
+    // Séries, Auteurs & Nouveautés
     { path: '/series/:seriesId', name: 'series-detail', component: SeriesDetailView, meta: { requiresAuth: true } },
     { path: '/author/:name', name: 'author-detail', component: AuthorDetailView, meta: { requiresAuth: true } },
     { path: '/releases', name: 'releases', component: ReleasesView, meta: { requiresAuth: true } },
-    // Coquille en attente du Jalon 7
-    { path: '/social', name: 'social', component: DashboardView, meta: { requiresAuth: true } },
+    // Social, Partage Public & Administration (Jalon 7, lazy-loaded)
+    {
+      path: '/social',
+      name: 'social',
+      component: () => import('../views/SocialView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
+      path: '/shared/:token',
+      name: 'public-share',
+      component: () => import('../views/PublicShareView.vue')
+    },
+    {
+      path: '/admin',
+      name: 'admin',
+      component: () => import('../views/AdminView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true }
+    },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' }
   ]
 });
@@ -97,6 +117,10 @@ router.beforeEach(async (to) => {
     if (typeof to.query.invite === 'string') query.invite = to.query.invite;
     if (typeof to.query.friend === 'string') query.friend = to.query.friend;
     return { path: '/login', query };
+  }
+
+  if (to.meta.requiresAdmin && !authStore.isAdmin) {
+    return { path: '/dashboard' };
   }
 
   if (to.meta.publicOnly && authStore.isAuthenticated) {

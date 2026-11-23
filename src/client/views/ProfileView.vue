@@ -176,7 +176,74 @@ async function confirmDeleteAccount(): Promise<void> {
 }
 
 function handleAdminClick(): void {
-  uiStore.pushToast(t('profile.comingSoonAdmin'), 'info');
+  void router.push('/admin');
+}
+
+// Statistiques & Export CSV/JSON (Jalon 7)
+interface RankedStatItem {
+  label: string;
+  count: number;
+}
+
+interface LibraryStatsData {
+  periodDays: number | null;
+  kpis: {
+    ownedCount: number;
+    wishedCount: number;
+    lentCount: number;
+    seriesCount: number;
+    addedInPeriodCount: number;
+    totalPages: number;
+  };
+  reading: {
+    readCount: number;
+    readingCount: number;
+    toReadCount: number;
+    abandonedCount: number;
+    ratedCount: number;
+    averageRating: number | null;
+  };
+  tops: {
+    genres: RankedStatItem[];
+    authors: RankedStatItem[];
+    series: RankedStatItem[];
+    publishers: RankedStatItem[];
+  };
+  activeLoans: Array<{
+    bookId: string;
+    title: string;
+    borrowerName: string;
+    loanedAt: string;
+  }>;
+}
+
+const statsPeriod = ref<string>('30');
+const statsLoading = ref(false);
+const statsData = ref<LibraryStatsData | null>(null);
+
+async function loadStats(): Promise<void> {
+  statsLoading.value = true;
+  try {
+    const query = statsPeriod.value === 'all' ? '' : `?periodDays=${encodeURIComponent(statsPeriod.value)}`;
+    const res = await apiRequest<{ ok: true; stats: LibraryStatsData }>(`/api/stats${query}`);
+    statsData.value = res.stats;
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    statsLoading.value = false;
+  }
+}
+
+function triggerExport(format: 'csv' | 'json'): void {
+  window.location.href = `/api/me/export?format=${format}`;
+}
+
+function navigateToCollectionFilter(q: string): void {
+  void router.push({ path: '/collection', query: { q } });
+}
+
+function navigateToAuthor(authorName: string): void {
+  void router.push(`/author/${encodeURIComponent(authorName)}`);
 }
 
 // Notifications & Web Push VAPID
@@ -236,10 +303,18 @@ watch(
   (tab) => {
     if (tab === 'notifications') {
       void loadNotificationPrefs();
+    } else if (tab === 'stats') {
+      void loadStats();
     }
   },
   { immediate: true }
 );
+
+watch(statsPeriod, () => {
+  if (activeTab.value === 'stats') {
+    void loadStats();
+  }
+});
 
 async function saveNotificationPrefs(): Promise<void> {
   notifBusy.value = true;
@@ -468,6 +543,19 @@ async function disableWebPush(): Promise<void> {
       </div>
 
       <div class="ds-card ds-stack">
+        <h2>{{ t('profile.exportTitle') }}</h2>
+        <p class="ds-text-muted">{{ t('profile.exportDesc') }}</p>
+        <div class="ds-row">
+          <button type="button" class="ds-btn" @click="triggerExport('csv')">
+            {{ t('profile.exportCsvBtn') }}
+          </button>
+          <button type="button" class="ds-btn" @click="triggerExport('json')">
+            {{ t('profile.exportJsonBtn') }}
+          </button>
+        </div>
+      </div>
+
+      <div class="ds-card ds-stack">
         <h2>{{ t('profile.dangerZoneTitle') }}</h2>
         <div class="ds-row ds-row--between">
           <button type="button" class="ds-btn" @click="handleLogout">
@@ -518,9 +606,157 @@ async function disableWebPush(): Promise<void> {
     </div>
 
     <!-- Onglet Statistiques (Jalon 7) -->
-    <div v-else-if="activeTab === 'stats'" class="ds-card ds-stack">
-      <h2>{{ t('profile.tabStats') }}</h2>
-      <p class="ds-text-muted">{{ t('profile.comingSoonStats') }}</p>
+    <div v-else-if="activeTab === 'stats'" class="ds-stack">
+      <div class="ds-card ds-row ds-row--between stats-toolbar">
+        <h2>{{ t('profile.tabStats') }}</h2>
+        <div class="ds-row">
+          <select v-model="statsPeriod" class="ds-input stats-period-select">
+            <option value="30">{{ t('profile.statsPeriod30') }}</option>
+            <option value="90">{{ t('profile.statsPeriod90') }}</option>
+            <option value="365">{{ t('profile.statsPeriod365') }}</option>
+            <option value="all">{{ t('profile.statsPeriodAll') }}</option>
+          </select>
+          <button type="button" class="ds-btn ds-btn--sm" @click="triggerExport('csv')">
+            {{ t('profile.exportCsvBtn') }}
+          </button>
+          <button type="button" class="ds-btn ds-btn--sm" @click="triggerExport('json')">
+            {{ t('profile.exportJsonBtn') }}
+          </button>
+        </div>
+      </div>
+
+      <p v-if="statsLoading && !statsData" class="ds-card ds-text-muted">{{ t('app.loading') }}</p>
+
+      <template v-else-if="statsData">
+        <div class="stats-kpi-grid">
+          <router-link to="/collection" class="ds-card stats-kpi-card">
+            <span class="ds-text-muted">{{ t('profile.statsKpiOwned') }}</span>
+            <strong class="stats-kpi-value">{{ statsData.kpis.ownedCount }}</strong>
+          </router-link>
+          <router-link to="/wishlist" class="ds-card stats-kpi-card">
+            <span class="ds-text-muted">{{ t('profile.statsKpiWish') }}</span>
+            <strong class="stats-kpi-value">{{ statsData.kpis.wishedCount }}</strong>
+          </router-link>
+          <router-link to="/loans" class="ds-card stats-kpi-card">
+            <span class="ds-text-muted">{{ t('profile.statsKpiLent') }}</span>
+            <strong class="stats-kpi-value">{{ statsData.kpis.lentCount }}</strong>
+          </router-link>
+          <router-link :to="{ path: '/collection', query: { mode: 'series' } }" class="ds-card stats-kpi-card">
+            <span class="ds-text-muted">{{ t('profile.statsKpiSeries') }}</span>
+            <strong class="stats-kpi-value">{{ statsData.kpis.seriesCount }}</strong>
+          </router-link>
+        </div>
+
+        <div class="ds-card ds-row ds-row--between stats-meta-bar">
+          <span>{{ t('profile.statsAddedInPeriod', { count: statsData.kpis.addedInPeriodCount }) }}</span>
+          <span>{{ t('profile.statsTotalPages', { count: statsData.kpis.totalPages }) }}</span>
+        </div>
+
+        <div class="ds-card ds-stack">
+          <h3>{{ t('profile.statsReadingTitle') }}</h3>
+          <div class="ds-chips">
+            <span class="ds-chip">{{ t('book.readingRead') }} : {{ statsData.reading.readCount }}</span>
+            <span class="ds-chip">{{ t('book.readingInProgress') }} : {{ statsData.reading.readingCount }}</span>
+            <span class="ds-chip">{{ t('book.readingToRead') }} : {{ statsData.reading.toReadCount }}</span>
+            <span class="ds-chip">{{ t('book.readingAbandoned') }} : {{ statsData.reading.abandonedCount }}</span>
+          </div>
+          <p class="ds-text-muted">
+            {{
+              statsData.reading.averageRating !== null
+                ? t('profile.statsAvgRating', {
+                    avg: statsData.reading.averageRating,
+                    count: statsData.reading.ratedCount
+                  })
+                : t('profile.statsNoRating')
+            }}
+          </p>
+        </div>
+
+        <div class="ds-grid-2">
+          <div class="ds-card ds-stack">
+            <h3>{{ t('profile.statsTopGenres') }}</h3>
+            <p v-if="statsData.tops.genres.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
+            <div v-else class="ds-stack stats-rank-list">
+              <button
+                v-for="item in statsData.tops.genres"
+                :key="item.label"
+                type="button"
+                class="ds-panel ds-row ds-row--between stats-rank-btn"
+                @click="navigateToCollectionFilter(item.label)"
+              >
+                <span>{{ item.label }}</span>
+                <span class="ds-badge">{{ item.count }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ds-card ds-stack">
+            <h3>{{ t('profile.statsTopAuthors') }}</h3>
+            <p v-if="statsData.tops.authors.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
+            <div v-else class="ds-stack stats-rank-list">
+              <button
+                v-for="item in statsData.tops.authors"
+                :key="item.label"
+                type="button"
+                class="ds-panel ds-row ds-row--between stats-rank-btn"
+                @click="navigateToAuthor(item.label)"
+              >
+                <span>{{ item.label }}</span>
+                <span class="ds-badge">{{ item.count }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ds-card ds-stack">
+            <h3>{{ t('profile.statsTopSeries') }}</h3>
+            <p v-if="statsData.tops.series.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
+            <div v-else class="ds-stack stats-rank-list">
+              <button
+                v-for="item in statsData.tops.series"
+                :key="item.label"
+                type="button"
+                class="ds-panel ds-row ds-row--between stats-rank-btn"
+                @click="navigateToCollectionFilter(item.label)"
+              >
+                <span>{{ item.label }}</span>
+                <span class="ds-badge">{{ item.count }}</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="ds-card ds-stack">
+            <h3>{{ t('profile.statsTopPublishers') }}</h3>
+            <p v-if="statsData.tops.publishers.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
+            <div v-else class="ds-stack stats-rank-list">
+              <button
+                v-for="item in statsData.tops.publishers"
+                :key="item.label"
+                type="button"
+                class="ds-panel ds-row ds-row--between stats-rank-btn"
+                @click="navigateToCollectionFilter(item.label)"
+              >
+                <span>{{ item.label }}</span>
+                <span class="ds-badge">{{ item.count }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="statsData.activeLoans.length > 0" class="ds-card ds-stack">
+          <h3>{{ t('profile.statsActiveLoansTitle', { count: statsData.activeLoans.length }) }}</h3>
+          <div class="ds-stack stats-rank-list">
+            <router-link
+              v-for="loan in statsData.activeLoans"
+              :key="loan.bookId"
+              :to="`/book/${loan.bookId}`"
+              class="ds-panel ds-row ds-row--between stats-rank-btn"
+            >
+              <span>{{ loan.title }}</span>
+              <span class="ds-badge">{{ t('loans.lentTo', { name: loan.borrowerName }) }}</span>
+            </router-link>
+          </div>
+        </div>
+      </template>
     </div>
 
     <!-- Onglet Notifications -->
@@ -680,5 +916,50 @@ async function disableWebPush(): Promise<void> {
 .genres-input {
   flex: 1;
   min-width: 200px;
+}
+
+.stats-toolbar {
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.stats-period-select {
+  width: auto;
+}
+
+.stats-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.stats-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.stats-kpi-value {
+  font-size: 1.75rem;
+  color: var(--accent);
+}
+
+.stats-meta-bar {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.stats-rank-list {
+  gap: var(--space-2);
+}
+
+.stats-rank-btn {
+  width: 100%;
+  cursor: pointer;
+  color: var(--text-primary);
+  text-decoration: none;
+  text-align: left;
 }
 </style>

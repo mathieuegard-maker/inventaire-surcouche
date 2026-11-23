@@ -16,7 +16,14 @@ import type { PhotoAiService } from '../services/photo-ai.service';
 import type { SearchService } from '../services/search.service';
 import type { SeriesManagementService } from '../services/series-management.service';
 import type { NotificationService } from '../services/notification.service';
-import { createRequireAuthMiddleware, type AppVariables } from '../middleware/auth.middleware';
+import type { SocialService } from '../services/social.service';
+import type { StatsExportService } from '../services/stats-export.service';
+import type { AdminService } from '../services/admin.service';
+import {
+  createRequireAdminMiddleware,
+  createRequireAuthMiddleware,
+  type AppVariables
+} from '../middleware/auth.middleware';
 import { createAuthRoutes } from './auth.routes';
 import { createProfileRoutes } from './profile.routes';
 import { createCoversRoutes } from './covers.routes';
@@ -30,6 +37,9 @@ import { createSearchRoutes } from './search.routes';
 import { createSeriesRoutes } from './series.routes';
 import { createAuthorsRoutes } from './authors.routes';
 import { createNotificationsRoutes, createReleasesRoutes } from './notifications.routes';
+import { createSocialRoutes } from './social.routes';
+import { createStatsRoutes } from './stats.routes';
+import { createAdminRoutes } from './admin.routes';
 
 export interface ApiRouterDeps {
   config: ServerConfig;
@@ -44,6 +54,9 @@ export interface ApiRouterDeps {
   searchService: SearchService;
   seriesManagementService: SeriesManagementService;
   notificationService: NotificationService;
+  socialService: SocialService;
+  statsExportService: StatsExportService;
+  adminService: AdminService;
   jobRepo: JobRepository;
   worker: BackgroundWorker;
   startedAt: number;
@@ -52,6 +65,7 @@ export interface ApiRouterDeps {
 export function createApiRouter(deps: ApiRouterDeps) {
   const api = new Hono<{ Variables: AppVariables }>();
   const requireAuth = createRequireAuthMiddleware(deps.authService);
+  const requireAdmin = createRequireAdminMiddleware(deps.authService);
 
   api.get('/health', (c) =>
     c.json({
@@ -63,7 +77,7 @@ export function createApiRouter(deps: ApiRouterDeps) {
   );
 
   api.route('/auth', createAuthRoutes(deps.authService, deps.config));
-  api.route('/me', createProfileRoutes(deps.authService));
+  api.route('/me', createProfileRoutes(deps.authService, deps.statsExportService));
   api.route('/covers', createCoversRoutes({ coverService: deps.coverService, requireAuth }));
   api.route('/books', createBooksRoutes({ ingestionService: deps.ingestionService, libraryService: deps.libraryService, requireAuth }));
   api.route('/jobs', createJobsRoutes({ jobRepo: deps.jobRepo, worker: deps.worker, photoAiService: deps.photoAiService, requireAuth }));
@@ -76,6 +90,9 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.route('/authors', createAuthorsRoutes({ seriesManagementService: deps.seriesManagementService, requireAuth }));
   api.route('/releases', createReleasesRoutes({ notificationService: deps.notificationService, requireAuth }));
   api.route('/notifications', createNotificationsRoutes({ notificationService: deps.notificationService, requireAuth }));
+  api.route('/social', createSocialRoutes({ socialService: deps.socialService, authService: deps.authService, requireAuth }));
+  api.route('/stats', createStatsRoutes({ statsExportService: deps.statsExportService, requireAuth }));
+  api.route('/admin', createAdminRoutes({ adminService: deps.adminService, requireAuth, requireAdmin }));
 
   return api;
 }

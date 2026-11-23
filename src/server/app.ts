@@ -16,6 +16,7 @@ import { LogRepository } from './repositories/log.repo';
 import { LoanRepository } from './repositories/loan.repo';
 import { ReadingRepository } from './repositories/reading.repo';
 import { NotificationRepository } from './repositories/notification.repo';
+import { SocialRepository } from './repositories/social.repo';
 import { AuthService } from './services/auth.service';
 import { CoverService } from './services/cover.service';
 import { CollectionGuardService } from './services/acquisition/collection-guard.service';
@@ -30,6 +31,9 @@ import { PhotoAiService } from './services/photo-ai.service';
 import { SearchService } from './services/search.service';
 import { SeriesManagementService } from './services/series-management.service';
 import { NotificationService } from './services/notification.service';
+import { SocialService } from './services/social.service';
+import { StatsExportService } from './services/stats-export.service';
+import { AdminService } from './services/admin.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { CronScheduler } from './workers/cron-scheduler';
 import { createApiRouter } from './routes';
@@ -72,6 +76,7 @@ export function createApp(options: CreateAppOptions) {
   const loanRepo = new LoanRepository(options.db);
   const readingRepo = new ReadingRepository(options.db);
   const notifRepo = new NotificationRepository(options.db);
+  const socialRepo = new SocialRepository(options.db);
 
   // Connecteurs isolés
   const mailSender =
@@ -194,6 +199,26 @@ export function createApp(options: CreateAppOptions) {
     coverService
   });
 
+  const socialService = new SocialService({
+    db: options.db,
+    socialRepo,
+    libraryRepo,
+    catalogRepo,
+    loanRepo,
+    ingestionService
+  });
+
+  const statsExportService = new StatsExportService({ libraryService });
+
+  const adminService = new AdminService({
+    db: options.db,
+    catalogRepo,
+    userRepo,
+    logRepo,
+    coverService,
+    cronScheduler
+  });
+
   // Enregistrement des handlers du worker continu
   worker.registerHandler('photo_ocr', async (ctx) => {
     return photoAiService.executePhotoOcrJob(ctx);
@@ -239,6 +264,9 @@ export function createApp(options: CreateAppOptions) {
     searchService,
     seriesManagementService,
     notificationService,
+    socialService,
+    statsExportService,
+    adminService,
     jobRepo,
     worker,
     startedAt
@@ -258,7 +286,7 @@ export function createApp(options: CreateAppOptions) {
 
   return {
     app,
-    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo, notifRepo },
+    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo, notifRepo, socialRepo },
     services: {
       authService,
       coverService,
@@ -273,7 +301,10 @@ export function createApp(options: CreateAppOptions) {
       photoAiService,
       searchService,
       seriesManagementService,
-      notificationService
+      notificationService,
+      socialService,
+      statsExportService,
+      adminService
     },
     worker,
     cronScheduler
