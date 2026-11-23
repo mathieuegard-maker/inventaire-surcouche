@@ -934,35 +934,6 @@ describe('v4-pipeline.service', () => {
 
   it("enqueueOrExpandSeriesLayer5 rejette les homonymes d'autres auteurs (Les Éphémères / Jeff Lemire)", async () => {
     const { db } = createInMemoryV4Db();
-    const t1 = await consolidateBookLayer4(
-      db,
-      {
-        anchorIsbn13: '9782754836531',
-        anchorTitle: 'Les éphémères',
-        language: 'fre',
-        sisterEditions: [
-          {
-            source: 'bnf',
-            isbn13: '9782754836531',
-            title: 'Les éphémères',
-            seriesRaw: 'Les éphémères',
-            volumeNumber: '1',
-            language: 'fre'
-          }
-        ],
-        seriesCandidates: [
-          { source: 'bnf', rawName: 'Les éphémères', coreKey: 'ephemeres', cleanDisplay: 'Les éphémères', weight: 4 }
-        ],
-        authors: ['Jeff Lemire'],
-        illustrators: [],
-        scriptwriters: [],
-        rawSubjects: ['Bande dessinée'],
-        rawTitles: ['Les éphémères'],
-        sourcesHit: ['bnf']
-      },
-      { sourceChannel: 'canal_4_ai_photo', libraryId: 'lib_A', action: 'owned' }
-    );
-
     const bnfMockXml = `
       <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
         <srw:records>
@@ -996,20 +967,49 @@ describe('v4-pipeline.service', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response(bnfMockXml, { status: 200 }))
+      vi.fn().mockImplementation(async () => new Response(bnfMockXml, { status: 200 }))
     );
+    let t1;
     try {
+      t1 = await consolidateBookLayer4(
+        db,
+        {
+          anchorIsbn13: '9782754836531',
+          anchorTitle: 'Les éphémères',
+          language: 'fre',
+          sisterEditions: [
+            {
+              source: 'bnf',
+              isbn13: '9782754836531',
+              title: 'Les éphémères',
+              seriesRaw: 'Les éphémères',
+              volumeNumber: '1',
+              coverUrl: 'https://catalogue.bnf.fr/couverture?idImage=eph1',
+              language: 'fre'
+            }
+          ],
+          seriesCandidates: [
+            { source: 'bnf', rawName: 'Les éphémères', coreKey: 'ephemeres', cleanDisplay: 'Les éphémères', weight: 4 }
+          ],
+          authors: ['Jeff Lemire'],
+          illustrators: [],
+          scriptwriters: [],
+          rawSubjects: ['Bande dessinée'],
+          rawTitles: ['Les éphémères'],
+          sourcesHit: ['bnf']
+        },
+        { sourceChannel: 'canal_4_ai_photo', libraryId: 'lib_A', action: 'owned' }
+      );
       await enqueueOrExpandSeriesLayer5(db, t1);
+      const res = await getV4SeriesBooks(db, { seriesId: t1.seriesId!, libraryId: 'lib_A' });
+      const titles = res.books.map((b) => b.book.canonicalTitle);
+      const isbns = res.books.flatMap((b) => b.book.knownIsbns);
+      expect(titles).not.toContain('Les Éphémères sont éternels');
+      expect(isbns).not.toContain('9782322560080');
+      expect(isbns).not.toContain('9782905469007');
+      expect(isbns).toContain('9782754843775');
     } finally {
       vi.unstubAllGlobals();
     }
-
-    const res = await getV4SeriesBooks(db, { seriesId: t1.seriesId!, libraryId: 'lib_A' });
-    const titles = res.books.map((b) => b.book.canonicalTitle);
-    const isbns = res.books.flatMap((b) => b.book.knownIsbns);
-    expect(titles).not.toContain('Les Éphémères sont éternels');
-    expect(isbns).not.toContain('9782322560080');
-    expect(isbns).not.toContain('9782905469007');
-    expect(isbns).toContain('9782754843775');
   });
 });

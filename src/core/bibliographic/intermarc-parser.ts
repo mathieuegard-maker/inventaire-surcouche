@@ -17,6 +17,7 @@ function decodeXmlEntities(raw: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
     .trim();
 }

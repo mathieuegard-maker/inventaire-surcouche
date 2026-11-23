@@ -469,9 +469,9 @@ export function parseIntermarcRecord(
   const fields = parseMarcFields(recordXml);
   if (fields.length === 0) return null;
 
-  // 1. ISBN (038$a EAN-13 ou 020$a prioritaire sur 020$z)
-  const f038List = fields.filter(f => f.tag === '038');
-  const f020List = fields.filter(f => f.tag === '020');
+  // 1. ISBN (038$a / 073$a EAN-13 ou 020$a / 010$a prioritaire sur 020$z / 010$z — compatible InterMarc BnF & UNIMARC Sudoc)
+  const f038List = fields.filter(f => f.tag === '038' || f.tag === '073');
+  const f020List = fields.filter(f => f.tag === '020' || f.tag === '010');
   let rawIsbn = '';
   let hasPrimaryIsbn = false;
   for (const f038 of f038List) {
@@ -507,12 +507,13 @@ export function parseIntermarcRecord(
   // Rejeter les codes-barres commerciaux non-livres (DVD 3607..., CD Audio 00289..., DVD DE 40351...)
   if (!isBookOrPressEan13(isbn)) return null;
 
-  // 2. Titre & filtre anti-non-livre (245$d = Images animées, Enregistrement sonore, DVD, etc.)
-  const f245 = fields.find(f => f.tag === '245');
-  const rawD245 = f245 ? getSubfield(f245, 'd') : undefined;
+  // 2. Titre & filtre anti-non-livre (245 InterMarc / 200 UNIMARC Sudoc)
+  const f245 = fields.find(f => f.tag === '245' || f.tag === '200');
+  const rawD245 = f245 ? (getSubfield(f245, 'd') || getSubfield(f245, 'b')) : undefined;
   if (isNonBookMarcType(rawD245)) return null;
   const rawA245 = f245 ? cleanTitle(getSubfield(f245, 'a') || '') : '';
   const rawP245 = f245 ? cleanTitle(getSubfield(f245, 'p') || '') : '';
+  const rawI245 = f245 ? cleanTitle(getSubfield(f245, 'i') || '') : '';
   const rawE245 = f245 ? cleanTitle(getSubfield(f245, 'e') || '') : '';
   const rawH245 = f245 ? getSubfield(f245, 'h') : undefined;
   const partNumber245 = f245 ? getSubfield(f245, 'n') : undefined;
@@ -520,9 +521,10 @@ export function parseIntermarcRecord(
 
   let rawImTitle = rawA245;
   let inferredSeriesFrom245: string | undefined;
-  if (rawP245 && rawA245) {
+  const hasIntegralTagIn245 = /\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\b/i.test(`${rawE245} ${rawI245}`);
+  if ((rawP245 || (rawI245 && !hasIntegralTagIn245 && normalizeTextKey(rawI245) !== normalizeTextKey(rawA245))) && rawA245) {
     inferredSeriesFrom245 = cleanSeriesName(rawA245);
-    rawImTitle = rawP245;
+    rawImTitle = rawP245 || rawI245;
   } else if (rawE245 && /\b(?:l['’]?\s*int[ée]grale|int[ée]grale|coffret|omnibus)\b/i.test(rawE245) && !/\b(?:int[ée]grale|coffret|omnibus)\b/i.test(rawA245)) {
     const ord = normalizeSeriesNumber(rawH245 || imVolumeNumber || '');
     rawImTitle = ord && /^\d+$/.test(ord) ? `${rawA245} — Intégrale ${ord}` : `${rawA245} — ${rawE245}`;
@@ -532,7 +534,7 @@ export function parseIntermarcRecord(
   if (!rawImTitle) return null;
   const secondTitleInSameVol = f245 ? getSubfield(f245, 'b') : undefined;
 
-  const f280 = fields.find(f => f.tag === '280');
+  const f280 = fields.find(f => f.tag === '280' || f.tag === '215');
   const paginationRaw = f280 ? getSubfield(f280, 'a') : undefined;
   const isDoubleOrIntegral =
     Boolean(paginationRaw && /\d+\s*-\s*\d+\s*p\./.test(paginationRaw)) ||
@@ -545,9 +547,9 @@ export function parseIntermarcRecord(
     return null; // Édition double/intégrale écartée en expansion de série standard
   }
 
-  // 3. Série & numéro de tome (460 -> 245$p -> 290/410 uniquement si non-collection-poche et n° <= 150)
+  // 3. Série & numéro de tome (460/461 -> 245$p/$i -> 290/225/410 uniquement si non-collection-poche et n° <= 150)
   let imSeries: string | undefined = inferredSeriesFrom245;
-  let imSeriesNumber: string | undefined = isDoubleOrIntegral ? undefined : partNumber245;
+  let imSeriesNumber: string | undefined = isDoubleOrIntegral ? undefined : (partNumber245 || imVolumeNumber);
   let bnfEnsembleId: string | undefined;
   for (const f460 of fields.filter(f => f.tag === '460' || f.tag === '461')) {
     const rawEns = getSubfield(f460, '3') || '';
@@ -565,7 +567,7 @@ export function parseIntermarcRecord(
     }
   }
   if (!imSeries) {
-    for (const f290 of fields.filter(f => f.tag === '290')) {
+    for (const f290 of fields.filter(f => f.tag === '290' || f.tag === '225')) {
       const v290 = getSubfield(f290, 'v');
       const cand290 = getSubfield(f290, 'a') || getSubfield(f290, 't');
       if (cand290 && v290 && !isEditorialPaperbackCollectionName(cand290) && isPlausibleFallbackSeriesNumber(v290)) {
@@ -607,25 +609,27 @@ export function parseIntermarcRecord(
     return null;
   }
 
-  // 4. Auteurs (100, 700)
+  // 4. Auteurs (100, 700, 701, 702 — InterMarc $a/$m et UNIMARC $a/$b)
   const authorSet = new Set<string>();
   for (const f of fields) {
-    if (f.tag === '100' || f.tag === '700') {
-      const last = getSubfield(f, 'a');
-      const first = getSubfield(f, 'm');
-      const full = [first, last].filter(Boolean).join(' ').trim();
+    if (f.tag === '100' || f.tag === '700' || f.tag === '701' || f.tag === '702') {
+      const last = getSubfield(f, 'a')?.trim() || '';
+      const firstM = getSubfield(f, 'm')?.trim() || '';
+      const firstB = getSubfield(f, 'b')?.trim() || '';
+      const first = firstM || (!last.includes(' ') ? firstB : '');
+      const full = cleanAuthor([last, first].filter(Boolean).join(', '));
       if (full) authorSet.add(full);
     }
   }
 
-  // 5. Éditeur, date, pagination, couverture, langue, collection, Dewey, RAMEAU
-  const f260 = fields.find(f => f.tag === '260');
+  // 5. Éditeur, date, pagination, couverture, langue, collection, Dewey, RAMEAU (260 InterMarc / 214, 210 UNIMARC)
+  const f260 = fields.find(f => f.tag === '260' || f.tag === '214' || f.tag === '210');
   const publisher = f260 ? getSubfield(f260, 'c')?.trim() : undefined;
   const rawDate = f260 ? getSubfield(f260, 'd') : undefined;
   const publishDate = rawDate ? (cleanPublishDate(rawDate) || undefined) : undefined;
   const pageCount = paginationRaw ? cleanPageCount(paginationRaw) : undefined;
 
-  const fCol = fields.find(f => (f.tag === '290' || f.tag === '410') && !getSubfield(f, 'v'));
+  const fCol = fields.find(f => (f.tag === '290' || f.tag === '225' || f.tag === '410') && !getSubfield(f, 'v'));
   const collection = fCol ? (getSubfield(fCol, 't') || getSubfield(fCol, 'a'))?.trim() : undefined;
 
   const f676 = fields.find(f => f.tag === '676');

@@ -77,11 +77,11 @@ export function extractMarcRecordMetadata(
 
   for (const f of fields) {
     const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
-    if (f.tag === '020' || f.tag === '038') {
+    if (f.tag === '020' || f.tag === '038' || f.tag === '010' || f.tag === '073') {
       const rawIsbn = isbnUtil.normalize(getSf('a'));
       const conv = rawIsbn.length === 10 ? isbnUtil.toIsbn13(rawIsbn) : rawIsbn;
       if (isbnUtil.isValidBookBarcode(conv) && isBookOrPressEan13(conv)) {
-        if (!hasPrimaryIsbn || f.tag === '038') {
+        if (!hasPrimaryIsbn || f.tag === '038' || f.tag === '073') {
           isbn13 = conv;
           hasPrimaryIsbn = true;
         }
@@ -94,8 +94,8 @@ export function extractMarcRecordMetadata(
       if (coverId) {
         coverUrl = `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`;
       }
-    } else if (f.tag === '245') {
-      if (isNonBookMarcType(getSf('d'))) {
+    } else if (f.tag === '245' || f.tag === '200') {
+      if (isNonBookMarcType(getSf('d') || getSf('b'))) {
         return null;
       }
       const a = cleanTitle(getSf('a'));
@@ -148,7 +148,7 @@ export function extractMarcRecordMetadata(
         unnumberedEns = sTitle;
         if (validBibEnsId) unnumberedEnsId = validBibEnsId;
       }
-    } else if (f.tag === '290') {
+    } else if (f.tag === '290' || f.tag === '225') {
       const sTitle = cleanSeriesName(cleanTitle(getSf('t') || getSf('a')));
       const sVol = normalizeSeriesNumber(getSf('v'));
       if (
@@ -178,13 +178,17 @@ export function extractMarcRecordMetadata(
       } else if (sTitle && !collectionRaw) {
         collectionRaw = sTitle;
       }
-    } else if (f.tag === '260') {
+    } else if (f.tag === '260' || f.tag === '214' || f.tag === '210') {
       publisher = publisher || cleanPublisher(getSf('c') || getSf('b'));
       publishDate = publishDate || cleanPublishDate(getSf('d'));
-    } else if (f.tag === '100' || f.tag === '700') {
-      const cleaned = cleanAuthor([getSf('a'), getSf('m')].filter(Boolean).join(', '));
+    } else if (f.tag === '100' || f.tag === '700' || f.tag === '701' || f.tag === '702') {
+      const last = getSf('a').trim();
+      const firstM = getSf('m').trim();
+      const firstB = getSf('b').trim();
+      const first = firstM || (!last.includes(' ') ? firstB : '');
+      const cleaned = cleanAuthor([last, first].filter(Boolean).join(', '));
       if (cleaned && !authors.includes(cleaned)) authors.push(cleaned);
-    } else if (f.tag === '280') {
+    } else if (f.tag === '280' || f.tag === '215') {
       const raw280 = getSf('a');
       if (/\d+\s*-\s*\d+\s*p\./i.test(raw280)) isDualPages = true;
       const m = /(\d+)\s*p\b/i.exec(raw280);
@@ -248,6 +252,36 @@ export function extractMarcRecordMetadata(
   };
 }
 
+/**
+ * Interroge le catalogue national SUDOC (ABES — `sudoc.fr`) par ISBN-13 :
+ * 1. `isbn2ppn` JSON (~120 ms) -> récupère le(s) PPN
+ * 2. `<ppn>.xml` (~150 ms) -> notice UNIMARC XML complète (compatible `extractMarcRecordMetadata` & `parseIntermarcRecord`).
+ * Indispensable pour les éditions franco-belges (ex: Dupuis / Lombard / Casterman) absentes ou retardées au dépôt légal BnF.
+ */
+export async function fetchSudocRecordXmlByIsbn(isbn13: string, timeoutMs = 3500): Promise<string | null> {
+  const clean = isbnUtil.normalize(isbn13);
+  if (!clean) return null;
+  try {
+    const ppnUrl = `https://www.sudoc.fr/services/isbn2ppn/${encodeURIComponent(clean)}&format=text/json`;
+    const ppnRes = await fetchWithTimeoutAndRetry(ppnUrl, { timeoutMs, retriesOn5xx: 0 });
+    if (!ppnRes.ok) return null;
+    const ppnJson = (await ppnRes.json().catch(() => null)) as any;
+    const rawResult = ppnJson?.sudoc?.query?.result;
+    const ppnEntry = Array.isArray(rawResult) ? rawResult[0] : rawResult;
+    const ppn = typeof ppnEntry?.ppn === 'string' ? ppnEntry.ppn.trim() : '';
+    if (!/^[0-9X]{8,10}$/i.test(ppn)) return null;
+
+    const xmlUrl = `https://www.sudoc.fr/${encodeURIComponent(ppn)}.xml`;
+    const xmlRes = await fetchWithTimeoutAndRetry(xmlUrl, { timeoutMs, retriesOn5xx: 0 });
+    if (!xmlRes.ok) return null;
+    const xml = await xmlRes.text();
+    if (!xml || !xml.includes('<datafield')) return null;
+    return xml;
+  } catch {
+    return null;
+  }
+}
+
 export async function discoverMultiSourceLayer3(
   rawIsbn13: string,
   tracer?: PipelineTracer
@@ -265,7 +299,7 @@ export async function discoverMultiSourceLayer3(
   const fetchTrackedText = async (url: string) => {
     const t0 = Date.now();
     try {
-      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4500, retriesOn5xx: 1 });
+      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4200, retriesOn5xx: 0 });
       const text = r.ok ? await r.text() : await r.text().catch(() => '');
       return { ok: r.ok, status: r.status, ms: Date.now() - t0, data: r.ok ? text : '', err: r.ok ? undefined : text.slice(0, 180) };
     } catch (e: unknown) {
@@ -275,7 +309,7 @@ export async function discoverMultiSourceLayer3(
   const fetchTrackedJson = async (url: string) => {
     const t0 = Date.now();
     try {
-      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4500, retriesOn5xx: 0 });
+      const r = await fetchWithTimeoutAndRetry(url, { timeoutMs: 4200, retriesOn5xx: 0 });
       if (!r.ok) {
         const txt = await r.text().catch(() => '');
         return { ok: false, status: r.status, ms: Date.now() - t0, data: null as any, err: txt.slice(0, 180) };
@@ -288,8 +322,9 @@ export async function discoverMultiSourceLayer3(
   };
 
   const gbCircuitOpen = isGoogleBooksCircuitOpen();
-  const [bnfRes, gbRes, olRes, invRes] = await Promise.all([
+  const [bnfRes, sudocXml, gbRes, olRes, invRes] = await Promise.all([
     fetchTrackedText(bnfAnchorUrl),
+    fetchSudocRecordXmlByIsbn(isbn13),
     gbCircuitOpen
       ? Promise.resolve({ ok: false, status: 429, ms: 0, data: null as any, err: 'circuit-breaker cooldown' })
       : fetchTrackedJson(gbUrl),
@@ -345,14 +380,20 @@ export async function discoverMultiSourceLayer3(
     });
   };
 
-  // 1. Analyse BnF InterMarc
+  // 1. Analyse BnF InterMarc (+ repli / complément UNIMARC SUDOC ABES si présent)
   const bnfExtractedSummary: any[] = [];
+  const rawMarcRecords: string[] = [];
   if (bnfRes.ok && bnfRes.data) {
-    const records = bnfRes.data.split('<srw:record>').slice(1);
-    for (const recXml of records) {
+    rawMarcRecords.push(...bnfRes.data.split('<srw:record>').slice(1));
+  }
+  if (sudocXml) {
+    rawMarcRecords.push(sudocXml);
+  }
+  if (rawMarcRecords.length > 0) {
+    for (const recXml of rawMarcRecords) {
       const cand = extractMarcRecordMetadata(recXml, isbn13);
       if (!cand) continue;
-      sourcesHit.push('bnf');
+      if (!sourcesHit.includes('bnf')) sourcesHit.push('bnf');
       if (!isStrictFrenchLanguage(cand.language)) continue;
       sisterEditions.push(cand);
       anchorTitle = anchorTitle || cand.title;
@@ -380,13 +421,17 @@ export async function discoverMultiSourceLayer3(
       const fields = parseMarcFieldsFromXml(recXml);
       for (const f of fields) {
         const getSf = (c: string) => f.subfields.find((s) => s.code === c)?.value || '';
-        if (f.tag === '100' || f.tag === '700') {
-          const cleaned = cleanAuthor([getSf('a'), getSf('m')].filter(Boolean).join(', '));
+        if (f.tag === '100' || f.tag === '700' || f.tag === '701' || f.tag === '702') {
+          const last = getSf('a').trim();
+          const firstM = getSf('m').trim();
+          const firstB = getSf('b').trim();
+          const first = firstM || (!last.includes(' ') ? firstB : '');
+          const cleaned = cleanAuthor([last, first].filter(Boolean).join(', '));
           const role = getSf('4').toLowerCase();
           if (cleaned) {
             if (role.includes('440') || role.includes('ill') || role.includes('dessin')) {
               if (!illustrators.includes(cleaned)) illustrators.push(cleaned);
-            } else if (role.includes('690') || role.includes('scén')) {
+            } else if (role.includes('690') || role.includes('070') || role.includes('scén')) {
               if (!scriptwriters.includes(cleaned)) scriptwriters.push(cleaned);
             }
             if (!authors.includes(cleaned)) authors.push(cleaned);
@@ -396,7 +441,7 @@ export async function discoverMultiSourceLayer3(
         } else if (f.tag === '606' || f.tag === '608' || f.tag === '610') {
           if (getSf('a')) rawSubjects.push(getSf('a'));
           if (getSf('x')) rawSubjects.push(getSf('x'));
-        } else if (f.tag === '830') {
+        } else if (f.tag === '830' || f.tag === '330') {
           const d = getSf('a');
           if (d && d.length > description.length) description = d;
         }

@@ -13,6 +13,7 @@ import {
   parseCoverDataUrl,
   storeCompressedCover
 } from '../services/d1-cover-storage.service';
+import { fetchSudocRecordXmlByIsbn } from './v4/v4-layer3-discovery';
 import { isbnUtil } from '../utils/isbn.util';
 
 const USER_AGENT_BASE = 'BiblioCollectionPWA/2.0 (mathieu.egard@gmail.com)';
@@ -350,10 +351,26 @@ export async function handleGatewayRequest(context: {
 
           if (!isbn) return jsonResp({ error: 'ISBN ou série requis' }, 400);
           const bnfUrl = `https://catalogue.bnf.fr/api/SRU?version=1.2&operation=searchRetrieve&query=bib.anywhere%20all%20%22${encodeURIComponent(isbn)}%22&recordSchema=${recordSchema}`;
-          const bnfRes = await resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } });
-          const bnfText = await bnfRes.text();
-          return new Response(bnfText, {
-            status: bnfRes.status,
+          const [bnfRes, sudocXml] = await Promise.all([
+            resilientFetch(bnfUrl, { headers: { 'User-Agent': USER_AGENT_BASE } }).catch(() => null),
+            recordSchema === 'intermarcxchange' ? fetchSudocRecordXmlByIsbn(isbn).catch(() => null) : Promise.resolve(null)
+          ]);
+          const bnfText = bnfRes && bnfRes.ok ? await bnfRes.text().catch(() => '') : '';
+          if (bnfText && bnfText.includes('<srw:record>')) {
+            return new Response(bnfText, {
+              status: 200,
+              headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+            });
+          }
+          if (sudocXml) {
+            const wrappedSudoc = `<?xml version="1.0" encoding="UTF-8"?><srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/"><srw:version>1.2</srw:version><srw:numberOfRecords>1</srw:numberOfRecords><srw:records><srw:record><srw:recordSchema>marcxchange</srw:recordSchema><srw:recordData>${sudocXml.replace(/<\?xml[^>]*\?>/i, '')}</srw:recordData></srw:record></srw:records></srw:searchRetrieveResponse>`;
+            return new Response(wrappedSudoc, {
+              status: 200,
+              headers: { 'Content-Type': 'application/xml; charset=utf-8' }
+            });
+          }
+          return new Response(bnfText || '<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/"><srw:numberOfRecords>0</srw:numberOfRecords></srw:searchRetrieveResponse>', {
+            status: bnfRes?.status || 200,
             headers: { 'Content-Type': 'application/xml; charset=utf-8' }
           });
         }

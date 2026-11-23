@@ -722,5 +722,33 @@ describe('BNF Resolver & Parsers', () => {
       );
       expect(dargaudScore).toBeGreaterThan(hachetteScore);
     });
+
+    it('extrait correctement le titre de tome depuis 200$i / 245$i (Animal Jack T.7 — UNIMARC Sudoc 9791034765959 et InterMarc BnF 9791034768738)', () => {
+      const sudocUnimarcXml = `
+        <record>
+          <datafield tag="010"><subfield code="a">979-10-347-6595-9</subfield></datafield>
+          <datafield tag="073"><subfield code="a">9791034765959</subfield></datafield>
+          <datafield tag="200">
+            <subfield code="a">Animal Jack</subfield>
+            <subfield code="h">7</subfield>
+            <subfield code="i">Le plein d&apos;aventures</subfield>
+          </datafield>
+          <datafield tag="214"><subfield code="c">Dupuis</subfield><subfield code="d">DL 2022</subfield></datafield>
+          <datafield tag="215"><subfield code="a">1 vol. (104 p.)</subfield></datafield>
+          <datafield tag="225"><subfield code="a">Animal Jack</subfield><subfield code="v">7</subfield></datafield>
+          <datafield tag="700"><subfield code="a">Kid Toussaint</subfield><subfield code="b">Thierry</subfield></datafield>
+          <datafield tag="702"><subfield code="a">Miss Prickly</subfield></datafield>
+        </record>
+      `;
+      const parsedSudoc = parseIntermarcRecord(sudocUnimarcXml);
+      expect(parsedSudoc?.isbn).toBe('9791034765959');
+      expect(parsedSudoc?.title).toBe("Le plein d'aventures");
+      expect(parsedSudoc?.series).toBe('Animal Jack');
+      expect(parsedSudoc?.seriesNumber).toBe('7');
+      expect(parsedSudoc?.publisher).toBe('Dupuis');
+      expect(parsedSudoc?.publishDate).toBe('2022');
+      expect(parsedSudoc?.pageCount).toBe(104);
+      expect(parsedSudoc?.authors).toEqual(['Kid Toussaint', 'Miss Prickly']);
+    });
   });
 });
