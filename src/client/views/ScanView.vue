@@ -30,11 +30,30 @@ const uiStore = useUiStore();
 
 const validTabs: ScanTab[] = ['photo', 'burst', 'simple', 'search'];
 
+// Modales caméra déclarées avant le watcher d'onglets pour ouverture directe au clic sur Rafale / Scan simple
+const burstCameraOpen = ref(false);
+const simpleCameraOpen = ref(false);
+
+function openCameraForTab(tab: ScanTab): void {
+  if (tab === 'burst') {
+    simpleCameraOpen.value = false;
+    burstCameraOpen.value = true;
+  } else if (tab === 'simple') {
+    burstCameraOpen.value = false;
+    simpleCameraOpen.value = true;
+  } else {
+    burstCameraOpen.value = false;
+    simpleCameraOpen.value = false;
+  }
+}
+
 watch(
   () => route.query.tab,
   (raw) => {
     if (typeof raw === 'string' && validTabs.includes(raw as ScanTab)) {
-      scanStore.activeTab = raw as ScanTab;
+      const nextTab = raw as ScanTab;
+      scanStore.activeTab = nextTab;
+      openCameraForTab(nextTab);
     }
   },
   { immediate: true }
@@ -42,6 +61,7 @@ watch(
 
 function selectTab(tab: ScanTab): void {
   scanStore.activeTab = tab;
+  openCameraForTab(tab);
   void router.replace({ path: '/scan', query: { tab } });
 }
 
@@ -179,7 +199,6 @@ async function handleDeletePhotoJob(): Promise<void> {
 }
 
 // ==================== ONGLET 2 : MODE RAFALE ====================
-const burstCameraOpen = ref(false);
 const burstFlash = ref<'none' | 'added' | 'duplicate'>('none');
 const burstManualInput = ref('');
 const burstSelectedIds = ref<Set<string>>(new Set());
@@ -305,7 +324,6 @@ async function confirmBurstGenres(genres: string[]): Promise<void> {
 }
 
 // ==================== ONGLET 3 : SCAN SIMPLE ====================
-const simpleCameraOpen = ref(false);
 const simpleIsbnInput = ref('');
 const simpleLoading = ref(false);
 

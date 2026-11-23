@@ -45,7 +45,7 @@ export interface SourceCandidateRecord {
 
 /**
  * Œuvre officielle d'une série retournée par le Graphe (Wikidata P179/P1545 ou Inventaire)
- * ou par le filet de sécurité BnF 460$3.
+ * ou par le filet de sécurité BnF 460$3 / titre.
  */
 export interface GraphSeriesWork {
   title: string;
@@ -77,9 +77,15 @@ export interface CollectionSampleItem {
   volumeNumber?: string;
 }
 
+export interface BnfSeriesDiscoveryResult {
+  works: GraphSeriesWork[];
+  discoveredEnsembleIds: string[];
+}
+
 export interface BnfConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
   searchByEnsembleId(bnfEnsembleId: string, maxRecords?: number): Promise<GraphSeriesWork[]>;
+  searchBySeriesName?(seriesName: string, author?: string, maxRecords?: number): Promise<BnfSeriesDiscoveryResult>;
   sampleByCollectionName(collectionName: string, maxRecords?: number): Promise<CollectionSampleItem[]>;
   searchByTitleAndAuthor(title: string, author?: string, maxRecords?: number): Promise<SourceCandidateRecord[]>;
 }
@@ -91,11 +97,14 @@ export interface SudocConnector {
 export interface InventaireConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
   fetchSeriesWorks(seriesUri: string): Promise<GraphSeriesWork[]>;
+  searchSeriesUri?(seriesName: string): Promise<{ seriesUri: string; wikidataQid: string | null } | null>;
+  searchByText?(query: string, limit?: number): Promise<SourceCandidateRecord[]>;
 }
 
 export interface WikidataConnector {
   lookupWorkByQid(workQid: string, fallbackIsbn13?: string): Promise<SourceCandidateRecord | null>;
   fetchSeriesWorksByQid(seriesQid: string): Promise<GraphSeriesWork[]>;
+  searchSeriesQid?(seriesName: string): Promise<string | null>;
 }
 
 export interface GoogleBooksConnector {

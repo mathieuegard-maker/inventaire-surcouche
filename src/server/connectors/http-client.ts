@@ -1,6 +1,8 @@
 // src/server/connectors/http-client.ts
-// Client HTTP résilient par source : timeout, circuit-breaker (429 / pannes répétées), throttle et cache SQLite external_cache.
+// Client HTTP résilient par source : timeout, circuit-breaker (429 / pannes répétées), throttle, IPv4 node:https et cache SQLite external_cache.
 
+import http from 'node:http';
+import https from 'node:https';
 import type { JobRepository } from '../repositories/job.repo';
 import type { SourceName } from './types';
 
@@ -18,21 +20,72 @@ export interface HttpFetchOptions {
   cacheKey?: string;
   cacheTtlSec?: number;
   minIntervalMs?: number;
+  /** Force node:http/https en IPv4 (contourne les resets/timeouts undici sur catalogue.bnf.fr). */
+  forceIpv4?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min sur HTTP 429 (ex: Google Books)
 const FAILURE_TRIP_THRESHOLD = 4;
 const FAILURE_COOLDOWN_MS = 2 * 60 * 1000;
+const BROWSER_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) BiblioCollection/2.0 Safari/537.36';
+
+function fetchWithNodeIpv4(
+  urlStr: string,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  redirectsLeft = 3
+): Promise<{ status: number; ok: boolean; text: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(urlStr);
+    const mod = parsed.protocol === 'https:' ? https : http;
+    const req = mod.get(
+      {
+        hostname: parsed.hostname,
+        port: parsed.port || undefined,
+        path: `${parsed.pathname}${parsed.search}`,
+        family: 4,
+        headers,
+        timeout: timeoutMs
+      },
+      (res) => {
+        const status = res.statusCode ?? 0;
+        const location = res.headers.location;
+        if (location && status >= 300 && status < 400 && redirectsLeft > 0) {
+          res.resume();
+          const nextUrl = new URL(location, parsed).toString();
+          fetchWithNodeIpv4(nextUrl, headers, timeoutMs, redirectsLeft - 1).then(resolve, reject);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          resolve({
+            status,
+            ok: status >= 200 && status < 300,
+            text: Buffer.concat(chunks).toString('utf-8')
+          });
+        });
+      }
+    );
+    req.on('timeout', () => {
+      req.destroy(new Error('HTTP IPv4 timeout'));
+    });
+    req.on('error', reject);
+  });
+}
 
 export class HttpClient {
   private readonly jobRepo?: JobRepository;
   private readonly circuits = new Map<SourceName, CircuitState>();
   private readonly fetchImpl: typeof fetch;
+  private readonly hasCustomFetch: boolean;
 
   constructor(options?: { jobRepo?: JobRepository; fetchImpl?: typeof fetch }) {
     this.jobRepo = options?.jobRepo;
     this.fetchImpl = options?.fetchImpl ?? fetch;
+    this.hasCustomFetch = Boolean(options?.fetchImpl);
   }
 
   private getCircuit(source: SourceName): CircuitState {
@@ -77,21 +130,38 @@ export class HttpClient {
     }
     circuit.lastRequestAt = Date.now();
 
-    try {
-      const res = await this.fetchImpl(options.url, {
-        headers: {
-          'User-Agent': 'BiblioCollection/2.0 (self-hosted bibliographic client)',
-          ...(options.headers ?? {})
-        },
-        signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
-      });
+    const headers: Record<string, string> = {
+      'User-Agent': BROWSER_USER_AGENT,
+      ...(options.headers ?? {})
+    };
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-      if (res.status === 429) {
+    try {
+      let status: number;
+      let ok: boolean;
+      let text: string;
+
+      if (options.forceIpv4 && !this.hasCustomFetch) {
+        const result = await fetchWithNodeIpv4(options.url, headers, timeoutMs);
+        status = result.status;
+        ok = result.ok;
+        text = result.text;
+      } else {
+        const res = await this.fetchImpl(options.url, {
+          headers,
+          signal: AbortSignal.timeout(timeoutMs)
+        });
+        status = res.status;
+        ok = res.ok;
+        text = ok ? await res.text() : '';
+      }
+
+      if (status === 429) {
         circuit.openUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
         return null;
       }
 
-      if (!res.ok) {
+      if (!ok) {
         circuit.failures++;
         if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
           circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
@@ -101,7 +171,6 @@ export class HttpClient {
       }
 
       circuit.failures = 0;
-      const text = await res.text();
 
       if (options.cacheKey && this.jobRepo) {
         const ttlSec = options.cacheTtlSec ?? 86400;

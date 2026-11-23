@@ -220,6 +220,10 @@ Physiquement, le serveur utilise **un seul fichier SQLite en mode WAL** (`biblio
 
 ---
 
-## 10. Prochaine Étape
-* Tous les arbitrages fondamentaux sont tranchés.
-* **Prêt pour la rédaction du Plan d'Action V2** (architecture dossiers, schéma SQLite V2 complet, contrat API unique, feuille de route par jalons, et vérification de bijection 100 % avec [`03_MATRICE_BIJECTION_V1_V2.md`](./03_MATRICE_BIJECTION_V1_V2.md)).
+## 10. Arbitrages Techniques Terrain (Post-déploiement V2)
+* **BnF SRU en HTTPS IPv4 (`node:https`, `family: 4`) :** la BnF coupe désormais les requêtes HTTP port 80 (`ECONNRESET`) et certains handshakes `undici` (`fetch` par défaut Node 22) expirent. L'utilisation de `https://catalogue.bnf.fr/api/SRU` via `node:https` IPv4 forcé + `User-Agent` navigateur + `Accept: application/xml` répond de façon fiable en < 1 s.
+* **Inventaire.io (`inv:...` + `invp:P2`) :** l'API `action=by-uris&uris=isbn:...` retourne les éditions sous leur URI canonique (`inv:...`) avec le hash image dans `invp:P2` (`https://inventaire.io/img/entities/<hash>`). Le connecteur résout désormais via `redirects` / `type === 'edition'` / `wdt:P212`, charge les relations `P629`/`P179`/`P50` manquantes et expose `searchSeriesUri` et `searchByText`.
+* **Cascade multi-sources de couvertures avant WebP (`CoverService.resolveBestCoverFromCascade`) :** BnF `950$a` → Inventaire `invp:P2` → CDN Amazon Direct ISBN-10 → CDN Eyrolles/Dilicom H1400 (avec rejet explicite du placeholder exact de 63 601 octets) → OpenLibrary Covers ISBN → Apple Books / iTunes FR, le tout converti et dédupliqué en WebP sur `/data/covers/`.
+* **Découverte de rattrapage pour l'expansion de séries :** si une série est créée sans `wikidata_qid` ni `bnf_ensemble_ids` (ex. depuis SUDOC seul), `SeriesGraphService.expandSeriesByGraph()` tente automatiquement `inventaire.searchSeriesUri` → `wikidata.searchSeriesQid` → `bnf.searchBySeriesName` (`460$3` → `bib.ens2bib`) et mémorise les identifiants découverts.
+* **Cascade multi-modèles Gemini Vision (`gemini.connector.ts`) :** Google ayant retiré `gemini-2.5-flash` pour les nouveaux projets (`HTTP 404`), le connecteur tente une cascade résiliente (`gemini-3-flash-preview` → `gemini-flash-latest` → `gemini-3.1-flash-lite` → `gemini-2.5-flash-lite`) avec bascule automatique sur `404`, `429` et `503`.
+* **Ergonomie Scan mobile (`ScanView.vue`) :** cliquer sur l'onglet *Rafale* ou *Scan simple* ouvre directement la fenêtre caméra `CameraBarcodeModal`.

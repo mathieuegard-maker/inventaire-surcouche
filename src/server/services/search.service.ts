@@ -132,7 +132,7 @@ export class SearchService {
       };
     });
 
-    // 3. Complément externe BnF SRU (dédupliqué contre les ISBN déjà dans localBooks)
+    // 3. Complément externe parallèle BnF SRU + Inventaire.io (dédupliqué contre les ISBN déjà dans localBooks)
     const knownIsbns = new Set<string>();
     for (const b of localBooks) {
       for (const isbn of b.knownIsbns) knownIsbns.add(isbn);
@@ -142,37 +142,40 @@ export class SearchService {
     const primaryQuery = [input.series, input.title, volStr].filter(Boolean).join(' ').trim();
 
     if (primaryQuery || input.author?.trim()) {
-      try {
-        const bnfHits = await this.connectors.bnf.searchByTitleAndAuthor(
-          primaryQuery || input.author!.trim(),
-          input.author?.trim() || undefined,
-          15
-        );
+      const searchStr = primaryQuery || input.author!.trim();
+      const [bnfRes, invRes] = await Promise.allSettled([
+        this.connectors.bnf.searchByTitleAndAuthor(searchStr, input.author?.trim() || undefined, 15),
+        this.connectors.inventaire.searchByText
+          ? this.connectors.inventaire.searchByText(searchStr, 10)
+          : Promise.resolve([])
+      ]);
 
-        const normPub = input.publisher?.trim() ? normalizeTextKey(input.publisher) : '';
-        const normCol = input.collection?.trim() ? normalizeTextKey(input.collection) : '';
+      const combinedHits = [
+        ...(bnfRes.status === 'fulfilled' ? bnfRes.value : []),
+        ...(invRes.status === 'fulfilled' ? invRes.value : [])
+      ];
 
-        for (const hit of bnfHits) {
-          if (!hit.isbn13 || !hit.title || knownIsbns.has(hit.isbn13)) continue;
-          if (normPub && hit.publisher && !normalizeTextKey(hit.publisher).includes(normPub)) continue;
-          if (normCol && hit.collectionName && !normalizeTextKey(hit.collectionName).includes(normCol)) continue;
-          knownIsbns.add(hit.isbn13);
+      const normPub = input.publisher?.trim() ? normalizeTextKey(input.publisher) : '';
+      const normCol = input.collection?.trim() ? normalizeTextKey(input.collection) : '';
 
-          externalBooks.push({
-            isbn13: hit.isbn13,
-            title: hit.title,
-            seriesName: hit.seriesName ?? null,
-            volumeNumber: hit.volumeNumber ?? null,
-            authors: hit.authors,
-            publisher: hit.publisher ?? null,
-            collectionName: hit.collectionName ?? null,
-            publishYear: hit.publishYear ?? null,
-            coverUrl: hit.coverUrl ?? null,
-            source: hit.source
-          });
-        }
-      } catch {
-        // Repli propre sur les résultats locaux uniquement si BnF indisponible
+      for (const hit of combinedHits) {
+        if (!hit.isbn13 || !hit.title || knownIsbns.has(hit.isbn13)) continue;
+        if (normPub && hit.publisher && !normalizeTextKey(hit.publisher).includes(normPub)) continue;
+        if (normCol && hit.collectionName && !normalizeTextKey(hit.collectionName).includes(normCol)) continue;
+        knownIsbns.add(hit.isbn13);
+
+        externalBooks.push({
+          isbn13: hit.isbn13,
+          title: hit.title,
+          seriesName: hit.seriesName ?? null,
+          volumeNumber: hit.volumeNumber ?? null,
+          authors: hit.authors,
+          publisher: hit.publisher ?? null,
+          collectionName: hit.collectionName ?? null,
+          publishYear: hit.publishYear ?? null,
+          coverUrl: hit.coverUrl ?? null,
+          source: hit.source
+        });
       }
     }
 

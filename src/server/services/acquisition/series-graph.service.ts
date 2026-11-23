@@ -325,11 +325,51 @@ export class SeriesGraphService {
     const now = new Date().toISOString();
     const sourcesUsed: string[] = [];
     const graphWorks: GraphSeriesWork[] = [];
+    const primaryAuthors = this.parseJsonArray(series.primary_authors_json);
+
+    let effectiveWikidataQid = series.wikidata_qid;
+    let effectiveInventaireSeriesUri = effectiveWikidataQid ? `wd:${effectiveWikidataQid}` : null;
+
+    // 0. Découverte de rattrapage Graphe si la série n'a pas encore de Q-ID Wikidata / URI Inventaire
+    if (!effectiveWikidataQid) {
+      try {
+        const invFound = await this.connectors.inventaire.searchSeriesUri?.(series.canonical_name);
+        if (invFound) {
+          effectiveInventaireSeriesUri = invFound.seriesUri;
+          if (invFound.wikidataQid) {
+            effectiveWikidataQid = invFound.wikidataQid;
+          }
+        }
+      } catch {
+        // continue
+      }
+
+      if (!effectiveWikidataQid) {
+        try {
+          const wdFound = await this.connectors.wikidata.searchSeriesQid?.(series.canonical_name);
+          if (wdFound) {
+            effectiveWikidataQid = wdFound;
+            if (!effectiveInventaireSeriesUri) {
+              effectiveInventaireSeriesUri = `wd:${wdFound}`;
+            }
+          }
+        } catch {
+          // continue
+        }
+      }
+
+      if (effectiveWikidataQid) {
+        this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, {
+          wikidataQid: effectiveWikidataQid,
+          now
+        });
+      }
+    }
 
     // 1. Graphe Wikidata P179/P1545
-    if (series.wikidata_qid) {
+    if (effectiveWikidataQid) {
       try {
-        const wdWorks = await this.connectors.wikidata.fetchSeriesWorksByQid(series.wikidata_qid);
+        const wdWorks = await this.connectors.wikidata.fetchSeriesWorksByQid(effectiveWikidataQid);
         if (wdWorks.length > 0) {
           sourcesUsed.push('wikidata');
           graphWorks.push(...wdWorks);
@@ -337,10 +377,12 @@ export class SeriesGraphService {
       } catch {
         // continue
       }
+    }
 
-      // 2. Complément graphe Inventaire (ISBN FR P629 + œuvres P179)
+    // 2. Complément graphe Inventaire (ISBN FR P629 + œuvres P179, fonctionne sur wd:Q... et inv:...)
+    if (effectiveInventaireSeriesUri) {
       try {
-        const invWorks = await this.connectors.inventaire.fetchSeriesWorks(`wd:${series.wikidata_qid}`);
+        const invWorks = await this.connectors.inventaire.fetchSeriesWorks(effectiveInventaireSeriesUri);
         if (invWorks.length > 0) {
           sourcesUsed.push('inventaire');
           this.mergeGraphWorks(graphWorks, invWorks);
@@ -350,8 +392,30 @@ export class SeriesGraphService {
       }
     }
 
-    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) pour les séries franco-belges ou pour compléter les ISBN FR
-    const bnfEnsembleIds = this.parseJsonArray(series.bnf_ensemble_ids_json);
+    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) + découverte d'ensemble BnF par nom de série si absent
+    const bnfEnsembleIds = new Set<string>(this.parseJsonArray(series.bnf_ensemble_ids_json));
+    if (bnfEnsembleIds.size === 0 || graphWorks.length < 2) {
+      try {
+        const discovery = await this.connectors.bnf.searchBySeriesName?.(
+          series.canonical_name,
+          primaryAuthors[0],
+          50
+        );
+        if (discovery) {
+          for (const ensId of discovery.discoveredEnsembleIds) {
+            bnfEnsembleIds.add(ensId);
+            this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, { bnfEnsembleId: ensId, now });
+          }
+          if (discovery.works.length > 0) {
+            if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+            this.mergeGraphWorks(graphWorks, discovery.works);
+          }
+        }
+      } catch {
+        // continue
+      }
+    }
+
     for (const ensId of bnfEnsembleIds) {
       try {
         const bnfWorks = await this.connectors.bnf.searchByEnsembleId(ensId, 80);
@@ -398,10 +462,14 @@ export class SeriesGraphService {
         }
       }
 
-      // Téléchargement optionnel de couverture WebP si disponible et pas encore de couverture
+      // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + ISBN) si pas encore de couverture
       let coverKey: string | null = existingBook?.cover_key ?? null;
-      if (!coverKey && work.coverUrl && this.coverService) {
-        const stored = await this.coverService.ingestFromExternalUrl(work.coverUrl);
+      if (!coverKey && this.coverService && (work.coverUrl || work.isbn13s.length > 0)) {
+        const stored = await this.coverService.resolveBestCoverFromCascade({
+          isbn13: work.isbn13s[0] ?? null,
+          candidateUrls: work.coverUrl ? [work.coverUrl] : [],
+          skipTitleFallback: true
+        });
         if (stored) coverKey = stored.coverKey;
       }
 

@@ -40,6 +40,14 @@ interface SparqlResponse {
   };
 }
 
+interface WdSearchResponse {
+  search?: Array<{
+    id?: string;
+    label?: string;
+    description?: string;
+  }>;
+}
+
 function getWdLabel(entity: WdEntity | undefined): string {
   if (!entity?.labels) return '';
   return entity.labels.fr?.value || entity.labels.en?.value || Object.values(entity.labels)[0]?.value || '';
@@ -209,6 +217,32 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       }
 
       return works;
+    },
+
+    async searchSeriesQid(seriesName: string): Promise<string | null> {
+      const q = seriesName.trim();
+      if (!q) return null;
+      const url = `${WD_API}?action=wbsearchentities&search=${encodeURIComponent(q)}&language=fr&limit=6&format=json`;
+      const data = await http.fetchJson<WdSearchResponse>({
+        source: 'wikidata',
+        url,
+        timeoutMs: 7000,
+        minIntervalMs: 250,
+        cacheKey: `wd:search:series:${q.toLowerCase()}`,
+        cacheTtlSec: 60 * 60 * 24 * 7
+      });
+
+      const candidates = (data?.search ?? []).filter((c) => c.id && /^Q\d+$/i.test(c.id));
+      if (candidates.length === 0) return null;
+
+      // Priorité aux entités décrites comme série BD / livre / manga / roman
+      const seriesHintRe = /\b(s[ée]rie|bande dessin[ée]e|bd|manga|comics|roman|litt[ée]rature|albums?)\b/i;
+      const prioritized = [
+        ...candidates.filter((c) => seriesHintRe.test(c.description ?? '')),
+        ...candidates.filter((c) => !seriesHintRe.test(c.description ?? ''))
+      ];
+
+      return prioritized[0]?.id?.toUpperCase() ?? null;
     }
   };
 }

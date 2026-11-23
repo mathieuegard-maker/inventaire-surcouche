@@ -1,5 +1,5 @@
 // src/server/connectors/gemini.connector.ts
-// Connecteur Gemini Vision OCR (clé API serveur GEMINI_API_KEY, terme BYOK supprimé, 100 % mockable).
+// Connecteur Gemini Vision OCR (clé API serveur GEMINI_API_KEY, cascade multi-modèles avec bascule auto sur 404/429/503).
 
 export interface GeminiExtractedBookHint {
   title: string;
@@ -20,7 +20,12 @@ export interface GeminiConnector {
   }): Promise<GeminiExtractedBookHint[]>;
 }
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
+export const PREFERRED_GEMINI_MODELS = [
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
+  'gemini-3.1-flash-lite',
+  'gemini-2.5-flash-lite'
+] as const;
 
 function extractBase64Payload(dataUrl: string): { mimeType: string; data: string } | null {
   const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
@@ -88,38 +93,72 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
         throw new Error('Format image data URL invalide.');
       }
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-      const res = await fetchImpl(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: buildPrompt(input.mode) },
-                { inline_data: { mime_type: payload.mimeType, data: payload.data } }
-              ]
-            }
-          ],
-          generationConfig: {
-            responseMimeType: 'application/json',
-            temperature: 0.1
+      const requestBody = JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: buildPrompt(input.mode) },
+              { inline_data: { mime_type: payload.mimeType, data: payload.data } }
+            ]
           }
-        }),
-        signal: AbortSignal.timeout(45000)
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          temperature: 0.1
+        }
       });
 
-      if (!res.ok) {
-        throw new Error(`Erreur Gemini Vision (HTTP ${res.status}).`);
+      let lastStatus = 0;
+      let lastErrorText = '';
+
+      for (let round = 1; round <= 2; round++) {
+        if (round > 1) {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+
+        for (const modelId of PREFERRED_GEMINI_MODELS) {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+          try {
+            const res = await fetchImpl(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: requestBody,
+              signal: AbortSignal.timeout(30000)
+            });
+
+            if (res.ok) {
+              const data = (await res.json()) as {
+                candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+              };
+              const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '[]';
+              const cleanedJson = rawText.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
+              const parsed = JSON.parse(cleanedJson);
+              return normalizeHints(parsed);
+            }
+
+            lastStatus = res.status;
+            lastErrorText = (await res.text().catch(() => '')).slice(0, 200);
+
+            // Basculer sur le modèle suivant en cas de 404 (modèle déprécié), 429 ou 503 (surcharge)
+            if (res.status === 404 || res.status === 429 || res.status === 503 || res.status >= 500) {
+              continue;
+            }
+            // Erreur client bloquante (ex: 400 clé invalide, 403)
+            throw new Error(`Erreur Gemini Vision (HTTP ${res.status}).`);
+          } catch (err) {
+            if (err instanceof Error && err.message.startsWith('Erreur Gemini Vision')) {
+              throw err;
+            }
+            lastErrorText = err instanceof Error ? err.message : 'Erreur réseau';
+          }
+        }
       }
 
-      const data = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-      };
-      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? '[]';
-      const cleanedJson = rawText.replace(/^```(?:json)?\s*|\s*```$/gi, '').trim();
-      const parsed = JSON.parse(cleanedJson);
-      return normalizeHints(parsed);
+      throw new Error(
+        lastStatus
+          ? `Erreur Gemini Vision (HTTP ${lastStatus}${lastErrorText ? ` — ${lastErrorText}` : ''}).`
+          : `Erreur Gemini Vision (${lastErrorText || 'indisponible'}).`
+      );
     }
   };
 }

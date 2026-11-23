@@ -254,15 +254,17 @@ export class IngestionService {
           }
         }
 
-        // 3. Téléchargement & compression WebP de la meilleure couverture candidate (disque /data/covers/)
+        // 3. Téléchargement & compression WebP via cascade multi-sources vérifiée (disque /data/covers/)
         let coverKey: string | null = bookRow?.cover_key ?? null;
         if (!coverKey) {
-          for (const candidateUrl of draft.coverCandidates) {
-            const stored = await this.coverService.ingestFromExternalUrl(candidateUrl);
-            if (stored) {
-              coverKey = stored.coverKey;
-              break;
-            }
+          const stored = await this.coverService.resolveBestCoverFromCascade({
+            isbn13,
+            candidateUrls: draft.coverCandidates,
+            title: draft.title,
+            author: draft.authors[0]
+          });
+          if (stored) {
+            coverKey = stored.coverKey;
           }
         }
 
