@@ -323,4 +323,57 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     }
     expect(http.isCircuitOpen('inventaire')).toBe(true);
   });
+
+  it('réessaie une fois sur HTTP 429 ponctuel sur Inventaire sans couper 10 min, mais coupe toujours Google Books sur 429', async () => {
+    vi.useFakeTimers();
+    try {
+      let invCalls = 0;
+      const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+        const url = String(input);
+        if (url.includes('inventaire.io')) {
+          invCalls++;
+          if (invCalls === 1) return new Response('Too Many Requests', { status: 429 });
+          return new Response('{"ok":true}', { status: 200 });
+        }
+        return new Response('Quota exceeded', { status: 429 });
+      });
+
+      const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+
+      // 1. Inventaire 429 -> pause 3 s + retry automatique réussi, circuit reste fermé !
+      const invPromise = http.fetchText({ source: 'inventaire', url: 'https://inventaire.io/api/test' });
+      await vi.advanceTimersByTimeAsync(3500);
+      const invBody = await invPromise;
+      expect(invBody).toBe('{"ok":true}');
+      expect(invCalls).toBe(2);
+      expect(http.isCircuitOpen('inventaire')).toBe(false);
+
+      // 2. Google Books 429 -> circuit-breaker ouvert immédiatement (10 min)
+      const gbBody = await http.fetchText({ source: 'google_books', url: 'https://www.googleapis.com/books/v1/volumes?q=isbn:123' });
+      expect(gbBody).toBeNull();
+      expect(http.isCircuitOpen('google_books')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('transforme une saturation Gemini HTTP 503 JSON brut en message utilisateur français lisible', async () => {
+    const rawGoogle503 = JSON.stringify({
+      error: {
+        code: 503,
+        message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary.',
+        status: 'UNAVAILABLE'
+      }
+    });
+    const mockFetch = vi.fn(async () => new Response(rawGoogle503, { status: 503 }));
+    const gemini = createGeminiConnector('fake-key', mockFetch as typeof fetch);
+
+    await expect(
+      gemini.extractBooksFromImage({
+        imageDataUrl: 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=',
+        mimeType: 'image/webp',
+        mode: 'shelf'
+      })
+    ).rejects.toThrow(/momentanément surchargé.*Réessayer/i);
+  });
 });

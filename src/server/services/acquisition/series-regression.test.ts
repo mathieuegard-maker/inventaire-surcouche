@@ -997,4 +997,153 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(burmaRoman.franchise.id).toBe(burmaBd.franchise.id);
     expect(burmaRoman.series.id).not.toBe(burmaBd.series.id);
   });
+
+  it('Cas 13 (Boule & Bill et Tintin décalé Casterman/Wikidata) : unifie "&"/"et" et empêche toute collision de numéro décalé', async () => {
+    // 1. Unification "Boule & Bill" === "Boule et Bill"
+    const { extractFranchiseBaseName } = await import('../../../shared/bibliographic/text-normalize.util');
+    expect(extractFranchiseBaseName('Boule & Bill').normalizedKey).toBe(
+      extractFranchiseBaseName('Boule et Bill').normalizedKey
+    );
+
+    // 2. Tintin : Wikidata numérote Soviets=#1, Congo=#2, Amérique=#3, Cigares=#4.
+    // Une réédition Casterman sans QID numérote Congo=#1, Amérique=#2, Oreille cassée=#4 :
+    // elle ne doit JAMAIS écraser Soviets=#1 ni Cigares=#4, ni créer un faux découpage "Tintin (Casterman)".
+    const now = new Date().toISOString();
+    const connectors = createMockConnectors({
+      bnfByIsbn: {
+        '9782203001015': {
+          source: 'bnf',
+          isbn13: '9782203001015',
+          title: 'Tintin au Congo',
+          seriesName: 'Les Aventures de Tintin',
+          seriesLinkKind: 'marc_ensemble_460',
+          volumeNumber: '1', // Numérotation décalée Casterman !
+          authors: ['Hergé'],
+          scriptwriters: [],
+          illustrators: [],
+          publisher: 'Casterman',
+          pageCount: 62,
+          rawSubjects: ['Bandes dessinées']
+        },
+        '9782203001022': {
+          source: 'bnf',
+          isbn13: '9782203001022',
+          title: 'Les Aventures de Tintin en Amérique',
+          seriesName: 'Les Aventures de Tintin',
+          seriesLinkKind: 'marc_ensemble_460',
+          volumeNumber: '2', // Numérotation décalée Casterman !
+          authors: ['Hergé'],
+          scriptwriters: [],
+          illustrators: [],
+          publisher: 'Casterman',
+          pageCount: 62,
+          rawSubjects: ['Bandes dessinées']
+        },
+        '9782203001053': {
+          source: 'bnf',
+          isbn13: '9782203001053',
+          title: "L'Oreille cassée",
+          seriesName: 'Les Aventures de Tintin',
+          seriesLinkKind: 'marc_ensemble_460',
+          volumeNumber: '4', // Entre en collision avec Cigares (#4 Wikidata) si on ne compare pas le titre !
+          authors: ['Hergé'],
+          scriptwriters: [],
+          illustrators: [],
+          publisher: 'Casterman',
+          pageCount: 62,
+          rawSubjects: ['Bandes dessinées']
+        }
+      }
+    });
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const { series: tintinSeries } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Les Aventures de Tintin',
+      wikidataSeriesQid: 'Q744536',
+      bookTitle: 'Tintin au pays des Soviets',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 141,
+      publisher: 'Casterman',
+      mainCategory: 'BD',
+      authors: ['Hergé'],
+      now
+    });
+
+    const seedTintin = (id: string, qid: string, title: string, vol: number) => {
+      catalogRepo.upsertBookAutomatic({
+        id,
+        workCanonicalId: `wd:${qid}`,
+        seriesId: tintinSeries.id,
+        title,
+        normalizedTitle: title.toLowerCase(),
+        volumeNumber: vol,
+        volumeLabel: String(vol),
+        sortOrder: vol,
+        isHorsSerie: false,
+        isIntegral: false,
+        includedVolumes: [],
+        authors: ['Hergé'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Casterman',
+        collectionName: null,
+        publishYear: '1930',
+        pageCount: 62,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: qid,
+        inventaireUri: null,
+        sourceOrigin: 'auto',
+        now
+      });
+    };
+
+    seedTintin('bk_tin_1', 'Q629032', 'Tintin au pays des Soviets', 1);
+    seedTintin('bk_tin_2', 'Q636870', 'Tintin au Congo', 2);
+    seedTintin('bk_tin_3', 'Q629489', 'Tintin en Amérique', 3);
+    seedTintin('bk_tin_4', 'Q768104', 'Les Cigares du pharaon', 4);
+    seedTintin('bk_tin_6', 'Q1199184', "L'Oreille cassée", 6);
+
+    const ingestion = new IngestionService({
+      catalogRepo,
+      libraryRepo,
+      jobRepo,
+      logRepo,
+      comparisonService: new ComparisonTableService({ connectors }),
+      seriesGraphService: seriesGraph,
+      coverService
+    });
+
+    const res = await ingestion.resolveIsbns({
+      rawIsbns: ['9782203001015', '9782203001022', '9782203001053'],
+      channel: 'barcode_simple',
+      action: 'owned',
+      userId,
+      libraryId
+    });
+
+    expect(res.results.every((r) => r.found && r.book !== null)).toBe(true);
+    // Congo (#1 Casterman) s'est bien rattaché à bk_tin_2 (#2 Wikidata), sans écraser Soviets (#1) !
+    expect(res.results[0].book?.id).toBe('bk_tin_2');
+    expect(res.results[0].book?.volumeNumber).toBe(2);
+    // Amérique (#2 Casterman) s'est bien rattaché à bk_tin_3 (#3 Wikidata) via correspondance tronc de titre !
+    expect(res.results[1].book?.id).toBe('bk_tin_3');
+    expect(res.results[1].book?.volumeNumber).toBe(3);
+    // L'Oreille cassée (#4 Casterman) s'est bien rattaché à bk_tin_6 (#6 Wikidata), sans toucher Les Cigares (#4) !
+    expect(res.results[2].book?.id).toBe('bk_tin_6');
+    expect(res.results[2].book?.volumeNumber).toBe(6);
+
+    // Soviets (#1) et Cigares (#4) sont strictement intacts, et aucune 2e série Tintin (Casterman) n'a été créée !
+    expect(catalogRepo.findBookById('bk_tin_1')?.title).toBe('Tintin au pays des Soviets');
+    expect(catalogRepo.findBookById('bk_tin_4')?.title).toBe('Les Cigares du pharaon');
+    const allTintinSeries = db.all<{ id: string; canonical_name: string }>(
+      "SELECT id, canonical_name FROM series WHERE lower(canonical_name) LIKE '%tintin%'"
+    );
+    expect(allTintinSeries).toHaveLength(1);
+  });
 });

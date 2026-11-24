@@ -171,9 +171,10 @@ export function extractFranchiseBaseName(rawSeriesName: string): { baseName: str
   const head = cleaned.split(/\s*[,—–]\s*/)[0].trim();
   const stripped = head.replace(SERIES_PREFIX_NOISE_RE, '').trim();
   const baseName = stripped.length >= 2 ? stripped : cleaned;
+  // Unifie `&` et `et` dans la clé de franchise ("Boule & Bill" === "Boule et Bill", "Blake & Mortimer" === "Blake et Mortimer")
   return {
     baseName,
-    normalizedKey: normalizeTextKey(baseName)
+    normalizedKey: normalizeTextKey(baseName.replace(/\s*&\s*/g, ' et '))
   };
 }
 

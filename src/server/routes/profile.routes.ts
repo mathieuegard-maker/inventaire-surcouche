@@ -2,19 +2,25 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import {
+  collectionImportRequestSchema,
   deleteAccountSchema,
   updateDefaultGenresSchema,
   updateProfileSchema
 } from '../../shared/schemas/auth.schema';
 import type { AuthService } from '../services/auth.service';
 import type { StatsExportService } from '../services/stats-export.service';
+import type { CollectionImportService } from '../services/collection-import.service';
 import {
   clearSessionCookie,
   createRequireAuthMiddleware,
   type AppVariables
 } from '../middleware/auth.middleware';
 
-export function createProfileRoutes(authService: AuthService, statsExportService?: StatsExportService) {
+export function createProfileRoutes(
+  authService: AuthService,
+  statsExportService?: StatsExportService,
+  collectionImportService?: CollectionImportService
+) {
   const router = new Hono<{ Variables: AppVariables }>();
   const requireAuth = createRequireAuthMiddleware(authService);
 
@@ -62,6 +68,22 @@ export function createProfileRoutes(authService: AuthService, statsExportService
         'Cache-Control': 'no-store'
       }
     });
+  });
+
+  router.post('/import', zValidator('json', collectionImportRequestSchema), async (c) => {
+    const auth = c.get('auth')!;
+    if (!collectionImportService) {
+      return c.json({ error: { code: 'IMPORT_UNAVAILABLE', message: 'Service import non disponible.' } }, 503);
+    }
+    const body = c.req.valid('json');
+    const enqueued = await collectionImportService.enqueueImportJob({
+      userId: auth.userId,
+      libraryId: auth.libraryId,
+      filename: body.filename,
+      contentBase64: body.contentBase64,
+      defaultStatus: body.defaultStatus
+    });
+    return c.json({ ok: true, ...enqueued }, 202);
   });
 
   return router;

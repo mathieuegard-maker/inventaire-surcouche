@@ -71,6 +71,7 @@ const photoMode = ref<'shelf' | 'cover'>('shelf');
 const cameraPhotoInputRef = ref<HTMLInputElement | null>(null);
 const galleryPhotoInputRef = ref<HTMLInputElement | null>(null);
 const photoUploading = ref(false);
+const photoRetryingOcr = ref(false);
 const photoCommitting = ref(false);
 const activePhotoItemId = ref<string | null>(null);
 const previewLightboxOpen = ref(false);
@@ -207,6 +208,19 @@ async function handleRetryFailed(): Promise<void> {
     uiStore.pushToast(t('scan.photoRetryBnfSuccess'), 'success');
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  }
+}
+
+async function handleRetryOcr(): Promise<void> {
+  if (!latestPhotoJob.value) return;
+  photoRetryingOcr.value = true;
+  try {
+    await scanStore.retryPhotoJobOcr(latestPhotoJob.value.id);
+    uiStore.pushToast(t('scan.photoRetryOcrToast'), 'info');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    photoRetryingOcr.value = false;
   }
 }
 
@@ -535,19 +549,30 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         <div class="ds-panel ds-row ds-row--between">
           <strong>
             {{
-              latestPhotoJob.status === 'done'
-                ? t('scan.photoBannerDone', {
-                    done: latestPhotoJob.progressDone,
-                    total: latestPhotoJob.progressTotal
-                  })
-                : t('scan.photoBannerRunning', {
-                    done: latestPhotoJob.progressDone,
-                    total: latestPhotoJob.progressTotal
-                  })
+              latestPhotoJob.status === 'error'
+                ? t('scan.photoBannerError')
+                : latestPhotoJob.status === 'done'
+                  ? t('scan.photoBannerDone', {
+                      done: latestPhotoJob.progressDone,
+                      total: latestPhotoJob.progressTotal
+                    })
+                  : t('scan.photoBannerRunning', {
+                      done: latestPhotoJob.progressDone,
+                      total: latestPhotoJob.progressTotal
+                    })
             }}
           </strong>
 
           <div class="ds-row">
+            <button
+              v-if="latestPhotoJob.status === 'error'"
+              type="button"
+              class="ds-btn ds-btn--primary ds-btn--sm"
+              :disabled="photoRetryingOcr"
+              @click="handleRetryOcr"
+            >
+              {{ photoRetryingOcr ? t('app.loading') : t('scan.photoRetryOcrBtn') }}
+            </button>
             <button
               v-if="unresolvedItems.length > 0"
               type="button"
@@ -562,8 +587,17 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           </div>
         </div>
 
-        <div v-if="latestPhotoJob.errorMessage" class="ds-banner ds-banner--danger" role="alert">
-          {{ latestPhotoJob.errorMessage }}
+        <div v-if="latestPhotoJob.errorMessage" class="ds-banner ds-banner--danger ds-row ds-row--between" role="alert">
+          <span>{{ latestPhotoJob.errorMessage }}</span>
+          <button
+            v-if="latestPhotoJob.status === 'error'"
+            type="button"
+            class="ds-btn ds-btn--sm"
+            :disabled="photoRetryingOcr"
+            @click="handleRetryOcr"
+          >
+            {{ photoRetryingOcr ? t('app.loading') : t('scan.photoRetryOcrBtn') }}
+          </button>
         </div>
 
         <div v-if="jobsStore.activePhotoCommitJob" class="ds-banner ds-banner--info" role="status">

@@ -48,3 +48,9 @@ export const updateDefaultGenresSchema = z.object({
   action: z.enum(['add', 'remove', 'reset']),
   genre: z.string().trim().min(1).max(60).optional()
 });
+
+export const collectionImportRequestSchema = z.object({
+  filename: z.string().trim().min(1).max(200),
+  contentBase64: z.string().min(1).max(8 * 1024 * 1024),
+  defaultStatus: z.enum(['owned', 'wish']).default('owned')
+});

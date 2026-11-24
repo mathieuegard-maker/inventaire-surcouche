@@ -161,6 +161,16 @@ export class JobRepository {
     return this.findJobById(id);
   }
 
+  requeueJob(id: string, now: string): BackgroundJobRow | null {
+    this.db.run(
+      `UPDATE background_jobs
+       SET status = 'pending', progress_done = 0, progress_total = 1, error_message = NULL, updated_at = ?
+       WHERE id = ?`,
+      [now, id]
+    );
+    return this.findJobById(id);
+  }
+
   deleteJob(id: string): void {
     this.db.run('DELETE FROM background_jobs WHERE id = ?', [id]);
   }

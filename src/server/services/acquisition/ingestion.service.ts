@@ -3,6 +3,11 @@
 
 import crypto from 'node:crypto';
 import { isbnUtil } from '../../../shared/bibliographic/isbn.util';
+import {
+  extractFranchiseBaseName,
+  isGenericVolumeTitle,
+  tokenOverlapRatio
+} from '../../../shared/bibliographic/text-normalize.util';
 import type { AcquisitionChannel, BookView, LibraryBookOverrides } from '../../../shared/types/domain.types';
 import type { BookRow, CatalogRepository } from '../../repositories/catalog.repo';
 import type { LibraryBookRow, LibraryRepository } from '../../repositories/library.repo';
@@ -10,7 +15,7 @@ import type { JobRepository } from '../../repositories/job.repo';
 import type { LogRepository } from '../../repositories/log.repo';
 import type { CoverService } from '../cover.service';
 import type { ComparisonTableService } from './comparison-table.service';
-import type { SeriesGraphService } from './series-graph.service';
+import { compareSameVolumeContent, type SeriesGraphService } from './series-graph.service';
 
 export interface ResolveIsbnItemResult {
   isbn13: string;
@@ -269,13 +274,51 @@ export class IngestionService {
           }
         }
 
-        // 4. Rattachement éventuel à une œuvre déjà existante (même Q-ID ou même tome dans la série)
-        const existingWork =
+        // 4. Rattachement éventuel à une œuvre déjà existante :
+        //    Ordre strict : ISBN -> Q-ID Wikidata -> titre distinctif dans la série -> n° de tome (UNIQUEMENT si contenu compatible)
+        let existingWork: BookRow | null =
           bookRow ??
-          (draft.wikidataWorkQid ? this.catalogRepo.findBookByWikidataQid(draft.wikidataWorkQid) : null) ??
-          (resolvedSeriesId && draft.volumeNumber && !draft.isHorsSerie && !draft.isIntegral
-            ? this.catalogRepo.findBookInSeriesByVolume(resolvedSeriesId, draft.volumeNumber)
-            : null);
+          (draft.wikidataWorkQid ? this.catalogRepo.findBookByWikidataQid(draft.wikidataWorkQid) : null);
+
+        if (!existingWork && resolvedSeriesId) {
+          const seriesRow = this.catalogRepo.findSeriesById(resolvedSeriesId);
+          const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
+          const isGeneric = isGenericVolumeTitle(draft.title, seriesLabel);
+
+          if (!isGeneric && draft.normalizedTitle) {
+            const byExact = this.catalogRepo.findBookInSeriesByNormalizedTitle(resolvedSeriesId, draft.normalizedTitle);
+            if (byExact && Boolean(byExact.is_integral) === Boolean(draft.isIntegral)) {
+              existingWork = byExact;
+            } else {
+              const strippedIn = extractFranchiseBaseName(draft.title).normalizedKey;
+              const seriesBooks = this.catalogRepo.listBooksBySeriesId(resolvedSeriesId);
+              existingWork =
+                seriesBooks.find((b) => {
+                  if (Boolean(b.is_integral) !== Boolean(draft.isIntegral)) return false;
+                  if (isGenericVolumeTitle(b.title, seriesLabel)) return false;
+                  if (strippedIn && extractFranchiseBaseName(b.title).normalizedKey === strippedIn) return true;
+                  return tokenOverlapRatio(draft.title, b.title) >= 0.8 && tokenOverlapRatio(b.title, draft.title) >= 0.8;
+                }) ?? null;
+            }
+          }
+
+          if (!existingWork && draft.volumeNumber && !draft.isHorsSerie && !draft.isIntegral) {
+            const volCandidate = this.catalogRepo.findBookInSeriesByVolume(resolvedSeriesId, draft.volumeNumber);
+            if (volCandidate) {
+              const cmp = compareSameVolumeContent(volCandidate, {
+                title: draft.title,
+                wikidataWorkQid: draft.wikidataWorkQid,
+                pageCount: draft.pageCount,
+                collectionName: draft.collectionName,
+                publisher: draft.publisher,
+                seriesName: seriesLabel
+              });
+              if (cmp.sameContent) {
+                existingWork = volCandidate;
+              }
+            }
+          }
+        }
 
         const workCanonicalId =
           existingWork?.work_canonical_id ??
@@ -285,6 +328,12 @@ export class IngestionService {
               ? `inv:${draft.inventaireWorkUri}`
               : `isbn:${isbn13}`);
 
+        // Si l'œuvre canonique existe déjà avec un Q-ID Wikidata et un n° de tome établi,
+        // une réédition à numérotation décalée (ex. Tintin Casterman vs Wikidata) ne doit pas écraser son n° de tome canonique.
+        const preserveCanonicalVol = Boolean(
+          existingWork?.wikidata_qid && existingWork.volume_number !== null && !draft.wikidataWorkQid
+        );
+
         // Écriture Catalogue Central (Couche 1) en respectant STRICTEMENT locked_fields_json (Couche 2 Admin)
         bookRow = this.catalogRepo.upsertBookAutomatic({
           id: existingWork?.id ?? generateId('bk'),
@@ -292,9 +341,9 @@ export class IngestionService {
           seriesId: resolvedSeriesId,
           title: draft.title,
           normalizedTitle: draft.normalizedTitle,
-          volumeNumber: draft.volumeNumber,
-          volumeLabel: draft.volumeLabel,
-          sortOrder: draft.sortOrder,
+          volumeNumber: preserveCanonicalVol ? existingWork!.volume_number : draft.volumeNumber,
+          volumeLabel: preserveCanonicalVol ? existingWork!.volume_label : draft.volumeLabel,
+          sortOrder: preserveCanonicalVol ? existingWork!.sort_order : draft.sortOrder,
           isHorsSerie: draft.isHorsSerie,
           isIntegral: draft.isIntegral,
           includedVolumes: draft.includedVolumes,

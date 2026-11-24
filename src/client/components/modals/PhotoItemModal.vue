@@ -67,17 +67,23 @@ function handleWheelZoom(event: WheelEvent): void {
   adjustZoom(event.deltaY < 0 ? 25 : -25);
 }
 
-async function patchItem(patch: {
-  selected?: boolean;
-  ignored?: boolean;
-  selectedOptionIsbn13?: string | null;
-  isIntegral?: boolean;
-  includedVolumes?: string[];
-}): Promise<void> {
+async function patchItem(
+  patch: {
+    selected?: boolean;
+    ignored?: boolean;
+    selectedOptionIsbn13?: string | null;
+    isIntegral?: boolean;
+    includedVolumes?: string[];
+  },
+  showSavedToast = false
+): Promise<void> {
   if (!props.item) return;
   saving.value = true;
   try {
     await scanStore.updatePhotoItem(props.jobId, props.item.id, patch);
+    if (showSavedToast) {
+      uiStore.pushToast(t('scan.photoOptionSavedToast'), 'success', 1800);
+    }
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -217,7 +223,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
             :value="opt.isbn13"
             :checked="item.selectedOptionIsbn13 === opt.isbn13"
             :disabled="saving"
-            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false })"
+            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false }, true)"
           />
 
           <div class="photo-option-cover">
@@ -254,8 +260,8 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
     </div>
 
     <template #footer>
-      <button type="button" class="ds-btn ds-btn--primary" @click="emit('close')">
-        {{ t('app.close') }}
+      <button type="button" class="ds-btn ds-btn--primary" :disabled="saving" @click="emit('close')">
+        {{ saving ? t('app.loading') : t('app.close') }}
       </button>
     </template>
   </BaseModal>

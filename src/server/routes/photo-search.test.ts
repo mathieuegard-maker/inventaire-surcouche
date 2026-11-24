@@ -462,4 +462,210 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
     expect(pseudoBody.options).toHaveLength(1);
     expect(pseudoBody.options[0].isbn13).toBe('9782390080442');
   });
+
+  it('gère POST /api/jobs/photo/:jobId/retry-ocr sans consommer de quota et applique la couverture de l’édition choisie en Couche 3 au commit', async () => {
+    const dbLocal = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(dbLocal, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-j5-retry-'));
+    try {
+      let geminiAttempts = 0;
+      const flakyGemini: GeminiConnector = {
+        isConfigured: () => true,
+        async extractBooksFromImage() {
+          geminiAttempts++;
+          if (geminiAttempts === 1) {
+            throw new Error(
+              'Le service de reconnaissance IA (Gemini) est temporairement saturé. Patientez quelques secondes puis cliquez sur « Réessayer ».'
+            );
+          }
+          return [
+            { title: 'La Marque du diable', series: 'Le Scorpion', volumeNumber: '1', author: 'Marini', confidence: 'high' }
+          ];
+        }
+      };
+
+      const redPng = await sharp({ create: { width: 120, height: 180, channels: 3, background: { r: 220, g: 30, b: 30 } } })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
+      const bluePng = await sharp({ create: { width: 120, height: 180, channels: 3, background: { r: 20, g: 60, b: 220 } } })
+        .png({ compressionLevel: 0 })
+        .toBuffer();
+
+      const customConnectors: BibliographicConnectors = {
+        bnf: {
+          async lookupByIsbn(isbn13) {
+            if (isbn13 === '9782871293019' || isbn13 === '9782871299998') {
+              return {
+                source: 'bnf',
+                isbn13,
+                title: 'La Marque du diable',
+                seriesName: 'Le Scorpion',
+                seriesLinkKind: 'marc_ensemble_460',
+                volumeNumber: '1',
+                authors: ['Stephen Desberg', 'Enrico Marini'],
+                scriptwriters: [],
+                illustrators: [],
+                publisher: isbn13 === '9782871299998' ? 'Dargaud Collector' : 'Dargaud',
+                coverUrl: isbn13 === '9782871299998' ? 'https://covers.test/collector.png' : 'https://covers.test/orig.png',
+                rawSubjects: ['Bandes dessinées']
+              };
+            }
+            return null;
+          },
+          async searchByEnsembleId() { return []; },
+          async sampleByCollectionName() { return []; },
+          async searchByTitleAndAuthor() {
+            return [
+              {
+                source: 'bnf',
+                isbn13: '9782871293019',
+                title: 'La Marque du diable',
+                seriesName: 'Le Scorpion',
+                volumeNumber: '1',
+                authors: ['Enrico Marini'],
+                scriptwriters: [],
+                illustrators: [],
+                publisher: 'Dargaud',
+                coverUrl: 'https://covers.test/orig.png',
+                rawSubjects: []
+              },
+              {
+                source: 'bnf',
+                isbn13: '9782871299998',
+                title: 'La Marque du diable',
+                seriesName: 'Le Scorpion',
+                volumeNumber: '1',
+                authors: ['Enrico Marini'],
+                scriptwriters: [],
+                illustrators: [],
+                publisher: 'Dargaud Collector',
+                coverUrl: 'https://covers.test/collector.png',
+                rawSubjects: []
+              }
+            ];
+          }
+        },
+        sudoc: { async lookupByIsbn() { return null; } },
+        inventaire: { async lookupByIsbn() { return null; }, async fetchSeriesWorks() { return []; } },
+        wikidata: { async lookupWorkByQid() { return null; }, async fetchSeriesWorksByQid() { return []; } },
+        googleBooks: { async lookupByIsbn() { return null; } },
+        openLibrary: { async lookupByIsbn() { return null; } }
+      };
+
+      const ctxLocal = createApp({
+        db: dbLocal,
+        config: loadServerConfig({
+          NODE_ENV: 'test',
+          COVERS_DIR: tmpDir,
+          AI_MONTHLY_QUOTA_DEFAULT: '1',
+          CRON_ENABLED: 'false'
+        }),
+        connectors: customConnectors,
+        geminiConnector: flakyGemini,
+        coverFetchImpl: (async (input: Parameters<typeof fetch>[0]) => {
+          const url = String(input);
+          if (url.includes('collector.png')) return new Response(new Uint8Array(bluePng), { status: 200, headers: { 'content-type': 'image/png' } });
+          if (url.includes('orig.png')) return new Response(new Uint8Array(redPng), { status: 200, headers: { 'content-type': 'image/png' } });
+          return new Response('', { status: 404 });
+        }) as typeof fetch
+      });
+
+      const reg = await ctxLocal.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'RetryTester',
+          email: 'retry@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+
+      // 1. Envoi photo (consomme l'unique quota 1/1) -> Gemini échoue sur saturation 503
+      const dataUrl = await makeShelfPhotoDataUrl();
+      const createRes = await ctxLocal.app.request('/api/jobs/photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ mode: 'shelf', imageDataUrl: dataUrl, mimeType: 'image/png' })
+      });
+      expect(createRes.status).toBe(201);
+      const jobId = ((await createRes.json()) as { job: { id: string } }).job.id;
+
+      await ctxLocal.worker.processNextJob();
+      const afterFail = (await (await ctxLocal.app.request('/api/jobs', { headers: { cookie } })).json()) as {
+        jobs: Array<{ id: string; status: string; errorMessage: string | null }>;
+      };
+      expect(afterFail.jobs.find((j) => j.id === jobId)?.status).toBe('error');
+      expect(afterFail.jobs.find((j) => j.id === jobId)?.errorMessage).toMatch(/temporairement saturé/i);
+
+      // 2. Réessai OCR sur le même lot (quota déjà à 1/1 -> ne consomme PAS de quota supplémentaire !)
+      const retryOcrRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/retry-ocr`, {
+        method: 'POST',
+        headers: { cookie }
+      });
+      expect(retryOcrRes.status).toBe(200);
+
+      while (await ctxLocal.worker.processNextJob()) {
+        // dépile le job photo_ocr relancé
+      }
+
+      const afterRetry = (await (await ctxLocal.app.request('/api/jobs', { headers: { cookie } })).json()) as {
+        jobs: Array<{
+          id: string;
+          status: string;
+          result: { items: Array<{ id: string; options: Array<{ isbn13: string; coverUrl: string | null }> }> };
+        }>;
+      };
+      const doneJob = afterRetry.jobs.find((j) => j.id === jobId)!;
+      expect(doneJob.status).toBe('done');
+      const item = doneJob.result.items[0];
+      expect(item.options).toHaveLength(2);
+      const collectorOpt = item.options.find((o) => o.isbn13 === '9782871299998')!;
+      expect(collectorOpt.coverUrl).toBeTruthy();
+
+      // Pré-peupler le livre dans le Catalogue Central avec la 1ère édition (orig.png) pour vérifier
+      // que choisir la 2e édition (collector.png) impose bien la couverture de la 2e édition en Couche 3 !
+      const previewOrigRes = await ctxLocal.app.request('/api/books/resolve-isbn', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ isbns: ['9782871293019'], channel: 'barcode_simple', action: 'preview' })
+      });
+      const previewOrigBody = (await previewOrigRes.json()) as {
+        results: Array<{ book: { coverUrl: string | null } }>;
+      };
+      const origCoverUrl = previewOrigBody.results[0].book.coverUrl;
+      expect(origCoverUrl).toMatch(/^\/api\/covers\//);
+
+      // 3. Sélection de la 2e édition (Dargaud Collector) + validation en Collection
+      const patchOptRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ selectedOptionIsbn13: '9782871299998', selected: true })
+      });
+      expect(patchOptRes.status).toBe(200);
+
+      const commitRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/commit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ targetStatus: 'owned' })
+      });
+      expect(commitRes.status).toBe(200);
+
+      const pullRes = await ctxLocal.app.request('/api/sync/pull', { headers: { cookie } });
+      const pullBody = (await pullRes.json()) as {
+        books: Array<{ coverUrl: string | null; knownIsbns: string[]; hasUserOverrides: boolean }>;
+      };
+      expect(pullBody.books).toHaveLength(1);
+      expect(pullBody.books[0].knownIsbns).toContain('9782871299998');
+      expect(pullBody.books[0].coverUrl).toMatch(/^\/api\/covers\//);
+      expect(pullBody.books[0].coverUrl).not.toBe(origCoverUrl);
+      expect(pullBody.books[0].hasUserOverrides).toBe(true);
+
+      ctxLocal.worker.stop();
+    } finally {
+      dbLocal.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

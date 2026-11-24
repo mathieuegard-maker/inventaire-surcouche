@@ -21,13 +21,19 @@ export type ReadingStatus = 'none' | 'to_read' | 'reading' | 'read' | 'abandoned
 export type LibraryMemberRole = 'owner' | 'member';
 export type BookSourceOrigin = 'auto' | 'manual';
 
-export type BackgroundJobType = 'photo_ocr' | 'photo_retry_item' | 'photo_commit' | 'series_expand' | 'book_enrich';
+export type BackgroundJobType =
+  | 'photo_ocr'
+  | 'photo_retry_item'
+  | 'photo_commit'
+  | 'series_expand'
+  | 'book_enrich'
+  | 'collection_import';
 export type BackgroundJobStatus = 'pending' | 'running' | 'done' | 'error';
 
 export type NotificationFrequency = 'off' | 'daily' | 'weekly' | 'monthly';
 export type NotificationChannel = 'push' | 'email' | 'both';
 
-export type AcquisitionChannel = 'barcode_simple' | 'barcode_burst' | 'manual_isbn' | 'text_search' | 'photo_ai';
+export type AcquisitionChannel = 'barcode_simple' | 'barcode_burst' | 'manual_isbn' | 'text_search' | 'photo_ai' | 'import';
 
 /**
  * Surcharges privées verrouillées par le Foyer (Couche 3 > Couche 2 > Couche 1).

@@ -28,6 +28,10 @@ export const useJobsStore = defineStore('jobs', () => {
     jobs.value.find((j) => j.type === 'photo_commit' && (j.status === 'pending' || j.status === 'running')) ?? null
   );
 
+  const latestCollectionImportJob = computed(() =>
+    jobs.value.find((j) => j.type === 'collection_import') ?? null
+  );
+
   function upsertJob(incoming: BackgroundJobView): void {
     const idx = jobs.value.findIndex((j) => j.id === incoming.id);
     const prevStatus = idx >= 0 ? jobs.value[idx].status : null;
@@ -37,7 +41,9 @@ export const useJobsStore = defineStore('jobs', () => {
       jobs.value.unshift(incoming);
     }
     if (
-      (incoming.type === 'photo_commit' || incoming.type === 'series_expand') &&
+      (incoming.type === 'photo_commit' ||
+        incoming.type === 'series_expand' ||
+        incoming.type === 'collection_import') &&
       incoming.status === 'done' &&
       prevStatus !== 'done'
     ) {
@@ -116,6 +122,7 @@ export const useJobsStore = defineStore('jobs', () => {
     hasRunningJobs,
     latestPhotoJob,
     activePhotoCommitJob,
+    latestCollectionImportJob,
     isStreamConnected,
     upsertJob,
     refreshJobs,

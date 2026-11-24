@@ -18,6 +18,7 @@ import type { SeriesManagementService } from '../services/series-management.serv
 import type { NotificationService } from '../services/notification.service';
 import type { SocialService } from '../services/social.service';
 import type { StatsExportService } from '../services/stats-export.service';
+import type { CollectionImportService } from '../services/collection-import.service';
 import type { AdminService } from '../services/admin.service';
 import {
   createRequireAdminMiddleware,
@@ -56,6 +57,7 @@ export interface ApiRouterDeps {
   notificationService: NotificationService;
   socialService: SocialService;
   statsExportService: StatsExportService;
+  collectionImportService: CollectionImportService;
   adminService: AdminService;
   jobRepo: JobRepository;
   worker: BackgroundWorker;
@@ -77,7 +79,7 @@ export function createApiRouter(deps: ApiRouterDeps) {
   );
 
   api.route('/auth', createAuthRoutes(deps.authService, deps.config));
-  api.route('/me', createProfileRoutes(deps.authService, deps.statsExportService));
+  api.route('/me', createProfileRoutes(deps.authService, deps.statsExportService, deps.collectionImportService));
   api.route('/covers', createCoversRoutes({ coverService: deps.coverService, requireAuth }));
   api.route(
     '/books',

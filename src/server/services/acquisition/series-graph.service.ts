@@ -228,14 +228,20 @@ export class SeriesGraphService {
         }
       }
 
-      // Même œuvre déjà présente dans ce découpage (Q-ID ou titre distinctif exact) -> rattacher ici (évite un faux découpage sur édition luxe 126 p.)
+      // Même œuvre déjà présente dans ce découpage (Q-ID ou titre distinctif exact / sans préfixe "Les Aventures de...") -> rattacher ici
+      const strippedIncomingTitle = extractFranchiseBaseName(input.bookTitle).normalizedKey;
       const matchesExistingWork =
         Boolean(input.wikidataWorkQid && cutBooks.some((b) => b.wikidata_qid === input.wikidataWorkQid)) ||
         Boolean(
           normIncomingTitle &&
             !isGenericVolumeTitle(input.bookTitle, cut.canonical_name) &&
             cutBooks.some(
-              (b) => b.normalized_title === normIncomingTitle && Boolean(b.is_integral) === Boolean(input.isIntegral)
+              (b) =>
+                Boolean(b.is_integral) === Boolean(input.isIntegral) &&
+                !isGenericVolumeTitle(b.title, cut.canonical_name) &&
+                (b.normalized_title === normIncomingTitle ||
+                  (Boolean(strippedIncomingTitle) &&
+                    extractFranchiseBaseName(b.title).normalizedKey === strippedIncomingTitle))
             )
         );
       if (matchesExistingWork) {

@@ -411,12 +411,30 @@ export class PhotoAiService {
     const total = Math.max(1, hints.length);
     const items: PhotoJobItem[] = [];
 
-    const buildPayload = (): PhotoJobResultPayload => ({
-      mode,
-      previewCoverKey,
-      previewUrl: previewCoverKey ? `/api/covers/${previewCoverKey}` : null,
-      items: [...items]
-    });
+    const mergeSavedArbitrations = () => {
+      const latestRow = this.jobRepo.findJobById(ctx.job.id);
+      if (!latestRow?.result_json) return;
+      const savedItems = this.parseResult(latestRow).items;
+      if (savedItems.length === 0) return;
+      const savedById = new Map(savedItems.map((it) => [it.id, it]));
+      for (let idx = 0; idx < items.length; idx++) {
+        const persisted = savedById.get(items[idx].id);
+        if (persisted) {
+          // Conserve les choix déjà enregistrés par l'utilisateur pendant l'analyse en cours (édition choisie, sélection, relance BnF, intégrale)
+          items[idx] = { ...items[idx], ...persisted };
+        }
+      }
+    };
+
+    const buildPayload = (): PhotoJobResultPayload => {
+      mergeSavedArbitrations();
+      return {
+        mode,
+        previewCoverKey,
+        previewUrl: previewCoverKey ? `/api/covers/${previewCoverKey}` : null,
+        items: [...items]
+      };
+    };
 
     ctx.reportProgress(0, total, buildPayload());
 
@@ -735,11 +753,34 @@ export class PhotoAiService {
 
             const book = resolved.results[0]?.book;
             if (book) {
+              const chosenOption = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13);
+              let chosenCoverKey: string | null = null;
+              if (chosenOption?.coverUrl?.startsWith('/api/covers/')) {
+                chosenCoverKey = chosenOption.coverUrl.slice('/api/covers/'.length);
+              } else if (chosenOption?.coverUrl) {
+                const stored = await this.coverService.ingestFromExternalUrl(chosenOption.coverUrl);
+                if (stored) chosenCoverKey = stored.coverKey;
+              } else {
+                const edRow = this.catalogRepo.findEditionByIsbn13(item.selectedOptionIsbn13);
+                if (edRow?.cover_key) chosenCoverKey = edRow.cover_key;
+              }
+
+              const userPickedAlternateEdition =
+                Boolean(item.options[0]?.isbn13) && item.selectedOptionIsbn13 !== item.options[0].isbn13;
+              const overridePatch: {
+                isIntegral?: boolean;
+                includedVolumes?: string[];
+                coverKey?: string;
+              } = {};
               if (item.isIntegral) {
-                this.libraryService.updateBookOverrides(params.libraryId, params.userId, book.id, {
-                  isIntegral: true,
-                  includedVolumes: item.includedVolumes
-                });
+                overridePatch.isIntegral = true;
+                overridePatch.includedVolumes = item.includedVolumes;
+              }
+              if (chosenCoverKey && chosenCoverKey !== book.coverKey && (userPickedAlternateEdition || !book.coverKey)) {
+                overridePatch.coverKey = chosenCoverKey;
+              }
+              if (Object.keys(overridePatch).length > 0) {
+                this.libraryService.updateBookOverrides(params.libraryId, params.userId, book.id, overridePatch);
               }
               item.committedBookId = book.id;
               item.alreadyStatus = params.targetStatus;
@@ -760,6 +801,25 @@ export class PhotoAiService {
     this.onJobChanged?.(updated);
 
     return { committedCount, updatedJob: mapJobRowToView(updated) };
+  }
+
+  /**
+   * Relance l'analyse OCR Gemini d'un job Photo IA en erreur sans re-décompter le quota utilisateur.
+   */
+  retryOcrJob(input: { userId: string; libraryId: string; jobId: string }): BackgroundJobView {
+    const row = this.assertOwnedJob(input.jobId, input.userId, input.libraryId);
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = JSON.parse(row.payload_json || '{}') as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
+    if (typeof payload.imageDataUrl !== 'string' || !payload.imageDataUrl) {
+      throw new AppError(400, 'PHOTO_IMAGE_MISSING', "L'image de cette analyse n'est plus disponible : reprenez une photo.");
+    }
+    const requeued = this.jobRepo.requeueJob(row.id, new Date().toISOString())!;
+    this.onJobChanged?.(requeued);
+    return mapJobRowToView(requeued);
   }
 
   deletePhotoJob(input: { userId: string; libraryId: string; jobId: string }): void {

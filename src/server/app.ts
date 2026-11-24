@@ -33,6 +33,7 @@ import { SeriesManagementService } from './services/series-management.service';
 import { NotificationService } from './services/notification.service';
 import { SocialService } from './services/social.service';
 import { StatsExportService } from './services/stats-export.service';
+import { CollectionImportService } from './services/collection-import.service';
 import { AdminService } from './services/admin.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { CronScheduler } from './workers/cron-scheduler';
@@ -213,6 +214,16 @@ export function createApp(options: CreateAppOptions) {
 
   const statsExportService = new StatsExportService({ libraryService });
 
+  const collectionImportService = new CollectionImportService({
+    jobRepo,
+    ingestionService,
+    photoAiService,
+    libraryService,
+    readingService,
+    onJobEnqueued: () => worker.nudge(),
+    onJobChanged: (row) => worker.notifyJobRow(row)
+  });
+
   const adminService = new AdminService({
     db: options.db,
     catalogRepo,
@@ -228,6 +239,9 @@ export function createApp(options: CreateAppOptions) {
   });
   worker.registerHandler('photo_commit', async (ctx) => {
     return photoAiService.executePhotoCommitJob(ctx);
+  });
+  worker.registerHandler('collection_import', async (ctx) => {
+    return collectionImportService.executeCollectionImportJob(ctx);
   });
   worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
@@ -272,6 +286,7 @@ export function createApp(options: CreateAppOptions) {
     notificationService,
     socialService,
     statsExportService,
+    collectionImportService,
     adminService,
     jobRepo,
     worker,
@@ -310,6 +325,7 @@ export function createApp(options: CreateAppOptions) {
       notificationService,
       socialService,
       statsExportService,
+      collectionImportService,
       adminService
     },
     worker,

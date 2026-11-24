@@ -152,6 +152,18 @@ export function createJobsRoutes(deps: {
     return c.json({ ok: true, job });
   });
 
+  router.post('/photo/:jobId/retry-ocr', (c) => {
+    const auth = c.get('auth')!;
+    const jobId = c.req.param('jobId');
+    const job = deps.photoAiService.retryOcrJob({
+      userId: auth.userId,
+      libraryId: auth.libraryId,
+      jobId
+    });
+    deps.worker.nudge();
+    return c.json({ ok: true, job });
+  });
+
   router.post('/photo/:jobId/commit', zValidator('json', commitPhotoJobSchema), async (c) => {
     const auth = c.get('auth')!;
     const jobId = c.req.param('jobId');

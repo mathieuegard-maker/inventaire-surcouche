@@ -100,6 +100,26 @@ function normalizeHints(raw: unknown): GeminiExtractedBookHint[] {
   return out.slice(0, 60).map((item, idx) => ({ ...item, spineIndex: idx + 1 }));
 }
 
+function formatFriendlyGeminiError(status: number, rawDetail: string): string {
+  const lower = rawDetail.toLowerCase();
+  if (status === 503 || lower.includes('high demand') || lower.includes('unavailable') || lower.includes('overloaded')) {
+    return "Le service d'analyse photo (IA Gemini) est momentanément surchargé. Patientez quelques secondes puis cliquez sur « Réessayer ».";
+  }
+  if (status === 429 || lower.includes('resource_exhausted') || lower.includes('quota')) {
+    return 'Limite temporaire du service IA atteinte. Patientez une minute puis cliquez sur « Réessayer ».';
+  }
+  if (status === 401 || status === 403) {
+    return 'Accès au service IA Gemini refusé côté serveur (vérifiez la clé API).';
+  }
+  if (lower.includes('timeout') || lower.includes('aborted')) {
+    return 'Le service IA met trop de temps à répondre. Cliquez sur « Réessayer ».';
+  }
+  if (status >= 500) {
+    return `Le service IA Gemini rencontre une erreur temporaire (HTTP ${status}). Cliquez sur « Réessayer ».`;
+  }
+  return "Impossible d'analyser la photo pour le moment. Cliquez sur « Réessayer ».";
+}
+
 export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = fetch): GeminiConnector {
   const cleanKey = (apiKey || '').trim();
 
@@ -167,9 +187,9 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
             if (res.status === 404 || res.status === 429 || res.status === 503 || res.status >= 500) {
               continue;
             }
-            throw new Error(`Erreur Gemini Vision (HTTP ${res.status}).`);
+            throw new Error(formatFriendlyGeminiError(res.status, lastErrorText));
           } catch (err) {
-            if (err instanceof Error && err.message.startsWith('Erreur Gemini Vision')) {
+            if (err instanceof Error && err.message.startsWith('Accès au service IA')) {
               throw err;
             }
             lastErrorText = err instanceof Error ? err.message : 'Erreur réseau';
@@ -177,11 +197,7 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
         }
       }
 
-      throw new Error(
-        lastStatus
-          ? `Erreur Gemini Vision (HTTP ${lastStatus}${lastErrorText ? ` — ${lastErrorText}` : ''}).`
-          : `Erreur Gemini Vision (${lastErrorText || 'indisponible'}).`
-      );
+      throw new Error(formatFriendlyGeminiError(lastStatus, lastErrorText));
     }
   };
 }

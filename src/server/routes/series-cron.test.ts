@@ -262,6 +262,80 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
     const mergedTargetDet = await appCtx.app.request(`/api/series/${cut2.series.id}`, { headers: { cookie } });
     const mergedTargetBody = (await mergedTargetDet.json()) as { books: Array<{ id: string }> };
     expect(mergedTargetBody.books.map((b) => b.id)).toContain(hsBookId);
+
+    // Déduplication intelligente lors d'une fusion complète de série :
+    // Un tome possédé sans numéro dans la série source masque le doublon non possédé homonyme dans la cible et hérite de son numéro !
+    const dupTargetCut = appCtx.services.seriesGraphService.resolveOrCreateSeriesCut({
+      seriesName: 'Tintin Cible',
+      bookTitle: 'Tintin en Amérique',
+      volumeNumber: 3,
+      isHorsSerie: false,
+      isIntegral: false,
+      authors: ['Hergé']
+    });
+    const unownedTargetBook = appCtx.repos.catalogRepo.upsertBookAutomatic({
+      id: 'bk_target_amerique',
+      workCanonicalId: 'wd:Q_TIN_AMERIQUE',
+      seriesId: dupTargetCut.series.id,
+      title: 'Tintin en Amérique',
+      normalizedTitle: 'tintin en amerique',
+      volumeNumber: 3,
+      volumeLabel: '3',
+      sortOrder: 3,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Hergé'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Casterman',
+      collectionName: null,
+      publishYear: '1932',
+      pageCount: 62,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: 'Q_TIN_AMERIQUE',
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    const ownedSourceRes = await appCtx.app.request('/api/books/manual', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        title: 'Les Aventures de Tintin en Amérique',
+        authors: ['Hergé'],
+        seriesName: 'Tintin Source',
+        oneShot: false,
+        ownershipStatus: 'owned'
+      })
+    });
+    const ownedSource = ((await ownedSourceRes.json()) as { book: { id: string; seriesId: string } }).book;
+
+    const dedupMergeRes = await appCtx.app.request('/api/series/attach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        bookIds: [],
+        targetSeriesId: dupTargetCut.series.id,
+        mergeEntireSourceSeriesId: ownedSource.seriesId
+      })
+    });
+    expect(dedupMergeRes.status).toBe(200);
+
+    const dedupTargetDet = await appCtx.app.request(`/api/series/${dupTargetCut.series.id}`, { headers: { cookie } });
+    const dedupTargetBody = (await dedupTargetDet.json()) as {
+      books: Array<{ id: string; volumeNumber: number | null; ownershipStatus: string }>;
+    };
+    // Le doublon non possédé est masqué en Couche 3 et l'exemplaire possédé a hérité du tome #3 !
+    expect(dedupTargetBody.books.map((b) => b.id)).toEqual([ownedSource.id]);
+    expect(dedupTargetBody.books.map((b) => b.id)).not.toContain(unownedTargetBook.id);
+    expect(dedupTargetBody.books[0].volumeNumber).toBe(3);
+    expect(dedupTargetBody.books[0].ownershipStatus).toBe('owned');
   });
 
   it('exécute le CRON nocturne & horaire de manière idempotente (zéro faux positif intégrale, purge couvertures orphelines > 30j, envoi Push + E-mail)', async () => {

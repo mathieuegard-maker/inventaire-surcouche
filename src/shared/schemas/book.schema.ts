@@ -21,7 +21,8 @@ export const acquisitionChannelSchema = z.enum([
   'barcode_burst',
   'manual_isbn',
   'text_search',
-  'photo_ai'
+  'photo_ai',
+  'import'
 ]);
 
 export const resolveIsbnSchema = z.object({

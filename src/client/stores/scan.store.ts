@@ -192,6 +192,15 @@ export const useScanStore = defineStore('scan', () => {
     return res.job;
   }
 
+  async function retryPhotoJobOcr(jobId: string): Promise<BackgroundJobView> {
+    const res = await apiRequest<{ ok: true; job: BackgroundJobView }>(
+      `/api/jobs/photo/${encodeURIComponent(jobId)}/retry-ocr`,
+      { method: 'POST', timeoutMs: 15000 }
+    );
+    useJobsStore().upsertJob(res.job);
+    return res.job;
+  }
+
   async function commitPhotoJob(
     jobId: string,
     targetStatus: 'owned' | 'wish'
@@ -349,6 +358,7 @@ export const useScanStore = defineStore('scan', () => {
     updatePhotoItem,
     retryPhotoItemBnf,
     retryPhotoJobFailed,
+    retryPhotoJobOcr,
     commitPhotoJob,
     deletePhotoJob,
     captureBurstIsbn,

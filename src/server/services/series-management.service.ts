@@ -7,6 +7,7 @@ import {
   cleanSeriesName,
   cleanTitle,
   extractFranchiseBaseName,
+  isGenericVolumeTitle,
   matchesAuthorName,
   normalizeTextKey
 } from '../../shared/bibliographic/text-normalize.util';
@@ -289,6 +290,9 @@ export class SeriesManagementService {
     let updatedCount = 0;
     const targetId = targetSeries.id;
     const targetName = targetSeries.canonical_name;
+    const existingTargetBooks = input.mergeEntireSourceSeriesId
+      ? this.catalogRepo.listBooksBySeriesId(targetId)
+      : [];
 
     this.db.transaction(() => {
       for (const bookId of bookIdSet) {
@@ -305,6 +309,42 @@ export class SeriesManagementService {
           seriesName: targetName,
           hiddenSeriesIds: nextHidden
         };
+
+        // Lors d'une fusion de série entière, si un livre possédé/souhaité de la série source a le même titre qu'un tome
+        // non possédé déjà dans la série cible (ex. Tintin en Amérique), masquer le doublon non possédé en Couche 3
+        // et reprendre son numéro/position de tri si manquant (Catalogue Central intact).
+        const isUserTracked = Boolean(libRow && !libRow.deleted_at && (libRow.status === 'owned' || libRow.status === 'wish'));
+        if (input.mergeEntireSourceSeriesId && isUserTracked && !isGenericVolumeTitle(bookRow.title, targetName)) {
+          const srcBaseTitle = extractFranchiseBaseName(current.title ?? bookRow.title).normalizedKey;
+          if (srcBaseTitle) {
+            const unownedDup = existingTargetBooks.find((tb) => {
+              if (tb.id === bookRow.id || bookIdSet.has(tb.id)) return false;
+              if (Boolean(tb.is_integral) !== Boolean(current.isIntegral ?? bookRow.is_integral === 1)) return false;
+              if (isGenericVolumeTitle(tb.title, targetName)) return false;
+              const tbLib = this.libraryRepo.findLibraryBook(input.libraryId, tb.id);
+              if (tbLib && !tbLib.deleted_at && (tbLib.status === 'owned' || tbLib.status === 'wish')) return false;
+              return extractFranchiseBaseName(tb.title).normalizedKey === srcBaseTitle;
+            });
+            if (unownedDup) {
+              const dupLib = this.libraryRepo.findLibraryBook(input.libraryId, unownedDup.id);
+              const dupOv = parseOverrides(dupLib?.overrides_json);
+              this.libraryRepo.setLibraryBookOverrides(
+                input.libraryId,
+                unownedDup.id,
+                {
+                  ...dupOv,
+                  hiddenSeriesIds: Array.from(new Set([...(dupOv.hiddenSeriesIds ?? []), targetId]))
+                },
+                now
+              );
+              if (current.volumeNumber === undefined && bookRow.volume_number === null && unownedDup.volume_number !== null) {
+                nextOverrides.volumeNumber = unownedDup.volume_number;
+                nextOverrides.volumeLabel = unownedDup.volume_label ?? String(unownedDup.volume_number);
+                nextOverrides.sortOrder = unownedDup.sort_order ?? unownedDup.volume_number;
+              }
+            }
+          }
+        }
 
         // Si un seul livre est rattaché avec des précisions de tome / position (ex. 0.5, HS)
         if (bookIdSet.size === 1) {
