@@ -237,7 +237,7 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
       }
       if (url.includes('property=wdt:P629') && url.includes('wd%3AQ599154')) {
         return new Response(
-          JSON.stringify({ uris: ['inv:ed_en_1', 'inv:ed_fr_1'] }),
+          JSON.stringify({ uris: ['inv:ed_omnibus', 'inv:ed_en_1', 'inv:ed_fr_1'] }),
           { status: 200 }
         );
       }
@@ -261,6 +261,15 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
         return new Response(
           JSON.stringify({
             entities: {
+              'inv:ed_omnibus': {
+                uri: 'inv:ed_omnibus',
+                type: 'edition',
+                claims: {
+                  'wdt:P407': ['wd:Q150'],
+                  'wdt:P212': ['978-2-7242-5447-1'],
+                  'wdt:P629': ['wd:Q599154', 'wd:Q618719']
+                }
+              },
               'inv:ed_en_1': {
                 uri: 'inv:ed_en_1',
                 type: 'edition',

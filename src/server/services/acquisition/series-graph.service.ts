@@ -446,7 +446,14 @@ export class SeriesGraphService {
       // et un titre générique (ex. "Bug", "Tome 1") ne matche JAMAIS uniquement sur son titre.
       let existingBook: BookRow | null =
         (work.wikidataQid ? this.catalogRepo.findBookByWikidataQid(work.wikidataQid) : null) ??
-        work.isbn13s.map((isbn) => this.catalogRepo.findBookByIsbn13(isbn)).find((b): b is BookRow => Boolean(b)) ??
+        work.isbn13s
+          .map((isbn) => this.catalogRepo.findBookByIsbn13(isbn))
+          .find(
+            (b): b is BookRow =>
+              Boolean(b) &&
+              !hasConflictingVolume(b) &&
+              !(b!.wikidata_qid && work.wikidataQid && b!.wikidata_qid !== work.wikidataQid)
+          ) ??
         null;
 
       if (!existingBook && !isGenericT) {

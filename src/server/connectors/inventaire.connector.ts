@@ -184,6 +184,9 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         const ed = edEntities[u] ?? edEntities[resolvedUri];
         if (!ed) continue;
 
+        // Ignorer les éditions omnibus / intégrales couvrant plusieurs œuvres (ex. "Astérix le Gaulois - La Serpe d'or")
+        if (claimStrings(ed, 'wdt:P629').length > 1) continue;
+
         const isbns = extractEditionIsbn13s(ed);
         const rawCov = resolveInvImageUrl(ed) ?? null;
         const cover = rawCov && !/\.svg(?:[?#]|$)/i.test(rawCov) && !/wikimedia\.org/i.test(rawCov) ? rawCov : null;
