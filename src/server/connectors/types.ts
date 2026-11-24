@@ -111,6 +111,7 @@ export interface WikidataConnector {
   lookupWorkByTitleAndAuthor?(title: string, author: string, fallbackIsbn13?: string): Promise<SourceCandidateRecord | null>;
   fetchSeriesWorksByQid(seriesQid: string): Promise<GraphSeriesWork[]>;
   searchSeriesQid?(seriesName: string): Promise<string | null>;
+  searchSeriesQids?(seriesName: string, mediaFamily?: 'graphic' | 'prose' | 'neutral'): Promise<string[]>;
 }
 
 export interface GoogleBooksConnector {

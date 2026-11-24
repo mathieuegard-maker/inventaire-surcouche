@@ -348,10 +348,10 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         .slice(0, limit);
       if (workUris.length === 0) return [];
 
-      const targetWorkUris = workUris.slice(0, 8);
+      const targetWorkUris = workUris.slice(0, Math.min(limit, 5));
       const [{ entities }, editionsByWork] = await Promise.all([
         fetchEntitiesRaw(targetWorkUris),
-        resolveEditionsForWorks(targetWorkUris, 6)
+        resolveEditionsForWorks(targetWorkUris, 4)
       ]);
       const out: SourceCandidateRecord[] = [];
 

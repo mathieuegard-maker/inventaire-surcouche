@@ -334,30 +334,82 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       return works;
     },
 
-    async searchSeriesQid(seriesName: string): Promise<string | null> {
+    async searchSeriesQids(
+      seriesName: string,
+      mediaFamily: 'graphic' | 'prose' | 'neutral' = 'neutral'
+    ): Promise<string[]> {
       const q = seriesName.trim();
-      if (!q) return null;
-      const url = `${WD_API}?action=wbsearchentities&search=${encodeURIComponent(q)}&language=fr&limit=6&format=json`;
-      const data = await http.fetchJson<WdSearchResponse>({
-        source: 'wikidata',
-        url,
-        timeoutMs: 7000,
-        minIntervalMs: 250,
-        cacheKey: `wd:search:series:${q.toLowerCase()}`,
-        cacheTtlSec: 60 * 60 * 24 * 7
-      });
+      if (!q) return [];
 
-      const candidates = (data?.search ?? []).filter((c) => c.id && /^Q\d+$/i.test(c.id));
-      if (candidates.length === 0) return null;
+      const fetchCandidates = async (queryText: string) => {
+        const url = `${WD_API}?action=wbsearchentities&search=${encodeURIComponent(queryText)}&language=fr&uselang=fr&limit=8&format=json`;
+        const data = await http.fetchJson<WdSearchResponse>({
+          source: 'wikidata',
+          url,
+          timeoutMs: 7000,
+          minIntervalMs: 250,
+          cacheKey: `wd:search:series:fr:${queryText.toLowerCase()}`,
+          cacheTtlSec: 60 * 60 * 24 * 7
+        });
+        return (data?.search ?? []).filter((c) => c.id && /^Q\d+$/i.test(c.id));
+      };
 
-      // Priorité aux entités décrites comme série BD / livre / manga / roman
-      const seriesHintRe = /\b(s[ée]rie|bande dessin[ée]e|bd|manga|comics|roman|litt[ée]rature|albums?)\b/i;
-      const prioritized = [
-        ...candidates.filter((c) => seriesHintRe.test(c.description ?? '')),
-        ...candidates.filter((c) => !seriesHintRe.test(c.description ?? ''))
-      ];
+      let candidates = await fetchCandidates(q);
+      // Wikidata indexe "Boule et Bill" (pas "Boule & Bill") : bascule automatique & -> et si vide
+      if (candidates.length === 0 && q.includes('&')) {
+        const altQuery = q.replace(/\s*&\s*/g, ' et ').replace(/\s+/g, ' ').trim();
+        if (altQuery && altQuery.toLowerCase() !== q.toLowerCase()) {
+          candidates = await fetchCandidates(altQuery);
+        }
+      }
+      if (candidates.length === 0) return [];
 
-      return prioritized[0]?.id?.toUpperCase() ?? null;
+      const nonBookNoiseRe =
+        /\b(franchise\s+m[ée]dia(?:tique)?|media\s+franchise|jeu\s+vid[ée]o|video\s*game|arcade\s+game|film|movie|t[ée]l[ée]vis|television|s[ée]rie\s+d['’]animation|animated|personnage|character|bande\s+originale|soundtrack|parc\s+d['’]attractions|theme\s+park)\b/i;
+      const graphicSeriesRe =
+        /\b(s[ée]ries?\s+(?:[a-zà-ÿ-]+\s+)?de\s+bandes?\s+dessin[ée]es?|bandes?\s+dessin[ée]es?|comic\s*books?\s+series|series\s+of\s+.*comic\s*books?|comic\s*books?|comics?|mangas?|romans?\s+graphiques?)\b/i;
+      const proseSeriesRe =
+        /\b(s[ée]ries?\s+litt[ée]raires?|s[ée]ries?\s+de\s+romans?|cycles?\s+litt[ée]raires?|book\s+series|novel\s+series)\b/i;
+      const genericBookHintRe = /\b(s[ée]ries?|romans?|litt[ée]rature|albums?)\b/i;
+
+      const scoreCandidate = (desc: string): number => {
+        if (nonBookNoiseRe.test(desc)) return -50;
+        const isGraphic = graphicSeriesRe.test(desc);
+        const isProse = proseSeriesRe.test(desc);
+        if (mediaFamily === 'prose' && isGraphic) return -30;
+        if (mediaFamily === 'graphic' && isProse && !isGraphic) return -20;
+        if (isGraphic) return 30;
+        if (isProse) return 25;
+        if (genericBookHintRe.test(desc)) return 10;
+        return 0;
+      };
+
+      const ranked = candidates
+        .map((c, idx) => ({
+          qid: c.id!.toUpperCase(),
+          score: scoreCandidate(c.description ?? ''),
+          idx
+        }))
+        .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx));
+
+      // Exclure le bruit évident (jeux vidéo, films, personnages, franchises média) s'il existe au moins un candidat pertinent
+      const positive = ranked.filter((r) => r.score >= 0);
+      const selected = positive.length > 0 ? positive : ranked;
+
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const item of selected) {
+        if (seen.has(item.qid)) continue;
+        seen.add(item.qid);
+        out.push(item.qid);
+        if (out.length >= 4) break;
+      }
+      return out;
+    },
+
+    async searchSeriesQid(seriesName: string): Promise<string | null> {
+      const qids = await this.searchSeriesQids!(seriesName, 'neutral');
+      return qids[0] ?? null;
     }
   };
 }

@@ -230,20 +230,31 @@ export class PhotoAiService {
 
     const runExternalPass = async (titleQuery: string, authorQuery?: string, bnfLimit = 10) => {
       if (!titleQuery && !authorQuery) return;
-      const [bnfRes, invRes] = await Promise.allSettled([
-        this.connectors.bnf.searchByTitleAndAuthor(titleQuery, authorQuery, bnfLimit),
-        titleQuery && this.connectors.inventaire.searchByText
-          ? this.connectors.inventaire.searchByText(titleQuery, 8)
-          : Promise.resolve([])
-      ]);
-      const invHits = (invRes.status === 'fulfilled' ? invRes.value : []).filter((hit) => {
-        if (!titleQuery) return true;
-        const candidateText = `${hit.seriesName ?? ''} ${hit.title ?? ''}`.trim();
-        return tokenOverlapRatio(titleQuery, candidateText) >= 0.4;
-      });
-      const hits = [...(bnfRes.status === 'fulfilled' ? bnfRes.value : []), ...invHits];
-      for (const hit of hits) {
+      const bnfHits = await this.connectors.bnf
+        .searchByTitleAndAuthor(titleQuery, authorQuery, bnfLimit)
+        .catch(() => []);
+      for (const hit of bnfHits) {
         pushOpt(toOption(hit));
+      }
+
+      // Secours Inventaire.io uniquement si la BnF n'a pas trouvé de candidat suffisant
+      // (évite une saturation HTTP 429 d'Inventaire sur les photos d'étagère de 20+ livres).
+      const bnfMatchedTargetVol = Boolean(
+        volNumStr && bnfHits.some((h) => normalizeSeriesNumber(h.volumeNumber) === volNumStr)
+      );
+      const needsInventaireFallback =
+        Boolean(titleQuery && this.connectors.inventaire.searchByText) &&
+        (bnfHits.length === 0 || (Boolean(volNumStr) && !bnfMatchedTargetVol && bnfHits.length < 2));
+
+      if (needsInventaireFallback && this.connectors.inventaire.searchByText) {
+        const rawInvHits = await this.connectors.inventaire.searchByText(titleQuery, 4).catch(() => []);
+        const invHits = rawInvHits.filter((hit) => {
+          const candidateText = `${hit.seriesName ?? ''} ${hit.title ?? ''}`.trim();
+          return tokenOverlapRatio(titleQuery, candidateText) >= 0.4;
+        });
+        for (const hit of invHits) {
+          pushOpt(toOption(hit));
+        }
       }
     };
 

@@ -1146,4 +1146,126 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     );
     expect(allTintinSeries).toHaveLength(1);
   });
+
+  it('Cas 14 (MARC 280$c BD pré-2015 + verrouillage Q-ID par la preuve + trous BnF) : Le Petit Spirou complet, Astérix Q42490, Nestor Burma Roman préservé', async () => {
+    const { parseMarcRecord } = await import('../../../shared/bibliographic/intermarc-parser');
+    const { classifyBookMetadata } = await import('../../../shared/bibliographic/category-classifier');
+
+    // 1. Notices BnF pré-2015 avec 051$a=txt seul mais 280$c="ill. en coul." -> BD (illustrated)
+    const petitSpirouT15Xml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-8001-4968-4</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Tiens-toi droit !</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="280"><mxc:subfield code="a">1 vol.</mxc:subfield><mxc:subfield code="c">ill. en coul.</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="460"><mxc:subfield code="3">38941816</mxc:subfield><mxc:subfield code="t">Le petit Spirou</mxc:subfield><mxc:subfield code="v">15</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    const parsedSpirou = parseMarcRecord(petitSpirouT15Xml);
+    expect(parsedSpirou?.contentKind).toBe('illustrated');
+    expect(
+      classifyBookMetadata({
+        title: parsedSpirou?.title,
+        series: parsedSpirou?.ensembleSeriesName,
+        contentKind: parsedSpirou?.contentKind
+      }).mainCategory
+    ).toBe('BD');
+
+    // Roman Nestor Burma : 051$a=txt + 280$c="couv. ill. en coul." (couverture seule !) -> reste text_only (Roman)
+    const nestorRomanXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-221-10635-8</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Dernières enquêtes</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="280"><mxc:subfield code="a">1 vol. (XXIX-888 p.)</mxc:subfield><mxc:subfield code="c">couv. ill. en coul.</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    const parsedBurmaRoman = parseMarcRecord(nestorRomanXml);
+    expect(parsedBurmaRoman?.contentKind).toBe('text_only');
+    expect(
+      classifyBookMetadata({
+        title: parsedBurmaRoman?.title,
+        series: 'Nestor Burma',
+        contentKind: parsedBurmaRoman?.contentKind
+      }).mainCategory
+    ).toBe('Roman');
+
+    // Roman illustré avec Dewey 843 + 280$c="ill." sans sti -> reste text_only (pas faux positif BD)
+    const romanDewey843Xml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-07-041111-5</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Vingt mille lieues sous les mers</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="280"><mxc:subfield code="a">1 vol. (512 p.)</mxc:subfield><mxc:subfield code="c">ill.</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="676"><mxc:subfield code="a">843</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    expect(parseMarcRecord(romanDewey843Xml)?.contentKind).toBe('text_only');
+
+    // 2. Verrouillage Q-ID par la preuve : Q105030970 (0 œuvre) est ignoré au profit du candidat suivant Q42490 (œuvres réelles)
+    const now = new Date().toISOString();
+    const connectors = createMockConnectors({
+      wikidataSeries: {
+        Q105030970: [],
+        Q42490: [
+          { title: 'Astérix le Gaulois', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, wikidataQid: 'Q501999', authors: ['René Goscinny', 'Albert Uderzo'], isbn13s: [], source: 'wikidata' },
+          { title: 'Astérix chez Rahàzade', volumeNumber: 28, volumeLabel: '28', sortOrder: 28, wikidataQid: 'Q599154', authors: ['Albert Uderzo'], isbn13s: [], source: 'wikidata' },
+          { title: "L'Iris blanc", volumeNumber: 40, volumeLabel: '40', sortOrder: 40, wikidataQid: 'Q117226890', authors: ['Fabcaro', 'Didier Conrad'], isbn13s: [], source: 'wikidata' }
+        ]
+      },
+      bnfEnsemble: {
+        '38941816': [
+          { title: 'Tiens-toi droit !', volumeNumber: 15, volumeLabel: '15', sortOrder: 15, bnfEnsembleId: '38941816', authors: ['Tome', 'Janry'], isbn13s: ['9782800149684'], contentKind: 'illustrated', source: 'bnf' },
+          { title: 'T’es gonflé !', volumeNumber: 16, volumeLabel: '16', sortOrder: 16, bnfEnsembleId: '38941816', authors: ['Tome', 'Janry'], isbn13s: ['9782800151588'], contentKind: 'illustrated', source: 'bnf' }
+        ],
+        '34314264': [
+          { title: 'Dis bonjour à la dame !', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, bnfEnsembleId: '34314264', authors: ['Tome', 'Janry'], isbn13s: ['9782800117270'], contentKind: 'illustrated', source: 'bnf' },
+          { title: 'Tu veux mon doigt ?', volumeNumber: 2, volumeLabel: '2', sortOrder: 2, bnfEnsembleId: '34314264', authors: ['Tome', 'Janry'], isbn13s: ['9782800118482'], contentKind: 'illustrated', source: 'bnf' }
+        ]
+      },
+      bnfBySeriesName: {
+        'le petit spirou': {
+          discoveredEnsembleIds: ['38941816', '34314264'],
+          works: [
+            { title: 'Dis bonjour à la dame !', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, bnfEnsembleId: '34314264', authors: ['Tome', 'Janry'], isbn13s: ['9782800117270'], contentKind: 'illustrated', source: 'bnf' }
+          ]
+        }
+      }
+    });
+    connectors.wikidata.searchSeriesQids = async (name) =>
+      name.toLowerCase().includes('ast') ? ['Q105030970', 'Q42490'] : [];
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+
+    const { series: astSeries } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Astérix',
+      bookTitle: 'Astérix le Gaulois',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      mainCategory: 'BD',
+      authors: ['René Goscinny', 'Albert Uderzo'],
+      now
+    });
+    await seriesGraph.expandSeriesByGraph(astSeries.id);
+    expect(catalogRepo.findSeriesById(astSeries.id)?.wikidata_qid).toBe('Q42490');
+    expect(catalogRepo.listBooksBySeriesId(astSeries.id).map((b) => b.volume_number)).toEqual([1, 28, 40]);
+
+    // 3. Trou de numérotation BnF (tomes 15 & 16 sans graphe Wikidata/Inventaire) -> déclenche la découverte des autres ensembles BnF (tomes 1 & 2) !
+    const { series: spirouSeries } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Le Petit Spirou',
+      bnfEnsembleId: '38941816',
+      bookTitle: 'Tiens-toi droit !',
+      volumeNumber: 15,
+      isHorsSerie: false,
+      isIntegral: false,
+      mainCategory: 'BD',
+      authors: ['Tome', 'Janry'],
+      now
+    });
+    await seriesGraph.expandSeriesByGraph(spirouSeries.id);
+    expect(
+      catalogRepo
+        .listBooksBySeriesId(spirouSeries.id)
+        .map((b) => b.volume_number)
+        .sort((a, b) => (a ?? 0) - (b ?? 0))
+    ).toEqual([1, 2, 15, 16]);
+  });
 });

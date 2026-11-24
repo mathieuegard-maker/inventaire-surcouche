@@ -141,6 +141,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   let isNonBook = false;
   let hasRdaStillImage = false;
   let hasRdaText = false;
+  let hasInteriorIllustrations = false;
 
   const authors: string[] = [];
   const scriptwriters: string[] = [];
@@ -245,13 +246,23 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       if (yr && !publishYear) publishYear = yr;
     }
 
-    // Pagination : 280 (InterMarc), 215 (UNIMARC)
+    // Pagination & illustrations : 280 (InterMarc), 215 (UNIMARC)
     if (f.tag === '280' || f.tag === '215') {
       const raw280 = sf('a');
       if (raw280) {
         if (!rawFormat) rawFormat = raw280;
         const pages = cleanPageCount(raw280);
         if (pages && !pageCount) pageCount = pages;
+      }
+      // Sous-zone $c (norme ISBD/MARC) : "couv. ill." désigne uniquement la couverture (roman/texte),
+      // tandis que "ill." intérieur ("ill. en coul.", "ill. en noir et en coul.") caractérise une BD ou un album illustré
+      // (indispensable pour les notices BnF pré-2015 où 051$a ne porte que `txt` sans `sti`).
+      const rawIll = sf('c');
+      if (rawIll) {
+        const withoutCoverOnly = rawIll.replace(/\b(?:couv(?:erture)?|jaquette|[ée]tui)\.?\s+ill\.?[^,;]*/gi, '');
+        if (/(?:^|[\s,(;])ill\.(?=[\s,);]|$)|\billustrations?\b/i.test(withoutCoverOnly)) {
+          hasInteriorIllustrations = true;
+        }
       }
     }
 
@@ -288,8 +299,10 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     INTEGRAL_TITLE_RE.test(fullTitleText) && !/\btexte\s+int[ée]gral\b/i.test(fullTitleText);
 
   const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
+  const hasProseDewey = Boolean(deweyCode && /^8\d\d/.test(deweyCode));
   const isExplicitGraphic =
     hasRdaStillImage ||
+    (hasInteriorIllustrations && !hasProseDewey) ||
     illustrators.length > 0 ||
     Boolean(deweyCode && deweyCode.startsWith('741.5')) ||
     /\b(bandes?\s+dessin[ée]es?|comics?|mangas?|romans?\s+graphiques?)\b/i.test(graphicSubjectText);

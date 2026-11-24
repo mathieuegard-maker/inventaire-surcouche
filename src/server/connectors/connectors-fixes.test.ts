@@ -15,7 +15,9 @@ import { SeriesGraphService } from '../services/acquisition/series-graph.service
 import type { BibliographicConnectors } from './types';
 import { HttpClient } from './http-client';
 import { createInventaireConnector } from './inventaire.connector';
+import { createWikidataConnector } from './wikidata.connector';
 import { createGeminiConnector, PREFERRED_GEMINI_MODELS } from './gemini.connector';
+import { JobRepository } from '../repositories/job.repo';
 
 describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
   it('résout une édition Inventaire indexée sous clé canonique inv:... et extrait la couverture invp:P2', async () => {
@@ -375,5 +377,128 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
         mode: 'shelf'
       })
     ).rejects.toThrow(/momentanément surchargé.*Réessayer/i);
+  });
+
+  it('envoie un User-Agent API propre vers Inventaire/Wikidata (jamais Mozilla/5.0) et ne met jamais en cache une erreur JSON HTTP 200', async () => {
+    const db = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(db, path.resolve(process.cwd(), 'migrations'));
+    try {
+      const jobRepo = new JobRepository(db);
+      const seenUserAgents: Record<string, string> = {};
+      let wdCalls = 0;
+
+      const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        const url = String(input);
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const ua = headers['User-Agent'] ?? '';
+        if (url.includes('catalogue.bnf.fr')) {
+          seenUserAgents.bnf = ua;
+          return new Response('<xml/>', { status: 200 });
+        }
+        if (url.includes('inventaire.io')) {
+          seenUserAgents.inventaire = ua;
+          return new Response('{"results":[]}', { status: 200 });
+        }
+        if (url.includes('wikidata.org')) {
+          seenUserAgents.wikidata = ua;
+          wdCalls++;
+          if (wdCalls === 1) {
+            return new Response(
+              JSON.stringify({ error: { code: 'cirrussearch-too-busy-error', info: 'busy' } }),
+              { status: 200 }
+            );
+          }
+          return new Response(JSON.stringify({ search: [{ id: 'Q42490', description: 'série de bandes dessinées' }] }), {
+            status: 200
+          });
+        }
+        return new Response('', { status: 404 });
+      });
+
+      const http = new HttpClient({ jobRepo, fetchImpl: mockFetch as typeof fetch });
+      await http.fetchText({ source: 'bnf', url: 'https://catalogue.bnf.fr/api/SRU?test=1' });
+      await http.fetchJson({ source: 'inventaire', url: 'https://inventaire.io/api/search?test=1' });
+
+      // 1er appel Wikidata = erreur applicative HTTP 200 -> ne doit PAS être mis en cache
+      await http.fetchJson({
+        source: 'wikidata',
+        url: 'https://www.wikidata.org/w/api.php?action=wbsearchentities&search=asterix',
+        cacheKey: 'wd:test:busy'
+      });
+      // 2e appel avec la même cacheKey -> doit réellement rappeler le réseau et réussir !
+      const second = await http.fetchJson<{ search?: Array<{ id: string }> }>({
+        source: 'wikidata',
+        url: 'https://www.wikidata.org/w/api.php?action=wbsearchentities&search=asterix',
+        cacheKey: 'wd:test:busy'
+      });
+
+      expect(seenUserAgents.bnf).toContain('Mozilla/5.0');
+      expect(seenUserAgents.inventaire).not.toContain('Mozilla/5.0');
+      expect(seenUserAgents.inventaire).toContain('BiblioCollection/2.0');
+      expect(seenUserAgents.wikidata).not.toContain('Mozilla/5.0');
+      expect(wdCalls).toBe(2);
+      expect(second?.search?.[0]?.id).toBe('Q42490');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('classe Q42490 (Astérix) avant franchise/personnage/jeu vidéo et bascule Boule & Bill -> Boule et Bill (Q59991) sur Wikidata', async () => {
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      expect(url).toContain('uselang=fr');
+      if (url.includes('search=Ast%C3%A9rix')) {
+        return new Response(
+          JSON.stringify({
+            search: [
+              { id: 'Q105030970', label: 'Astérix', description: 'franchise médiatique' },
+              { id: 'Q2442526', label: 'Astérix', description: 'jeu vidéo de 1993' },
+              { id: 'Q42490', label: 'Astérix', description: 'série française de bandes dessinées' },
+              {
+                id: 'Q7620503',
+                label: 'Astérix',
+                description: 'personnage fictif et héros titulaire de la série de bandes dessinées française Astérix'
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('search=Boule%20%26%20Bill')) {
+        return new Response(JSON.stringify({ search: [] }), { status: 200 });
+      }
+      if (url.includes('search=Boule%20et%20Bill')) {
+        return new Response(
+          JSON.stringify({
+            search: [
+              { id: 'Q2921731', label: 'Boule et Bill', description: "série télévisée d'animation, 2005" },
+              { id: 'Q59991', label: 'Boule et Bill', description: 'série de bande dessinée humoristique belge' }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('search=Nestor%20Burma')) {
+        return new Response(
+          JSON.stringify({
+            search: [
+              { id: 'Q1780654', label: 'Nestor Burma', description: 'personnage créé par Léo Malet' },
+              { id: 'Q3144248', label: 'Nestor Burma', description: 'série de bande dessinée' },
+              { id: 'Q9999999', label: 'Nestor Burma', description: 'série de romans policiers de Léo Malet' }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ search: [] }), { status: 200 });
+    });
+
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const wd = createWikidataConnector(http);
+
+    expect(await wd.searchSeriesQids!('Astérix', 'graphic')).toEqual(['Q42490']);
+    expect(await wd.searchSeriesQids!('Boule & Bill', 'graphic')).toEqual(['Q59991']);
+    expect(await wd.searchSeriesQids!('Nestor Burma', 'graphic')).toEqual(['Q3144248']);
+    expect(await wd.searchSeriesQids!('Nestor Burma', 'prose')).toEqual(['Q9999999']);
   });
 });

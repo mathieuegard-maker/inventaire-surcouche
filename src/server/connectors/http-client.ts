@@ -29,8 +29,24 @@ const RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min uniquement sur HTTP 429
 const BURST_RETRY_BACKOFF_MS = 3000; // Pause courte 3 s sur HTTP 429 ponctuel (Inventaire / Wikidata / BnF)
 const FAILURE_TRIP_THRESHOLD = 6;
 const FAILURE_COOLDOWN_MS = 30 * 1000; // 30 s sur pannes 5xx/réseau répétées (ne bloque pas les jobs suivants)
+const API_USER_AGENT = 'BiblioCollection/2.0 (+https://biblio.mathieuegardtest.fr)';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) BiblioCollection/2.0 Safari/537.36';
+
+/**
+ * Détecte les erreurs applicatives renvoyées en HTTP 200 par certaines API (ex. MediaWiki/Wikidata
+ * `{"error":{"code":"cirrussearch-too-busy-error"}}`) afin de ne jamais les figer en cache SQLite.
+ */
+function isJsonErrorPayload(text: string): boolean {
+  const trimmed = text.trimStart();
+  if (!trimmed.startsWith('{')) return false;
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    return Boolean(parsed && typeof parsed === 'object' && 'error' in parsed && parsed.error);
+  } catch {
+    return false;
+  }
+}
 
 function fetchWithNodeIpv4(
   urlStr: string,
@@ -134,7 +150,7 @@ export class HttpClient {
     const minInterval = options.minIntervalMs ?? 0;
 
     const headers: Record<string, string> = {
-      'User-Agent': BROWSER_USER_AGENT,
+      'User-Agent': options.source === 'bnf' ? BROWSER_USER_AGENT : API_USER_AGENT,
       ...(options.headers ?? {})
     };
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -190,7 +206,7 @@ export class HttpClient {
 
         circuit.failures = 0;
 
-        if (options.cacheKey && this.jobRepo) {
+        if (options.cacheKey && this.jobRepo && !isJsonErrorPayload(text)) {
           const ttlSec = options.cacheTtlSec ?? 86400;
           const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
           this.jobRepo.setExternalCache(options.cacheKey, options.source, { text }, expiresAt);

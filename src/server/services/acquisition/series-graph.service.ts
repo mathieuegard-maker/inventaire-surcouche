@@ -376,75 +376,99 @@ export class SeriesGraphService {
     const sourcesUsed: string[] = [];
     const graphWorks: GraphSeriesWork[] = [];
     const primaryAuthors = this.parseJsonArray(series.primary_authors_json);
+    const seriesMediaFamily = this.getSeriesMediaFamily(this.catalogRepo.listBooksBySeriesId(series.id));
 
-    let effectiveWikidataQid = series.wikidata_qid;
-    let effectiveInventaireSeriesUri = effectiveWikidataQid ? `wd:${effectiveWikidataQid}` : null;
-
-    // 0. Découverte de rattrapage Graphe si la série n'a pas encore de Q-ID Wikidata / URI Inventaire
-    if (!effectiveWikidataQid) {
-      try {
-        const invFound = await this.connectors.inventaire.searchSeriesUri?.(series.canonical_name);
-        if (invFound) {
-          effectiveInventaireSeriesUri = invFound.seriesUri;
-          if (invFound.wikidataQid) {
-            effectiveWikidataQid = invFound.wikidataQid;
-          }
-        }
-      } catch {
-        // continue
-      }
-
-      if (!effectiveWikidataQid) {
+    const fetchGraphForCandidate = async (
+      qid: string | null,
+      invUri: string | null
+    ): Promise<{ wdWorks: GraphSeriesWork[]; invWorks: GraphSeriesWork[] }> => {
+      let wdWorks: GraphSeriesWork[] = [];
+      let invWorks: GraphSeriesWork[] = [];
+      if (qid) {
         try {
-          const wdFound = await this.connectors.wikidata.searchSeriesQid?.(series.canonical_name);
-          if (wdFound) {
-            effectiveWikidataQid = wdFound;
-            if (!effectiveInventaireSeriesUri) {
-              effectiveInventaireSeriesUri = `wd:${wdFound}`;
-            }
-          }
+          wdWorks = await this.connectors.wikidata.fetchSeriesWorksByQid(qid);
         } catch {
           // continue
         }
       }
-
-      if (effectiveWikidataQid) {
-        this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, {
-          wikidataQid: effectiveWikidataQid,
-          now
-        });
+      if (invUri) {
+        try {
+          invWorks = await this.connectors.inventaire.fetchSeriesWorks(invUri);
+        } catch {
+          // continue
+        }
       }
-    }
+      return { wdWorks, invWorks };
+    };
 
-    // 1. Graphe Wikidata P179/P1545
-    if (effectiveWikidataQid) {
+    const appendGraphResults = (wdWorks: GraphSeriesWork[], invWorks: GraphSeriesWork[]) => {
+      if (wdWorks.length > 0) {
+        if (!sourcesUsed.includes('wikidata')) sourcesUsed.push('wikidata');
+        graphWorks.push(...wdWorks);
+      }
+      if (invWorks.length > 0) {
+        if (!sourcesUsed.includes('inventaire')) sourcesUsed.push('inventaire');
+        this.mergeGraphWorks(graphWorks, invWorks, series.canonical_name);
+      }
+    };
+
+    if (series.wikidata_qid) {
+      // 1 & 2. Graphe déjà ancré (Wikidata P179/P1545 + Inventaire P179/P629)
+      const { wdWorks, invWorks } = await fetchGraphForCandidate(series.wikidata_qid, `wd:${series.wikidata_qid}`);
+      appendGraphResults(wdWorks, invWorks);
+    } else {
+      // 0. Découverte de rattrapage Graphe par la preuve :
+      //    On teste les candidats ordonnés (Inventaire puis Wikidata) et on ne verrouille wikidata_qid en base
+      //    QUE si le candidat renvoie effectivement des œuvres (évite les Q-ID "franchise médiatique" / album isolé à 0 œuvre).
+      const candidates: Array<{ wikidataQid: string | null; inventaireSeriesUri: string | null }> = [];
+      const seenKeys = new Set<string>();
+      const addCandidate = (wikidataQid: string | null, inventaireSeriesUri: string | null) => {
+        const cleanQid = wikidataQid ? wikidataQid.toUpperCase() : null;
+        const cleanInv = inventaireSeriesUri || (cleanQid ? `wd:${cleanQid}` : null);
+        const key = `${cleanQid ?? ''}|${cleanInv ?? ''}`;
+        if ((!cleanQid && !cleanInv) || seenKeys.has(key)) return;
+        seenKeys.add(key);
+        candidates.push({ wikidataQid: cleanQid, inventaireSeriesUri: cleanInv });
+      };
+
       try {
-        const wdWorks = await this.connectors.wikidata.fetchSeriesWorksByQid(effectiveWikidataQid);
-        if (wdWorks.length > 0) {
-          sourcesUsed.push('wikidata');
-          graphWorks.push(...wdWorks);
+        const invFound = await this.connectors.inventaire.searchSeriesUri?.(series.canonical_name);
+        if (invFound) {
+          addCandidate(invFound.wikidataQid ?? null, invFound.seriesUri);
         }
       } catch {
         // continue
       }
-    }
 
-    // 2. Complément graphe Inventaire (ISBN FR P629 + œuvres P179, fonctionne sur wd:Q... et inv:...)
-    if (effectiveInventaireSeriesUri) {
       try {
-        const invWorks = await this.connectors.inventaire.fetchSeriesWorks(effectiveInventaireSeriesUri);
-        if (invWorks.length > 0) {
-          sourcesUsed.push('inventaire');
-          this.mergeGraphWorks(graphWorks, invWorks, series.canonical_name);
+        if (this.connectors.wikidata.searchSeriesQids) {
+          const wdQids = await this.connectors.wikidata.searchSeriesQids(series.canonical_name, seriesMediaFamily);
+          for (const qid of wdQids) addCandidate(qid, `wd:${qid}`);
+        } else if (this.connectors.wikidata.searchSeriesQid) {
+          const wdFound = await this.connectors.wikidata.searchSeriesQid(series.canonical_name);
+          if (wdFound) addCandidate(wdFound, `wd:${wdFound}`);
         }
       } catch {
         // continue
+      }
+
+      for (const cand of candidates.slice(0, 3)) {
+        const { wdWorks, invWorks } = await fetchGraphForCandidate(cand.wikidataQid, cand.inventaireSeriesUri);
+        if (wdWorks.length > 0 || invWorks.length > 0) {
+          appendGraphResults(wdWorks, invWorks);
+          if (cand.wikidataQid) {
+            this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, {
+              wikidataQid: cand.wikidataQid,
+              now
+            });
+          }
+          break;
+        }
       }
     }
 
     // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) d'abord sur les ensembles déjà connus,
     // puis découverte textuelle uniquement si nécessaire, filtrée par compatibilité média (BD vs Roman).
-    const seriesMediaFamily = this.getSeriesMediaFamily(this.catalogRepo.listBooksBySeriesId(series.id));
     const isCompatibleMediaWork = (work: GraphSeriesWork): boolean => {
       if (seriesMediaFamily === 'graphic' && work.contentKind === 'text_only') return false;
       if (seriesMediaFamily === 'prose' && work.contentKind === 'illustrated') return false;
@@ -476,8 +500,21 @@ export class SeriesGraphService {
     const incompleteGraphCount = graphWorks.filter(
       (w) => w.volumeNumber === null || w.volumeNumber === undefined || w.isbn13s.length === 0
     ).length;
+    const hasGraphSource = sourcesUsed.includes('wikidata') || sourcesUsed.includes('inventaire');
+    const numberedVols = graphWorks
+      .map((w) => w.volumeNumber)
+      .filter((n): n is number => typeof n === 'number' && n > 0);
+    const minVol = numberedVols.length > 0 ? Math.min(...numberedVols) : null;
+    const maxVol = numberedVols.length > 0 ? Math.max(...numberedVols) : null;
+    const uniqueVolCount = new Set(numberedVols).size;
+    const hasBnfNumberingGaps =
+      !hasGraphSource &&
+      ((minVol !== null && minVol > 2) ||
+        (maxVol !== null && maxVol >= 6 && uniqueVolCount * 2 < maxVol));
+
     const needsBnfDiscovery =
       graphWorks.length < 2 ||
+      hasBnfNumberingGaps ||
       (bnfEnsembleIds.size === 0 && incompleteGraphCount > 0 && incompleteGraphCount * 2 >= graphWorks.length);
 
     if (needsBnfDiscovery) {
