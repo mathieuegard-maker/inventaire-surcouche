@@ -773,4 +773,14 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(calledUrls.some((u) => u.includes('images-eu.ssl-images-amazon.com'))).toBe(true);
     expect(calledUrls.some((u) => u.includes('commons.wikimedia.org'))).toBe(false);
   });
+
+  it('Cas 10 (Duos d’auteurs multi-séparateurs) : matche Cuzor/Y.Sente, Fournier/Lax et Ayroles & Masbou sans rejeter les notices', () => {
+    expect(matchesAuthorName('Steve Cuzor', 'Cuzor/Y.Sente')).toBe(true);
+    expect(matchesAuthorName('Yves Sente', 'Cuzor/Y.Sente')).toBe(true);
+    expect(matchesAuthorName('Jean-Claude Fournier', 'Fournier/Lax')).toBe(true);
+    expect(matchesAuthorName('Christian Lax', 'Fournier/Lax')).toBe(true);
+    expect(matchesAuthorName('Alain Ayroles', 'Ayroles & Masbou')).toBe(true);
+    expect(matchesAuthorName('Jean-Luc Masbou', 'Ayroles & Masbou')).toBe(true);
+    expect(matchesAuthorName('Hergé', 'Ayroles & Masbou')).toBe(false);
+  });
 });

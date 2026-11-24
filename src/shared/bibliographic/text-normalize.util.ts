@@ -18,7 +18,7 @@ export function normalizeTextKey(value: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/['’".,:;!?()[\]-]+/g, ' ')
+    .replace(/['’".,:;!?()[\]/&-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -216,19 +216,26 @@ export function isCompatibleSeriesName(candidateSeries: string | undefined, winn
 }
 
 /**
- * Compare un nom d'auteur candidat à une cible de manière insensible aux accents, tirets,
- * majuscules et ordre "Prénom Nom" vs "Nom, Prénom" (corrige le LIKE SQLite qui échoue sur Hergé, Jean-Pierre, etc.).
+ * Compare un nom d'auteur candidat à une cible (simple ou duo "Auteur 1 / Auteur 2", "Auteur 1 & Auteur 2")
+ * de manière insensible aux accents, tirets, majuscules et ordre "Prénom Nom" vs "Nom, Prénom".
  */
 export function matchesAuthorName(candidateAuthor: string, targetAuthor: string): boolean {
   const cand = normalizeTextKey(candidateAuthor);
-  const target = normalizeTextKey(targetAuthor);
-  if (!cand || !target) return false;
-  if (cand === target) return true;
-  if (target.length >= 3 && cand.includes(target)) return true;
-  if (cand.length >= 3 && target.includes(cand)) return true;
+  if (!cand || !targetAuthor?.trim()) return false;
 
-  const targetTokens = target.split(' ').filter((tok) => tok.length >= 2);
-  if (targetTokens.length === 0) return false;
+  const targetParts = targetAuthor
+    .split(/\s*(?:\/|&|;|\bet\b|\band\b)\s*/i)
+    .map((p) => normalizeTextKey(p))
+    .filter(Boolean);
+  if (targetParts.length === 0) return false;
+
   const candTokens = new Set(cand.split(' ').filter((tok) => tok.length >= 2));
-  return targetTokens.every((tok) => candTokens.has(tok));
+
+  return targetParts.some((target) => {
+    if (cand === target) return true;
+    if (target.length >= 3 && cand.includes(target)) return true;
+    if (cand.length >= 3 && target.includes(cand)) return true;
+    const targetTokens = target.split(' ').filter((tok) => tok.length >= 2);
+    return targetTokens.length > 0 && targetTokens.every((tok) => candTokens.has(tok));
+  });
 }

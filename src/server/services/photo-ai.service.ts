@@ -240,9 +240,6 @@ export class PhotoAiService {
         ...(invRes.status === 'fulfilled' ? invRes.value : [])
       ];
       for (const hit of hits) {
-        if (authorQuery && hit.authors.length > 0 && !hit.authors.some((a) => matchesAuthorName(a, authorQuery))) {
-          continue;
-        }
         pushOpt(toOption(hit));
       }
     };
@@ -253,15 +250,18 @@ export class PhotoAiService {
         : cleanTitle || cleanSeries;
 
     if (combinedTitle) {
-      await runExternalPass(combinedTitle, cleanAuthor, 10);
+      await runExternalPass(combinedTitle, cleanAuthor, 12);
     }
 
-    if (options.length < 2 && cleanSeries) {
-      await runExternalPass(cleanSeries, cleanAuthor, 15);
+    const hasTargetVolume = Boolean(
+      volNumStr && options.some((o) => normalizeSeriesNumber(o.volumeNumber) === volNumStr)
+    );
+    if ((options.length < 2 || (volNumStr && !hasTargetVolume)) && cleanSeries) {
+      await runExternalPass(cleanSeries, cleanAuthor, 25);
     }
 
     if (options.length === 0 && cleanTitle && cleanTitle !== combinedTitle) {
-      await runExternalPass(cleanTitle, cleanAuthor, 10);
+      await runExternalPass(cleanTitle, cleanAuthor, 12);
     }
 
     // Scoring déterministe pour placer la meilleure édition (tome exact > titre proche > éditeur > auteur) en #1
