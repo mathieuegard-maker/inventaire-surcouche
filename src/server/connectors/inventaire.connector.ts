@@ -135,19 +135,19 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
   async function resolveEditionsForWorks(
     workUris: string[],
     maxEditionsPerWork = 10
-  ): Promise<Map<string, { isbn13s: string[]; coverUrl: string | null; frTitle: string | null }>> {
+  ): Promise<Map<string, { isbn13s: string[]; coverUrl: string | null; coverUrls: string[]; frTitle: string | null }>> {
     const rawEdUrisByWork = new Map<string, string[]>();
     const editionUrisToFetch: string[] = [];
 
-    // Récupération des reverse-claims par petits lots de 5 en parallèle
-    for (let i = 0; i < workUris.length; i += 5) {
-      const batch = workUris.slice(i, i + 5);
+    // Récupération des reverse-claims par petits lots de 3 en parallèle (moins de pression burst sur Inventaire.io)
+    for (let i = 0; i < workUris.length; i += 3) {
+      const batch = workUris.slice(i, i + 3);
       await Promise.all(
         batch.map(async (workUri) => {
           const edRev = await http.fetchJson<InvReverseClaimsResponse>({
             source: 'inventaire',
             url: `${INV_API}?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`,
-            timeoutMs: 5000,
+            timeoutMs: 8000,
             minIntervalMs: 80,
             cacheKey: `inv:work-editions:${workUri}`,
             cacheTtlSec: 60 * 60 * 24 * 7
@@ -164,7 +164,10 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
     const { entities: edEntities, redirects: edRedirects } =
       editionUrisToFetch.length > 0 ? await fetchEntitiesRaw(editionUrisToFetch, false) : { entities: {}, redirects: {} };
 
-    const result = new Map<string, { isbn13s: string[]; coverUrl: string | null; frTitle: string | null }>();
+    const result = new Map<
+      string,
+      { isbn13s: string[]; coverUrl: string | null; coverUrls: string[]; frTitle: string | null }
+    >();
 
     for (const workUri of workUris) {
       const uris = rawEdUrisByWork.get(workUri) ?? [];
@@ -204,18 +207,24 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
       preferred.sort((a, b) => (b.cover ? 1 : 0) - (a.cover ? 1 : 0));
 
       const isbn13s: string[] = [];
-      let coverUrl: string | null = null;
+      const coverUrls: string[] = [];
       let frTitle: string | null = null;
 
       for (const entry of preferred) {
         for (const isbn of entry.isbns) {
           if (!isbn13s.includes(isbn)) isbn13s.push(isbn);
         }
-        if (!coverUrl && entry.cover) coverUrl = entry.cover;
+        if (entry.cover && !coverUrls.includes(entry.cover)) coverUrls.push(entry.cover);
         if (!frTitle && frEntries.length > 0 && entry.title) frTitle = entry.title;
       }
+      // Ajouter aussi les couvertures d'autres éditions si besoin (pour la galerie "Rechercher d'autres couvertures")
+      if (frEntries.length > 0) {
+        for (const entry of otherEntries) {
+          if (entry.cover && !coverUrls.includes(entry.cover)) coverUrls.push(entry.cover);
+        }
+      }
 
-      result.set(workUri, { isbn13s, coverUrl, frTitle });
+      result.set(workUri, { isbn13s, coverUrl: coverUrls[0] ?? null, coverUrls, frTitle });
     }
 
     return result;
@@ -438,6 +447,16 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
       }
 
       return works;
+    },
+
+    async fetchWorkEditions(workUri: string): Promise<{ isbn13s: string[]; coverUrls: string[] }> {
+      if (!workUri) return { isbn13s: [], coverUrls: [] };
+      const map = await resolveEditionsForWorks([workUri], 15);
+      const entry = map.get(workUri);
+      return {
+        isbn13s: entry?.isbn13s ?? [],
+        coverUrls: entry?.coverUrls ?? []
+      };
     }
   };
 }

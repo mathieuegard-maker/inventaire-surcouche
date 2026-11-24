@@ -138,6 +138,7 @@ export function createApp(options: CreateAppOptions) {
     seriesGraphService,
     coverService,
     loanService,
+    connectors,
     onJobEnqueued: () => worker.nudge()
   });
   const syncService = new SyncService({

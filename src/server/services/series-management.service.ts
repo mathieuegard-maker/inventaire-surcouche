@@ -277,6 +277,13 @@ export class SeriesManagementService {
     if (input.mergeEntireSourceSeriesId) {
       const sourceBooks = this.catalogRepo.listBooksBySeriesId(input.mergeEntireSourceSeriesId);
       for (const b of sourceBooks) bookIdSet.add(b.id);
+      // Inclure également les livres rattachés à la série source en Couche 3 (fusions en cascade)
+      for (const lr of this.libraryRepo.listLibraryBooks(input.libraryId)) {
+        const ov = parseOverrides(lr.overrides_json);
+        if (!ov.oneShotForced && ov.seriesId === input.mergeEntireSourceSeriesId) {
+          bookIdSet.add(lr.book_id);
+        }
+      }
     }
 
     let updatedCount = 0;

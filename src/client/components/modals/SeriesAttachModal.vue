@@ -6,13 +6,16 @@ import { apiRequest } from '../../api/client';
 import { useLibraryStore } from '../../stores/library.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ApiClientError } from '../../api/client';
-import { normalizeTextKey } from '../../../shared/bibliographic/text-normalize.util';
+import { extractFranchiseBaseName, normalizeTextKey } from '../../../shared/bibliographic/text-normalize.util';
 import { t } from '../../../shared/locales';
 
 const props = defineProps<{
   open: boolean;
   bookIds: string[];
   sourceSeriesId?: string | null;
+  sourceSeriesName?: string | null;
+  sourceFranchiseId?: string | null;
+  defaultMergeEntire?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -39,7 +42,7 @@ watch(
       filterText.value = '';
       selectedSeriesId.value = '';
       newSeriesName.value = '';
-      mergeEntireSource.value = false;
+      mergeEntireSource.value = Boolean(props.defaultMergeEntire && props.sourceSeriesId);
       volumeType.value = 'standard';
       volumeLabel.value = '';
       sortOrder.value = '';
@@ -49,14 +52,31 @@ watch(
 
 const filteredSeries = computed(() => {
   const needle = normalizeTextKey(filterText.value);
+  const sourceBaseKey = props.sourceSeriesName
+    ? extractFranchiseBaseName(props.sourceSeriesName).normalizedKey
+    : '';
+  const rank = (s: (typeof libraryStore.series)[number]): number => {
+    if (props.sourceFranchiseId && s.franchiseId === props.sourceFranchiseId) return 2;
+    if (sourceBaseKey && extractFranchiseBaseName(s.canonicalName).normalizedKey === sourceBaseKey) return 1;
+    return 0;
+  };
   return libraryStore.series
     .filter((s) => s.id !== props.sourceSeriesId)
     .filter((s) => !needle || normalizeTextKey(s.canonicalName).includes(needle))
+    .sort((a, b) => rank(b) - rank(a) || a.canonicalName.localeCompare(b.canonicalName, 'fr', { sensitivity: 'base' }))
     .slice(0, 40);
 });
 
+const modalTitle = computed(() =>
+  mergeEntireSource.value && props.sourceSeriesName
+    ? t('series.mergeWholeSeriesModalTitle', { name: props.sourceSeriesName })
+    : t('series.attachModalTitle', { count: props.bookIds.length })
+);
+
 const canSubmit = computed(
-  () => props.bookIds.length > 0 && Boolean(selectedSeriesId.value || newSeriesName.value.trim())
+  () =>
+    (props.bookIds.length > 0 || (mergeEntireSource.value && Boolean(props.sourceSeriesId))) &&
+    Boolean(selectedSeriesId.value || newSeriesName.value.trim())
 );
 
 async function handleSubmit(): Promise<void> {
@@ -91,7 +111,7 @@ async function handleSubmit(): Promise<void> {
 <template>
   <BaseModal
     :open="open"
-    :title="t('series.attachModalTitle', { count: bookIds.length })"
+    :title="modalTitle"
     max-width="560px"
     @close="emit('close')"
   >

@@ -47,10 +47,15 @@ export interface ParsedMarcRecord {
   isNonBook: boolean;
   isIntegralHint: boolean;
   rawFormat?: string;
+  /** Signal structurel ISO/RDA 051 / illustrateurs : distingue BD/albums illustrés vs romans purement textuels. */
+  contentKind?: 'illustrated' | 'text_only';
 }
 
 const NON_BOOK_MARC_TYPE_RE =
-  /\b(images?\s+anim[ée]es?|enregistrement\s+sonore|ressource\s+[ée]lectronique|document\s+[ée]lectronique|musique\s+imprim[ée]e|musique|image\s+fixe|objet|dvd|blu-?ray|cd-?rom|vid[ée]o|audio)\b/i;
+  /\b(images?\s+anim[ée]es?|enregistrement\s+sonore|ressource\s+[ée]lectronique|document\s+[ée]lectronique|multim[ée]dia(?:\s+multisupport)?|musique\s+imprim[ée]e|musique|image\s+fixe|objet|dvd|blu-?ray|cd-?rom|vid[ée]o|audio)\b/i;
+
+/** Codes RDA 051$a BnF désignant des supports non-livres (vidéo, audio, musique, logiciel). */
+const NON_BOOK_RDA_CODES = new Set(['tdi', 'tdm', 'prm', 'spw', 'snd', 'cod', 'cop', 'tdf']);
 
 const INTEGRAL_TITLE_RE =
   /\b(int[ée]grale|coffret|omnibus|compendium|l['’]int[ée]grale)\b|\btomes?\s*\d+\s*(?:-|–|à)\s*\d+\b/i;
@@ -134,6 +139,8 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   let description: string | undefined;
   let deweyCode: string | undefined;
   let isNonBook = false;
+  let hasRdaStillImage = false;
+  let hasRdaText = false;
 
   const authors: string[] = [];
   const scriptwriters: string[] = [];
@@ -146,6 +153,17 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
 
   for (const f of fields) {
     const sf = (code: string) => getSubfield(f, code)?.trim() || '';
+
+    // Type de contenu RDA BnF (`051$a`) : `txt` (texte), `sti` (image fixe / BD), `tdi`/`prm`/`spw` (vidéo/DVD/audio -> non-livre)
+    if (f.tag === '051') {
+      for (const sub of f.subfields) {
+        if (sub.code !== 'a') continue;
+        const codeVal = sub.value.trim().toLowerCase();
+        if (NON_BOOK_RDA_CODES.has(codeVal)) isNonBook = true;
+        else if (codeVal === 'sti') hasRdaStillImage = true;
+        else if (codeVal === 'txt') hasRdaText = true;
+      }
+    }
 
     if (f.tag === '101' && !language) {
       const lang101 = sf('a').toLowerCase();
@@ -269,6 +287,18 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const isIntegralHint =
     INTEGRAL_TITLE_RE.test(fullTitleText) && !/\btexte\s+int[ée]gral\b/i.test(fullTitleText);
 
+  const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
+  const isExplicitGraphic =
+    hasRdaStillImage ||
+    illustrators.length > 0 ||
+    Boolean(deweyCode && deweyCode.startsWith('741.5')) ||
+    /\b(bandes?\s+dessin[ée]es?|comics?|mangas?|romans?\s+graphiques?)\b/i.test(graphicSubjectText);
+  const contentKind: ParsedMarcRecord['contentKind'] = isExplicitGraphic
+    ? 'illustrated'
+    : hasRdaText
+      ? 'text_only'
+      : undefined;
+
   return {
     isbn13,
     title,
@@ -291,6 +321,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     bnfCoverUrl,
     isNonBook,
     isIntegralHint,
-    rawFormat
+    rawFormat,
+    contentKind
   };
 }

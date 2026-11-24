@@ -26,8 +26,8 @@ export interface HttpFetchOptions {
 
 const DEFAULT_TIMEOUT_MS = 8000;
 const RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min sur HTTP 429 (ex: Google Books)
-const FAILURE_TRIP_THRESHOLD = 4;
-const FAILURE_COOLDOWN_MS = 2 * 60 * 1000;
+const FAILURE_TRIP_THRESHOLD = 6;
+const FAILURE_COOLDOWN_MS = 30 * 1000; // 30 s sur pannes 5xx/réseau répétées (ne bloque pas les jobs suivants)
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) BiblioCollection/2.0 Safari/537.36';
 
@@ -162,10 +162,13 @@ export class HttpClient {
       }
 
       if (!ok) {
-        circuit.failures++;
-        if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
-          circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
-          circuit.failures = 0;
+        // Les réponses 4xx (ex. 404 ISBN absent d'Inventaire) ne sont PAS des pannes serveur -> ne jamais ouvrir le circuit-breaker dessus !
+        if (status >= 500) {
+          circuit.failures++;
+          if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
+            circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
+            circuit.failures = 0;
+          }
         }
         return null;
       }

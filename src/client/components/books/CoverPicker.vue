@@ -187,9 +187,10 @@ onMounted(() => {
           class="cover-thumb"
           :class="{ 'cover-thumb--active': item.coverKey && item.coverKey === modelValue }"
           :disabled="busy"
+          :title="item.label"
           @click="selectCandidate(item)"
         >
-          <img :src="item.url" :alt="item.label" loading="lazy" />
+          <img :src="item.url" :alt="item.label" loading="lazy" referrerpolicy="no-referrer" />
         </button>
       </div>
     </div>

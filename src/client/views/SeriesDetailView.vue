@@ -46,7 +46,26 @@ const deleteOpen = ref(false);
 const lendOpen = ref(false);
 const genreOpen = ref(false);
 const attachOpen = ref(false);
+const mergeEntireMode = ref(false);
 const modalBusy = ref(false);
+
+function openMergeWholeSeries(): void {
+  mergeEntireMode.value = true;
+  attachOpen.value = true;
+}
+
+function openAttachSelected(): void {
+  mergeEntireMode.value = false;
+  attachOpen.value = true;
+}
+
+async function handleSeriesAttached(targetSeriesId: string): Promise<void> {
+  if (mergeEntireMode.value && targetSeriesId && targetSeriesId !== series.value?.id) {
+    await router.replace(`/series/${encodeURIComponent(targetSeriesId)}`);
+    return;
+  }
+  await loadSeries();
+}
 
 async function loadSeries(): Promise<void> {
   const id = typeof route.params.seriesId === 'string' ? route.params.seriesId : '';
@@ -237,6 +256,9 @@ async function confirmGenres(genres: string[]): Promise<void> {
         <button type="button" class="ds-btn ds-btn--sm" :disabled="expanding" @click="handleExpandNow">
           {{ expanding ? t('app.loading') : series.isCompleteExpanded ? t('series.refreshSeriesBtn') : t('series.enrichNowBtn') }}
         </button>
+        <button type="button" class="ds-btn ds-btn--sm" @click="openMergeWholeSeries">
+          {{ t('series.mergeWholeSeriesBtn') }}
+        </button>
         <button
           v-if="selectedIds.size > 0"
           type="button"
@@ -337,16 +359,19 @@ async function confirmGenres(genres: string[]): Promise<void> {
         show-attach-series
         @action="handleBatchAction"
         @open-genres="genreOpen = true"
-        @open-attach-series="attachOpen = true"
+        @open-attach-series="openAttachSelected"
         @clear="selectedIds = new Set()"
       />
 
       <SeriesAttachModal
         :open="attachOpen"
-        :book-ids="Array.from(selectedIds)"
+        :book-ids="mergeEntireMode ? [] : Array.from(selectedIds)"
         :source-series-id="series.id"
+        :source-series-name="series.canonicalName"
+        :source-franchise-id="series.franchiseId"
+        :default-merge-entire="mergeEntireMode"
         @close="attachOpen = false"
-        @attached="loadSeries"
+        @attached="handleSeriesAttached"
       />
 
       <ConfirmDeleteModal

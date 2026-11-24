@@ -41,6 +41,7 @@ export interface SourceCandidateRecord {
   coverUrl?: string;
   isNonBook?: boolean;
   isIntegralHint?: boolean;
+  contentKind?: 'illustrated' | 'text_only';
 }
 
 /**
@@ -54,6 +55,7 @@ export interface GraphSeriesWork {
   sortOrder?: number | null;
   wikidataQid?: string | null;
   inventaireUri?: string | null;
+  bnfEnsembleId?: string | null;
   authors: string[];
   scriptwriters?: string[];
   illustrators?: string[];
@@ -66,6 +68,7 @@ export interface GraphSeriesWork {
   coverUrl?: string | null;
   isHorsSerie?: boolean;
   isIntegral?: boolean;
+  contentKind?: 'illustrated' | 'text_only';
   source: SourceName;
 }
 
@@ -98,6 +101,7 @@ export interface SudocConnector {
 export interface InventaireConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
   fetchSeriesWorks(seriesUri: string): Promise<GraphSeriesWork[]>;
+  fetchWorkEditions?(workUri: string): Promise<{ isbn13s: string[]; coverUrls: string[] }>;
   searchSeriesUri?(seriesName: string): Promise<{ seriesUri: string; wikidataQid: string | null } | null>;
   searchByText?(query: string, limit?: number): Promise<SourceCandidateRecord[]>;
 }
@@ -111,6 +115,7 @@ export interface WikidataConnector {
 
 export interface GoogleBooksConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+  searchByTitleAndAuthor?(title: string, author?: string, maxResults?: number): Promise<SourceCandidateRecord[]>;
 }
 
 export interface OpenLibraryConnector {

@@ -2,6 +2,7 @@
 // Connecteur BnF SRU en HTTPS (`https://catalogue.bnf.fr/api/SRU`) via node:https IPv4 forcé + User-Agent navigateur.
 
 import { parseMarcRecord, type ParsedMarcRecord } from '../../shared/bibliographic/intermarc-parser';
+import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import {
   extractAuthorLastNameForQuery,
   isCompatibleSeriesName,
@@ -60,8 +61,13 @@ function toCandidate(parsed: ParsedMarcRecord, fallbackIsbn13: string): SourceCa
     rawSubjects: parsed.rawSubjects,
     coverUrl: parsed.bnfCoverUrl,
     isNonBook: parsed.isNonBook,
-    isIntegralHint: parsed.isIntegralHint
+    isIntegralHint: parsed.isIntegralHint,
+    contentKind: parsed.contentKind
   };
+}
+
+function isPressOrKioskOnlyRecord(rec: ParsedMarcRecord): boolean {
+  return Boolean(rec.isbn13 && !isbnUtil.isValidBookBarcode(rec.isbn13));
 }
 
 function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
@@ -72,6 +78,7 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
     volumeNumber: volNum,
     volumeLabel: volStr || null,
     sortOrder: volNum,
+    bnfEnsembleId: rec.bnfEnsembleId ?? null,
     authors: rec.authors,
     scriptwriters: rec.scriptwriters,
     illustrators: rec.illustrators,
@@ -83,6 +90,7 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
     language: rec.language ?? null,
     coverUrl: rec.bnfCoverUrl ?? null,
     isIntegral: rec.isIntegralHint,
+    contentKind: rec.contentKind,
     source: 'bnf'
   };
 }
@@ -118,6 +126,13 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
     async lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null> {
       let records = await querySru(`bib.isbn all "${isbn13}"`, 3, `bnf:isbn:${isbn13}`);
       if (records.length === 0) {
+        // Les notices BnF antérieures à 2007 (ex. Blacksad T1, UW1 T1, Tardi) ne sont souvent indexées qu'en ISBN-10
+        const isbn10 = isbnUtil.toIsbn10(isbn13);
+        if (isbn10) {
+          records = await querySru(`bib.isbn all "${isbn10}"`, 3, `bnf:isbn10:${isbn10}`);
+        }
+      }
+      if (records.length === 0) {
         records = await querySru(`bib.anywhere all "${isbn13}"`, 3, `bnf:any:${isbn13}`);
       }
       if (records.length === 0) return null;
@@ -129,7 +144,7 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       const cleanId = bnfEnsembleId.replace(/\D/g, '');
       if (!cleanId) return [];
       const records = await querySru(`bib.ens2bib all "${cleanId}"`, maxRecords, `bnf:ens:${cleanId}:${maxRecords}`);
-      return records.map(toGraphWork);
+      return records.filter((rec) => !isPressOrKioskOnlyRecord(rec)).map(toGraphWork);
     },
 
     async searchBySeriesName(
@@ -151,6 +166,7 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       const works: GraphSeriesWork[] = [];
 
       for (const rec of records) {
+        if (isPressOrKioskOnlyRecord(rec)) continue;
         const ensembleCompatible = Boolean(
           rec.ensembleSeriesName && isCompatibleSeriesName(rec.ensembleSeriesName, seriesName)
         );

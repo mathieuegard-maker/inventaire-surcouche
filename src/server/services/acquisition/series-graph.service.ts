@@ -12,6 +12,7 @@ import {
   tokenOverlapRatio
 } from '../../../shared/bibliographic/text-normalize.util';
 import { classifyBookMetadata } from '../../../shared/bibliographic/category-classifier';
+import type { BookMainCategory } from '../../../shared/types/domain.types';
 import type { BibliographicConnectors, GraphSeriesWork } from '../../connectors/types';
 import type { BookRow, CatalogRepository, FranchiseRow, SeriesRow } from '../../repositories/catalog.repo';
 import type { CoverService } from '../cover.service';
@@ -115,8 +116,18 @@ export interface ResolveSeriesCutInput {
   pageCount?: number | null;
   collectionName?: string | null;
   publisher?: string | null;
+  mainCategory?: BookMainCategory | null;
   authors: string[];
   now?: string;
+}
+
+type MediaFamily = 'graphic' | 'prose' | 'neutral';
+
+function getCategoryMediaFamily(category?: string | null): MediaFamily {
+  if (!category) return 'neutral';
+  if (category === 'BD' || category === 'Manga' || category === 'Comics') return 'graphic';
+  if (category === 'Roman' || category === 'Essai' || category === 'Poésie / Théâtre') return 'prose';
+  return 'neutral';
 }
 
 export interface SeriesExpansionReport {
@@ -203,7 +214,42 @@ export class SeriesGraphService {
       return bExact - aExact;
     });
 
+    const incomingMedia = getCategoryMediaFamily(input.mainCategory);
+    const normIncomingTitle = normalizeTextKey(input.bookTitle);
+
     for (const cut of orderedCuts) {
+      const cutBooks = this.catalogRepo.listBooksBySeriesId(cut.id);
+
+      // Séparation média structurelle (ex. Nestor Burma BD vs Nestor Burma Romans dans la même Franchise)
+      if (incomingMedia !== 'neutral') {
+        const cutMedia = this.getSeriesMediaFamily(cutBooks);
+        if (cutMedia !== 'neutral' && cutMedia !== incomingMedia) {
+          continue;
+        }
+      }
+
+      // Même œuvre déjà présente dans ce découpage (Q-ID ou titre distinctif exact) -> rattacher ici (évite un faux découpage sur édition luxe 126 p.)
+      const matchesExistingWork =
+        Boolean(input.wikidataWorkQid && cutBooks.some((b) => b.wikidata_qid === input.wikidataWorkQid)) ||
+        Boolean(
+          normIncomingTitle &&
+            !isGenericVolumeTitle(input.bookTitle, cut.canonical_name) &&
+            cutBooks.some(
+              (b) => b.normalized_title === normIncomingTitle && Boolean(b.is_integral) === Boolean(input.isIntegral)
+            )
+        );
+      if (matchesExistingWork) {
+        const merged = this.catalogRepo.mergeSeriesMetadataAutomatic(cut.id, {
+          franchiseId: franchise.id,
+          alias: input.seriesName !== cut.canonical_name ? input.seriesName : undefined,
+          authors: input.authors,
+          wikidataQid: input.wikidataSeriesQid ?? null,
+          bnfEnsembleId: input.bnfEnsembleId ?? null,
+          now
+        })!;
+        return { franchise, series: merged };
+      }
+
       if (input.volumeNumber !== null && !input.isHorsSerie && !input.isIntegral) {
         const existingVol = this.catalogRepo.findBookInSeriesByVolume(cut.id, input.volumeNumber);
         if (existingVol) {
@@ -232,10 +278,13 @@ export class SeriesGraphService {
       }
 
       // Pas de tome N existant dans ce découpage :
-      // Si un découpage dédié existe déjà pour la même signature, ou si c'est le découpage principal compatible en pagination
-      const cutBooks = this.catalogRepo.listBooksBySeriesId(cut.id);
+      // Ne créer un découpage séparé sur la pagination seule QUE pour un tome standard numéroté portant une collection éditoriale distincte (ex. Urban Nomad),
+      // jamais pour une intégrale, un hors-série ou une édition luxe sans collection distincte (ex. Astérix 126 p.).
       const avgPages = this.computeAveragePages(cutBooks);
+      const needsPaginationCheck =
+        Boolean(incomingSig) && input.volumeNumber !== null && !input.isHorsSerie && !input.isIntegral;
       const paginationCompatible =
+        !needsPaginationCheck ||
         !avgPages ||
         !input.pageCount ||
         (Math.max(avgPages, input.pageCount) / Math.min(avgPages, input.pageCount) < 1.65);
@@ -290,6 +339,20 @@ export class SeriesGraphService {
       .map((b) => b.page_count as number);
     if (pages.length === 0) return null;
     return pages.reduce((sum, p) => sum + p, 0) / pages.length;
+  }
+
+  private getSeriesMediaFamily(books: BookRow[]): MediaFamily {
+    let graphicCount = 0;
+    let proseCount = 0;
+    for (const b of books) {
+      const catFam = getCategoryMediaFamily(b.main_category);
+      const hasIllustrators = this.parseJsonArray(b.illustrators_json).length > 0;
+      if (catFam === 'graphic' || hasIllustrators) graphicCount++;
+      else if (catFam === 'prose') proseCount++;
+    }
+    if (graphicCount > 0 && graphicCount >= proseCount) return 'graphic';
+    if (proseCount > 0 && proseCount > graphicCount) return 'prose';
+    return 'neutral';
   }
 
   /**
@@ -373,16 +436,43 @@ export class SeriesGraphService {
       }
     }
 
-    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) + découverte d'ensemble BnF par nom de série si nécessaire
+    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) d'abord sur les ensembles déjà connus,
+    // puis découverte textuelle uniquement si nécessaire, filtrée par compatibilité média (BD vs Roman).
+    const seriesMediaFamily = this.getSeriesMediaFamily(this.catalogRepo.listBooksBySeriesId(series.id));
+    const isCompatibleMediaWork = (work: GraphSeriesWork): boolean => {
+      if (seriesMediaFamily === 'graphic' && work.contentKind === 'text_only') return false;
+      if (seriesMediaFamily === 'prose' && work.contentKind === 'illustrated') return false;
+      return true;
+    };
+
     const bnfEnsembleIds = new Set<string>(this.parseJsonArray(series.bnf_ensemble_ids_json));
+    const queriedEnsembles = new Set<string>();
+    const hasCanonicalWikidataGraph = sourcesUsed.includes('wikidata') && graphWorks.length >= 2;
+
+    const queryAndMergeEnsemble = async (ensId: string): Promise<void> => {
+      if (queriedEnsembles.has(ensId)) return;
+      queriedEnsembles.add(ensId);
+      try {
+        const bnfWorks = (await this.connectors.bnf.searchByEnsembleId(ensId, 80)).filter(isCompatibleMediaWork);
+        if (bnfWorks.length > 0) {
+          if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+          this.mergeGraphWorks(graphWorks, bnfWorks, series.canonical_name, hasCanonicalWikidataGraph);
+        }
+      } catch {
+        // continue
+      }
+    };
+
+    for (const ensId of bnfEnsembleIds) {
+      await queryAndMergeEnsemble(ensId);
+    }
+
     const incompleteGraphCount = graphWorks.filter(
       (w) => w.volumeNumber === null || w.volumeNumber === undefined || w.isbn13s.length === 0
     ).length;
     const needsBnfDiscovery =
       graphWorks.length < 2 ||
       (bnfEnsembleIds.size === 0 && incompleteGraphCount > 0 && incompleteGraphCount * 2 >= graphWorks.length);
-
-    const hasCanonicalWikidataGraph = sourcesUsed.includes('wikidata') && graphWorks.length >= 2;
 
     if (needsBnfDiscovery) {
       try {
@@ -392,26 +482,22 @@ export class SeriesGraphService {
           50
         );
         if (discovery) {
-          for (const ensId of discovery.discoveredEnsembleIds) {
+          const compatibleWorks = discovery.works.filter(isCompatibleMediaWork);
+          const compatibleEnsembleIds = new Set<string>(
+            compatibleWorks.map((w) => w.bnfEnsembleId).filter((id): id is string => Boolean(id))
+          );
+          if (compatibleEnsembleIds.size === 0 && compatibleWorks.length === discovery.works.length) {
+            for (const ensId of discovery.discoveredEnsembleIds) compatibleEnsembleIds.add(ensId);
+          }
+          if (compatibleWorks.length > 0) {
+            if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+            this.mergeGraphWorks(graphWorks, compatibleWorks, series.canonical_name, hasCanonicalWikidataGraph);
+          }
+          for (const ensId of compatibleEnsembleIds) {
             bnfEnsembleIds.add(ensId);
             this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, { bnfEnsembleId: ensId, now });
+            await queryAndMergeEnsemble(ensId);
           }
-          if (discovery.works.length > 0) {
-            if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-            this.mergeGraphWorks(graphWorks, discovery.works, series.canonical_name, hasCanonicalWikidataGraph);
-          }
-        }
-      } catch {
-        // continue
-      }
-    }
-
-    for (const ensId of bnfEnsembleIds) {
-      try {
-        const bnfWorks = await this.connectors.bnf.searchByEnsembleId(ensId, 80);
-        if (bnfWorks.length > 0) {
-          if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
-          this.mergeGraphWorks(graphWorks, bnfWorks, series.canonical_name, hasCanonicalWikidataGraph);
         }
       } catch {
         // continue
@@ -517,7 +603,8 @@ export class SeriesGraphService {
         title: effectiveTitle,
         series: series.canonical_name,
         publisher: work.publisher ?? undefined,
-        collection: work.collectionName ?? undefined
+        collection: work.collectionName ?? undefined,
+        contentKind: work.contentKind
       });
 
       const saved = this.catalogRepo.upsertBookAutomatic({

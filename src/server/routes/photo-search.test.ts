@@ -90,8 +90,24 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
         async sampleByCollectionName() {
           return [];
         },
-        async searchByTitleAndAuthor(title) {
+        async searchByTitleAndAuthor(title, author) {
           const lower = title.toLowerCase();
+          if (lower.includes('pappa in afrika')) {
+            // Simule un auteur catalogué sous pseudonyme sur BnF : 0 résultat avec "Anton Kannemeyer", 1 hit sans filtre auteur !
+            if (author) return [];
+            return [
+              {
+                source: 'bnf',
+                isbn13: '9782390080442',
+                title: 'Pappa in Afrika',
+                authors: ['Joe Dog', 'William Henne'],
+                scriptwriters: [],
+                illustrators: [],
+                publisher: 'La 5e couche',
+                rawSubjects: ['Bandes dessinées']
+              }
+            ];
+          }
           if (lower.includes('scorpion')) {
             return [
               {
@@ -132,7 +148,24 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       sudoc: { async lookupByIsbn() { return null; } },
       inventaire: {
         async lookupByIsbn() { return null; },
-        async fetchSeriesWorks() { return []; }
+        async fetchSeriesWorks() { return []; },
+        async searchByText(query) {
+          if (query.toLowerCase().includes('pappa in afrika')) {
+            // Simule le bruit flou ElasticSearch d'Inventaire qui doit être filtré
+            return [
+              {
+                source: 'inventaire',
+                isbn13: '9782877141239',
+                title: 'Le Père Goriot',
+                authors: ['Honoré de Balzac'],
+                scriptwriters: [],
+                illustrators: [],
+                rawSubjects: []
+              }
+            ];
+          }
+          return [];
+        }
       },
       wikidata: {
         async lookupWorkByQid() { return null; },
@@ -417,5 +450,16 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
     const jobsRes = await appCtx.app.request('/api/jobs', { headers: { cookie } });
     const jobsList = ((await jobsRes.json()) as { jobs: Array<{ id: string; status: string }> }).jobs;
     expect(jobsList.find((j) => j.id === asyncCommitBody.commitJob.id)?.status).toBe('done');
+
+    // 5. Secours pseudonyme Photo IA / Lookup ("Pappa in Afrika" + "Anton Kannemeyer" -> filtre le bruit Inventaire et trouve Joe Dog)
+    const pseudoRes = await appCtx.app.request('/api/books/lookup', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ title: 'Pappa in Afrika', author: 'Anton Kannemeyer' })
+    });
+    expect(pseudoRes.status).toBe(200);
+    const pseudoBody = (await pseudoRes.json()) as { options: Array<{ isbn13: string; title: string }> };
+    expect(pseudoBody.options).toHaveLength(1);
+    expect(pseudoBody.options[0].isbn13).toBe('9782390080442');
   });
 });

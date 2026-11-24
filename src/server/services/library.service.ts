@@ -5,7 +5,11 @@ import crypto from 'node:crypto';
 import { annotateIntegralCoverage, parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { classifyBookMetadata } from '../../shared/bibliographic/category-classifier';
-import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  isGenericVolumeTitle,
+  normalizeTextKey,
+  tokenOverlapRatio
+} from '../../shared/bibliographic/text-normalize.util';
 import type {
   ActiveLoanView,
   BookMainCategory,
@@ -15,6 +19,7 @@ import type {
   SeriesView,
   UserReadingStateView
 } from '../../shared/types/domain.types';
+import type { BibliographicConnectors } from '../connectors/types';
 import type { DatabaseAdapter } from '../db/database.adapter';
 import type { BookRow, CatalogRepository } from '../repositories/catalog.repo';
 import type { LibraryBookRow, LibraryRepository } from '../repositories/library.repo';
@@ -100,6 +105,7 @@ export class LibraryService {
   private readonly seriesGraphService: SeriesGraphService;
   private readonly coverService: CoverService;
   private readonly loanService: LoanService;
+  private readonly connectors?: BibliographicConnectors;
   private readonly onJobEnqueued?: () => void;
 
   constructor(deps: {
@@ -114,6 +120,7 @@ export class LibraryService {
     seriesGraphService: SeriesGraphService;
     coverService: CoverService;
     loanService: LoanService;
+    connectors?: BibliographicConnectors;
     onJobEnqueued?: () => void;
   }) {
     this.db = deps.db;
@@ -127,6 +134,7 @@ export class LibraryService {
     this.seriesGraphService = deps.seriesGraphService;
     this.coverService = deps.coverService;
     this.loanService = deps.loanService;
+    this.connectors = deps.connectors;
     this.onJobEnqueued = deps.onJobEnqueued;
   }
 
@@ -583,12 +591,15 @@ export class LibraryService {
 
     const candidates: CoverCandidateItem[] = [];
     const seenUrls = new Set<string>();
+    const seenExternalUrls = new Set<string>();
 
     const pushLocal = (coverKey: string | null | undefined, label: string) => {
       if (!coverKey) return;
       const url = `/api/covers/${coverKey}`;
       if (seenUrls.has(url)) return;
       seenUrls.add(url);
+      const covRow = this.catalogRepo.findCoverByKey(coverKey);
+      if (covRow?.source_url) seenExternalUrls.add(covRow.source_url);
       candidates.push({ id: coverKey, kind: 'local', coverKey, url, label });
     };
 
@@ -603,19 +614,128 @@ export class LibraryService {
       pushLocal(ed.cover_key, `Édition ${ed.publisher || ed.isbn13}`);
     }
 
-    if (includeExternal && editions.length > 0) {
-      const draft = await this.comparisonService.collectAndArbitrate(editions[0].isbn13);
-      if (draft) {
-        for (const extUrl of draft.coverCandidates) {
-          if (!extUrl || seenUrls.has(extUrl)) continue;
-          seenUrls.add(extUrl);
-          candidates.push({
-            id: `ext_${crypto.createHash('md5').update(extUrl).digest('hex').slice(0, 10)}`,
-            kind: 'external',
-            url: extUrl,
-            label: 'Source externe'
-          });
+    if (includeExternal) {
+      const effectiveTitle = (overrides.title ?? bookRow.title).trim();
+      const effectiveSeriesRow = (overrides.seriesId ?? bookRow.series_id)
+        ? this.catalogRepo.findSeriesById((overrides.seriesId ?? bookRow.series_id)!)
+        : null;
+      const effectiveSeriesName = overrides.oneShotForced
+        ? null
+        : (overrides.seriesName ?? effectiveSeriesRow?.canonical_name ?? null);
+      const effectiveAuthors = overrides.authors ?? parseJsonStringArray(bookRow.authors_json);
+      const firstAuthor = effectiveAuthors[0];
+
+      const rawExternalQueue: Array<{
+        url: string;
+        label: string;
+        minBytes?: number;
+        rejectExactBytes?: number;
+      }> = [];
+      const enqueueExt = (url: string | null | undefined, label: string, minBytes?: number, rejectExactBytes?: number) => {
+        const clean = (url || '').trim();
+        if (!clean || (!clean.startsWith('http://') && !clean.startsWith('https://'))) return;
+        if (/\.svg(?:[?#]|$)/i.test(clean) || /(?:wikimedia|wikipedia)\.org/i.test(clean)) return;
+        if (seenExternalUrls.has(clean)) return;
+        seenExternalUrls.add(clean);
+        rawExternalQueue.push({ url: clean, label, minBytes, rejectExactBytes });
+      };
+
+      const isbnsToProbe = new Set<string>(editions.map((e) => e.isbn13).filter(Boolean));
+      const workUri = bookRow.inventaire_uri || (bookRow.wikidata_qid ? `wd:${bookRow.wikidata_qid}` : null);
+
+      const titleIsGeneric = effectiveSeriesName
+        ? isGenericVolumeTitle(effectiveTitle, effectiveSeriesName)
+        : false;
+      const bnfTitleQuery = titleIsGeneric && effectiveSeriesName ? effectiveSeriesName : effectiveTitle;
+      const fullSearchTitle =
+        effectiveSeriesName && !normalizeTextKey(effectiveTitle).includes(normalizeTextKey(effectiveSeriesName))
+          ? `${effectiveSeriesName} ${effectiveTitle}`
+          : effectiveTitle;
+
+      const [draftRes, invEdRes, bnfRes, gbRes, itunesRes] = await Promise.allSettled([
+        editions.length > 0 ? this.comparisonService.collectAndArbitrate(editions[0].isbn13) : Promise.resolve(null),
+        workUri && this.connectors?.inventaire.fetchWorkEditions
+          ? this.connectors.inventaire.fetchWorkEditions(workUri)
+          : Promise.resolve({ isbn13s: [], coverUrls: [] }),
+        this.connectors?.bnf && bnfTitleQuery
+          ? this.connectors.bnf.searchByTitleAndAuthor(bnfTitleQuery, firstAuthor, 6)
+          : Promise.resolve([]),
+        this.connectors?.googleBooks.searchByTitleAndAuthor && fullSearchTitle
+          ? this.connectors.googleBooks.searchByTitleAndAuthor(fullSearchTitle, firstAuthor, 5)
+          : Promise.resolve([]),
+        fullSearchTitle
+          ? this.coverService.searchItunesCoverUrls(`${fullSearchTitle} ${firstAuthor ?? ''}`.trim(), 4)
+          : Promise.resolve([])
+      ]);
+
+      // 1. Couvertures directes Inventaire éditions sœurs P629 (prioritaires sur BD franco-belges)
+      if (invEdRes.status === 'fulfilled') {
+        for (const u of invEdRes.value.coverUrls) enqueueExt(u, 'Inventaire (édition sœur)');
+        for (const isbn of invEdRes.value.isbn13s.slice(0, 3)) isbnsToProbe.add(isbn);
+      }
+
+      // 2. Couvertures directes Tableau Comparatif (BnF / Inventaire / Google Books / Open Library)
+      if (draftRes.status === 'fulfilled' && draftRes.value) {
+        for (const u of draftRes.value.coverCandidates) enqueueExt(u, 'Catalogue externe');
+      }
+
+      // 3. Résultats BnF par Titre + Auteur (filtrés par proximité titre)
+      if (bnfRes.status === 'fulfilled') {
+        for (const hit of bnfRes.value) {
+          const hitText = `${hit.seriesName ?? ''} ${hit.title ?? ''}`.trim();
+          const overlap = Math.max(
+            tokenOverlapRatio(effectiveTitle, hitText),
+            tokenOverlapRatio(fullSearchTitle, hitText)
+          );
+          if (overlap < 0.45 && !titleIsGeneric) continue;
+          if (hit.coverUrl) enqueueExt(hit.coverUrl, `BnF (${hit.publisher || hit.isbn13 || 'catalogue'})`);
+          if (hit.isbn13 && isbnsToProbe.size < 4) isbnsToProbe.add(hit.isbn13);
         }
+      }
+
+      // 4. CDN Librairies (Amazon EU, Amazon Media, Eyrolles/Dilicom H1400, Open Library) sur tous les ISBNs connus/découverts
+      for (const isbn of Array.from(isbnsToProbe).slice(0, 4)) {
+        for (const cdn of this.coverService.buildIsbnCdnCandidates(isbn)) {
+          enqueueExt(cdn.url, cdn.label, cdn.minBytes, cdn.rejectExactBytes);
+        }
+      }
+
+      // 5. Google Books (si non rate-limité) & Apple Books / iTunes FR (indispensable sans ISBN)
+      if (gbRes.status === 'fulfilled') {
+        for (const hit of gbRes.value) {
+          if (hit.coverUrl) enqueueExt(hit.coverUrl, `Google Books (${hit.publisher || 'édition'})`);
+        }
+      }
+      if (itunesRes.status === 'fulfilled') {
+        for (const u of itunesRes.value) enqueueExt(u, 'Apple Books');
+      }
+
+      // Vérification réelle en parallèle (lots de 6) pour ne présenter que des images valides (zéro 404/placeholder)
+      const toProbe = rawExternalQueue.slice(0, 18);
+      const verified: typeof toProbe = [];
+      for (let i = 0; i < toProbe.length && verified.length < 12; i += 6) {
+        const batch = toProbe.slice(i, i + 6);
+        const checks = await Promise.all(
+          batch.map(async (item) => ({
+            item,
+            ok: await this.coverService.probeExternalCoverUrl(item.url, {
+              minBytes: item.minBytes,
+              rejectExactBytes: item.rejectExactBytes
+            })
+          }))
+        );
+        for (const c of checks) {
+          if (c.ok && verified.length < 12) verified.push(c.item);
+        }
+      }
+
+      for (const item of verified) {
+        candidates.push({
+          id: `ext_${crypto.createHash('md5').update(item.url).digest('hex').slice(0, 10)}`,
+          kind: 'external',
+          url: item.url,
+          label: item.label
+        });
       }
     }
 
@@ -681,6 +801,7 @@ export class LibraryService {
             isIntegral: input.isIntegral,
             pageCount: input.pageCount ?? null,
             publisher: input.publisher ?? null,
+            mainCategory: input.mainCategory ?? null,
             authors: input.authors,
             now
           });

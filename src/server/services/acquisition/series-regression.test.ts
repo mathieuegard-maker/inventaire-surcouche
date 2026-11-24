@@ -783,4 +783,218 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(matchesAuthorName('Jean-Luc Masbou', 'Ayroles & Masbou')).toBe(true);
     expect(matchesAuthorName('Hergé', 'Ayroles & Masbou')).toBe(false);
   });
+
+  it('Cas 11 (Astérix Luxe 126 p. + Séparation média RDA 051 Nestor Burma BD vs Romans vs DVD) : évite les faux découpages et la pollution entre médias', async () => {
+    const { parseMarcRecord } = await import('../../../shared/bibliographic/intermarc-parser');
+
+    // 1. Parseur InterMarc ISO/RDA 051 : DVD M6 (tdi / Multimédia multisupport) -> isNonBook; BD (txt+sti) -> illustrated; Roman (txt seul) -> text_only
+    const dvdXml = `
+      <mxc:record>
+        <mxc:datafield tag="038"><mxc:subfield code="a">3780284510996</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield><mxc:subfield code="a">tdi</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Les cadavres de la plaine Monceau</mxc:subfield><mxc:subfield code="d">Multimédia multisupport</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    expect(parseMarcRecord(dvdXml)?.isNonBook).toBe(true);
+
+    const bdXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-203-14964-9</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Le soleil naît derrière le Louvre</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    expect(parseMarcRecord(bdXml)?.contentKind).toBe('illustrated');
+
+    const romanXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-221-10635-8</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Dernières enquêtes</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    expect(parseMarcRecord(romanXml)?.contentKind).toBe('text_only');
+
+    // 2. Astérix 48 p. + Astérix en Lusitanie Luxe 126 p. (vol: null, sans collection distincte) -> reste dans 1 seule série !
+    const now = new Date().toISOString();
+    const connectors = createMockConnectors({
+      bnfBySeriesName: {
+        'nestor burma': {
+          discoveredEnsembleIds: ['34314610', '44273020'],
+          works: [
+            {
+              title: 'Nestor Burma contre CQFD',
+              volumeNumber: 2,
+              bnfEnsembleId: '34314610',
+              authors: ['Léo Malet'],
+              isbn13s: ['9782285003211'],
+              publisher: 'Presses de la Cité',
+              pageCount: 219,
+              contentKind: 'text_only',
+              source: 'bnf'
+            },
+            {
+              title: 'Boulevard ossements',
+              volumeNumber: 8,
+              bnfEnsembleId: '44273020',
+              authors: ['Nicolas Barral', 'Léo Malet'],
+              isbn13s: ['9782203163737'],
+              publisher: 'Casterman',
+              pageCount: 86,
+              contentKind: 'illustrated',
+              source: 'bnf'
+            }
+          ]
+        }
+      },
+      bnfEnsemble: {
+        '34314610': [
+          {
+            title: 'Le Cinquième procédé',
+            volumeNumber: 5,
+            bnfEnsembleId: '34314610',
+            authors: ['Léo Malet'],
+            isbn13s: ['9782285003372'],
+            publisher: 'Presses de la Cité',
+            pageCount: 217,
+            contentKind: 'text_only',
+            source: 'bnf'
+          }
+        ],
+        '44273020': [
+          {
+            title: 'Boulevard ossements',
+            volumeNumber: 8,
+            bnfEnsembleId: '44273020',
+            authors: ['Nicolas Barral', 'Léo Malet'],
+            isbn13s: ['9782203163737'],
+            publisher: 'Casterman',
+            pageCount: 86,
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ]
+      }
+    });
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const ast1 = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Astérix',
+      wikidataSeriesQid: 'Q42490',
+      bookTitle: 'Astérix le Gaulois',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 48,
+      publisher: 'Hachette',
+      mainCategory: 'BD',
+      authors: ['René Goscinny', 'Albert Uderzo'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_ast_1',
+      workCanonicalId: 'wd:Q501999',
+      seriesId: ast1.series.id,
+      title: 'Astérix le Gaulois',
+      normalizedTitle: 'asterix le gaulois',
+      volumeNumber: 1,
+      volumeLabel: '1',
+      sortOrder: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['René Goscinny', 'Albert Uderzo'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Hachette',
+      collectionName: null,
+      publishYear: '1961',
+      pageCount: 48,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: 'Q501999',
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    const astLuxe = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Astérix',
+      bookTitle: 'Astérix en Lusitanie',
+      volumeNumber: null,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 126,
+      collectionName: null,
+      publisher: 'Hachette livre',
+      mainCategory: 'BD',
+      authors: ['Fabcaro', 'Didier Conrad'],
+      now
+    });
+    expect(astLuxe.series.id).toBe(ast1.series.id);
+
+    // 3. Nestor Burma BD : l'expansion BnF rejette l'ensemble Roman (text_only) et ne conserve que les BD Casterman (illustrated)
+    const burmaBd = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Nestor Burma',
+      bookTitle: 'Le soleil naît derrière le Louvre',
+      volumeNumber: 6,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 69,
+      publisher: 'Casterman',
+      mainCategory: 'BD',
+      authors: ['Emmanuel Moynot', 'Léo Malet'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_burma_bd_6',
+      workCanonicalId: 'isbn:9782203149649',
+      seriesId: burmaBd.series.id,
+      title: 'Le soleil naît derrière le Louvre',
+      normalizedTitle: 'le soleil nait derriere le louvre',
+      volumeNumber: 6,
+      volumeLabel: '6',
+      sortOrder: 6,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Emmanuel Moynot', 'Léo Malet'],
+      scriptwriters: [],
+      illustrators: ['Emmanuel Moynot'],
+      publisher: 'Casterman',
+      collectionName: null,
+      publishYear: '2018',
+      pageCount: 69,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    await seriesGraph.expandSeriesByGraph(burmaBd.series.id);
+    const expandedBurmaBooks = catalogRepo.listBooksBySeriesId(burmaBd.series.id);
+    expect(expandedBurmaBooks.map((b) => b.title)).toContain('Boulevard ossements');
+    expect(expandedBurmaBooks.some((b) => /CQFD|Cinquième procédé/i.test(b.title))).toBe(false);
+
+    // 4. Nestor Burma Roman (Léo Malet) -> séparé proprement de la série BD dans la même Franchise !
+    const burmaRoman = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Les Aventures de Nestor Burma',
+      bookTitle: 'Dernières enquêtes',
+      volumeNumber: 4,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 888,
+      publisher: 'R. Laffont',
+      mainCategory: 'Roman',
+      authors: ['Léo Malet'],
+      now
+    });
+    expect(burmaRoman.franchise.id).toBe(burmaBd.franchise.id);
+    expect(burmaRoman.series.id).not.toBe(burmaBd.series.id);
+  });
 });

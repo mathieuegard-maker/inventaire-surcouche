@@ -277,4 +277,120 @@ describe('Jalon 4 — Fiche Livre, Primauté Couche 3, Lecture Individuelle, Int
       isbn13: undefined
     });
   });
+
+  it('trouve des couvertures externes vérifiées sur GET /api/books/:id/covers?external=1 même pour un livre sans ISBN', async () => {
+    const validPng = await sharp({
+      create: {
+        width: 240,
+        height: 360,
+        channels: 3,
+        background: { r: 30, g: 90, b: 160 },
+        noise: { type: 'gaussian', mean: 128, sigma: 35 }
+      }
+    })
+      .png()
+      .toBuffer();
+
+    const customApp = createApp({
+      db,
+      config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpCoversDir }),
+      connectors: {
+        bnf: {
+          async lookupByIsbn() { return null; },
+          async searchByEnsembleId() { return []; },
+          async sampleByCollectionName() { return []; },
+          async searchByTitleAndAuthor() { return []; }
+        },
+        sudoc: { async lookupByIsbn() { return null; } },
+        inventaire: {
+          async lookupByIsbn() { return null; },
+          async fetchSeriesWorks() { return []; },
+          async fetchWorkEditions(workUri) {
+            if (workUri === 'wd:Q3551257') {
+              return {
+                isbn13s: ['9782849465356'],
+                coverUrls: [
+                  'https://inventaire.io/img/entities/validhash1234567890',
+                  'https://commons.wikimedia.org/wiki/Special:FilePath/ShouldIgnore.jpg'
+                ]
+              };
+            }
+            return { isbn13s: [], coverUrls: [] };
+          }
+        },
+        wikidata: {
+          async lookupWorkByQid() { return null; },
+          async fetchSeriesWorksByQid() { return []; }
+        },
+        googleBooks: {
+          async lookupByIsbn() { return null; },
+          async searchByTitleAndAuthor() { return []; }
+        },
+        openLibrary: { async lookupByIsbn() { return null; } }
+      },
+      coverFetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('validhash1234567890') || url.includes('images-eu.ssl-images-amazon.com')) {
+          return new Response(new Uint8Array(validPng), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        return new Response('', { status: 404 });
+      }) as typeof fetch
+    });
+
+    try {
+      const reg = await customApp.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'CoverTester',
+          email: 'cov@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+
+      const now = new Date().toISOString();
+      customApp.repos.catalogRepo.upsertBookAutomatic({
+        id: 'bk_uw1_zero_isbn',
+        workCanonicalId: 'wd:Q3551257',
+        seriesId: null,
+        title: 'La Genèse',
+        normalizedTitle: 'la genese',
+        volumeNumber: 1,
+        volumeLabel: '1',
+        sortOrder: 1,
+        isHorsSerie: false,
+        isIntegral: false,
+        includedVolumes: [],
+        authors: ['Denis Bajram'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: null,
+        collectionName: null,
+        publishYear: null,
+        pageCount: null,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: 'Q3551257',
+        inventaireUri: 'wd:Q3551257',
+        sourceOrigin: 'auto',
+        now
+      });
+
+      const res = await customApp.app.request('/api/books/bk_uw1_zero_isbn/covers?external=1', {
+        headers: { cookie }
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { covers: Array<{ url: string; label: string }> };
+      expect(body.covers.some((c) => c.url.includes('validhash1234567890'))).toBe(true);
+      expect(body.covers.some((c) => c.url.includes('images-eu.ssl-images-amazon.com'))).toBe(true);
+      expect(body.covers.some((c) => c.url.includes('wikimedia.org'))).toBe(false);
+    } finally {
+      customApp.worker.stop();
+    }
+  });
 });

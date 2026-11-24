@@ -427,7 +427,8 @@ export const useLibraryStore = defineStore('library', () => {
   async function fetchCoverCandidates(bookId: string, includeExternal = false): Promise<CoverCandidateItem[]> {
     const q = includeExternal ? '?external=1' : '';
     const res = await apiRequest<{ ok: true; covers: CoverCandidateItem[] }>(
-      `/api/books/${encodeURIComponent(bookId)}/covers${q}`
+      `/api/books/${encodeURIComponent(bookId)}/covers${q}`,
+      includeExternal ? { timeoutMs: 30000 } : undefined
     );
     return res.covers;
   }

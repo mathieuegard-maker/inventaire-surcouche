@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
 import {
+  isGenericVolumeTitle,
   matchesAuthorName,
   normalizeSeriesNumber,
   normalizeTextKey,
@@ -235,10 +236,12 @@ export class PhotoAiService {
           ? this.connectors.inventaire.searchByText(titleQuery, 8)
           : Promise.resolve([])
       ]);
-      const hits = [
-        ...(bnfRes.status === 'fulfilled' ? bnfRes.value : []),
-        ...(invRes.status === 'fulfilled' ? invRes.value : [])
-      ];
+      const invHits = (invRes.status === 'fulfilled' ? invRes.value : []).filter((hit) => {
+        if (!titleQuery) return true;
+        const candidateText = `${hit.seriesName ?? ''} ${hit.title ?? ''}`.trim();
+        return tokenOverlapRatio(titleQuery, candidateText) >= 0.4;
+      });
+      const hits = [...(bnfRes.status === 'fulfilled' ? bnfRes.value : []), ...invHits];
       for (const hit of hits) {
         pushOpt(toOption(hit));
       }
@@ -262,6 +265,19 @@ export class PhotoAiService {
 
     if (options.length === 0 && cleanTitle && cleanTitle !== combinedTitle) {
       await runExternalPass(cleanTitle, cleanAuthor, 12);
+    }
+
+    // Passe D (secours pseudonyme / co-auteur absent de BnF, ex. "Pappa in Afrika" / Anton Kannemeyer -> Joe Dog) :
+    // Uniquement si 0 option trouvée AVEC auteur et que le titre est suffisamment distinctif (>= 6 car., non générique).
+    const titleFallbackQuery = cleanTitle || cleanSeries;
+    if (
+      options.length === 0 &&
+      cleanAuthor &&
+      titleFallbackQuery &&
+      normalizeTextKey(titleFallbackQuery).length >= 6 &&
+      !isGenericVolumeTitle(titleFallbackQuery, cleanSeries)
+    ) {
+      await runExternalPass(titleFallbackQuery, undefined, 10);
     }
 
     // Scoring déterministe pour placer la meilleure édition (tome exact > titre proche > éditeur > auteur) en #1

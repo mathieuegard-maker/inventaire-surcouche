@@ -247,6 +247,21 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
     const authorBody = (await authorRes.json()) as { series: unknown[]; books: unknown[] };
     expect(authorBody.series.length).toBeGreaterThanOrEqual(1);
     expect(authorBody.books.length).toBeGreaterThanOrEqual(2);
+
+    // Fusion de toute une série en 1 appel (`bookIds: []` + `mergeEntireSourceSeriesId`)
+    const mergeWholeRes = await appCtx.app.request('/api/series/attach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        bookIds: [],
+        targetSeriesId: cut2.series.id,
+        mergeEntireSourceSeriesId: cut1.series.id
+      })
+    });
+    expect(mergeWholeRes.status).toBe(200);
+    const mergedTargetDet = await appCtx.app.request(`/api/series/${cut2.series.id}`, { headers: { cookie } });
+    const mergedTargetBody = (await mergedTargetDet.json()) as { books: Array<{ id: string }> };
+    expect(mergedTargetBody.books.map((b) => b.id)).toContain(hsBookId);
   });
 
   it('exécute le CRON nocturne & horaire de manière idempotente (zéro faux positif intégrale, purge couvertures orphelines > 30j, envoi Push + E-mail)', async () => {

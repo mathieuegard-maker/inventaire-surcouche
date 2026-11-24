@@ -365,6 +365,8 @@ export const fr = {
     enrichNoNewResult: 'Vérification terminée : aucun tome supplémentaire détecté ({total} connu(s)).',
     otherEditionsOfFranchise: 'Autres découpages de cette saga',
     mergeSeriesBtn: 'Rattacher / Fusionner',
+    mergeWholeSeriesBtn: 'Fusionner cette série…',
+    mergeWholeSeriesModalTitle: 'Fusionner « {name} » vers une autre série',
     excludeSelectedBtn: 'Ne fait pas partie de cette série ({count})',
     searchPlaceholder: 'Filtrer les tomes de cette série...',
     notFound: 'Série introuvable.',

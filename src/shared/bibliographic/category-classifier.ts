@@ -78,19 +78,21 @@ export function classifyBookMetadata(input: {
   deweyCode?: string;
   rawSubjects?: string[];
   description?: string;
+  contentKind?: 'illustrated' | 'text_only';
 }): ClassificationResult {
   const subjects = (input.rawSubjects || []).filter(Boolean);
   const subjectsText = subjects.join(' | ');
+  const dewey = (input.deweyCode || '').trim();
   const combinedText = [
     input.title || '',
     input.series || '',
     input.publisher || '',
     input.collection || '',
+    dewey,
     subjectsText,
     input.description || ''
   ].join(' | ');
 
-  const dewey = (input.deweyCode || '').trim();
   const isYouth =
     YOUTH_SUBJECT_REGEX.test(combinedText) ||
     /^(028\.5|j\b|\[j\]|e\b|\[e\])/i.test(dewey) ||
@@ -128,6 +130,8 @@ export function classifyBookMetadata(input: {
     /^[01234569]/.test(dewey)
   ) {
     mainCategory = 'Essai';
+  } else if (input.contentKind === 'text_only') {
+    mainCategory = 'Roman';
   } else if (input.series) {
     mainCategory = 'BD';
   } else {

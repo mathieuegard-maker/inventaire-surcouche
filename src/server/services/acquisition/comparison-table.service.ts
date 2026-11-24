@@ -309,9 +309,10 @@ export class ComparisonTableService {
     const wikidataWorkQid = pickBestString(columns, (c) => c.wikidataWorkQid);
     const inventaireWorkUri = pickBestString(columns, (c) => c.inventaireWorkUri);
 
-    // 7. Classification Dewey / RAMEAU / Sujets
+    // 7. Classification Dewey / RAMEAU / Sujets + signal ISO/RDA 051 (`contentKind`)
     const deweyCode = pickBestString(columns, (c) => c.deweyCode) ?? undefined;
     const rawSubjects = mergeUniqueStrings(orderedCols.map((c) => c.rawSubjects));
+    const contentKind = orderedCols.find((c) => c.contentKind)?.contentKind;
     const classification = classifyBookMetadata({
       title,
       series: seriesName ?? undefined,
@@ -319,7 +320,8 @@ export class ComparisonTableService {
       collection: collectionName ?? undefined,
       deweyCode,
       rawSubjects,
-      description: description ?? undefined
+      description: description ?? undefined,
+      contentKind
     });
 
     // 8. Couvertures candidates (ordre de qualité : BnF, Inventaire, Wikidata, Google Books, Open Library)

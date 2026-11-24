@@ -228,6 +228,7 @@ export class IngestionService {
             pageCount: draft.pageCount,
             collectionName: draft.collectionName,
             publisher: draft.publisher,
+            mainCategory: draft.mainCategory,
             authors: draft.authors,
             now
           });

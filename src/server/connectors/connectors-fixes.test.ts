@@ -304,4 +304,23 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     expect(works[0].isbn13s).toEqual(['9782864972099']);
     expect(works[0].coverUrl).toBe('https://inventaire.io/img/entities/a4d2420302179f38af46ac5a1c3d22b6c749ffae');
   });
+
+  it('ne coupe pas le circuit-breaker HttpClient sur des 404 normaux, mais protège bien sur 503 répétés', async () => {
+    let statusToReturn = 404;
+    const mockFetch = vi.fn(async () => new Response('', { status: statusToReturn }));
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+
+    // 8 réponses 404 (ex. ISBN absent d'Inventaire) ne doivent JAMAIS ouvrir le circuit-breaker
+    for (let i = 0; i < 8; i++) {
+      await http.fetchText({ source: 'inventaire', url: `https://inventaire.io/test/${i}` });
+    }
+    expect(http.isCircuitOpen('inventaire')).toBe(false);
+
+    // En revanche, 6 erreurs 503 consécutives ouvrent bien le circuit
+    statusToReturn = 503;
+    for (let i = 0; i < 6; i++) {
+      await http.fetchText({ source: 'inventaire', url: `https://inventaire.io/err/${i}` });
+    }
+    expect(http.isCircuitOpen('inventaire')).toBe(true);
+  });
 });
