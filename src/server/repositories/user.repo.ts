@@ -193,7 +193,9 @@ export class UserRepository {
     this.db.run('DELETE FROM user_default_genres WHERE user_id = ?', [userId]);
     for (const g of genres) {
       this.db.run(
-        'INSERT OR IGNORE INTO user_default_genres (user_id, genre_label, created_at) VALUES (?, ?, ?)',
+        `INSERT INTO user_default_genres (user_id, genre_label, created_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT (user_id, genre_label) DO NOTHING`,
         [userId, g, now]
       );
     }
@@ -201,7 +203,9 @@ export class UserRepository {
 
   addDefaultGenre(userId: string, genre: string, now: string): void {
     this.db.run(
-      'INSERT OR IGNORE INTO user_default_genres (user_id, genre_label, created_at) VALUES (?, ?, ?)',
+      `INSERT INTO user_default_genres (user_id, genre_label, created_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id, genre_label) DO NOTHING`,
       [userId, genre, now]
     );
   }

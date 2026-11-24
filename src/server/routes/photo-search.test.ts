@@ -592,6 +592,14 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       expect(createRes.status).toBe(201);
       const jobId = ((await createRes.json()) as { job: { id: string } }).job.id;
 
+      // Invariant strict V2 : zéro image base64 stockée dans SQLite (uniquement previewCoverKey WebP sur disque)
+      const rawJobRow = dbLocal.get<{ payload_json: string }>(
+        'SELECT payload_json FROM background_jobs WHERE id = ?',
+        [jobId]
+      );
+      expect(rawJobRow?.payload_json).not.toContain('data:image/');
+      expect(rawJobRow?.payload_json).toContain('previewCoverKey');
+
       await ctxLocal.worker.processNextJob();
       const afterFail = (await (await ctxLocal.app.request('/api/jobs', { headers: { cookie } })).json()) as {
         jobs: Array<{ id: string; status: string; errorMessage: string | null }>;

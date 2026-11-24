@@ -100,8 +100,11 @@ export class LibraryRepository {
 
   addMember(libraryId: string, userId: string, role: LibraryMemberRole, now: string): void {
     this.db.run(
-      `INSERT OR REPLACE INTO library_members (library_id, user_id, role, joined_at)
-       VALUES (?, ?, ?, ?)`,
+      `INSERT INTO library_members (library_id, user_id, role, joined_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (library_id, user_id) DO UPDATE SET
+         role = excluded.role,
+         joined_at = excluded.joined_at`,
       [libraryId, userId, role, now]
     );
   }
@@ -139,7 +142,9 @@ export class LibraryRepository {
 
   addFriendConnection(userId: string, targetLibraryId: string, now: string): void {
     this.db.run(
-      'INSERT OR IGNORE INTO friend_connections (user_id, target_library_id, created_at) VALUES (?, ?, ?)',
+      `INSERT INTO friend_connections (user_id, target_library_id, created_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT (user_id, target_library_id) DO NOTHING`,
       [userId, targetLibraryId, now]
     );
   }

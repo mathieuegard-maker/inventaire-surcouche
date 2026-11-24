@@ -155,8 +155,9 @@ export class NotificationRepository {
     detectedAt: string;
   }): boolean {
     const res = this.db.run(
-      `INSERT OR IGNORE INTO series_release_alerts (id, library_id, series_id, book_id, detected_at, dismissed_at)
-       VALUES (?, ?, ?, ?, ?, NULL)`,
+      `INSERT INTO series_release_alerts (id, library_id, series_id, book_id, detected_at, dismissed_at)
+       VALUES (?, ?, ?, ?, ?, NULL)
+       ON CONFLICT (library_id, book_id) DO NOTHING`,
       [input.id, input.libraryId, input.seriesId, input.bookId, input.detectedAt]
     );
     return res.changes > 0;

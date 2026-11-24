@@ -17,6 +17,7 @@ import { LoanRepository } from './repositories/loan.repo';
 import { ReadingRepository } from './repositories/reading.repo';
 import { NotificationRepository } from './repositories/notification.repo';
 import { SocialRepository } from './repositories/social.repo';
+import { AdminRepository } from './repositories/admin.repo';
 import { AuthService } from './services/auth.service';
 import { CoverService } from './services/cover.service';
 import { CollectionGuardService } from './services/acquisition/collection-guard.service';
@@ -78,6 +79,7 @@ export function createApp(options: CreateAppOptions) {
   const readingRepo = new ReadingRepository(options.db);
   const notifRepo = new NotificationRepository(options.db);
   const socialRepo = new SocialRepository(options.db);
+  const adminRepo = new AdminRepository(options.db);
 
   // Connecteurs isolés
   const mailSender =
@@ -226,6 +228,7 @@ export function createApp(options: CreateAppOptions) {
 
   const adminService = new AdminService({
     db: options.db,
+    adminRepo,
     catalogRepo,
     userRepo,
     logRepo,
@@ -307,7 +310,7 @@ export function createApp(options: CreateAppOptions) {
 
   return {
     app,
-    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo, notifRepo, socialRepo },
+    repos: { userRepo, libraryRepo, catalogRepo, jobRepo, logRepo, loanRepo, readingRepo, notifRepo, socialRepo, adminRepo },
     services: {
       authService,
       coverService,

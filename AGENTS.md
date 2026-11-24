@@ -62,7 +62,7 @@ Ce document s'applique à **toute session de travail** sur ce dépôt. Son but e
 ## 4. Pipeline Bibliographique, Séries & Tâches de Fond (Zéro Hardcoding)
 * **Architecture d'acquisition en 3 étages :**
   1. **Étage 1 (Canal → ISBN-13)** : Scan simple, Rafale, Saisie, Photo IA ou Recherche produit un ISBN-13 propre.
-  2. **Étage 2 (Collecte parallèle & Tableau Comparatif)** : interrogation parallèle BnF (`http://catalogue.bnf.fr/api/SRU` port 80 pour éviter le blocage SSL port 443), SUDOC (ABES), Inventaire.io, Wikidata, Google Books (avec circuit-breaker 429) et Open Library → remplissage d'un tableau comparatif normalisé champ par champ avant arbitrage.
+  2. **Étage 2 (Collecte parallèle & Tableau Comparatif)** : interrogation parallèle BnF (`https://catalogue.bnf.fr/api/SRU` via `node:https` IPv4 forcé `family: 4`), SUDOC (ABES), Inventaire.io, Wikidata, Google Books (avec circuit-breaker 429) et Open Library → remplissage d'un tableau comparatif normalisé champ par champ avant arbitrage.
   3. **Étage 3 (Graphe `Édition ↔ Œuvre ↔ Série`)** : expansion de série **par le graphe d'abord** (Wikidata `P179`/`P1545` + Inventaire `P629`, autorisant la création d'un tome officiel du graphe avant résolution de son ISBN FR), puis BnF `460$3` (`bib.ens2bib`) / texte en filet de sécurité.
 * **Règles bibliographiques algorithmiques (zéro liste ou mot-clé éditorial en dur) :**
   * **Anti-fausses séries (collections poche type *Totem*, *Folio*…)** : combinaison de la distinction MARC (`460` ensemble vs `225/410` collection), de la confrontation `Œuvre vs Édition`, et du test d'hétérogénéité des auteurs (sans bloquer les séries anthologiques ancrées `P179`/`460`).

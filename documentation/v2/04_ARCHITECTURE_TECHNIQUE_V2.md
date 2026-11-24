@@ -34,7 +34,7 @@ flowchart TB
     Workers["Worker Continu (background_jobs)\n+ CRON Calendaire (cron_runs)"]
     Repos["Repositories SQL Standard"]
     Adapter["DatabaseAdapter\n(SQLite WAL / remplaçable PostgreSQL)"]
-    Connectors["Connecteurs Externes\n(BnF HTTP:80, SUDOC, Inventaire, Wikidata, GB, OL, Gemini, Resend, WebPush)"]
+    Connectors["Connecteurs Externes\n(BnF HTTPS IPv4, SUDOC, Inventaire, Wikidata, GB, OL, Gemini, Resend, WebPush)"]
     Disk["Disque /data/covers/*.webp"]
 
     Routes --> Services
@@ -109,10 +109,11 @@ inventaire-surcouche/
 │   │   │   ├── social.repo.ts           # friend_connections, wishlist_reservations
 │   │   │   ├── notification.repo.ts     # user_notification_prefs, user_push_subscriptions, series_release_alerts
 │   │   │   ├── job.repo.ts              # background_jobs, external_cache, cron_runs
-│   │   │   └── log.repo.ts              # pipeline_logs
+│   │   │   ├── log.repo.ts              # pipeline_logs
+│   │   │   └── admin.repo.ts            # Requêtes SQL d'administration (catalogue maître, vue d'ensemble, comptes, logs)
 │   │   ├── connectors/                  # Accès réseau externes isolés et mockables
 │   │   │   ├── http-client.ts           # Fetch avec timeout, circuit-breaker par source, throttle & cache
-│   │   │   ├── bnf.connector.ts         # BnF SRU HTTP port 80 (ISBN, CQL, 460$3 ens2bib)
+│   │   │   ├── bnf.connector.ts         # BnF SRU HTTPS IPv4 (ISBN, CQL, 460$3 ens2bib)
 │   │   │   ├── sudoc.connector.ts       # SUDOC ABES (isbn2ppn + XML UNIMARC)
 │   │   │   ├── inventaire.connector.ts  # Inventaire.io (by-uris P629/P179, reverse-claims, search)
 │   │   │   ├── wikidata.connector.ts    # Wikidata wbgetentities + SPARQL (P179/P1545)
@@ -334,7 +335,7 @@ flowchart LR
   C["Étage 1 : Canal\n(Scan, Rafale, Photo IA, Recherche)"] --> ISBN["ISBN-13 normalisé"]
   ISBN --> IDX{"Index O(1)\nbook_editions"}
   IDX -- "HIT" --> MERGE["Fusion\nCouche 3 > 2 > 1"]
-  IDX -- "MISS" --> COL["Étage 2 : Collecte parallèle\nBnF:80 + SUDOC + Inventaire\n+ Wikidata + GB + OL"]
+  IDX -- "MISS" --> COL["Étage 2 : Collecte parallèle\nBnF HTTPS IPv4 + SUDOC + Inventaire\n+ Wikidata + GB + OL"]
   COL --> TAB["Tableau Comparatif\n(1 colonne par source)"]
   TAB --> GUARD["Garde Anti-Fausse Série\n(MARC 460 vs 225/410\n+ Œuvre vs Édition\n+ Hétérogénéité auteurs)"]
   GUARD --> SPLIT["Franchise -> Découpage\n(Contenu : Tome + Titre + Pages)"]

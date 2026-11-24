@@ -358,14 +358,9 @@ export class PhotoAiService {
 
     const now = new Date().toISOString();
 
-    // Compresse la photo d'étagère en WebP haute définition (1800 px) sur disque (/data/covers/) pour un zoom 2 doigts net
-    let previewCoverKey: string | null = null;
-    try {
-      const storedPreview = await this.coverService.storePreviewDataUrlAsWebp(input.imageDataUrl);
-      previewCoverKey = storedPreview.coverKey;
-    } catch {
-      // si image minimaliste en test, continue sans aperçu disque
-    }
+    // Compresse la photo d'étagère en WebP haute définition (1800 px) sur disque (/data/covers/) — zéro image base64 dans SQLite
+    const storedPreview = await this.coverService.storePreviewDataUrlAsWebp(input.imageDataUrl);
+    const previewCoverKey = storedPreview.coverKey;
 
     const updatedUsage = this.userRepo.incrementAiUsage(input.userId, monthKey, now);
 
@@ -376,8 +371,7 @@ export class PhotoAiService {
       libraryId: input.libraryId,
       payload: {
         mode: input.mode,
-        imageDataUrl: input.imageDataUrl,
-        mimeType: input.mimeType,
+        mimeType: 'image/webp',
         previewCoverKey
       },
       progressTotal: 1,
@@ -402,10 +396,19 @@ export class PhotoAiService {
    */
   async executePhotoOcrJob(ctx: JobHandlerContext): Promise<{ result: PhotoJobResultPayload; total: number }> {
     const mode = ctx.payload.mode === 'cover' ? 'cover' : 'shelf';
-    const imageDataUrl = typeof ctx.payload.imageDataUrl === 'string' ? ctx.payload.imageDataUrl : '';
-    const mimeType = typeof ctx.payload.mimeType === 'string' ? ctx.payload.mimeType : 'image/webp';
+    let imageDataUrl = typeof ctx.payload.imageDataUrl === 'string' ? ctx.payload.imageDataUrl : '';
+    let mimeType = typeof ctx.payload.mimeType === 'string' ? ctx.payload.mimeType : 'image/webp';
     const previewCoverKey = typeof ctx.payload.previewCoverKey === 'string' ? ctx.payload.previewCoverKey : null;
     const libraryId = ctx.job.library_id ?? '';
+
+    if (!imageDataUrl && previewCoverKey) {
+      const storedBin = await this.coverService.readCoverBinary(previewCoverKey);
+      if (!storedBin) {
+        throw new AppError(400, 'PHOTO_IMAGE_MISSING', "L'image de cette analyse n'est plus disponible : reprenez une photo.");
+      }
+      mimeType = storedBin.mimeType;
+      imageDataUrl = `data:${storedBin.mimeType};base64,${storedBin.buffer.toString('base64')}`;
+    }
 
     const hints = await this.gemini.extractBooksFromImage({ imageDataUrl, mimeType, mode });
     const total = Math.max(1, hints.length);
@@ -814,7 +817,9 @@ export class PhotoAiService {
     } catch {
       payload = {};
     }
-    if (typeof payload.imageDataUrl !== 'string' || !payload.imageDataUrl) {
+    const hasDiskImage = typeof payload.previewCoverKey === 'string' && payload.previewCoverKey.length > 0;
+    const hasLegacyInlineImage = typeof payload.imageDataUrl === 'string' && payload.imageDataUrl.length > 0;
+    if (!hasDiskImage && !hasLegacyInlineImage) {
       throw new AppError(400, 'PHOTO_IMAGE_MISSING', "L'image de cette analyse n'est plus disponible : reprenez une photo.");
     }
     const requeued = this.jobRepo.requeueJob(row.id, new Date().toISOString())!;

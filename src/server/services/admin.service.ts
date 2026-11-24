@@ -1,10 +1,12 @@
 // src/server/services/admin.service.ts
 // Service Console Administration (`/admin` uniquement) : Catalogue Maître Couche 2 (locked_fields), Comptes, Quotas, Maintenance & Logs.
+// Zéro SQL brut : délègue 100 % des requêtes à AdminRepository / CatalogRepository / UserRepository / LogRepository.
 
 import crypto from 'node:crypto';
 import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type { BookMainCategory } from '../../shared/types/domain.types';
 import type { DatabaseAdapter } from '../db/database.adapter';
+import type { AdminRepository } from '../repositories/admin.repo';
 import type { CatalogRepository } from '../repositories/catalog.repo';
 import type { LogRepository } from '../repositories/log.repo';
 import type { UserRepository } from '../repositories/user.repo';
@@ -41,6 +43,7 @@ function parseJsonArray(raw: string | null | undefined): string[] {
 
 export class AdminService {
   private readonly db: DatabaseAdapter;
+  private readonly adminRepo: AdminRepository;
   private readonly catalogRepo: CatalogRepository;
   private readonly userRepo: UserRepository;
   private readonly logRepo: LogRepository;
@@ -49,6 +52,7 @@ export class AdminService {
 
   constructor(deps: {
     db: DatabaseAdapter;
+    adminRepo: AdminRepository;
     catalogRepo: CatalogRepository;
     userRepo: UserRepository;
     logRepo: LogRepository;
@@ -56,6 +60,7 @@ export class AdminService {
     cronScheduler: CronScheduler;
   }) {
     this.db = deps.db;
+    this.adminRepo = deps.adminRepo;
     this.catalogRepo = deps.catalogRepo;
     this.userRepo = deps.userRepo;
     this.logRepo = deps.logRepo;
@@ -64,28 +69,7 @@ export class AdminService {
   }
 
   getOverview() {
-    const count = (table: string) =>
-      Number(this.db.get<{ cnt: number }>(`SELECT COUNT(*) AS cnt FROM ${table}`)?.cnt ?? 0);
-    const coverBytes = Number(
-      this.db.get<{ total: number }>('SELECT COALESCE(SUM(byte_size), 0) AS total FROM covers')?.total ?? 0
-    );
-    const cronRuns = this.db.all<{ job_name: string; last_run_key: string; last_run_at: string; status: string }>(
-      'SELECT job_name, last_run_key, last_run_at, status FROM cron_runs ORDER BY job_name ASC'
-    );
-
-    return {
-      usersCount: count('users'),
-      librariesCount: count('libraries'),
-      booksCount: count('books'),
-      editionsCount: count('book_editions'),
-      seriesCount: count('series'),
-      franchisesCount: count('franchises'),
-      coversCount: count('covers'),
-      coversTotalBytes: coverBytes,
-      jobsCount: count('background_jobs'),
-      logsCount: count('pipeline_logs'),
-      cronRuns
-    };
+    return this.adminRepo.getOverviewCounts();
   }
 
   listCatalog(input: {
@@ -99,57 +83,17 @@ export class AdminService {
     const pageSize = Math.min(60, Math.max(12, input.pageSize ?? 24));
     const offset = (page - 1) * pageSize;
 
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
+    const searchRaw = input.search?.trim() || undefined;
+    const searchNormalized = searchRaw ? normalizeTextKey(searchRaw) : undefined;
 
-    if (input.search?.trim()) {
-      const needle = `%${normalizeTextKey(input.search)}%`;
-      clauses.push(
-        '(b.normalized_title LIKE ? OR lower(b.authors_json) LIKE ? OR lower(COALESCE(s.canonical_name, \'\')) LIKE ? OR EXISTS (SELECT 1 FROM book_editions be WHERE be.book_id = b.id AND be.isbn13 LIKE ?))'
-      );
-      params.push(needle, needle, needle, `%${input.search.trim()}%`);
-    }
-    if (input.filter === 'no_cover') {
-      clauses.push('b.cover_key IS NULL');
-    } else if (input.filter === 'no_series') {
-      clauses.push('b.series_id IS NULL');
-    }
-    if (input.category?.trim()) {
-      clauses.push('b.main_category = ?');
-      params.push(input.category.trim());
-    }
-
-    const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const totalRow = this.db.get<{ cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM books b LEFT JOIN series s ON s.id = b.series_id ${whereSql}`,
-      params
-    );
-
-    const rows = this.db.all<{
-      id: string;
-      title: string;
-      series_id: string | null;
-      series_name: string | null;
-      volume_number: number | null;
-      authors_json: string;
-      publisher: string | null;
-      publish_year: string | null;
-      main_category: BookMainCategory;
-      subgenres_json: string;
-      cover_key: string | null;
-      locked_fields_json: string;
-      updated_at: string;
-    }>(
-      `SELECT b.id, b.title, b.series_id, s.canonical_name AS series_name, b.volume_number,
-              b.authors_json, b.publisher, b.publish_year, b.main_category, b.subgenres_json,
-              b.cover_key, b.locked_fields_json, b.updated_at
-       FROM books b
-       LEFT JOIN series s ON s.id = b.series_id
-       ${whereSql}
-       ORDER BY b.updated_at DESC
-       LIMIT ? OFFSET ?`,
-      [...params, pageSize, offset]
-    );
+    const { total, rows } = this.adminRepo.listCatalogBooks({
+      searchNormalized,
+      searchRaw,
+      filter: input.filter,
+      category: input.category?.trim() || undefined,
+      limit: pageSize,
+      offset
+    });
 
     const items: AdminCatalogBookItem[] = rows.map((r) => {
       const editions = this.catalogRepo.listEditionsByBookId(r.id);
@@ -172,12 +116,7 @@ export class AdminService {
       };
     });
 
-    return {
-      total: Number(totalRow?.cnt ?? 0),
-      page,
-      pageSize,
-      items
-    };
+    return { total, page, pageSize, items };
   }
 
   /**
@@ -247,55 +186,24 @@ export class AdminService {
         const existing = this.catalogRepo.findBookById(bookId);
         if (!existing) continue;
 
-        const sets: string[] = [];
-        const vals: Array<string | number | null> = [];
-
-        if (patch.title !== undefined) {
-          sets.push('title = ?', 'normalized_title = ?');
-          vals.push(patch.title.trim(), normalizeTextKey(patch.title));
-        }
-        if (patch.authors !== undefined) {
-          sets.push('authors_json = ?');
-          vals.push(JSON.stringify(patch.authors));
-        }
-        if (resolvedSeriesId !== undefined) {
-          sets.push('series_id = ?');
-          vals.push(resolvedSeriesId);
-        }
-        if (patch.volumeNumber !== undefined) {
-          sets.push('volume_number = ?', 'volume_label = ?', 'sort_order = ?');
-          vals.push(
-            patch.volumeNumber,
-            patch.volumeNumber !== null ? String(patch.volumeNumber) : null,
-            patch.volumeNumber
-          );
-        }
-        if (patch.publisher !== undefined) {
-          sets.push('publisher = ?');
-          vals.push(patch.publisher);
-        }
-        if (patch.publishYear !== undefined) {
-          sets.push('publish_year = ?');
-          vals.push(patch.publishYear);
-        }
-        if (patch.mainCategory !== undefined) {
-          sets.push('main_category = ?');
-          vals.push(patch.mainCategory);
-        }
-        if (patch.subgenres !== undefined) {
-          sets.push('subgenres_json = ?');
-          vals.push(JSON.stringify(patch.subgenres));
-        }
-        if (patch.coverKey !== undefined) {
-          sets.push('cover_key = ?');
-          vals.push(patch.coverKey);
-        }
-
         const mergedLocked = Array.from(new Set([...parseJsonArray(existing.locked_fields_json), ...lockedToAdd]));
-        sets.push('locked_fields_json = ?', 'updated_at = ?');
-        vals.push(JSON.stringify(mergedLocked), now, bookId);
 
-        this.db.run(`UPDATE books SET ${sets.join(', ')} WHERE id = ?`, vals);
+        this.adminRepo.updateCatalogBookLocked(bookId, {
+          title: patch.title !== undefined ? patch.title.trim() : undefined,
+          normalizedTitle: patch.title !== undefined ? normalizeTextKey(patch.title) : undefined,
+          authorsJson: patch.authors !== undefined ? JSON.stringify(patch.authors) : undefined,
+          seriesId: resolvedSeriesId,
+          volumeNumber: patch.volumeNumber,
+          volumeLabel: patch.volumeNumber !== undefined && patch.volumeNumber !== null ? String(patch.volumeNumber) : null,
+          sortOrder: patch.volumeNumber,
+          publisher: patch.publisher,
+          publishYear: patch.publishYear,
+          mainCategory: patch.mainCategory,
+          subgenresJson: patch.subgenres !== undefined ? JSON.stringify(patch.subgenres) : undefined,
+          coverKey: patch.coverKey,
+          lockedFieldsJson: JSON.stringify(mergedLocked),
+          updatedAt: now
+        });
         updatedCount++;
       }
     });
@@ -305,37 +213,16 @@ export class AdminService {
 
   listUsers() {
     const monthKey = new Date().toISOString().slice(0, 7);
-    return this.db
-      .all<{
-        id: string;
-        username: string;
-        email: string;
-        is_admin: number;
-        created_at: string;
-        library_name: string | null;
-        month_key: string | null;
-        month_used: number | null;
-        total_used: number | null;
-      }>(
-        `SELECT u.id, u.username, u.email, u.is_admin, u.created_at,
-                l.name AS library_name,
-                ai.month_key, ai.month_used, ai.total_used
-         FROM users u
-         LEFT JOIN library_members lm ON lm.user_id = u.id
-         LEFT JOIN libraries l ON l.id = lm.library_id
-         LEFT JOIN user_ai_usage ai ON ai.user_id = u.id
-         ORDER BY u.created_at DESC`
-      )
-      .map((u) => ({
-        id: u.id,
-        username: u.username,
-        email: u.email,
-        isAdmin: u.is_admin === 1,
-        createdAt: u.created_at,
-        libraryName: u.library_name,
-        aiMonthUsed: u.month_key === monthKey ? Number(u.month_used ?? 0) : 0,
-        aiTotalUsed: Number(u.total_used ?? 0)
-      }));
+    return this.adminRepo.listUsersWithLibraryAndAi().map((u) => ({
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      isAdmin: u.is_admin === 1,
+      createdAt: u.created_at,
+      libraryName: u.library_name,
+      aiMonthUsed: u.month_key === monthKey ? Number(u.month_used ?? 0) : 0,
+      aiTotalUsed: Number(u.total_used ?? 0)
+    }));
   }
 
   resetUserAiQuota(userId: string): void {
@@ -345,36 +232,12 @@ export class AdminService {
 
   listLogs(input: { stage?: string; status?: string; query?: string; limit?: number }) {
     const limit = Math.min(300, Math.max(10, input.limit ?? 100));
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
-
-    if (input.stage?.trim()) {
-      clauses.push('stage = ?');
-      params.push(input.stage.trim());
-    }
-    if (input.status?.trim()) {
-      clauses.push('status = ?');
-      params.push(input.status.trim());
-    }
-    if (input.query?.trim()) {
-      const pat = `%${input.query.trim()}%`;
-      clauses.push('(trace_id LIKE ? OR summary LIKE ?)');
-      params.push(pat, pat);
-    }
-
-    const whereSql = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    return this.db.all<{
-      id: number;
-      trace_id: string;
-      channel: string;
-      stage: string;
-      step: string;
-      status: string;
-      duration_ms: number | null;
-      summary: string;
-      payload_json: string | null;
-      created_at: string;
-    }>(`SELECT * FROM pipeline_logs ${whereSql} ORDER BY id DESC LIMIT ?`, [...params, limit]);
+    return this.adminRepo.listPipelineLogs({
+      stage: input.stage?.trim() || undefined,
+      status: input.status?.trim() || undefined,
+      query: input.query?.trim() || undefined,
+      limit
+    });
   }
 
   purgeLogs(days = 30): { purgedCount: number } {
@@ -395,9 +258,6 @@ export class AdminService {
       return this.purgeLogs(30);
     }
     // sister_editions : rapport synthétique d'état des éditions sœurs
-    const count = Number(
-      this.db.get<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM book_editions')?.cnt ?? 0
-    );
-    return { editionsIndexed: count };
+    return { editionsIndexed: this.adminRepo.countEditions() };
   }
 }
