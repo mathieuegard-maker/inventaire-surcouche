@@ -81,30 +81,141 @@ function entityMatchesIsbn13(entity: InvEntity, isbn13: string): boolean {
   return false;
 }
 
+function isFrenchEdition(entity: InvEntity, isbn13s: string[]): boolean {
+  const langs = claimStrings(entity, 'wdt:P407');
+  if (langs.some((l) => l.toLowerCase() === 'wd:q150')) return true;
+  if (isbn13s.some((isbn) => isbn.startsWith('9782') || isbn.startsWith('97910'))) return true;
+  return false;
+}
+
+function extractEditionIsbn13s(entity: InvEntity): string[] {
+  const out: string[] = [];
+  for (const raw of [...claimStrings(entity, 'wdt:P212'), ...claimStrings(entity, 'wdt:P957')]) {
+    const norm = isbnUtil.normalizeToIsbn13(raw);
+    if (norm && !out.includes(norm)) out.push(norm);
+  }
+  return out;
+}
+
 export function createInventaireConnector(http: HttpClient): InventaireConnector {
-  async function fetchEntitiesRaw(uris: string[]): Promise<{ entities: Record<string, InvEntity>; redirects: Record<string, string> }> {
+  async function fetchEntitiesRaw(
+    uris: string[],
+    includeRelatives = true
+  ): Promise<{ entities: Record<string, InvEntity>; redirects: Record<string, string> }> {
     const clean = Array.from(new Set(uris.filter(Boolean)));
     if (clean.length === 0) return { entities: {}, redirects: {} };
 
     const entities: Record<string, InvEntity> = {};
     const redirects: Record<string, string> = {};
+    const relParam = includeRelatives ? `&relatives=${encodeURIComponent('wdt:P629|wdt:P179|wdt:P50|wdt:P123')}` : '';
+    const cachePrefix = includeRelatives ? 'inv:uris:v2' : 'inv:ed:v1';
 
     // Lots de 30 URIs max pour respecter l'API Inventaire
     for (let i = 0; i < clean.length; i += 30) {
       const slice = clean.slice(i, i + 30);
-      const url = `${INV_API}?action=by-uris&uris=${encodeURIComponent(slice.join('|'))}&relatives=${encodeURIComponent('wdt:P629|wdt:P179|wdt:P50|wdt:P123')}`;
+      const url = `${INV_API}?action=by-uris&uris=${encodeURIComponent(slice.join('|'))}${relParam}`;
       const data = await http.fetchJson<InvByUrisResponse>({
         source: 'inventaire',
         url,
         timeoutMs: 7500,
         minIntervalMs: 150,
-        cacheKey: `inv:uris:v2:${slice.sort().join('|')}`,
+        cacheKey: `${cachePrefix}:${slice.sort().join('|')}`,
         cacheTtlSec: 60 * 60 * 24 * 7
       });
       if (data?.entities) Object.assign(entities, data.entities);
       if (data?.redirects) Object.assign(redirects, data.redirects);
     }
     return { entities, redirects };
+  }
+
+  /**
+   * Résout en lot les éditions FR (ISBN-13 `wdt:P212` + couverture éditeur `invp:P2`) pour une liste d'œuvres
+   * via `reverse-claims wdt:P629` -> `by-uris` (Inventaire renvoie des URIs canoniques `inv:` / `wd:`, pas `isbn:`).
+   */
+  async function resolveEditionsForWorks(
+    workUris: string[],
+    maxEditionsPerWork = 10
+  ): Promise<Map<string, { isbn13s: string[]; coverUrl: string | null; frTitle: string | null }>> {
+    const rawEdUrisByWork = new Map<string, string[]>();
+    const editionUrisToFetch: string[] = [];
+
+    // Récupération des reverse-claims par petits lots de 5 en parallèle
+    for (let i = 0; i < workUris.length; i += 5) {
+      const batch = workUris.slice(i, i + 5);
+      await Promise.all(
+        batch.map(async (workUri) => {
+          const edRev = await http.fetchJson<InvReverseClaimsResponse>({
+            source: 'inventaire',
+            url: `${INV_API}?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`,
+            timeoutMs: 5000,
+            minIntervalMs: 80,
+            cacheKey: `inv:work-editions:${workUri}`,
+            cacheTtlSec: 60 * 60 * 24 * 7
+          });
+          const uris = (edRev?.uris ?? []).slice(0, maxEditionsPerWork);
+          rawEdUrisByWork.set(workUri, uris);
+          for (const u of uris) {
+            if (!u.startsWith('isbn:')) editionUrisToFetch.push(u);
+          }
+        })
+      );
+    }
+
+    const { entities: edEntities, redirects: edRedirects } =
+      editionUrisToFetch.length > 0 ? await fetchEntitiesRaw(editionUrisToFetch, false) : { entities: {}, redirects: {} };
+
+    const result = new Map<string, { isbn13s: string[]; coverUrl: string | null; frTitle: string | null }>();
+
+    for (const workUri of workUris) {
+      const uris = rawEdUrisByWork.get(workUri) ?? [];
+      const frEntries: Array<{ isbns: string[]; cover: string | null; title: string | null }> = [];
+      const otherEntries: Array<{ isbns: string[]; cover: string | null; title: string | null }> = [];
+
+      for (const u of uris) {
+        if (u.startsWith('isbn:')) {
+          const norm = isbnUtil.normalizeToIsbn13(u.slice(5));
+          if (norm) {
+            const bucket = norm.startsWith('9782') || norm.startsWith('97910') ? frEntries : otherEntries;
+            bucket.push({ isbns: [norm], cover: null, title: null });
+          }
+          continue;
+        }
+        const resolvedUri = edRedirects[u] ?? u;
+        const ed = edEntities[u] ?? edEntities[resolvedUri];
+        if (!ed) continue;
+
+        const isbns = extractEditionIsbn13s(ed);
+        const rawCov = resolveInvImageUrl(ed) ?? null;
+        const cover = rawCov && !/\.svg(?:[?#]|$)/i.test(rawCov) && !/wikimedia\.org/i.test(rawCov) ? rawCov : null;
+        const title = cleanTitle(firstClaimString(ed, 'wdt:P1476') || '') || null;
+
+        if (isFrenchEdition(ed, isbns)) {
+          frEntries.push({ isbns, cover, title });
+        } else {
+          otherEntries.push({ isbns, cover, title });
+        }
+      }
+
+      const preferred = frEntries.length > 0 ? frEntries : otherEntries;
+      // Placer d'abord les éditions ayant une couverture éditeur
+      preferred.sort((a, b) => (b.cover ? 1 : 0) - (a.cover ? 1 : 0));
+
+      const isbn13s: string[] = [];
+      let coverUrl: string | null = null;
+      let frTitle: string | null = null;
+
+      for (const entry of preferred) {
+        for (const isbn of entry.isbns) {
+          if (!isbn13s.includes(isbn)) isbn13s.push(isbn);
+        }
+        if (!coverUrl && entry.cover) coverUrl = entry.cover;
+        if (!frTitle && frEntries.length > 0 && entry.title) frTitle = entry.title;
+      }
+
+      result.set(workUri, { isbn13s, coverUrl, frTitle });
+    }
+
+    return result;
   }
 
   return {
@@ -225,27 +336,22 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         .slice(0, limit);
       if (workUris.length === 0) return [];
 
-      const { entities } = await fetchEntitiesRaw(workUris);
+      const targetWorkUris = workUris.slice(0, 8);
+      const [{ entities }, editionsByWork] = await Promise.all([
+        fetchEntitiesRaw(targetWorkUris),
+        resolveEditionsForWorks(targetWorkUris, 6)
+      ]);
       const out: SourceCandidateRecord[] = [];
 
-      for (const workUri of workUris.slice(0, 8)) {
+      for (const workUri of targetWorkUris) {
         const work = entities[workUri];
         if (!work) continue;
-        const title = cleanTitle(pickLabel(work.labels));
-        if (!title) continue;
-
-        const edRev = await http.fetchJson<InvReverseClaimsResponse>({
-          source: 'inventaire',
-          url: `${INV_API}?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`,
-          timeoutMs: 4500,
-          minIntervalMs: 100,
-          cacheKey: `inv:work-editions:${workUri}`,
-          cacheTtlSec: 60 * 60 * 24 * 7
-        });
-
-        const firstIsbnUri = (edRev?.uris ?? []).find((u) => u.startsWith('isbn:'));
-        const isbn13 = firstIsbnUri ? isbnUtil.normalizeToIsbn13(firstIsbnUri.slice(5)) : null;
+        const resolvedEd = editionsByWork.get(workUri);
+        const isbn13 = resolvedEd?.isbn13s[0] ?? null;
         if (!isbn13) continue;
+
+        const title = cleanTitle(work.labels?.fr || resolvedEd?.frTitle || pickLabel(work.labels));
+        if (!title) continue;
 
         const seriesUri = firstClaimString(work, 'wdt:P179');
         const seriesName = seriesUri ? cleanSeriesName(pickLabel(entities[seriesUri]?.labels)) : undefined;
@@ -266,7 +372,7 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
           rawSubjects: [],
           wikidataWorkQid: extractWikidataQid(workUri),
           inventaireWorkUri: workUri,
-          coverUrl: resolveInvImageUrl(work)
+          coverUrl: resolvedEd?.coverUrl ?? resolveInvImageUrl(work)
         });
       }
 
@@ -288,13 +394,17 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
       const workUris = (rev?.uris ?? []).slice(0, 120);
       if (workUris.length === 0) return [];
 
-      const { entities } = await fetchEntitiesRaw(workUris);
+      const [{ entities }, editionsByWork] = await Promise.all([
+        fetchEntitiesRaw(workUris),
+        resolveEditionsForWorks(workUris, 10)
+      ]);
       const works: GraphSeriesWork[] = [];
 
       for (const workUri of workUris) {
         const work = entities[workUri];
         if (!work) continue;
-        const title = cleanTitle(pickLabel(work.labels));
+        const resolvedEd = editionsByWork.get(workUri);
+        const title = cleanTitle(work.labels?.fr || resolvedEd?.frTitle || pickLabel(work.labels));
         if (!title) continue;
 
         const volStr = normalizeSeriesNumber(firstClaimString(work, 'wdt:P1545'));
@@ -303,23 +413,11 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
           .map((u) => pickLabel(entities[u]?.labels))
           .filter(Boolean);
 
-        // Récupère les ISBN FR éventuels via reverse-claims wdt:P629
-        const edRev = await http.fetchJson<InvReverseClaimsResponse>({
-          source: 'inventaire',
-          url: `${INV_API}?action=reverse-claims&property=wdt:P629&value=${encodeURIComponent(workUri)}`,
-          timeoutMs: 5000,
-          minIntervalMs: 100,
-          cacheKey: `inv:work-editions:${workUri}`,
-          cacheTtlSec: 60 * 60 * 24 * 7
-        });
-
-        const isbn13s: string[] = [];
-        for (const u of edRev?.uris ?? []) {
-          if (u.startsWith('isbn:')) {
-            const norm = isbnUtil.normalizeToIsbn13(u.slice(5));
-            if (norm && !isbn13s.includes(norm)) isbn13s.push(norm);
-          }
-        }
+        const rawWorkCover = resolveInvImageUrl(work) ?? null;
+        const safeWorkCover =
+          rawWorkCover && !/\.svg(?:[?#]|$)/i.test(rawWorkCover) && !/wikimedia\.org/i.test(rawWorkCover)
+            ? rawWorkCover
+            : null;
 
         works.push({
           title,
@@ -329,9 +427,9 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
           wikidataQid: extractWikidataQid(workUri) ?? null,
           inventaireUri: workUri,
           authors: authorNames,
-          isbn13s,
+          isbn13s: resolvedEd?.isbn13s ?? [],
           publishYear: cleanPublishDate(firstClaimString(work, 'wdt:P577') || '') || null,
-          coverUrl: resolveInvImageUrl(work) ?? null,
+          coverUrl: resolvedEd?.coverUrl ?? safeWorkCover,
           source: 'inventaire'
         });
       }

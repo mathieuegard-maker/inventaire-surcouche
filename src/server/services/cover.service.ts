@@ -308,11 +308,12 @@ export class CoverService {
    */
   async resolveBestCoverFromCascade(input: CoverCascadeInput): Promise<StoredCoverResult | null> {
     const isWikimediaUrl = (u: string): boolean => /(?:wikimedia|wikipedia)\.org/i.test(u);
-    const allCandidates = (input.candidateUrls ?? []).filter((u) => Boolean(u && !/\.svg(?:[?#]|$)/i.test(u)));
-    const primaryCandidates = allCandidates.filter((u) => !isWikimediaUrl(u));
-    const wikimediaFallbackCandidates = allCandidates.filter((u) => isWikimediaUrl(u));
+    // Exclure les .svg et les photos Wikimedia P18 Wikidata (qui sont des photos thématiques libres de droit, jamais des couvertures éditeur)
+    const primaryCandidates = (input.candidateUrls ?? []).filter(
+      (u) => Boolean(u && !/\.svg(?:[?#]|$)/i.test(u) && !isWikimediaUrl(u))
+    );
 
-    // 1. Candidats directs éditeurs/catalogues (BnF, Inventaire, Google Books, Open Library) — hors Wikimedia P18
+    // 1. Candidats directs éditeurs/catalogues (BnF, Inventaire invp:P2, Google Books, Open Library)
     for (const rawUrl of primaryCandidates) {
       const stored = await this.ingestFromExternalUrl(rawUrl, {
         minBytes: 500,
@@ -381,15 +382,6 @@ export class CoverService {
           // continue
         }
       }
-    }
-
-    // 6. Tout dernier recours (uniquement si aucun ISBN/CDN éditeur n'a retourné de couverture) : Wikimedia P18
-    for (const rawUrl of wikimediaFallbackCandidates) {
-      const stored = await this.ingestFromExternalUrl(rawUrl, {
-        minBytes: 500,
-        rejectExactBytes: EYROLLES_PLACEHOLDER_BYTES
-      });
-      if (stored) return stored;
     }
 
     return null;

@@ -228,4 +228,71 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('résout les éditions FR inv:... (ISBN P212 + couverture éditeur invp:P2) dans Inventaire fetchSeriesWorks', async () => {
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      if (url.includes('property=wdt:P179') && url.includes('wd%3AQ42490')) {
+        return new Response(JSON.stringify({ uris: ['wd:Q599154'] }), { status: 200 });
+      }
+      if (url.includes('property=wdt:P629') && url.includes('wd%3AQ599154')) {
+        return new Response(
+          JSON.stringify({ uris: ['inv:ed_en_1', 'inv:ed_fr_1'] }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('action=by-uris') && url.includes('wd%3AQ599154')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'wd:Q599154': {
+                uri: 'wd:Q599154',
+                type: 'work',
+                labels: { fr: 'Astérix chez Rahàzade' },
+                image: { url: 'https://commons.wikimedia.org/wiki/Special:FilePath/Asterix.svg?width=1280' },
+                claims: { 'wdt:P1545': ['28'] }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('action=by-uris') && url.includes('inv%3Aed_fr_1')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'inv:ed_en_1': {
+                uri: 'inv:ed_en_1',
+                type: 'edition',
+                claims: { 'wdt:P407': ['wd:Q1860'], 'wdt:P212': ['978-0-7528-4776-4'] }
+              },
+              'inv:ed_fr_1': {
+                uri: 'inv:ed_fr_1',
+                type: 'edition',
+                image: { url: '/img/entities/a4d2420302179f38af46ac5a1c3d22b6c749ffae' },
+                claims: {
+                  'wdt:P407': ['wd:Q150'],
+                  'wdt:P212': ['978-2-86497-209-9'],
+                  'wdt:P1476': ['Astérix chez Rahàzade'],
+                  'invp:P2': ['a4d2420302179f38af46ac5a1c3d22b6c749ffae']
+                }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('{}', { status: 404 });
+    });
+
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const inv = createInventaireConnector(http);
+    const works = await inv.fetchSeriesWorks('wd:Q42490');
+
+    expect(works).toHaveLength(1);
+    expect(works[0].title).toBe('Astérix chez Rahàzade');
+    expect(works[0].volumeNumber).toBe(28);
+    expect(works[0].isbn13s).toEqual(['9782864972099']);
+    expect(works[0].coverUrl).toBe('https://inventaire.io/img/entities/a4d2420302179f38af46ac5a1c3d22b6c749ffae');
+  });
 });
