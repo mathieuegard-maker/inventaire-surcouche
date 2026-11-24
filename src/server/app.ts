@@ -1,6 +1,7 @@
 // src/server/app.ts
 // Fabrique d'application Hono injectable et 100 % testable sur SQLite :memory:.
 
+import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
@@ -21,6 +22,7 @@ import { AdminRepository } from './repositories/admin.repo';
 import { AuthService } from './services/auth.service';
 import { CoverService } from './services/cover.service';
 import { CollectionGuardService } from './services/acquisition/collection-guard.service';
+import { BookIdentifierService } from './services/acquisition/book-identifier.service';
 import { ComparisonTableService } from './services/acquisition/comparison-table.service';
 import { SeriesGraphService } from './services/acquisition/series-graph.service';
 import { IngestionService } from './services/acquisition/ingestion.service';
@@ -111,6 +113,7 @@ export function createApp(options: CreateAppOptions) {
   });
 
   const collectionGuard = new CollectionGuardService({ bnf: connectors.bnf });
+  const bookIdentifier = new BookIdentifierService({ connectors });
   const comparisonService = new ComparisonTableService({ connectors, collectionGuard });
   const seriesGraphService = new SeriesGraphService({ catalogRepo, connectors, coverService });
 
@@ -124,6 +127,7 @@ export function createApp(options: CreateAppOptions) {
     comparisonService,
     seriesGraphService,
     coverService,
+    bookIdentifier,
     onJobEnqueued: () => worker.nudge()
   });
 
@@ -182,7 +186,9 @@ export function createApp(options: CreateAppOptions) {
     readingRepo,
     ingestionService,
     seriesGraphService,
-    connectors
+    connectors,
+    jobRepo,
+    onJobEnqueued: () => worker.nudge()
   });
 
   const notificationService = new NotificationService({
@@ -246,14 +252,43 @@ export function createApp(options: CreateAppOptions) {
   worker.registerHandler('collection_import', async (ctx) => {
     return collectionImportService.executeCollectionImportJob(ctx);
   });
-  worker.registerHandler('series_expand', async ({ payload, reportProgress }) => {
+  worker.registerHandler('series_expand', async ({ job, payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {
-      return { result: { addedCount: 0, totalVolumes: 0 }, total: 1 };
+      return { result: { addedCount: 0, totalVolumes: 0, incompleteVolumeCount: 0 }, total: 1 };
     }
     reportProgress(0, 1);
     const report = await seriesGraphService.expandSeriesByGraph(seriesId);
+
+    // Phases 3B + 3C en tâche de fond dédiée dès que la série comporte des tomes sans ISBN ou sans couverture
+    if (report.incompleteVolumeCount > 0) {
+      const existingEnrich = jobRepo.findActiveJobByTypeAndPayloadKey('series_enrich_volumes', seriesId);
+      if (!existingEnrich) {
+        jobRepo.createJob({
+          id: `job_${crypto.randomBytes(6).toString('hex')}`,
+          type: 'series_enrich_volumes',
+          userId: job.user_id,
+          libraryId: job.library_id,
+          payload: { seriesId },
+          progressTotal: report.incompleteVolumeCount,
+          now: new Date().toISOString()
+        });
+        worker.nudge();
+      }
+    }
+
     return { result: report, total: 1 };
+  });
+
+  worker.registerHandler('series_enrich_volumes', async ({ payload, reportProgress }) => {
+    const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
+    if (!seriesId) {
+      return { result: { processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 }, total: 1 };
+    }
+    const report = await ingestionService.enrichIncompleteSeriesVolumes(seriesId, (done, total) => {
+      reportProgress(done, total);
+    });
+    return { result: report, total: Math.max(1, report.processed) };
   });
 
   worker.registerHandler('book_enrich', async ({ payload }) => {

@@ -26,6 +26,7 @@ export type BackgroundJobType =
   | 'photo_retry_item'
   | 'photo_commit'
   | 'series_expand'
+  | 'series_enrich_volumes'
   | 'book_enrich'
   | 'collection_import';
 export type BackgroundJobStatus = 'pending' | 'running' | 'done' | 'error';

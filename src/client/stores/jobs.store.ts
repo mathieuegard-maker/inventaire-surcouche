@@ -32,9 +32,15 @@ export const useJobsStore = defineStore('jobs', () => {
     jobs.value.find((j) => j.type === 'collection_import') ?? null
   );
 
+  const activeSeriesEnrichJob = computed(() =>
+    jobs.value.find((j) => j.type === 'series_enrich_volumes' && (j.status === 'pending' || j.status === 'running')) ??
+    null
+  );
+
   function upsertJob(incoming: BackgroundJobView): void {
     const idx = jobs.value.findIndex((j) => j.id === incoming.id);
     const prevStatus = idx >= 0 ? jobs.value[idx].status : null;
+    const prevDone = idx >= 0 ? jobs.value[idx].progressDone : 0;
     if (idx >= 0) {
       jobs.value[idx] = incoming;
     } else {
@@ -43,9 +49,17 @@ export const useJobsStore = defineStore('jobs', () => {
     if (
       (incoming.type === 'photo_commit' ||
         incoming.type === 'series_expand' ||
+        incoming.type === 'series_enrich_volumes' ||
         incoming.type === 'collection_import') &&
       incoming.status === 'done' &&
       prevStatus !== 'done'
+    ) {
+      void useLibraryStore().syncNow();
+    } else if (
+      incoming.type === 'series_enrich_volumes' &&
+      incoming.status === 'running' &&
+      incoming.progressDone > prevDone &&
+      incoming.progressDone % 8 === 0
     ) {
       void useLibraryStore().syncNow();
     }
@@ -123,6 +137,7 @@ export const useJobsStore = defineStore('jobs', () => {
     latestPhotoJob,
     activePhotoCommitJob,
     latestCollectionImportJob,
+    activeSeriesEnrichJob,
     isStreamConnected,
     upsertJob,
     refreshJobs,

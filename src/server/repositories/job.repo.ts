@@ -104,14 +104,26 @@ export class JobRepository {
     return res.changes;
   }
 
-  claimNextPendingJob(now: string): BackgroundJobRow | null {
+  claimNextPendingJob(now: string, allowedTypes?: BackgroundJobType[]): BackgroundJobRow | null {
     return this.db.transaction(() => {
-      const next = this.db.get<BackgroundJobRow>(
-        `SELECT * FROM background_jobs
-         WHERE status = 'pending'
-         ORDER BY created_at ASC
-         LIMIT 1`
-      );
+      let next: BackgroundJobRow | null;
+      if (allowedTypes && allowedTypes.length > 0) {
+        const placeholders = allowedTypes.map(() => '?').join(', ');
+        next = this.db.get<BackgroundJobRow>(
+          `SELECT * FROM background_jobs
+           WHERE status = 'pending' AND type IN (${placeholders})
+           ORDER BY created_at ASC
+           LIMIT 1`,
+          allowedTypes
+        );
+      } else {
+        next = this.db.get<BackgroundJobRow>(
+          `SELECT * FROM background_jobs
+           WHERE status = 'pending'
+           ORDER BY created_at ASC
+           LIMIT 1`
+        );
+      }
       if (!next) return null;
       this.db.run(
         `UPDATE background_jobs

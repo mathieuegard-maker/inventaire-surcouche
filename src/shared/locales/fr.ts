@@ -8,6 +8,7 @@ export const fr = {
     loading: 'Chargement...',
     offlineBanner: 'Mode hors-ligne actif — vos actions seront synchronisées dès le retour du réseau.',
     onlineRestored: 'Connexion rétablie : synchronisation en cours...',
+    seriesEnrichBanner: 'Enrichissement des tomes en arrière-plan ({done}/{total})…',
     save: 'Enregistrer',
     cancel: 'Annuler',
     confirm: 'Confirmer',

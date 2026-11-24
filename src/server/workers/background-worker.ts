@@ -42,13 +42,26 @@ export interface JobUpdatedEvent {
   job: BackgroundJobView;
 }
 
+export const INTERACTIVE_LANE_TYPES: BackgroundJobType[] = [
+  'photo_ocr',
+  'photo_retry_item',
+  'photo_commit',
+  'collection_import'
+];
+
+export const CATALOG_LANE_TYPES: BackgroundJobType[] = [
+  'series_expand',
+  'series_enrich_volumes',
+  'book_enrich'
+];
+
 export class BackgroundWorker {
   private readonly jobRepo: JobRepository;
   private readonly logRepo: LogRepository;
   private readonly handlers = new Map<BackgroundJobType, JobHandler>();
   private readonly emitter = new EventEmitter();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private isProcessing = false;
+  private readonly activeLanes = new Set<string>();
   private readonly pollIntervalMs: number;
 
   constructor(deps: { jobRepo: JobRepository; logRepo: LogRepository; pollIntervalMs?: number }) {
@@ -120,24 +133,29 @@ export class BackgroundWorker {
     void this.drainTick();
   }
 
-  private async drainTick(): Promise<void> {
-    if (this.isProcessing) return;
-    this.isProcessing = true;
+  private drainTick(): void {
+    void this.drainLane('interactive', INTERACTIVE_LANE_TYPES);
+    void this.drainLane('catalog', CATALOG_LANE_TYPES);
+  }
+
+  private async drainLane(laneName: string, allowedTypes: BackgroundJobType[]): Promise<void> {
+    if (this.activeLanes.has(laneName)) return;
+    this.activeLanes.add(laneName);
     try {
-      while (await this.processNextJob()) {
-        // dépile en continu tant qu'il reste des jobs en attente
+      while (await this.processNextJob(allowedTypes)) {
+        // dépile en continu sur cette voie sans bloquer l'autre voie
       }
     } finally {
-      this.isProcessing = false;
+      this.activeLanes.delete(laneName);
     }
   }
 
   /**
    * Dépile et exécute exactement un job `pending` (100 % testable de façon synchrone/déterministe).
    */
-  async processNextJob(): Promise<boolean> {
+  async processNextJob(allowedTypes?: BackgroundJobType[]): Promise<boolean> {
     const now = new Date().toISOString();
-    const job = this.jobRepo.claimNextPendingJob(now);
+    const job = this.jobRepo.claimNextPendingJob(now, allowedTypes);
     if (!job) return false;
 
     this.emitRow(job);

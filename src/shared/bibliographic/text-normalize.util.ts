@@ -12,6 +12,8 @@ const STOP_WORDS = new Set([
 const UNIMARC_100_CODED_RE = /^\d{8}[a-z|]\d{4}|y0frey\d{2}/i;
 const GENERIC_VOLUME_TITLE_RE = /^(?:tome|vol\.?|volume|t\.?|n°|#)?\s*\d+(?:\s*[-–]\s*\d+)?$/i;
 const SERIES_PREFIX_NOISE_RE = /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+)/i;
+const COMPILATION_SERIES_PREFIX_RE =
+  /^(?:(?:la\s+)?collection\s+|diptyque\s+|triptyque\s+|coffret\s+|(?:l['’])?int[ée]grale\s+|les\s+archives\s+|anthologie\s+|best\s+of\s+)/i;
 
 export function normalizeTextKey(value: string): string {
   return (value || '')
@@ -208,6 +210,12 @@ export function isCompatibleSeriesName(candidateSeries: string | undefined, winn
   const normWin = normalizeTextKey(cleanWin);
   if (!normCand || !normWin) return false;
   if (normCand === normWin) return true;
+
+  // Empêche une collection kiosque / compilation préfixée ("La collection Spirou et Fantasio",
+  // "Diptyque Spirou et Fantasio", "Les archives Tintin") de contaminer une série canonique
+  if (COMPILATION_SERIES_PREFIX_RE.test(cleanCand) !== COMPILATION_SERIES_PREFIX_RE.test(cleanWin)) {
+    return false;
+  }
 
   const candBase = extractFranchiseBaseName(cleanCand).normalizedKey;
   const winBase = extractFranchiseBaseName(cleanWin).normalizedKey;

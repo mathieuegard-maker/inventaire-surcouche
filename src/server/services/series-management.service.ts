@@ -22,6 +22,7 @@ import type { IngestionService } from './acquisition/ingestion.service';
 import type { SeriesExpansionReport, SeriesGraphService } from './acquisition/series-graph.service';
 import { mapLoanRowToView } from './loan.service';
 import { AppError } from '../middleware/error.middleware';
+import type { JobRepository } from '../repositories/job.repo';
 
 export interface SeriesDetailPayload {
   series: SeriesView;
@@ -87,6 +88,8 @@ export class SeriesManagementService {
   private readonly ingestionService: IngestionService;
   private readonly seriesGraphService: SeriesGraphService;
   private readonly connectors?: BibliographicConnectors;
+  private readonly jobRepo?: JobRepository;
+  private readonly onJobEnqueued?: () => void;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -97,6 +100,8 @@ export class SeriesManagementService {
     ingestionService: IngestionService;
     seriesGraphService: SeriesGraphService;
     connectors?: BibliographicConnectors;
+    jobRepo?: JobRepository;
+    onJobEnqueued?: () => void;
   }) {
     this.db = deps.db;
     this.catalogRepo = deps.catalogRepo;
@@ -106,6 +111,8 @@ export class SeriesManagementService {
     this.ingestionService = deps.ingestionService;
     this.seriesGraphService = deps.seriesGraphService;
     this.connectors = deps.connectors;
+    this.jobRepo = deps.jobRepo;
+    this.onJobEnqueued = deps.onJobEnqueued;
   }
 
   private buildBookViewsForSeries(libraryId: string, userId: string, seriesId: string): BookView[] {
@@ -226,6 +233,21 @@ export class SeriesManagementService {
       throw new AppError(404, 'SERIES_NOT_FOUND', 'Série introuvable.');
     }
     const report = await this.seriesGraphService.expandSeriesByGraph(seriesId);
+    if (report.incompleteVolumeCount > 0 && this.jobRepo) {
+      const existing = this.jobRepo.findActiveJobByTypeAndPayloadKey('series_enrich_volumes', seriesId);
+      if (!existing) {
+        this.jobRepo.createJob({
+          id: `job_${crypto.randomBytes(6).toString('hex')}`,
+          type: 'series_enrich_volumes',
+          userId,
+          libraryId,
+          payload: { seriesId },
+          progressTotal: report.incompleteVolumeCount,
+          now: new Date().toISOString()
+        });
+        this.onJobEnqueued?.();
+      }
+    }
     const detail = this.getSeriesDetail(libraryId, userId, seriesId);
     return { report, detail };
   }

@@ -72,6 +72,19 @@ onBeforeUnmount(() => {
       }}
     </router-link>
 
+    <div
+      v-if="authStore.isAuthenticated && jobsStore.activeSeriesEnrichJob && jobsStore.activeSeriesEnrichJob.progressTotal > 0"
+      class="app-photo-job-bar"
+      role="status"
+    >
+      {{
+        t('app.seriesEnrichBanner', {
+          done: jobsStore.activeSeriesEnrichJob.progressDone,
+          total: jobsStore.activeSeriesEnrichJob.progressTotal
+        })
+      }}
+    </div>
+
     <main class="app-main">
       <router-view />
     </main>

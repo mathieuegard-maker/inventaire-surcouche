@@ -136,6 +136,7 @@ export interface SeriesExpansionReport {
   updatedCount: number;
   totalVolumes: number;
   sourcesUsed: string[];
+  incompleteVolumeCount: number;
 }
 
 export class SeriesGraphService {
@@ -369,7 +370,7 @@ export class SeriesGraphService {
   async expandSeriesByGraph(seriesId: string): Promise<SeriesExpansionReport> {
     const series = this.catalogRepo.findSeriesById(seriesId);
     if (!series) {
-      return { seriesId, addedCount: 0, updatedCount: 0, totalVolumes: 0, sourcesUsed: [] };
+      return { seriesId, addedCount: 0, updatedCount: 0, totalVolumes: 0, sourcesUsed: [], incompleteVolumeCount: 0 };
     }
 
     const now = new Date().toISOString();
@@ -467,20 +468,22 @@ export class SeriesGraphService {
       }
     }
 
-    // 3. Filet de sécurité BnF 460$3 (bib.ens2bib) d'abord sur les ensembles déjà connus,
-    // puis découverte textuelle uniquement si nécessaire, filtrée par compatibilité média (BD vs Roman).
+    // 3. Phase 3A — Complément multi-dossiers BnF + Règle "Zéro trou silencieux" (continuité 1 -> maxVol + sondage suite).
+    //    Tous les candidats BnF restent strictement filtrés par compatibilité média (BD vs Roman) et nom de série.
     const isCompatibleMediaWork = (work: GraphSeriesWork): boolean => {
       if (seriesMediaFamily === 'graphic' && work.contentKind === 'text_only') return false;
       if (seriesMediaFamily === 'prose' && work.contentKind === 'illustrated') return false;
       return true;
     };
 
+    const MAX_BNF_ENSEMBLES = 5;
+    const MAX_HOLE_PROBES = 12;
     const bnfEnsembleIds = new Set<string>(this.parseJsonArray(series.bnf_ensemble_ids_json));
     const queriedEnsembles = new Set<string>();
     const hasCanonicalWikidataGraph = sourcesUsed.includes('wikidata') && graphWorks.length >= 2;
 
     const queryAndMergeEnsemble = async (ensId: string): Promise<void> => {
-      if (queriedEnsembles.has(ensId)) return;
+      if (queriedEnsembles.has(ensId) || queriedEnsembles.size >= MAX_BNF_ENSEMBLES) return;
       queriedEnsembles.add(ensId);
       try {
         const bnfWorks = (await this.connectors.bnf.searchByEnsembleId(ensId, 80)).filter(isCompatibleMediaWork);
@@ -497,46 +500,47 @@ export class SeriesGraphService {
       await queryAndMergeEnsemble(ensId);
     }
 
-    const incompleteGraphCount = graphWorks.filter(
-      (w) => w.volumeNumber === null || w.volumeNumber === undefined || w.isbn13s.length === 0
-    ).length;
-    const hasGraphSource = sourcesUsed.includes('wikidata') || sourcesUsed.includes('inventaire');
-    const numberedVols = graphWorks
-      .map((w) => w.volumeNumber)
-      .filter((n): n is number => typeof n === 'number' && n > 0);
-    const minVol = numberedVols.length > 0 ? Math.min(...numberedVols) : null;
-    const maxVol = numberedVols.length > 0 ? Math.max(...numberedVols) : null;
-    const uniqueVolCount = new Set(numberedVols).size;
-    const hasBnfNumberingGaps =
-      !hasGraphSource &&
-      ((minVol !== null && minVol > 2) ||
-        (maxVol !== null && maxVol >= 6 && uniqueVolCount * 2 < maxVol));
+    // Découverte multi-dossiers BnF :
+    // - Sur les séries multi-auteurs (nom >= 5 car.), interroger SANS verrouiller sur le seul auteur du tome scanné
+    //   (ex. Spirou T.1 Franquin doit aussi trouver les dossiers Fournier / Tome & Janry / Yoann / Schwartz).
+    // - Sur un titre court ambigu (< 5 car., ex. "Bug"), conserver le filtre auteur.
+    const isAmbiguousShortSeries = normalizeTextKey(series.canonical_name).length < 5;
+    const discoveryAuthor = isAmbiguousShortSeries ? primaryAuthors[0] : undefined;
+    const missingIsbnCount = graphWorks.filter((w) => w.isbn13s.length === 0).length;
+    const shouldDiscoverMoreEnsembles =
+      queriedEnsembles.size < MAX_BNF_ENSEMBLES &&
+      (graphWorks.length < 2 || queriedEnsembles.size < 2 || missingIsbnCount > 0);
 
-    const needsBnfDiscovery =
-      graphWorks.length < 2 ||
-      hasBnfNumberingGaps ||
-      (bnfEnsembleIds.size === 0 && incompleteGraphCount > 0 && incompleteGraphCount * 2 >= graphWorks.length);
-
-    if (needsBnfDiscovery) {
+    if (shouldDiscoverMoreEnsembles && this.connectors.bnf.searchBySeriesName) {
       try {
-        const discovery = await this.connectors.bnf.searchBySeriesName?.(
-          series.canonical_name,
-          primaryAuthors[0],
-          50
-        );
+        let discovery = await this.connectors.bnf.searchBySeriesName(series.canonical_name, discoveryAuthor, 50);
+        if ((!discovery || discovery.works.length === 0) && !discoveryAuthor && primaryAuthors[0]) {
+          discovery = await this.connectors.bnf.searchBySeriesName(series.canonical_name, primaryAuthors[0], 50);
+        }
         if (discovery) {
           const compatibleWorks = discovery.works.filter(isCompatibleMediaWork);
-          const compatibleEnsembleIds = new Set<string>(
-            compatibleWorks.map((w) => w.bnfEnsembleId).filter((id): id is string => Boolean(id))
-          );
-          if (compatibleEnsembleIds.size === 0 && compatibleWorks.length === discovery.works.length) {
-            for (const ensId of discovery.discoveredEnsembleIds) compatibleEnsembleIds.add(ensId);
+          // Classer les dossiers découverts par richesse décroissante (les dossiers maîtres d'abord)
+          const ensCounts = new Map<string, number>();
+          for (const w of compatibleWorks) {
+            if (w.bnfEnsembleId) {
+              ensCounts.set(w.bnfEnsembleId, (ensCounts.get(w.bnfEnsembleId) ?? 0) + 1);
+            }
           }
+          if (ensCounts.size === 0 && compatibleWorks.length === discovery.works.length) {
+            for (const ensId of discovery.discoveredEnsembleIds) {
+              ensCounts.set(ensId, 1);
+            }
+          }
+          const rankedEnsembleIds = Array.from(ensCounts.entries())
+            .sort((a, b) => b[1] - a[1])
+            .map(([id]) => id);
+
           if (compatibleWorks.length > 0) {
             if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
             this.mergeGraphWorks(graphWorks, compatibleWorks, series.canonical_name, hasCanonicalWikidataGraph);
           }
-          for (const ensId of compatibleEnsembleIds) {
+          for (const ensId of rankedEnsembleIds) {
+            if (queriedEnsembles.size >= MAX_BNF_ENSEMBLES) break;
             bnfEnsembleIds.add(ensId);
             this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, { bnfEnsembleId: ensId, now });
             await queryAndMergeEnsemble(ensId);
@@ -544,6 +548,65 @@ export class SeriesGraphService {
         }
       } catch {
         // continue
+      }
+    }
+
+    // Règle explicite "Zéro trou silencieux" : détecter les numéros manquants dans [1..maxVol] + sonder la suite (maxVol+1, +2)
+    if (this.connectors.bnf.searchSeriesVolume) {
+      const getPresentStandardVolumes = (): Set<number> => {
+        const set = new Set<number>();
+        for (const w of graphWorks) {
+          if (!w.isHorsSerie && !w.isIntegral && typeof w.volumeNumber === 'number' && w.volumeNumber > 0) {
+            set.add(w.volumeNumber);
+          }
+        }
+        return set;
+      };
+
+      const initialVols = getPresentStandardVolumes();
+      if (initialVols.size > 0) {
+        const maxInitialVol = Math.max(...initialVols);
+        let probesUsed = 0;
+
+        // 1. Bouchage des trous internes 1..maxInitialVol (borné à MAX_HOLE_PROBES)
+        for (let vol = 1; vol <= maxInitialVol && probesUsed < MAX_HOLE_PROBES; vol++) {
+          if (getPresentStandardVolumes().has(vol)) continue;
+          probesUsed++;
+          try {
+            const found = (
+              await this.connectors.bnf.searchSeriesVolume(series.canonical_name, vol, discoveryAuthor)
+            ).filter(isCompatibleMediaWork);
+            if (found.length > 0) {
+              if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+              this.mergeGraphWorks(graphWorks, found, series.canonical_name, hasCanonicalWikidataGraph);
+              for (const w of found) {
+                if (w.bnfEnsembleId && !queriedEnsembles.has(w.bnfEnsembleId) && queriedEnsembles.size < MAX_BNF_ENSEMBLES) {
+                  bnfEnsembleIds.add(w.bnfEnsembleId);
+                  this.catalogRepo.mergeSeriesMetadataAutomatic(series.id, { bnfEnsembleId: w.bnfEnsembleId, now });
+                  await queryAndMergeEnsemble(w.bnfEnsembleId);
+                }
+              }
+            }
+          } catch {
+            // continue
+          }
+        }
+
+        // 2. Sondage de la suite immédiate (maxVol + 1, +2, +3 max) pour capter les tomes récents absents de Wikidata (ex. Spirou 56, 57)
+        const currentMaxVol = Math.max(...getPresentStandardVolumes());
+        for (let nextVol = currentMaxVol + 1; nextVol <= currentMaxVol + 3 && probesUsed < MAX_HOLE_PROBES + 3; nextVol++) {
+          probesUsed++;
+          try {
+            const found = (
+              await this.connectors.bnf.searchSeriesVolume(series.canonical_name, nextVol, discoveryAuthor)
+            ).filter(isCompatibleMediaWork);
+            if (found.length === 0) break;
+            if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+            this.mergeGraphWorks(graphWorks, found, series.canonical_name, hasCanonicalWikidataGraph);
+          } catch {
+            break;
+          }
+        }
       }
     }
 
@@ -708,12 +771,19 @@ export class SeriesGraphService {
       now
     });
 
+    const allSeriesBooks = this.catalogRepo.listBooksBySeriesId(series.id);
+    const incompleteVolumeCount = allSeriesBooks.filter((b) => {
+      const hasEditions = this.catalogRepo.listEditionsByBookId(b.id).length > 0;
+      return !hasEditions || !b.cover_key;
+    }).length;
+
     return {
       seriesId: series.id,
       addedCount,
       updatedCount,
       totalVolumes,
-      sourcesUsed
+      sourcesUsed,
+      incompleteVolumeCount
     };
   }
 

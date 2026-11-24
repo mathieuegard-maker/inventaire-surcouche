@@ -14,8 +14,17 @@ import type { LibraryBookRow, LibraryRepository } from '../../repositories/libra
 import type { JobRepository } from '../../repositories/job.repo';
 import type { LogRepository } from '../../repositories/log.repo';
 import type { CoverService } from '../cover.service';
+import type { BookIdentifierService } from './book-identifier.service';
 import type { ComparisonTableService } from './comparison-table.service';
 import { compareSameVolumeContent, type SeriesGraphService } from './series-graph.service';
+
+export interface SeriesVolumeEnrichmentReport {
+  seriesId: string;
+  processed: number;
+  enrichedByIsbn: number;
+  coversAdded: number;
+  stillMissingIsbn: number;
+}
 
 export interface ResolveIsbnItemResult {
   isbn13: string;
@@ -58,6 +67,7 @@ export class IngestionService {
   private readonly comparisonService: ComparisonTableService;
   private readonly seriesGraphService: SeriesGraphService;
   private readonly coverService: CoverService;
+  private readonly bookIdentifier?: BookIdentifierService;
   private readonly onJobEnqueued?: () => void;
 
   constructor(deps: {
@@ -68,6 +78,7 @@ export class IngestionService {
     comparisonService: ComparisonTableService;
     seriesGraphService: SeriesGraphService;
     coverService: CoverService;
+    bookIdentifier?: BookIdentifierService;
     onJobEnqueued?: () => void;
   }) {
     this.catalogRepo = deps.catalogRepo;
@@ -77,6 +88,7 @@ export class IngestionService {
     this.comparisonService = deps.comparisonService;
     this.seriesGraphService = deps.seriesGraphService;
     this.coverService = deps.coverService;
+    this.bookIdentifier = deps.bookIdentifier;
     this.onJobEnqueued = deps.onJobEnqueued;
   }
 
@@ -420,5 +432,279 @@ export class IngestionService {
     }
 
     return { traceId, results };
+  }
+
+  /**
+   * Phase 3C — Enrichit une fiche tome déjà existante d'une série à partir d'un ISBN-13 résolu
+   * en réutilisant EXACTEMENT le moteur Étage 2 (Tableau Comparatif + Cascade couvertures WebP) :
+   * - Zéro boucle infinie (ne relance JAMAIS series_expand),
+   * - Zéro déplacement hors de la série et préservation du numéro canonique déjà établi,
+   * - Zéro collision ISBN avec un autre tome de la base,
+   * - Respect strict de Couche 2 (`locked_fields_json`) et Couche 3 (`overrides_json`).
+   */
+  async enrichExistingBookByIsbn(
+    bookId: string,
+    rawIsbn: string
+  ): Promise<{ enriched: boolean; coverAdded: boolean }> {
+    const existing = this.catalogRepo.findBookById(bookId);
+    const isbn13 = isbnUtil.normalizeToIsbn13(rawIsbn);
+    if (!existing || !isbn13) return { enriched: false, coverAdded: false };
+
+    // Garde-fou anti-collision : ne jamais rattacher un ISBN qui appartient déjà à un autre livre du catalogue
+    const ownerOfIsbn = this.catalogRepo.findBookByIsbn13(isbn13);
+    if (ownerOfIsbn && ownerOfIsbn.id !== existing.id) {
+      return { enriched: false, coverAdded: false };
+    }
+
+    const draft = await this.comparisonService.collectAndArbitrate(isbn13);
+    if (!draft) return { enriched: false, coverAdded: false };
+
+    const hadCover = Boolean(existing.cover_key);
+    let coverKey: string | null = existing.cover_key ?? null;
+    if (!coverKey) {
+      const stored = await this.coverService.resolveBestCoverFromCascade({
+        isbn13,
+        candidateUrls: draft.coverCandidates,
+        title: existing.title || draft.title,
+        author: draft.authors[0]
+      });
+      if (stored) coverKey = stored.coverKey;
+    }
+
+    const now = new Date().toISOString();
+    const seriesRow = existing.series_id ? this.catalogRepo.findSeriesById(existing.series_id) : null;
+    const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
+    const keepExistingTitle =
+      Boolean(existing.title?.trim()) && !isGenericVolumeTitle(existing.title, seriesLabel);
+    const effectiveTitle = keepExistingTitle ? existing.title : draft.title;
+    const effectiveNormTitle = keepExistingTitle ? existing.normalized_title : draft.normalizedTitle;
+
+    const existingAuthors = parseJsonStringArray(existing.authors_json);
+    const existingScriptwriters = parseJsonStringArray(existing.scriptwriters_json);
+    const existingIllustrators = parseJsonStringArray(existing.illustrators_json);
+    const existingSubgenres = parseJsonStringArray(existing.subgenres_json);
+    const existingIncluded = parseJsonStringArray(existing.included_volumes_json);
+
+    this.catalogRepo.upsertBookAutomatic({
+      id: existing.id,
+      workCanonicalId: existing.work_canonical_id,
+      seriesId: existing.series_id,
+      title: effectiveTitle,
+      normalizedTitle: effectiveNormTitle,
+      volumeNumber: existing.volume_number !== null ? existing.volume_number : draft.volumeNumber,
+      volumeLabel: existing.volume_label ?? draft.volumeLabel,
+      sortOrder: existing.sort_order !== null ? existing.sort_order : draft.sortOrder,
+      isHorsSerie: existing.is_hors_serie === 1,
+      isIntegral: existing.is_integral === 1,
+      includedVolumes: existingIncluded.length > 0 ? existingIncluded : draft.includedVolumes,
+      authors: draft.authors.length > 0 ? draft.authors : existingAuthors,
+      scriptwriters: draft.scriptwriters.length > 0 ? draft.scriptwriters : existingScriptwriters,
+      illustrators: draft.illustrators.length > 0 ? draft.illustrators : existingIllustrators,
+      publisher: draft.publisher ?? existing.publisher,
+      collectionName: draft.collectionName ?? existing.collection_name,
+      publishYear: draft.publishYear ?? existing.publish_year,
+      pageCount: draft.pageCount ?? existing.page_count,
+      description: draft.description ?? existing.description,
+      language: draft.language || existing.language || 'fr',
+      mainCategory: existing.main_category !== 'Autre' ? existing.main_category : draft.mainCategory,
+      subgenres: draft.subgenres.length > 0 ? draft.subgenres : existingSubgenres,
+      coverKey,
+      wikidataQid: existing.wikidata_qid ?? draft.wikidataWorkQid,
+      inventaireUri: existing.inventaire_uri ?? draft.inventaireWorkUri,
+      sourceOrigin: existing.source_origin,
+      now
+    });
+
+    this.catalogRepo.upsertBookEdition({
+      isbn13,
+      bookId: existing.id,
+      publisher: draft.publisher,
+      collectionName: draft.collectionName,
+      publishYear: draft.publishYear,
+      pageCount: draft.pageCount,
+      coverKey,
+      source: draft.contributingSources[0] ?? 'auto',
+      now
+    });
+
+    return {
+      enriched: true,
+      coverAdded: !hadCover && Boolean(coverKey)
+    };
+  }
+
+  /**
+   * Phases 3B + 3C — Complète en tâche de fond tous les tomes d'une série encore dépourvus d'ISBN ou de couverture :
+   * 1. Si ISBN déjà présent sans couverture -> cascade couvertures Étage 2 directe ;
+   * 2. Si aucun ISBN -> BookIdentifierService (Étage 1) puis enrichExistingBookByIsbn (Étage 2) ;
+   * 3. Si introuvable (tome ancien sans ISBN / à paraître) -> tente la couverture par titre et conserve la fiche.
+   */
+  async enrichIncompleteSeriesVolumes(
+    seriesId: string,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<SeriesVolumeEnrichmentReport> {
+    const series = this.catalogRepo.findSeriesById(seriesId);
+    if (!series) {
+      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 };
+    }
+
+    const allBooks = this.catalogRepo.listBooksBySeriesId(series.id);
+    let graphicCount = 0;
+    let proseCount = 0;
+    for (const b of allBooks) {
+      if (b.main_category === 'BD' || b.main_category === 'Manga' || b.main_category === 'Comics') graphicCount++;
+      else if (b.main_category === 'Roman' || b.main_category === 'Essai' || b.main_category === 'Poésie / Théâtre') {
+        proseCount++;
+      }
+    }
+    const mediaFamily: 'graphic' | 'prose' | 'neutral' =
+      graphicCount > 0 && graphicCount >= proseCount
+        ? 'graphic'
+        : proseCount > 0 && proseCount > graphicCount
+          ? 'prose'
+          : 'neutral';
+
+    const incomplete = allBooks
+      .map((book) => ({ book, editions: this.catalogRepo.listEditionsByBookId(book.id) }))
+      .filter(({ book, editions }) => editions.length === 0 || !book.cover_key);
+
+    const total = incomplete.length;
+    onProgress?.(0, Math.max(1, total));
+    if (total === 0) {
+      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 };
+    }
+
+    let processed = 0;
+    let enrichedByIsbn = 0;
+    let coversAdded = 0;
+    let stillMissingIsbn = 0;
+
+    for (const { book, editions } of incomplete) {
+      const authors = parseJsonStringArray(book.authors_json);
+
+      try {
+        if (editions.length > 0 && !book.cover_key) {
+          // ISBN déjà connu mais couverture absente -> cascade couvertures Étage 2 directe
+          let coverKey: string | null = null;
+          for (const ed of editions.slice(0, 3)) {
+            const stored = await this.coverService.resolveBestCoverFromCascade({
+              isbn13: ed.isbn13,
+              candidateUrls: [],
+              title: book.title,
+              author: authors[0]
+            });
+            if (stored) {
+              coverKey = stored.coverKey;
+              break;
+            }
+          }
+          if (coverKey) {
+            const now = new Date().toISOString();
+            this.catalogRepo.upsertBookAutomatic({
+              id: book.id,
+              workCanonicalId: book.work_canonical_id,
+              seriesId: book.series_id,
+              title: book.title,
+              normalizedTitle: book.normalized_title,
+              volumeNumber: book.volume_number,
+              volumeLabel: book.volume_label,
+              sortOrder: book.sort_order,
+              isHorsSerie: book.is_hors_serie === 1,
+              isIntegral: book.is_integral === 1,
+              includedVolumes: parseJsonStringArray(book.included_volumes_json),
+              authors,
+              scriptwriters: parseJsonStringArray(book.scriptwriters_json),
+              illustrators: parseJsonStringArray(book.illustrators_json),
+              publisher: book.publisher,
+              collectionName: book.collection_name,
+              publishYear: book.publish_year,
+              pageCount: book.page_count,
+              description: book.description,
+              language: book.language,
+              mainCategory: book.main_category,
+              subgenres: parseJsonStringArray(book.subgenres_json),
+              coverKey,
+              wikidataQid: book.wikidata_qid,
+              inventaireUri: book.inventaire_uri,
+              sourceOrigin: book.source_origin,
+              now
+            });
+            coversAdded++;
+          }
+        } else if (editions.length === 0) {
+          // Aucun ISBN -> Phase 3B (Étage 1) puis Phase 3C (Étage 2)
+          const resolvedIsbn = this.bookIdentifier
+            ? await this.bookIdentifier.findBestIsbnForSeriesVolume({
+                seriesName: series.canonical_name,
+                title: book.title,
+                volumeNumber: book.volume_number,
+                authors,
+                mediaFamily,
+                isIntegral: book.is_integral === 1
+              })
+            : null;
+
+          if (resolvedIsbn) {
+            const res = await this.enrichExistingBookByIsbn(book.id, resolvedIsbn);
+            if (res.enriched) enrichedByIsbn++;
+            if (res.coverAdded) coversAdded++;
+          } else {
+            stillMissingIsbn++;
+            // Dernier recours sans ISBN : tentative de couverture par titre + série afin d'éviter une tuile vide
+            if (!book.cover_key) {
+              const titleQuery = isGenericVolumeTitle(book.title, series.canonical_name)
+                ? `${series.canonical_name} ${book.volume_number ?? ''}`.trim()
+                : `${series.canonical_name} ${book.title}`;
+              const stored = await this.coverService.resolveBestCoverFromCascade({
+                isbn13: null,
+                candidateUrls: [],
+                title: titleQuery,
+                author: authors[0]
+              });
+              if (stored) {
+                const now = new Date().toISOString();
+                this.catalogRepo.upsertBookAutomatic({
+                  id: book.id,
+                  workCanonicalId: book.work_canonical_id,
+                  seriesId: book.series_id,
+                  title: book.title,
+                  normalizedTitle: book.normalized_title,
+                  volumeNumber: book.volume_number,
+                  volumeLabel: book.volume_label,
+                  sortOrder: book.sort_order,
+                  isHorsSerie: book.is_hors_serie === 1,
+                  isIntegral: book.is_integral === 1,
+                  includedVolumes: parseJsonStringArray(book.included_volumes_json),
+                  authors,
+                  scriptwriters: parseJsonStringArray(book.scriptwriters_json),
+                  illustrators: parseJsonStringArray(book.illustrators_json),
+                  publisher: book.publisher,
+                  collectionName: book.collection_name,
+                  publishYear: book.publish_year,
+                  pageCount: book.page_count,
+                  description: book.description,
+                  language: book.language,
+                  mainCategory: book.main_category,
+                  subgenres: parseJsonStringArray(book.subgenres_json),
+                  coverKey: stored.coverKey,
+                  wikidataQid: book.wikidata_qid,
+                  inventaireUri: book.inventaire_uri,
+                  sourceOrigin: book.source_origin,
+                  now
+                });
+                coversAdded++;
+              }
+            }
+          }
+        }
+      } catch {
+        // Un tome en échec n'interrompt jamais le reste de la série
+      }
+
+      processed++;
+      onProgress?.(processed, total);
+    }
+
+    return { seriesId, processed, enrichedByIsbn, coversAdded, stillMissingIsbn };
   }
 }

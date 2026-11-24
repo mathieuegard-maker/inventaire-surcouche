@@ -191,6 +191,41 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       };
     },
 
+    async searchSeriesVolume(
+      seriesName: string,
+      volumeNumber: number,
+      author?: string
+    ): Promise<GraphSeriesWork[]> {
+      const safeSeries = seriesName.replace(/"/g, ' ').trim();
+      if (!safeSeries || !Number.isInteger(volumeNumber) || volumeNumber <= 0) return [];
+
+      const lastName = extractAuthorLastNameForQuery(author);
+      const cql = lastName
+        ? `bib.title all "${safeSeries} ${volumeNumber}" and bib.author all "${lastName}" and bib.doctype any "a"`
+        : `bib.title all "${safeSeries} ${volumeNumber}" and bib.doctype any "a"`;
+
+      const records = await querySru(cql, 10, `bnf:servol:${cql.toLowerCase()}`);
+      const targetVol = String(volumeNumber);
+      const works: GraphSeriesWork[] = [];
+
+      for (const rec of records) {
+        if (isPressOrKioskOnlyRecord(rec)) continue;
+        if (rec.ensembleVolumeNumber !== targetVol) continue;
+        const ensembleCompatible = Boolean(
+          rec.ensembleSeriesName && isCompatibleSeriesName(rec.ensembleSeriesName, seriesName)
+        );
+        const normSeries = normalizeTextKey(safeSeries);
+        const recTitleNorm = normalizeTextKey(rec.title || '');
+        const titleMatches =
+          !rec.ensembleSeriesName &&
+          Boolean(recTitleNorm && (recTitleNorm === normSeries || recTitleNorm.startsWith(`${normSeries} `)));
+        if (!ensembleCompatible && !titleMatches) continue;
+        works.push(toGraphWork(rec));
+      }
+
+      return works;
+    },
+
     async sampleByCollectionName(collectionName: string, maxRecords = 10): Promise<CollectionSampleItem[]> {
       const safe = collectionName.replace(/"/g, ' ').trim();
       if (!safe) return [];

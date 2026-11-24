@@ -1268,4 +1268,99 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
         .sort((a, b) => (a ?? 0) - (b ?? 0))
     ).toEqual([1, 2, 15, 16]);
   });
+
+  it('Cas 15 (Phase 3A multi-dossiers BnF sans verrou auteur + règle Zéro trou silencieux + rejet collections kiosque)', async () => {
+    const now = new Date().toISOString();
+    expect(isCompatibleSeriesName('La collection Spirou et Fantasio', 'Spirou et Fantasio')).toBe(false);
+    expect(isCompatibleSeriesName('Diptyque Spirou et Fantasio', 'Spirou et Fantasio')).toBe(false);
+    expect(isCompatibleSeriesName('Les aventures de Spirou et Fantasio', 'Spirou et Fantasio')).toBe(true);
+
+    let capturedSeriesSearchAuthor: string | undefined = 'SHOULD_BE_UNDEFINED';
+    const connectors = createMockConnectors({
+      wikidataSeries: {
+        // Wikidata ne connaît que les tomes 1, 2, 4 (trou sur le 3, et le tome 5 récent manque !) — sans ISBN
+        Q102237771: [
+          { title: '4 aventures de Spirou et Fantasio', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, wikidataQid: 'Q1', authors: ['André Franquin'], isbn13s: [], source: 'wikidata' },
+          { title: 'Il y a un sorcier à Champignac', volumeNumber: 2, volumeLabel: '2', sortOrder: 2, wikidataQid: 'Q2', authors: ['André Franquin'], isbn13s: [], source: 'wikidata' },
+          { title: 'Spirou et les Héritiers', volumeNumber: 4, volumeLabel: '4', sortOrder: 4, wikidataQid: 'Q4', authors: ['André Franquin'], isbn13s: [], source: 'wikidata' }
+        ]
+      },
+      bnfEnsemble: {
+        '45703820': [
+          { title: '4 aventures de Spirou et Fantasio', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, bnfEnsembleId: '45703820', authors: ['André Franquin'], isbn13s: ['9782800100036'], contentKind: 'illustrated', source: 'bnf' }
+        ],
+        '34308390': [
+          { title: 'Il y a un sorcier à Champignac', volumeNumber: 2, volumeLabel: '2', sortOrder: 2, bnfEnsembleId: '34308390', authors: ['André Franquin'], isbn13s: ['9782800100043'], contentKind: 'illustrated', source: 'bnf' }
+        ]
+      }
+    });
+
+    connectors.bnf.searchBySeriesName = async (_name, author) => {
+      capturedSeriesSearchAuthor = author;
+      return {
+        discoveredEnsembleIds: ['34308390'],
+        works: [
+          { title: 'Il y a un sorcier à Champignac', volumeNumber: 2, volumeLabel: '2', sortOrder: 2, bnfEnsembleId: '34308390', authors: ['André Franquin'], isbn13s: ['9782800100043'], contentKind: 'illustrated', source: 'bnf' }
+        ]
+      };
+    };
+
+    connectors.bnf.searchSeriesVolume = async (_name, vol) => {
+      if (vol === 3) {
+        return [
+          {
+            title: 'Les Chapeaux noirs',
+            volumeNumber: 3,
+            volumeLabel: '3',
+            sortOrder: 3,
+            bnfEnsembleId: '34308390',
+            authors: ['André Franquin'],
+            isbn13s: ['9782800100050'],
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ];
+      }
+      if (vol === 5) {
+        return [
+          {
+            title: 'Les Voleurs du marsupilami',
+            volumeNumber: 5,
+            volumeLabel: '5',
+            sortOrder: 5,
+            bnfEnsembleId: '34308390',
+            authors: ['André Franquin'],
+            isbn13s: ['9782800100074'],
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ];
+      }
+      return [];
+    };
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const { series } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Spirou et Fantasio',
+      wikidataSeriesQid: 'Q102237771',
+      bnfEnsembleId: '45703820',
+      bookTitle: '4 aventures de Spirou et Fantasio',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      mainCategory: 'BD',
+      authors: ['André Franquin'],
+      now
+    });
+
+    const report = await seriesGraph.expandSeriesByGraph(series.id);
+
+    // Découverte multi-dossiers sans verrouillage sur le seul auteur du T.1 !
+    expect(capturedSeriesSearchAuthor).toBeUndefined();
+    // Continuité parfaite 1..5 : trou #3 comblé et suite récente #5 découverte !
+    const saved = catalogRepo.listBooksBySeriesId(series.id).sort((a, b) => (a.volume_number ?? 0) - (b.volume_number ?? 0));
+    expect(saved.map((b) => b.volume_number)).toEqual([1, 2, 3, 4, 5]);
+    // Le tome 4 (sans ISBN ni couverture) est bien comptabilisé pour la Phase 3B/3C en arrière-plan
+    expect(report.incompleteVolumeCount).toBeGreaterThanOrEqual(1);
+  });
 });
