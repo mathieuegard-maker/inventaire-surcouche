@@ -256,6 +256,9 @@ async function handleSubmit(): Promise<void> {
                 <template v-if="opt.volumeNumber"> · T.{{ opt.volumeNumber }}</template>
               </strong>
               <span v-if="opt.seriesName" class="ds-text-muted">{{ opt.seriesName }}</span>
+              <span v-if="(opt.editionCount ?? 1) > 1" class="ds-badge">
+                {{ t('scan.photoEditionsGroupedBadge', { count: opt.editionCount! }) }}
+              </span>
               <span class="ds-text-muted">
                 {{ [opt.authors.join(', '), opt.publisher, opt.publishYear, opt.isbn13].filter(Boolean).join(' · ') }}
               </span>

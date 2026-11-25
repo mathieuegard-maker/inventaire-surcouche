@@ -8,6 +8,7 @@ import IntegralFields from '../components/books/IntegralFields.vue';
 import SeriesAttachModal from '../components/modals/SeriesAttachModal.vue';
 import { useLibraryStore, type BookSeriesContext } from '../stores/library.store';
 import { useUiStore } from '../stores/ui.store';
+import { apiRequest, ApiClientError } from '../api/client';
 import { formatIntegralRangeLabel } from '../../shared/bibliographic/integral.util';
 import type { BookView, ReadingStatus } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
@@ -31,6 +32,7 @@ const savingReading = ref(false);
 const integralModalOpen = ref(false);
 const draftIsIntegral = ref(false);
 const draftIncludedVolumes = ref<string[]>([]);
+const integralModalMode = ref<'create_separate' | 'convert_self'>('create_separate');
 const savingOverrides = ref(false);
 
 // Modale confirmation Réinitialiser Couche 3 & Rattachement série
@@ -87,8 +89,17 @@ async function handleSaveReading(): Promise<void> {
 
 function openIntegralModal(): void {
   if (!book.value) return;
-  draftIsIntegral.value = book.value.isIntegral;
-  draftIncludedVolumes.value = [...book.value.includedVolumes];
+  if (!book.value.isIntegral && book.value.seriesId) {
+    // Par défaut sur un tome unitaire d'une série : créer/associer une œuvre Intégrale distincte SANS écraser ce tome !
+    integralModalMode.value = 'create_separate';
+    draftIsIntegral.value = true;
+    draftIncludedVolumes.value =
+      book.value.volumeNumber !== null ? [String(book.value.volumeNumber)] : [];
+  } else {
+    integralModalMode.value = 'convert_self';
+    draftIsIntegral.value = book.value.isIntegral;
+    draftIncludedVolumes.value = [...book.value.includedVolumes];
+  }
   integralModalOpen.value = true;
 }
 
@@ -96,12 +107,34 @@ async function saveIntegralModal(): Promise<void> {
   if (!book.value) return;
   savingOverrides.value = true;
   try {
+    if (!book.value.isIntegral && book.value.seriesId && integralModalMode.value === 'create_separate') {
+      if (draftIncludedVolumes.value.length === 0) {
+        uiStore.pushToast(t('book.integralVolumesRequiredError'), 'warning');
+        return;
+      }
+      await apiRequest(`/api/series/${encodeURIComponent(book.value.seriesId)}/integrals`, {
+        method: 'POST',
+        body: {
+          includedVolumes: draftIncludedVolumes.value,
+          sourceBookId: book.value.id,
+          ownershipStatus: 'owned'
+        }
+      });
+      integralModalOpen.value = false;
+      await libraryStore.syncNow();
+      await loadBook();
+      uiStore.pushToast(t('book.integralSeparateCreatedToast'), 'success');
+      return;
+    }
+
     book.value = await libraryStore.saveBookOverrides(book.value.id, {
       isIntegral: draftIsIntegral.value,
       includedVolumes: draftIsIntegral.value ? draftIncludedVolumes.value : []
     });
     integralModalOpen.value = false;
     uiStore.pushToast(t('book.overridesSavedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
     savingOverrides.value = false;
   }
@@ -363,10 +396,25 @@ async function confirmResetOverrides(): Promise<void> {
         :title="book.isIntegral ? t('book.editIntegralBtn') : t('book.integralBtn')"
         @close="integralModalOpen = false"
       >
-        <IntegralFields
-          v-model:is-integral="draftIsIntegral"
-          v-model:included-volumes="draftIncludedVolumes"
-        />
+        <div class="ds-stack">
+          <div v-if="!book.isIntegral && book.seriesId" class="ds-stack">
+            <label class="ds-row">
+              <input v-model="integralModalMode" type="radio" value="create_separate" />
+              <span>{{ t('book.integralCreateSeparateMode') }}</span>
+            </label>
+            <label class="ds-row">
+              <input v-model="integralModalMode" type="radio" value="convert_self" />
+              <span>{{ t('book.integralConvertSelfMode') }}</span>
+            </label>
+            <p v-if="integralModalMode === 'create_separate'" class="ds-text-muted">
+              {{ t('book.integralSeparateHint') }}
+            </p>
+          </div>
+          <IntegralFields
+            v-model:is-integral="draftIsIntegral"
+            v-model:included-volumes="draftIncludedVolumes"
+          />
+        </div>
         <template #footer>
           <button type="button" class="ds-btn" :disabled="savingOverrides" @click="integralModalOpen = false">
             {{ t('app.cancel') }}

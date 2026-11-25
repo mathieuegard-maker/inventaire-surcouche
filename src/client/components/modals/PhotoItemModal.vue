@@ -5,7 +5,12 @@ import BaseModal from '../base/BaseModal.vue';
 import PhotoLightboxModal from '../base/PhotoLightboxModal.vue';
 import BookLookupModal, { type BookLookupHints } from './BookLookupModal.vue';
 import IntegralFields from '../books/IntegralFields.vue';
-import { useScanStore, type PhotoJobItem } from '../../stores/scan.store';
+import {
+  useScanStore,
+  type PhotoCandidateOption,
+  type PhotoCoverOption,
+  type PhotoJobItem
+} from '../../stores/scan.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ApiClientError } from '../../api/client';
 import { t } from '../../../shared/locales';
@@ -27,6 +32,8 @@ const uiStore = useUiStore();
 const zoomPercent = ref(100);
 const lightboxOpen = ref(false);
 const saving = ref(false);
+const loadingCovers = ref(false);
+const loadedCoverSignature = ref<string | null>(null);
 
 // Sous-modale partagée 6 champs vides pour relance BnF serveur
 const manualModalOpen = ref(false);
@@ -47,14 +54,97 @@ const positionLabel = computed(() => {
   return t('scan.photoPositionLabel', { left: idx, right: fromRight, total });
 });
 
-watch(
-  () => [props.open, props.item?.id] as const,
-  ([isOpen]) => {
-    if (isOpen) {
-      zoomPercent.value = 100;
-      lightboxOpen.value = false;
-    }
+function isOptionSelected(opt: PhotoCandidateOption): boolean {
+  const sel = props.item?.selectedOptionIsbn13;
+  if (!sel) return false;
+  return opt.isbn13 === sel || (opt.siblingIsbns ?? []).includes(sel);
+}
+
+const activeOption = computed<PhotoCandidateOption | null>(() => {
+  if (!props.item || props.item.options.length === 0) return null;
+  return props.item.options.find((o) => isOptionSelected(o)) ?? props.item.options[0];
+});
+
+const coverGallery = computed<PhotoCoverOption[]>(() => {
+  const opt = activeOption.value;
+  if (!opt) return [];
+  const out: PhotoCoverOption[] = [];
+  const seen = new Set<string>();
+  const push = (cov: PhotoCoverOption) => {
+    if (!cov.coverUrl || seen.has(cov.coverUrl)) return;
+    seen.add(cov.coverUrl);
+    out.push(cov);
+  };
+  for (const cov of opt.coverOptions ?? []) {
+    push(cov);
   }
+  if (opt.coverUrl) {
+    push({
+      coverKey: opt.coverUrl.startsWith('/api/covers/') ? opt.coverUrl.slice('/api/covers/'.length) : null,
+      coverUrl: opt.coverUrl,
+      label: opt.publisher || opt.title,
+      isbn13: opt.isbn13
+    });
+  }
+  if (props.item?.selectedCoverUrl) {
+    push({
+      coverKey: props.item.selectedCoverKey ?? null,
+      coverUrl: props.item.selectedCoverUrl,
+      label: t('scan.photoCoverSelectedBadge'),
+      isbn13: opt.isbn13
+    });
+  }
+  return out;
+});
+
+function isCoverSelected(cov: PhotoCoverOption, idx: number): boolean {
+  if (!props.item) return false;
+  if (props.item.selectedCoverKey && cov.coverKey) {
+    return props.item.selectedCoverKey === cov.coverKey;
+  }
+  if (props.item.selectedCoverUrl) {
+    return props.item.selectedCoverUrl === cov.coverUrl;
+  }
+  return idx === 0;
+}
+
+async function loadItemCovers(refresh = false): Promise<void> {
+  if (!props.item || !activeOption.value) return;
+  const sig = `${props.item.id}:${activeOption.value.isbn13}`;
+  if (!refresh && loadedCoverSignature.value === sig) return;
+  if (!refresh && (activeOption.value.coverOptions?.length ?? 0) >= 2 && activeOption.value.source === 'local') {
+    loadedCoverSignature.value = sig;
+    return;
+  }
+  loadedCoverSignature.value = sig;
+  loadingCovers.value = true;
+  try {
+    await scanStore.fetchPhotoItemCovers(props.jobId, props.item.id, {
+      isbn13: activeOption.value.isbn13,
+      refresh
+    });
+  } catch {
+    // non bloquant : la couverture principale reste affichée
+  } finally {
+    loadingCovers.value = false;
+  }
+}
+
+watch(
+  () => [props.open, props.item?.id, activeOption.value?.isbn13] as const,
+  ([isOpen, itemId, optIsbn], [, prevItemId]) => {
+    if (isOpen) {
+      if (itemId !== prevItemId) {
+        zoomPercent.value = 100;
+        lightboxOpen.value = false;
+        loadedCoverSignature.value = null;
+      }
+      if (itemId && optIsbn) {
+        void loadItemCovers(false);
+      }
+    }
+  },
+  { immediate: true }
 );
 
 function adjustZoom(delta: number): void {
@@ -72,23 +162,39 @@ async function patchItem(
     selected?: boolean;
     ignored?: boolean;
     selectedOptionIsbn13?: string | null;
+    selectedCoverKey?: string | null;
+    selectedCoverUrl?: string | null;
     isIntegral?: boolean;
     includedVolumes?: string[];
   },
-  showSavedToast = false
+  toastKind: 'none' | 'option' | 'cover' = 'none'
 ): Promise<void> {
   if (!props.item) return;
   saving.value = true;
   try {
     await scanStore.updatePhotoItem(props.jobId, props.item.id, patch);
-    if (showSavedToast) {
+    if (toastKind === 'option') {
       uiStore.pushToast(t('scan.photoOptionSavedToast'), 'success', 1800);
+    } else if (toastKind === 'cover') {
+      uiStore.pushToast(t('scan.photoCoverSavedToast'), 'success', 1800);
     }
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
     saving.value = false;
   }
+}
+
+function selectCover(cov: PhotoCoverOption): void {
+  void patchItem(
+    {
+      selectedCoverKey: cov.coverKey,
+      selectedCoverUrl: cov.coverUrl,
+      selected: true,
+      ignored: false
+    },
+    'cover'
+  );
 }
 
 function openManualBnfModal(): void {
@@ -101,6 +207,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   try {
     const res = await scanStore.retryPhotoItemBnf(props.jobId, props.item.id, hints);
     manualModalOpen.value = false;
+    loadedCoverSignature.value = null;
     uiStore.pushToast(
       res.item.options.length > 0 ? t('scan.photoRetryBnfSuccess') : t('scan.photoRetryBnfNone'),
       res.item.options.length > 0 ? 'success' : 'warning'
@@ -208,41 +315,100 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
         <p class="ds-text-muted photo-tap-hint">{{ t('scan.photoTapToExpandHint') }}</p>
       </div>
 
-      <!-- Éditions candidates avec miniatures de couverture -->
+      <!-- Œuvre abstraite reconnue (ou choix entre plusieurs œuvres distinctes) -->
       <div v-if="item.options.length > 0" class="ds-stack">
-        <strong class="ds-label">{{ t('scan.photoSelectOptionLabel') }}</strong>
+        <strong class="ds-label">
+          {{ item.options.length === 1 ? t('scan.photoWorkRecognizedLabel') : t('scan.photoSelectWorkLabel') }}
+        </strong>
         <label
           v-for="opt in item.options"
           :key="opt.isbn13"
           class="ds-panel photo-option-row"
-          :class="{ 'photo-option-row--active': item.selectedOptionIsbn13 === opt.isbn13 }"
+          :class="{ 'photo-option-row--active': isOptionSelected(opt) }"
         >
           <input
+            v-if="item.options.length > 1"
             type="radio"
             :name="`photo-opt-${item.id}`"
             :value="opt.isbn13"
-            :checked="item.selectedOptionIsbn13 === opt.isbn13"
+            :checked="isOptionSelected(opt)"
             :disabled="saving"
-            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false }, true)"
+            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false }, 'option')"
           />
 
           <div class="photo-option-cover">
-            <img v-if="opt.coverUrl" :src="opt.coverUrl" :alt="opt.title" loading="lazy" />
+            <img
+              v-if="isOptionSelected(opt) ? (item.selectedCoverUrl || opt.coverUrl) : opt.coverUrl"
+              :src="(isOptionSelected(opt) ? (item.selectedCoverUrl || opt.coverUrl) : opt.coverUrl) || ''"
+              :alt="opt.title"
+              loading="lazy"
+            />
             <span v-else class="photo-option-cover__empty">{{ opt.title.slice(0, 2).toUpperCase() }}</span>
           </div>
 
           <div class="photo-option-row__meta">
-            <strong>{{ opt.title }}</strong>
+            <div class="ds-row photo-option-badges">
+              <strong>{{ opt.title }}</strong>
+              <span v-if="opt.source === 'local'" class="ds-badge ds-badge--success">
+                {{ t('scan.photoLocalCatalogBadge') }}
+              </span>
+              <span v-if="opt.isIntegral" class="ds-badge ds-badge--accent">
+                {{ t('book.integralLabel') }}
+              </span>
+              <span v-if="(opt.editionCount ?? 1) > 1" class="ds-badge">
+                {{ t('scan.photoEditionsGroupedBadge', { count: opt.editionCount! }) }}
+              </span>
+            </div>
             <p class="ds-text-muted">
               <span v-if="opt.seriesName">{{ opt.seriesName }}</span>
               <span v-if="opt.volumeNumber"> T.{{ opt.volumeNumber }}</span>
               <span v-if="opt.authors.length > 0"> · {{ opt.authors.join(', ') }}</span>
               <span v-if="opt.publisher"> · {{ opt.publisher }}</span>
               <span v-if="opt.publishYear"> ({{ opt.publishYear }})</span>
-              <span> · {{ opt.isbn13 }}</span>
             </p>
           </div>
         </label>
+      </div>
+
+      <!-- Sélecteur visuel de couvertures multi-éditions (Couche 3 Foyer) -->
+      <div v-if="activeOption" class="ds-panel ds-stack photo-cover-picker">
+        <div class="ds-row ds-row--between photo-cover-picker__header">
+          <div class="ds-stack photo-cover-picker__title">
+            <strong>{{ t('scan.photoCoverPickerTitle') }}</strong>
+            <span class="ds-text-muted photo-cover-picker__hint">{{ t('scan.photoCoverPickerHint') }}</span>
+          </div>
+          <button
+            type="button"
+            class="ds-btn ds-btn--sm"
+            :disabled="loadingCovers || saving"
+            @click="loadItemCovers(true)"
+          >
+            {{ loadingCovers ? t('app.loading') : t('scan.photoCoverPickerMoreBtn') }}
+          </button>
+        </div>
+
+        <p v-if="loadingCovers && coverGallery.length <= 1" class="ds-text-muted photo-cover-picker__hint">
+          {{ t('scan.photoCoverPickerLoading') }}
+        </p>
+
+        <div v-if="coverGallery.length > 0" class="photo-cover-grid">
+          <button
+            v-for="(cov, idx) in coverGallery"
+            :key="cov.coverUrl"
+            type="button"
+            class="photo-cover-tile"
+            :class="{ 'photo-cover-tile--active': isCoverSelected(cov, idx) }"
+            :disabled="saving"
+            :title="cov.label"
+            @click="selectCover(cov)"
+          >
+            <img :src="cov.coverUrl" :alt="cov.label" loading="lazy" />
+            <span v-if="isCoverSelected(cov, idx)" class="photo-cover-tile__badge">
+              {{ t('scan.photoCoverSelectedBadge') }}
+            </span>
+            <span class="photo-cover-tile__label">{{ cov.label }}</span>
+          </button>
+        </div>
       </div>
 
       <!-- Intégrale optionnelle -->
@@ -377,6 +543,91 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
 .photo-option-row__meta {
   flex: 1;
   min-width: 0;
+}
+
+.photo-option-badges {
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.photo-cover-picker {
+  gap: var(--space-2);
+}
+
+.photo-cover-picker__header {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.photo-cover-picker__title {
+  gap: 2px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.photo-cover-picker__hint {
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.photo-cover-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: var(--space-2);
+}
+
+.photo-cover-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  border: 2px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.photo-cover-tile:hover {
+  border-color: var(--accent);
+}
+
+.photo-cover-tile--active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.photo-cover-tile img {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  display: block;
+}
+
+.photo-cover-tile__badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  right: 6px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.photo-cover-tile__label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .manual-field-row {

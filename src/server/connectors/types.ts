@@ -68,6 +68,7 @@ export interface GraphSeriesWork {
   coverUrl?: string | null;
   isHorsSerie?: boolean;
   isIntegral?: boolean;
+  includedVolumes?: string[];
   contentKind?: 'illustrated' | 'text_only';
   source: SourceName;
 }
@@ -91,6 +92,7 @@ export interface BnfConnector {
   searchByEnsembleId(bnfEnsembleId: string, maxRecords?: number): Promise<GraphSeriesWork[]>;
   searchBySeriesName?(seriesName: string, author?: string, maxRecords?: number): Promise<BnfSeriesDiscoveryResult>;
   searchSeriesVolume?(seriesName: string, volumeNumber: number, author?: string): Promise<GraphSeriesWork[]>;
+  searchSeriesIntegrals?(seriesName: string, maxRecords?: number): Promise<GraphSeriesWork[]>;
   sampleByCollectionName(collectionName: string, maxRecords?: number): Promise<CollectionSampleItem[]>;
   searchByTitleAndAuthor(title: string, author?: string, maxRecords?: number): Promise<SourceCandidateRecord[]>;
 }

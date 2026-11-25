@@ -35,6 +35,18 @@ export class BookIdentifierService {
    * en réutilisant BnF SRU d'abord puis Inventaire.io uniquement en filet de secours.
    */
   async findBestIsbnForSeriesVolume(input: SeriesVolumeIdentificationInput): Promise<string | null> {
+    const ranked = await this.findRankedIsbnsForSeriesVolume(input, 1);
+    return ranked[0] ?? null;
+  }
+
+  /**
+   * Identifie jusqu'à `limit` ISBN-13 français distincts appartenant à la MÊME Œuvre abstraite
+   * (permet d'alimenter `book_editions` et l'élection de couverture par consensus visuel dHash).
+   */
+  async findRankedIsbnsForSeriesVolume(
+    input: SeriesVolumeIdentificationInput,
+    limit = 4
+  ): Promise<string[]> {
     const cleanS = input.seriesName.trim();
     const cleanT = cleanTitle(input.title);
     const normTargetTitle = normalizeTextKey(cleanT);
@@ -44,7 +56,7 @@ export class BookIdentifierService {
     const primaryAuthor = input.authors.find((a) => a.trim().length >= 2);
     const mediaFamily = input.mediaFamily ?? 'neutral';
 
-    if (!cleanS && !cleanT) return null;
+    if (!cleanS && !cleanT) return [];
 
     const scoreCandidate = (hit: SourceCandidateRecord): { isbn13: string; score: number } | null => {
       if (hit.isNonBook) return null;
@@ -95,14 +107,11 @@ export class BookIdentifierService {
       // Preuve positive minimale obligatoire (triple verrou anti-homonyme)
       if (!isGeneric) {
         if (!strongTitleMatch) {
-          // Si le titre diffère trop, n'accepter que si série compatible + numéro exact
           if (!(seriesCompatible && sameVolume)) return null;
         } else if (!seriesCompatible && !authorMatched && !sameVolume) {
-          // Titre seul sans aucune confirmation par série, auteur ni numéro -> trop risqué (homonyme)
           return null;
         }
       } else {
-        // Titre générique ("Tome 4") -> exige impérativement série compatible + numéro de tome identique
         if (!(seriesCompatible && sameVolume)) return null;
       }
 
@@ -120,16 +129,20 @@ export class BookIdentifierService {
       return { isbn13, score };
     };
 
-    const pickBest = (hits: SourceCandidateRecord[]): { isbn13: string; score: number } | null => {
-      let best: { isbn13: string; score: number } | null = null;
+    const rankHits = (hits: SourceCandidateRecord[]): string[] => {
+      const byIsbn = new Map<string, number>();
       for (const hit of hits) {
         const scored = scoreCandidate(hit);
         if (!scored) continue;
-        if (!best || scored.score > best.score) {
-          best = scored;
+        const prev = byIsbn.get(scored.isbn13);
+        if (prev === undefined || scored.score > prev) {
+          byIsbn.set(scored.isbn13, scored.score);
         }
       }
-      return best;
+      return Array.from(byIsbn.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([isbn]) => isbn);
     };
 
     // Passe 1 (BnF) : Titre exact + Auteur (ou Série + N° si titre générique)
@@ -144,8 +157,8 @@ export class BookIdentifierService {
       const hits1 = await this.connectors.bnf
         .searchByTitleAndAuthor(pass1Query, primaryAuthor, 10)
         .catch(() => []);
-      const best1 = pickBest(hits1);
-      if (best1) return best1.isbn13;
+      const ranked1 = rankHits(hits1);
+      if (ranked1.length > 0) return ranked1;
     }
 
     // Passe 2A (BnF sans auteur) : couvre les changements d'auteurs multi-époques et les pseudonymes
@@ -153,8 +166,8 @@ export class BookIdentifierService {
       const hits2a = await this.connectors.bnf
         .searchByTitleAndAuthor(cleanT, undefined, 10)
         .catch(() => []);
-      const best2a = pickBest(hits2a);
-      if (best2a) return best2a.isbn13;
+      const ranked2a = rankHits(hits2a);
+      if (ranked2a.length > 0) return ranked2a;
     }
 
     // Passe 2B (BnF Série + Numéro de tome sans auteur) : filet très fiable pour les albums numérotés
@@ -162,8 +175,8 @@ export class BookIdentifierService {
       const hits2b = await this.connectors.bnf
         .searchByTitleAndAuthor(`${cleanS} ${targetVolStr}`, undefined, 10)
         .catch(() => []);
-      const best2b = pickBest(hits2b);
-      if (best2b) return best2b.isbn13;
+      const ranked2b = rankHits(hits2b);
+      if (ranked2b.length > 0) return ranked2b;
     }
 
     // Passe 3 (Secours Inventaire.io uniquement si la BnF n'a rien trouvé)
@@ -171,11 +184,11 @@ export class BookIdentifierService {
       const invQuery = !isGeneric && cleanT ? cleanT : `${cleanS} ${targetVolStr}`.trim();
       if (invQuery) {
         const invHits = await this.connectors.inventaire.searchByText(invQuery, 4).catch(() => []);
-        const best3 = pickBest(invHits);
-        if (best3) return best3.isbn13;
+        const ranked3 = rankHits(invHits);
+        if (ranked3.length > 0) return ranked3;
       }
     }
 
-    return null;
+    return [];
   }
 }

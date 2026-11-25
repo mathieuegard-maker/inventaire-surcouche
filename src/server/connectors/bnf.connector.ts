@@ -2,11 +2,14 @@
 // Connecteur BnF SRU en HTTPS (`https://catalogue.bnf.fr/api/SRU`) via node:https IPv4 forcé + User-Agent navigateur.
 
 import { parseMarcRecord, type ParsedMarcRecord } from '../../shared/bibliographic/intermarc-parser';
+import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import {
   extractAuthorLastNameForQuery,
+  extractFranchiseBaseName,
   isCompatibleSeriesName,
-  normalizeTextKey
+  normalizeTextKey,
+  tokenOverlapRatio
 } from '../../shared/bibliographic/text-normalize.util';
 import type { HttpClient } from './http-client';
 import type {
@@ -224,6 +227,81 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
       }
 
       return works;
+    },
+
+    async searchSeriesIntegrals(seriesName: string, maxRecords = 20): Promise<GraphSeriesWork[]> {
+      const safeSeries = seriesName.replace(/"/g, ' ').trim();
+      if (!safeSeries) return [];
+
+      const baseKey = extractFranchiseBaseName(safeSeries).normalizedKey;
+      const cql = `bib.title all "${safeSeries} intégrale" and bib.doctype any "a"`;
+      const records = await querySru(cql, maxRecords, `bnf:serint:${baseKey}:${maxRecords}`);
+
+      // Regrouper les rééditions d'une même intégrale (même n° d'intégrale ou même plage de tomes inclus) en 1 Œuvre abstraite
+      const grouped = new Map<string, GraphSeriesWork>();
+
+      for (const rec of records) {
+        if (isPressOrKioskOnlyRecord(rec)) continue;
+        const fullText = [rec.ensembleSeriesName ?? '', rec.title, rec.subtitle ?? '', rec.description ?? ''].join(' ');
+        const hasIntegralWord = rec.isIntegralHint || /\bint[ée]grale\b/i.test(fullText);
+        if (!hasIntegralWord) continue;
+
+        const ensBase = rec.ensembleSeriesName ? extractFranchiseBaseName(rec.ensembleSeriesName).normalizedKey : '';
+        const belongsToSeries =
+          (Boolean(ensBase) && ensBase === baseKey) ||
+          tokenOverlapRatio(safeSeries, `${rec.ensembleSeriesName ?? ''} ${rec.title} ${rec.subtitle ?? ''}`) >= 0.7;
+        if (!belongsToSeries) continue;
+
+        const parsedVols = parseIncludedVolumeNumbers(
+          [rec.title, rec.subtitle ?? '', rec.description ?? ''].join(' ')
+        );
+        // Numéro d'intégrale (ex. "Intégrale 1", "Tome 2")
+        const rawVol = rec.ensembleVolumeNumber;
+        const volFromTitle = fullText.match(/\bint[ée]grale\s*(?:t\.?|tome|vol\.?|volume|n°|#)?\s*(\d{1,2})\b/i)?.[1];
+        const volStr = rawVol && /^\d+$/.test(rawVol) ? rawVol : volFromTitle ?? null;
+        const volNum = volStr ? parseInt(volStr, 10) : null;
+
+        const dedupKey =
+          parsedVols.length >= 2
+            ? `range:${parsedVols.join(',')}`
+            : volNum !== null
+              ? `num:${volNum}`
+              : `title:${normalizeTextKey(rec.title)}`;
+
+        const existing = grouped.get(dedupKey);
+        if (!existing) {
+          grouped.set(dedupKey, {
+            title: rec.title,
+            volumeNumber: volNum,
+            volumeLabel: volNum ? `Int. ${volNum}` : 'Intégrale',
+            sortOrder: volNum ? 10000 + volNum : 10999,
+            bnfEnsembleId: rec.bnfEnsembleId ?? null,
+            authors: rec.authors,
+            scriptwriters: rec.scriptwriters,
+            illustrators: rec.illustrators,
+            isbn13s: rec.isbn13 ? [rec.isbn13] : [],
+            publisher: rec.publisher ?? null,
+            collectionName: rec.collectionName ?? null,
+            publishYear: rec.publishYear ?? null,
+            pageCount: rec.pageCount ?? null,
+            language: rec.language ?? null,
+            coverUrl: rec.bnfCoverUrl ?? null,
+            isHorsSerie: false,
+            isIntegral: true,
+            includedVolumes: parsedVols.length >= 2 ? parsedVols : [],
+            contentKind: rec.contentKind,
+            source: 'bnf'
+          });
+        } else {
+          if (rec.isbn13 && !existing.isbn13s.includes(rec.isbn13)) existing.isbn13s.push(rec.isbn13);
+          if (!existing.coverUrl && rec.bnfCoverUrl) existing.coverUrl = rec.bnfCoverUrl;
+          if ((!existing.includedVolumes || existing.includedVolumes.length === 0) && parsedVols.length >= 2) {
+            existing.includedVolumes = parsedVols;
+          }
+        }
+      }
+
+      return Array.from(grouped.values()).slice(0, 15);
     },
 
     async sampleByCollectionName(collectionName: string, maxRecords = 10): Promise<CollectionSampleItem[]> {

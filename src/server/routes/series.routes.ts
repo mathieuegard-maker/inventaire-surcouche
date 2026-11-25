@@ -3,7 +3,11 @@
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { attachSeriesSchema, excludeFromSeriesSchema } from '../../shared/schemas';
+import {
+  attachSeriesSchema,
+  createSeriesIntegralSchema,
+  excludeFromSeriesSchema
+} from '../../shared/schemas';
 import type { AppVariables } from '../middleware/auth.middleware';
 import type { SeriesManagementService } from '../services/series-management.service';
 
@@ -45,6 +49,19 @@ export function createSeriesRoutes(deps: {
     const { bookIds } = c.req.valid('json');
     const result = deps.seriesManagementService.excludeBooksFromSeries(auth.libraryId, seriesId, bookIds);
     return c.json({ ok: true, ...result });
+  });
+
+  router.post('/:seriesId/integrals', zValidator('json', createSeriesIntegralSchema), async (c) => {
+    const auth = c.get('auth')!;
+    const seriesId = c.req.param('seriesId');
+    const body = c.req.valid('json');
+    const result = await deps.seriesManagementService.createOrLinkIntegralForSeries({
+      libraryId: auth.libraryId,
+      userId: auth.userId,
+      seriesId,
+      ...body
+    });
+    return c.json({ ok: true, ...result }, 201);
   });
 
   return router;

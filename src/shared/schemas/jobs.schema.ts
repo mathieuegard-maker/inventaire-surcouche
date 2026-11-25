@@ -11,6 +11,8 @@ export const updatePhotoJobItemSchema = z.object({
   selected: z.boolean().optional(),
   ignored: z.boolean().optional(),
   selectedOptionIsbn13: z.string().trim().nullable().optional(),
+  selectedCoverKey: z.string().trim().nullable().optional(),
+  selectedCoverUrl: z.string().trim().nullable().optional(),
   isIntegral: z.boolean().optional(),
   includedVolumes: z.array(z.string().trim()).optional()
 });

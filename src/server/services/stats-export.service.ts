@@ -12,6 +12,7 @@ export interface LibraryStatsPayload {
   periodDays: number | null;
   kpis: {
     ownedCount: number;
+    coveredVolumesCount: number;
     wishedCount: number;
     lentCount: number;
     seriesCount: number;
@@ -120,10 +121,20 @@ export class StatsExportService {
       }
     }
 
+    let coveredVolumesCount = 0;
+    for (const book of owned) {
+      if (book.isIntegral && book.includedVolumes.length > 0) {
+        coveredVolumesCount += book.includedVolumes.length;
+      } else if (!book.ownedViaIntegral) {
+        coveredVolumesCount += 1;
+      }
+    }
+
     return {
       periodDays,
       kpis: {
         ownedCount: owned.length,
+        coveredVolumesCount: Math.max(owned.length, coveredVolumesCount),
         wishedCount: wished.length,
         lentCount: lent.length,
         seriesCount: snap.series.filter((s) => s.ownedCount > 0).length,

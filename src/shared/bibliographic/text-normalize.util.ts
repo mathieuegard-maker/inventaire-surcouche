@@ -11,7 +11,9 @@ const STOP_WORDS = new Set([
 
 const UNIMARC_100_CODED_RE = /^\d{8}[a-z|]\d{4}|y0frey\d{2}/i;
 const GENERIC_VOLUME_TITLE_RE = /^(?:tome|vol\.?|volume|t\.?|n°|#)?\s*\d+(?:\s*[-–]\s*\d+)?$/i;
-const SERIES_PREFIX_NOISE_RE = /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+)/i;
+const SERIES_PREFIX_NOISE_RE =
+  /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+|(?:l['’])?int[ée]grale\s+(?:d[e'’]\s*|des\s+aventures\s+d[e'’]\s*)?)/i;
+const SERIES_INTEGRAL_SUFFIX_RE = /\s*[-–—,:]?\s*(?:l['’])?int[ée]grale(?:\s+.*)?$/i;
 const COMPILATION_SERIES_PREFIX_RE =
   /^(?:(?:la\s+)?collection\s+|diptyque\s+|triptyque\s+|coffret\s+|(?:l['’])?int[ée]grale\s+|les\s+archives\s+|anthologie\s+|best\s+of\s+)/i;
 
@@ -171,8 +173,9 @@ export function extractAuthorLastNameForQuery(rawAuthor?: string): string {
 export function extractFranchiseBaseName(rawSeriesName: string): { baseName: string; normalizedKey: string } {
   const cleaned = cleanSeriesName(rawSeriesName);
   const head = cleaned.split(/\s*[,—–]\s*/)[0].trim();
-  const stripped = head.replace(SERIES_PREFIX_NOISE_RE, '').trim();
-  const baseName = stripped.length >= 2 ? stripped : cleaned;
+  const withoutPrefix = head.replace(SERIES_PREFIX_NOISE_RE, '').trim();
+  const stripped = withoutPrefix.replace(SERIES_INTEGRAL_SUFFIX_RE, '').trim();
+  const baseName = stripped.length >= 2 ? stripped : withoutPrefix.length >= 2 ? withoutPrefix : cleaned;
   // Unifie `&` et `et` dans la clé de franchise ("Boule & Bill" === "Boule et Bill", "Blake & Mortimer" === "Blake et Mortimer")
   return {
     baseName,

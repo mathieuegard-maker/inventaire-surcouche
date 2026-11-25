@@ -10,6 +10,7 @@ import { SqliteDatabaseAdapter } from '../db/sqlite.adapter';
 import { applySqlMigrations } from '../db/migrator';
 import { loadServerConfig } from '../config';
 import { createApp } from '../app';
+import { CoverService } from './cover.service';
 import { HttpClient } from '../connectors/http-client';
 import type { BibliographicConnectors } from '../connectors/types';
 
@@ -271,5 +272,68 @@ describe('Jalon 2 — Couvertures WebP disque, Jobs Serveur & Routes Acquisition
     const second = await http.fetchJson({ source: 'google_books', url: 'https://example.test/gb2' });
     expect(second).toBeNull();
     expect(calls).toBe(1);
+  });
+
+  it('élit la couverture consensuelle multi-éditions par dHash serveur (majorité + netteté) et déduplique la galerie', async () => {
+    const makeGradientPng = async (width: number, height: number, invert = false): Promise<Buffer> => {
+      const raw = Buffer.alloc(width * height * 3);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 3;
+          const v = Math.round(((invert ? width - 1 - x : x) / Math.max(1, width - 1)) * 240);
+          raw[idx] = v;
+          raw[idx + 1] = Math.min(255, v + 10);
+          raw[idx + 2] = Math.max(0, 255 - v);
+        }
+      }
+      return sharp(raw, { raw: { width, height, channels: 3 } }).png().toBuffer();
+    };
+
+    const mainSmall = await makeGradientPng(140, 200, false);
+    const mainLarge = await makeGradientPng(320, 480, false);
+    const outlier = await makeGradientPng(400, 600, true);
+
+    const customCoverService = new CoverService({
+      coversDir: tmpCoversDir,
+      catalogRepo: appCtx.repos.catalogRepo,
+      libraryRepo: appCtx.repos.libraryRepo,
+      fetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('ed-outlier')) return new Response(new Uint8Array(outlier), { status: 200, headers: { 'content-type': 'image/png' } });
+        if (url.includes('ed-main-1')) return new Response(new Uint8Array(mainSmall), { status: 200, headers: { 'content-type': 'image/png' } });
+        if (url.includes('ed-main-2')) return new Response(new Uint8Array(mainLarge), { status: 200, headers: { 'content-type': 'image/png' } });
+        if (url.includes('ed-main-3')) return new Response(new Uint8Array(mainSmall), { status: 200, headers: { 'content-type': 'image/png' } });
+        return new Response('', { status: 404 });
+      }) as typeof fetch
+    });
+
+    const consensus = await customCoverService.electBestCoverFromMultiEditions({
+      isbn13s: [],
+      candidateUrls: [
+        'https://cdn.example.test/ed-outlier.png',
+        'https://cdn.example.test/ed-main-1.png',
+        'https://cdn.example.test/ed-main-2.png',
+        'https://cdn.example.test/ed-main-3.png'
+      ]
+    });
+
+    expect(consensus.winner).not.toBeNull();
+    // 2 groupes visuels distincts : le groupe majoritaire (3 éditions) gagne devant l'outlier isolé (1 édition)
+    expect(consensus.distinctCovers).toHaveLength(2);
+    expect(consensus.distinctCovers[0].clusterSize).toBe(3);
+    expect(consensus.distinctCovers[0].sourceUrl).toBe('https://cdn.example.test/ed-main-2.png');
+    expect(consensus.distinctCovers[1].clusterSize).toBe(1);
+    expect(consensus.distinctCovers[1].sourceUrl).toBe('https://cdn.example.test/ed-outlier.png');
+
+    // Déduplication galerie externe face à la couverture locale gagnante : seule la variante distincte (outlier) reste proposée !
+    const deduped = await customCoverService.deduplicateExternalCandidatesVisually(
+      [
+        { url: 'https://cdn.example.test/ed-main-1.png', label: 'Copie 1', minBytes: 200 },
+        { url: 'https://cdn.example.test/ed-outlier.png', label: 'Édition alternative', minBytes: 200 }
+      ],
+      [consensus.winner!.coverKey]
+    );
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].url).toBe('https://cdn.example.test/ed-outlier.png');
   });
 });

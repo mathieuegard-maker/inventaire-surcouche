@@ -5,6 +5,8 @@ import { useRoute, useRouter } from 'vue-router';
 import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import BaseModal from '../components/base/BaseModal.vue';
+import IntegralFields from '../components/books/IntegralFields.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import LendModal from '../components/modals/LendModal.vue';
 import BatchGenreModal from '../components/modals/BatchGenreModal.vue';
@@ -49,6 +51,14 @@ const attachOpen = ref(false);
 const mergeEntireMode = ref(false);
 const modalBusy = ref(false);
 
+// Bloc repliable Intégrales + Modale ajout intégrale
+const integralsExpanded = ref(false);
+const addIntegralOpen = ref(false);
+const newIntegralVolumes = ref<string[]>([]);
+const newIntegralTitle = ref('');
+const newIntegralIsbn = ref('');
+const newIntegralStatus = ref<'owned' | 'wish'>('owned');
+
 function openMergeWholeSeries(): void {
   mergeEntireMode.value = true;
   attachOpen.value = true;
@@ -77,6 +87,10 @@ async function loadSeries(): Promise<void> {
     series.value = res.series;
     siblingCuts.value = res.siblingCuts;
     books.value = res.books;
+    // Déplier automatiquement la section Intégrales si l'utilisateur en possède déjà une dans cette série
+    if (res.books.some((b) => b.isIntegral && b.ownershipStatus === 'owned')) {
+      integralsExpanded.value = true;
+    }
   } catch {
     series.value = null;
   } finally {
@@ -88,11 +102,18 @@ watch(() => route.params.seriesId, () => {
   void loadSeries();
 }, { immediate: true });
 
+// Première intention : tomes unitaires ; les intégrales vivent dans leur propre section repliable
+const unitaryBooks = computed(() => books.value.filter((b) => !b.isIntegral));
+const integralBooks = computed(() => books.value.filter((b) => b.isIntegral));
+const ownedIntegralsCount = computed(() =>
+  integralBooks.value.filter((b) => b.ownershipStatus === 'owned').length
+);
+
 const ownedBooks = computed(() =>
-  books.value.filter((b) => b.ownershipStatus === 'owned' || Boolean(b.ownedViaIntegral))
+  unitaryBooks.value.filter((b) => b.ownershipStatus === 'owned' || Boolean(b.ownedViaIntegral))
 );
 const unownedBooks = computed(() =>
-  books.value.filter((b) => b.ownershipStatus !== 'owned' && !b.ownedViaIntegral)
+  unitaryBooks.value.filter((b) => b.ownershipStatus !== 'owned' && !b.ownedViaIntegral)
 );
 
 const visibleBooks = computed(() => {
@@ -101,7 +122,7 @@ const visibleBooks = computed(() => {
       ? ownedBooks.value
       : filterMode.value === 'unowned'
         ? unownedBooks.value
-        : books.value;
+        : unitaryBooks.value;
   const needle = normalizeTextKey(searchQuery.value);
   if (!needle) return base;
   return base.filter((b) =>
@@ -113,10 +134,50 @@ const selectedBooks = computed(() =>
   books.value.filter((b) => selectedIds.value.has(b.id))
 );
 
+const progressTotal = computed(() =>
+  unitaryBooks.value.length > 0 ? unitaryBooks.value.length : books.value.length
+);
 const progressPercent = computed(() => {
-  const total = Math.max(1, books.value.length);
+  const total = Math.max(1, progressTotal.value);
   return Math.min(100, Math.round((ownedBooks.value.length / total) * 100));
 });
+
+function openAddIntegralModal(): void {
+  newIntegralVolumes.value = [];
+  newIntegralTitle.value = '';
+  newIntegralIsbn.value = '';
+  newIntegralStatus.value = 'owned';
+  addIntegralOpen.value = true;
+}
+
+async function submitAddIntegral(): Promise<void> {
+  if (!series.value) return;
+  if (newIntegralVolumes.value.length === 0) {
+    uiStore.pushToast(t('book.integralVolumesRequiredError'), 'warning');
+    return;
+  }
+  modalBusy.value = true;
+  try {
+    await apiRequest(`/api/series/${encodeURIComponent(series.value.id)}/integrals`, {
+      method: 'POST',
+      body: {
+        includedVolumes: newIntegralVolumes.value,
+        title: newIntegralTitle.value.trim() || undefined,
+        isbn13: newIntegralIsbn.value.trim() || undefined,
+        ownershipStatus: newIntegralStatus.value
+      }
+    });
+    addIntegralOpen.value = false;
+    integralsExpanded.value = true;
+    await loadSeries();
+    await libraryStore.syncNow();
+    uiStore.pushToast(t('book.integralSeparateCreatedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    modalBusy.value = false;
+  }
+}
 
 function toggleSelect(bookId: string): void {
   const next = new Set(selectedIds.value);
@@ -283,7 +344,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
             </p>
           </div>
           <span class="ds-badge ds-badge--accent">
-            {{ t('collection.ownedProgress', { owned: ownedBooks.length, total: books.length }) }}
+            {{ t('collection.ownedProgress', { owned: ownedBooks.length, total: progressTotal }) }}
           </span>
         </div>
 
@@ -305,6 +366,41 @@ async function confirmGenres(genres: string[]): Promise<void> {
         </div>
       </div>
 
+      <!-- Section repliable dédiée aux Intégrales (séparée des tomes unitaires) -->
+      <div class="ds-card ds-stack series-integrals-box">
+        <div class="ds-row ds-row--between">
+          <button
+            type="button"
+            class="ds-btn ds-btn--ghost ds-btn--sm series-integrals-toggle"
+            :aria-expanded="integralsExpanded"
+            @click="integralsExpanded = !integralsExpanded"
+          >
+            <span>{{ integralsExpanded ? '▾' : '▸' }} {{ t('series.integralsAccordionTitle', { count: integralBooks.length }) }}</span>
+            <span v-if="ownedIntegralsCount > 0" class="ds-badge ds-badge--accent">
+              {{ t('series.integralsOwnedBadge', { owned: ownedIntegralsCount }) }}
+            </span>
+          </button>
+          <button type="button" class="ds-btn ds-btn--sm" @click="openAddIntegralModal">
+            {{ t('series.addIntegralBtn') }}
+          </button>
+        </div>
+
+        <template v-if="integralsExpanded">
+          <p v-if="integralBooks.length === 0" class="ds-text-muted">{{ t('series.integralsEmpty') }}</p>
+          <div v-else class="ds-grid-2">
+            <BookCard
+              v-for="intBook in integralBooks"
+              :key="intBook.id"
+              :book="intBook"
+              selectable
+              :selected="selectedIds.has(intBook.id)"
+              @toggle-select="toggleSelect"
+              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+            />
+          </div>
+        </template>
+      </div>
+
       <div class="ds-tabs" role="tablist">
         <button
           type="button"
@@ -312,7 +408,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
           :class="{ 'ds-tab--active': filterMode === 'all' }"
           @click="filterMode = 'all'"
         >
-          {{ t('series.filterAll', { count: books.length }) }}
+          {{ t('series.filterAll', { count: unitaryBooks.length }) }}
         </button>
         <button
           type="button"
@@ -400,11 +496,70 @@ async function confirmGenres(genres: string[]): Promise<void> {
         @confirm="confirmGenres"
         @add-default-genre="(g) => authStore.updateDefaultGenres('add', g)"
       />
+
+      <BaseModal
+        :open="addIntegralOpen"
+        :title="t('series.addIntegralModalTitle', { name: series.canonicalName })"
+        @close="addIntegralOpen = false"
+      >
+        <div class="ds-stack">
+          <IntegralFields
+            :is-integral="true"
+            v-model:included-volumes="newIntegralVolumes"
+          />
+          <div class="ds-field">
+            <label class="ds-label" for="series-int-title">{{ t('series.addIntegralTitleLabel') }}</label>
+            <input
+              id="series-int-title"
+              v-model="newIntegralTitle"
+              type="text"
+              class="ds-input"
+              :placeholder="t('series.addIntegralTitlePlaceholder')"
+            />
+          </div>
+          <div class="ds-field">
+            <label class="ds-label" for="series-int-isbn">{{ t('series.addIntegralIsbnLabel') }}</label>
+            <input id="series-int-isbn" v-model="newIntegralIsbn" type="text" class="ds-input" />
+          </div>
+          <div class="ds-row">
+            <button
+              type="button"
+              class="ds-btn ds-btn--sm"
+              :class="{ 'ds-btn--primary': newIntegralStatus === 'owned' }"
+              @click="newIntegralStatus = 'owned'"
+            >
+              {{ t('series.addIntegralStatusOwned') }}
+            </button>
+            <button
+              type="button"
+              class="ds-btn ds-btn--sm"
+              :class="{ 'ds-btn--primary': newIntegralStatus === 'wish' }"
+              @click="newIntegralStatus = 'wish'"
+            >
+              {{ t('series.addIntegralStatusWish') }}
+            </button>
+          </div>
+        </div>
+        <template #footer>
+          <button type="button" class="ds-btn" :disabled="modalBusy" @click="addIntegralOpen = false">
+            {{ t('app.cancel') }}
+          </button>
+          <button type="button" class="ds-btn ds-btn--primary" :disabled="modalBusy" @click="submitAddIntegral">
+            {{ modalBusy ? t('app.loading') : t('app.save') }}
+          </button>
+        </template>
+      </BaseModal>
     </template>
   </section>
 </template>
 
 <style scoped>
+.series-integrals-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
 .series-progress-bar {
   height: 8px;
   width: 100%;

@@ -8,6 +8,14 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import sharp from 'sharp';
+import {
+  computeDHashFromRgba,
+  DEFAULT_DHASH_THRESHOLD,
+  DHASH_HEIGHT,
+  DHASH_WIDTH,
+  electConsensusCovers,
+  hammingDistanceHex
+} from '../../shared/bibliographic/cover-dhash.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import type { CatalogRepository, CoverRow } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
@@ -24,6 +32,23 @@ export interface StoredCoverResult {
   coverUrl: string;
   byteSize: number;
   reused: boolean;
+}
+
+export interface MultiEditionConsensusResult {
+  winner: StoredCoverResult | null;
+  distinctCovers: Array<{
+    cover: StoredCoverResult;
+    sourceIsbn?: string;
+    sourceUrl: string;
+    clusterSize: number;
+  }>;
+}
+
+export interface ExternalCoverProbeInput {
+  url: string;
+  label: string;
+  minBytes?: number;
+  rejectExactBytes?: number;
 }
 
 export interface CoverCascadeInput {
@@ -344,6 +369,214 @@ export class CoverService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Calcule l'empreinte perceptuelle dHash 64-bit et la résolution d'une image en mémoire (< 2 ms via sharp).
+   */
+  async computeBufferVisualMeta(
+    rawBuffer: Buffer
+  ): Promise<{ hash: string; width: number; height: number; area: number } | null> {
+    try {
+      const meta = await sharp(rawBuffer, { failOn: 'none' }).metadata();
+      const width = meta.width ?? 0;
+      const height = meta.height ?? 0;
+      if (width < 40 || height < 40) return null;
+
+      const rawRgba = await sharp(rawBuffer, { failOn: 'none' })
+        .rotate()
+        .resize(DHASH_WIDTH, DHASH_HEIGHT, { fit: 'fill' })
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
+
+      const hash = computeDHashFromRgba(rawRgba, DHASH_WIDTH, DHASH_HEIGHT);
+      return { hash, width, height, area: width * height };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Vérifie et déduplique visuellement une liste de couvertures externes par empreinte dHash
+   * (élimine les doublons quasi-identiques entre Amazon/Eyrolles/BnF et les copies des couvertures déjà en base).
+   */
+  async deduplicateExternalCandidatesVisually(
+    items: ExternalCoverProbeInput[],
+    existingLocalCoverKeys: string[] = [],
+    maxResults = 12
+  ): Promise<Array<ExternalCoverProbeInput & { clusterSize: number }>> {
+    if (items.length === 0) return [];
+
+    // 1. Empreintes des couvertures locales déjà présentes sur disque
+    const localHashes: string[] = [];
+    for (const key of existingLocalCoverKeys) {
+      const bin = await this.readCoverBinary(key);
+      if (!bin) continue;
+      const meta = await this.computeBufferVisualMeta(bin.buffer);
+      if (meta) localHashes.push(meta.hash);
+    }
+
+    // 2. Téléchargement + calcul dHash en parallèle par lots de 6
+    type ProbedEntry = {
+      item: ExternalCoverProbeInput;
+      hash: string;
+      area: number;
+    };
+    const probed: ProbedEntry[] = [];
+    const queue = items.slice(0, 18);
+
+    for (let i = 0; i < queue.length; i += 6) {
+      const batch = queue.slice(i, i + 6);
+      const settled = await Promise.all(
+        batch.map(async (item): Promise<ProbedEntry | null> => {
+          const cleanUrl = (item.url || '').trim();
+          if (!cleanUrl || /(?:wikimedia|wikipedia)\.org/i.test(cleanUrl)) return null;
+
+          // Réutilise l'image déjà stockée si connue
+          const existingCov = this.catalogRepo.findCoverBySourceUrl(cleanUrl);
+          if (existingCov) {
+            const bin = await this.readCoverBinary(existingCov.cover_key);
+            if (bin) {
+              const meta = await this.computeBufferVisualMeta(bin.buffer);
+              if (meta) return { item, hash: meta.hash, area: meta.area };
+            }
+          }
+
+          const rawBuf = await this.fetchAndValidateImageBuffer(cleanUrl, {
+            minBytes: item.minBytes ?? 1000,
+            rejectExactBytes: item.rejectExactBytes ?? EYROLLES_PLACEHOLDER_BYTES,
+            timeoutMs: 3500
+          });
+          if (!rawBuf) return null;
+          const meta = await this.computeBufferVisualMeta(rawBuf);
+          if (!meta) return null;
+          return { item, hash: meta.hash, area: meta.area };
+        })
+      );
+      for (const entry of settled) {
+        if (entry) probed.push(entry);
+      }
+    }
+
+    if (probed.length === 0) return [];
+
+    // 3. Regroupement visuel & vote majoritaire (élimine les doublons quasi-identiques)
+    const { clusters } = electConsensusCovers(probed, DEFAULT_DHASH_THRESHOLD);
+    const out: Array<ExternalCoverProbeInput & { clusterSize: number }> = [];
+
+    for (const cluster of clusters) {
+      const rep = cluster.representative;
+      // Ne pas reproposer en "externe" une couverture déjà identique visuellement à une couverture locale
+      const alreadyLocal = localHashes.some((h) => hammingDistanceHex(h, rep.hash) <= DEFAULT_DHASH_THRESHOLD);
+      if (alreadyLocal) continue;
+      out.push({ ...rep.item, clusterSize: cluster.count });
+      if (out.length >= maxResults) break;
+    }
+
+    return out;
+  }
+
+  /**
+   * Collecte les couvertures de plusieurs éditions (ISBNs) d'une même Œuvre abstraite,
+   * les compare visuellement par dHash et élit la couverture majoritaire la plus nette,
+   * tout en stockant jusqu'à 4 couvertures distinctes en WebP pour le choix utilisateur.
+   */
+  async electBestCoverFromMultiEditions(input: {
+    isbn13s: string[];
+    candidateUrls?: string[];
+    maxEditions?: number;
+    maxDistinctStored?: number;
+  }): Promise<MultiEditionConsensusResult> {
+    const cleanIsbns = Array.from(
+      new Set(
+        input.isbn13s
+          .map((raw) => isbnUtil.normalizeToIsbn13(raw))
+          .filter((x): x is string => Boolean(x))
+      )
+    ).slice(0, input.maxEditions ?? 4);
+
+    const probes: Array<{ url: string; sourceIsbn?: string; minBytes?: number; rejectExactBytes?: number }> = [];
+    const seenUrls = new Set<string>();
+    const pushProbe = (url: string, sourceIsbn?: string, minBytes?: number, rejectExactBytes?: number) => {
+      const clean = (url || '').trim();
+      if (!clean || seenUrls.has(clean)) return;
+      if (/\.svg(?:[?#]|$)/i.test(clean) || /(?:wikimedia|wikipedia)\.org/i.test(clean)) return;
+      seenUrls.add(clean);
+      probes.push({ url: clean, sourceIsbn, minBytes, rejectExactBytes });
+    };
+
+    for (const u of input.candidateUrls ?? []) {
+      pushProbe(u, cleanIsbns[0], 500, EYROLLES_PLACEHOLDER_BYTES);
+    }
+
+    for (const isbn of cleanIsbns) {
+      // Sur plusieurs éditions, on prend les 2 CDN les plus rapides/fiables par ISBN (Amazon EU + Eyrolles H1400) + OpenLibrary
+      const cdns = this.buildIsbnCdnCandidates(isbn);
+      for (const cdn of cdns) {
+        if (cdn.label.startsWith('Amazon Media')) continue;
+        pushProbe(cdn.url, isbn, cdn.minBytes, cdn.rejectExactBytes);
+      }
+    }
+
+    type DownloadedCandidate = {
+      url: string;
+      sourceIsbn?: string;
+      buffer: Buffer;
+      hash: string;
+      area: number;
+    };
+
+    const downloaded: DownloadedCandidate[] = [];
+    const limitedProbes = probes.slice(0, 12);
+
+    for (let i = 0; i < limitedProbes.length; i += 6) {
+      const batch = limitedProbes.slice(i, i + 6);
+      const settled = await Promise.all(
+        batch.map(async (p): Promise<DownloadedCandidate | null> => {
+          const buf = await this.fetchAndValidateImageBuffer(p.url, {
+            minBytes: p.minBytes ?? 1000,
+            rejectExactBytes: p.rejectExactBytes ?? EYROLLES_PLACEHOLDER_BYTES,
+            timeoutMs: 3500
+          });
+          if (!buf) return null;
+          const meta = await this.computeBufferVisualMeta(buf);
+          if (!meta) return null;
+          return { url: p.url, sourceIsbn: p.sourceIsbn, buffer: buf, hash: meta.hash, area: meta.area };
+        })
+      );
+      for (const d of settled) {
+        if (d) downloaded.push(d);
+      }
+    }
+
+    if (downloaded.length === 0) {
+      return { winner: null, distinctCovers: [] };
+    }
+
+    const { clusters } = electConsensusCovers(downloaded, DEFAULT_DHASH_THRESHOLD);
+    const maxStore = input.maxDistinctStored ?? 4;
+    const distinctCovers: MultiEditionConsensusResult['distinctCovers'] = [];
+
+    for (const cluster of clusters.slice(0, maxStore)) {
+      const rep = cluster.representative;
+      try {
+        const stored = await this.storeBufferAsWebp(rep.buffer, rep.url);
+        distinctCovers.push({
+          cover: stored,
+          sourceIsbn: rep.sourceIsbn,
+          sourceUrl: rep.url,
+          clusterSize: cluster.count
+        });
+      } catch {
+        // ignore single conversion failure
+      }
+    }
+
+    return {
+      winner: distinctCovers[0]?.cover ?? null,
+      distinctCovers
+    };
   }
 
   /**

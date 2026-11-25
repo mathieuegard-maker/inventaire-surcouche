@@ -667,11 +667,14 @@ export class CatalogRepository {
   }): { series: SeriesRow[]; books: BookRow[] } {
     const limit = criteria.limit ?? 40;
 
-    // 1. Recherche Séries
+    // 1. Recherche Séries (unifie & et et via extractFranchiseBaseName)
     const seriesClauses: string[] = [];
     const seriesParams: Array<string | number> = [];
 
-    const seriesNeedle = criteria.seriesNorm || criteria.titleNorm;
+    const rawSeriesNeedle = criteria.seriesNorm || criteria.titleNorm;
+    const seriesNeedle = rawSeriesNeedle
+      ? rawSeriesNeedle.replace(/\s*&\s*/g, ' et ').replace(/\s+/g, ' ').trim()
+      : undefined;
     if (seriesNeedle) {
       seriesClauses.push('(normalized_key LIKE ? OR lower(canonical_name) LIKE ? OR lower(aliases_json) LIKE ?)');
       const pat = `%${seriesNeedle}%`;
@@ -700,20 +703,32 @@ export class CatalogRepository {
     // 2. Recherche Livres (jointure optionnelle sur series & editions)
     const bookClauses: string[] = [];
     const bookParams: Array<string | number> = [];
+    const matchedSeriesIds = seriesRows.map((s) => s.id);
 
-    if (criteria.titleNorm) {
+    // Si l'utilisateur a tapé un nom de série dans le champ "Titre" (ex. Titre="Lucky Luke", Tome=10),
+    // inclure aussi les livres appartenant aux séries locales correspondantes !
+    if (criteria.titleNorm && !criteria.seriesNorm && matchedSeriesIds.length > 0) {
+      const placeholders = matchedSeriesIds.map(() => '?').join(', ');
+      bookClauses.push(`(b.normalized_title LIKE ? OR lower(b.title) LIKE ? OR b.series_id IN (${placeholders}))`);
+      const pat = `%${criteria.titleNorm}%`;
+      bookParams.push(pat, pat, ...matchedSeriesIds);
+    } else if (criteria.titleNorm) {
       bookClauses.push('(b.normalized_title LIKE ? OR lower(b.title) LIKE ?)');
       const pat = `%${criteria.titleNorm}%`;
       bookParams.push(pat, pat);
     }
     if (criteria.seriesNorm) {
+      const sPat = `%${criteria.seriesNorm.replace(/\s*&\s*/g, ' et ').trim()}%`;
       bookClauses.push('(s.normalized_key LIKE ? OR lower(s.canonical_name) LIKE ? OR lower(s.aliases_json) LIKE ?)');
-      const pat = `%${criteria.seriesNorm}%`;
-      bookParams.push(pat, pat, pat);
+      bookParams.push(sPat, sPat, sPat);
     }
     if (criteria.volumeNumber !== undefined && criteria.volumeNumber !== null) {
-      bookClauses.push('b.volume_number = ?');
-      bookParams.push(criteria.volumeNumber);
+      // Retourne le tome unitaire exact ET toute intégrale qui inclut ce numéro de tome !
+      const volStr = String(criteria.volumeNumber);
+      bookClauses.push(
+        `(b.volume_number = ? OR (b.is_integral = 1 AND b.included_volumes_json LIKE ?))`
+      );
+      bookParams.push(criteria.volumeNumber, `%"${volStr}"%`);
     }
     if (criteria.collectionNorm) {
       bookClauses.push('(lower(COALESCE(b.collection_name, \'\')) LIKE ? OR EXISTS (SELECT 1 FROM book_editions be WHERE be.book_id = b.id AND lower(COALESCE(be.collection_name, \'\')) LIKE ?))');

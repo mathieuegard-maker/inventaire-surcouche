@@ -20,6 +20,24 @@ function extractCookie(res: Response): string {
   return `biblio_session=${m[1]}`;
 }
 
+async function makeGradientPng(direction: 'ltr' | 'rtl'): Promise<Buffer> {
+  const w = 120;
+  const h = 180;
+  const raw = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 3;
+      const v = direction === 'ltr' ? Math.floor((x / w) * 255) : Math.floor(((w - 1 - x) / w) * 255);
+      raw[idx] = v;
+      raw[idx + 1] = v;
+      raw[idx + 2] = v;
+    }
+  }
+  return sharp(raw, { raw: { width: w, height: h, channels: 3 } })
+    .png({ compressionLevel: 0 })
+    .toBuffer();
+}
+
 async function makeShelfPhotoDataUrl(): Promise<string> {
   const buf = await sharp({
     create: { width: 200, height: 120, channels: 3, background: { r: 100, g: 120, b: 140 } }
@@ -484,12 +502,8 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
         }
       };
 
-      const redPng = await sharp({ create: { width: 120, height: 180, channels: 3, background: { r: 220, g: 30, b: 30 } } })
-        .png({ compressionLevel: 0 })
-        .toBuffer();
-      const bluePng = await sharp({ create: { width: 120, height: 180, channels: 3, background: { r: 20, g: 60, b: 220 } } })
-        .png({ compressionLevel: 0 })
-        .toBuffer();
+      const redPng = await makeGradientPng('ltr');
+      const bluePng = await makeGradientPng('rtl');
 
       const customConnectors: BibliographicConnectors = {
         bnf: {
@@ -622,15 +636,29 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
         jobs: Array<{
           id: string;
           status: string;
-          result: { items: Array<{ id: string; options: Array<{ isbn13: string; coverUrl: string | null }> }> };
+          result: {
+            items: Array<{
+              id: string;
+              options: Array<{
+                isbn13: string;
+                siblingIsbns?: string[];
+                editionCount?: number;
+                coverUrl: string | null;
+                coverOptions?: Array<{ coverKey: string | null; coverUrl: string; isbn13?: string | null }>;
+              }>;
+            }>;
+          };
         }>;
       };
       const doneJob = afterRetry.jobs.find((j) => j.id === jobId)!;
       expect(doneJob.status).toBe('done');
       const item = doneJob.result.items[0];
-      expect(item.options).toHaveLength(2);
-      const collectorOpt = item.options.find((o) => o.isbn13 === '9782871299998')!;
-      expect(collectorOpt.coverUrl).toBeTruthy();
+      // Lot 4 : les 2 éditions (Dargaud + Dargaud Collector) d'un même album sont regroupées en 1 seule Œuvre abstraite avec leurs 2 couvertures distinctes !
+      expect(item.options).toHaveLength(1);
+      expect(item.options[0].editionCount).toBe(2);
+      expect(item.options[0].siblingIsbns).toEqual(expect.arrayContaining(['9782871293019', '9782871299998']));
+      const collectorCov = item.options[0].coverOptions?.find((c) => c.isbn13 === '9782871299998');
+      expect(collectorCov?.coverUrl).toMatch(/^\/api\/covers\//);
 
       // Pré-peupler le livre dans le Catalogue Central avec la 1ère édition (orig.png) pour vérifier
       // que choisir la 2e édition (collector.png) impose bien la couverture de la 2e édition en Couche 3 !
@@ -669,6 +697,448 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       expect(pullBody.books[0].coverUrl).toMatch(/^\/api\/covers\//);
       expect(pullBody.books[0].coverUrl).not.toBe(origCoverUrl);
       expect(pullBody.books[0].hasUserOverrides).toBe(true);
+
+      ctxLocal.worker.stop();
+    } finally {
+      dbLocal.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('Lot 3 (Recherche textuelle Œuvre abstraite) : court-circuite internet si la série est déjà en base (tome + intégrale) et résout Série->Tome canonique + Intégrale sans polluer la DB si inconnue', async () => {
+    const dbLocal = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(dbLocal, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-lot3-search-'));
+    let bnfTextCalls = 0;
+
+    try {
+      const ctxLocal = createApp({
+        db: dbLocal,
+        config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpDir }),
+        connectors: {
+          bnf: {
+            async lookupByIsbn() { return null; },
+            async searchByEnsembleId() { return []; },
+            async sampleByCollectionName() { return []; },
+            async searchSeriesIntegrals(seriesName) {
+              if (seriesName.toLowerCase().includes('lucky luke')) {
+                return [
+                  {
+                    title: 'Lucky Luke — L’Intégrale 11 (Tomes 31 à 33)',
+                    volumeNumber: 11,
+                    volumeLabel: 'Int. 11',
+                    sortOrder: 10011,
+                    authors: ['Morris', 'René Goscinny'],
+                    isbn13s: ['9782884719995'],
+                    publisher: 'Lucky Comics',
+                    isIntegral: true,
+                    includedVolumes: ['31', '32', '33'],
+                    source: 'bnf'
+                  }
+                ];
+              }
+              return [];
+            },
+            async searchByTitleAndAuthor(title) {
+              bnfTextCalls++;
+              if (title.toLowerCase().includes('diligence')) {
+                return [
+                  {
+                    source: 'bnf',
+                    isbn13: '9782205002324',
+                    title: 'La Diligence',
+                    seriesName: 'Lucky Luke',
+                    volumeNumber: '32',
+                    authors: ['Morris', 'René Goscinny'],
+                    scriptwriters: [],
+                    illustrators: [],
+                    publisher: 'Dargaud',
+                    language: 'fr',
+                    rawSubjects: []
+                  }
+                ];
+              }
+              // Simule un piège BnF brut sur "Lucky Luke 32" qui renverrait à tort un Tome 1 réédité !
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782800101019',
+                  title: 'La Mine d’or de Dick Digger',
+                  seriesName: 'Lucky Luke',
+                  volumeNumber: '1',
+                  authors: ['Morris'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Dupuis',
+                  language: 'fr',
+                  rawSubjects: []
+                }
+              ];
+            }
+          },
+          sudoc: { async lookupByIsbn() { return null; } },
+          inventaire: {
+            async lookupByIsbn() { return null; },
+            async fetchSeriesWorks() { return []; },
+            async searchByText() { return []; }
+          },
+          wikidata: {
+            async lookupWorkByQid() { return null; },
+            async searchSeriesQids(name) {
+              return name.toLowerCase().includes('lucky luke') ? ['Q137475'] : [];
+            },
+            async fetchSeriesWorksByQid(qid) {
+              if (qid === 'Q137475') {
+                return [
+                  {
+                    title: 'La Diligence',
+                    volumeNumber: 32,
+                    volumeLabel: '32',
+                    sortOrder: 32,
+                    wikidataQid: 'Q3208312',
+                    authors: ['Morris', 'René Goscinny'],
+                    isbn13s: [],
+                    source: 'wikidata'
+                  }
+                ];
+              }
+              return [];
+            }
+          },
+          googleBooks: { async lookupByIsbn() { return null; } },
+          openLibrary: { async lookupByIsbn() { return null; } }
+        },
+        coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
+      });
+
+      const reg = await ctxLocal.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'SearchLot3',
+          email: 'lot3@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+
+      // 1. Série absente de la base -> recherche "Lucky Luke" Tome 32 :
+      //    Propose le VRAI Tome 32 canonique ("La Diligence") en #1 + l'intégrale couvrante en #2, SANS écrire en base !
+      const extRes = await ctxLocal.app.request('/api/search/catalog', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ title: 'Lucky Luke', volumeNumber: '32' })
+      });
+      expect(extRes.status).toBe(200);
+      const extBody = (await extRes.json()) as {
+        externalBooks: Array<{ title: string; volumeNumber: string | null; isIntegral?: boolean; includedVolumes?: string[] }>;
+      };
+      expect(extBody.externalBooks[0].title).toBe('La Diligence');
+      expect(extBody.externalBooks[0].volumeNumber).toBe('32');
+      expect(extBody.externalBooks[0].isIntegral).toBe(false);
+      expect(extBody.externalBooks[1].isIntegral).toBe(true);
+      expect(extBody.externalBooks[1].includedVolumes).toContain('32');
+      // Zéro pollution du Catalogue Central avant validation !
+      expect(dbLocal.all('SELECT id FROM series')).toHaveLength(0);
+
+      // 2. Une fois la série étendue en base locale, chercher "Lucky Luke" Tome 10 court-circuite totalement internet (0 appel BnF)
+      //    et renvoie le tome unitaire #10 ET l'intégrale locale couvrant #10 !
+      const now = new Date().toISOString();
+      const { series } = ctxLocal.services.seriesGraphService.resolveOrCreateSeriesCut({
+        seriesName: 'Lucky Luke',
+        wikidataSeriesQid: 'Q137475',
+        bookTitle: 'Alerte aux Pieds-Bleus',
+        volumeNumber: 10,
+        isHorsSerie: false,
+        isIntegral: false,
+        authors: ['Morris'],
+        now
+      });
+      ctxLocal.repos.catalogRepo.mergeSeriesMetadataAutomatic(series.id, { isCompleteExpanded: true, now });
+      ctxLocal.repos.catalogRepo.upsertBookAutomatic({
+        id: 'bk_ll_10',
+        workCanonicalId: 'wd:Q_LL_10',
+        seriesId: series.id,
+        title: 'Alerte aux Pieds-Bleus',
+        normalizedTitle: 'alerte aux pieds bleus',
+        volumeNumber: 10,
+        volumeLabel: '10',
+        sortOrder: 10,
+        isHorsSerie: false,
+        isIntegral: false,
+        includedVolumes: [],
+        authors: ['Morris'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Dupuis',
+        collectionName: null,
+        publishYear: '1958',
+        pageCount: 46,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: 'Q_LL_10',
+        inventaireUri: null,
+        sourceOrigin: 'auto',
+        now
+      });
+      ctxLocal.repos.catalogRepo.upsertBookAutomatic({
+        id: 'bk_ll_int4',
+        workCanonicalId: 'ser:ll:int:10-12',
+        seriesId: series.id,
+        title: 'Lucky Luke — Intégrale 4',
+        normalizedTitle: 'lucky luke integrale 4',
+        volumeNumber: null,
+        volumeLabel: 'Int. T.10-12',
+        sortOrder: 10004,
+        isHorsSerie: false,
+        isIntegral: true,
+        includedVolumes: ['10', '11', '12'],
+        authors: ['Morris'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Dupuis',
+        collectionName: null,
+        publishYear: '2016',
+        pageCount: 180,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: null,
+        inventaireUri: null,
+        sourceOrigin: 'auto',
+        now
+      });
+
+      const callsBeforeLocal = bnfTextCalls;
+      const locRes = await ctxLocal.app.request('/api/search/catalog', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ title: 'Lucky Luke', volumeNumber: '10' })
+      });
+      expect(locRes.status).toBe(200);
+      const locBody = (await locRes.json()) as {
+        books: Array<{ id: string; isIntegral: boolean }>;
+        externalBooks: unknown[];
+      };
+      // Court-circuit 100 % local : 0 appel réseau BnF !
+      expect(bnfTextCalls).toBe(callsBeforeLocal);
+      expect(locBody.externalBooks).toHaveLength(0);
+      // Tome 10 unitaire en première intention + Intégrale 4 couvrante juste après !
+      expect(locBody.books.map((b) => b.id)).toEqual(['bk_ll_10', 'bk_ll_int4']);
+
+      ctxLocal.worker.stop();
+    } finally {
+      dbLocal.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('Lot 4 (Photo IA Œuvre abstraite) : court-circuite BnF si l’œuvre est déjà au Catalogue Central, expose les couvertures multi-éditions via /covers et applique selectedCoverKey en Couche 3 Foyer sans toucher au Catalogue Central', async () => {
+    const dbLocal = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(dbLocal, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-lot4-photo-'));
+    let bnfSearchCalls = 0;
+
+    try {
+      const covA = await makeGradientPng('ltr');
+      const covB = await makeGradientPng('rtl');
+
+      const mockGemini: GeminiConnector = {
+        isConfigured: () => true,
+        async extractBooksFromImage() {
+          return [
+            {
+              title: 'Le Secret de La Licorne',
+              series: 'Tintin',
+              volumeNumber: '11',
+              author: 'Hergé',
+              confidence: 'high'
+            }
+          ];
+        }
+      };
+
+      const ctxLocal = createApp({
+        db: dbLocal,
+        config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpDir, MONTHLY_AI_QUOTA: '5' }),
+        geminiConnector: mockGemini,
+        connectors: {
+          bnf: {
+            async lookupByIsbn() { return null; },
+            async searchByEnsembleId() { return []; },
+            async sampleByCollectionName() { return []; },
+            async searchByTitleAndAuthor() {
+              bnfSearchCalls++;
+              return [];
+            }
+          },
+          sudoc: { async lookupByIsbn() { return null; } },
+          inventaire: { async lookupByIsbn() { return null; }, async fetchSeriesWorks() { return []; }, async searchByText() { return []; } },
+          wikidata: { async lookupWorkByQid() { return null; }, async fetchSeriesWorksByQid() { return []; } },
+          googleBooks: { async lookupByIsbn() { return null; } },
+          openLibrary: { async lookupByIsbn() { return null; } }
+        },
+        coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
+      });
+
+      const reg = await ctxLocal.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'PhotoLot4',
+          email: 'lot4@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+
+      // Pré-peupler Tintin T.11 dans le Catalogue Central avec 2 éditions + 2 couvertures WebP distinctes
+      const now = new Date().toISOString();
+      const storedCovA = await ctxLocal.services.coverService.storeBufferAsWebp(covA, 'https://covers.test/tintin-a.png');
+      const storedCovB = await ctxLocal.services.coverService.storeBufferAsWebp(covB, 'https://covers.test/tintin-b.png');
+
+      const { series } = ctxLocal.services.seriesGraphService.resolveOrCreateSeriesCut({
+        seriesName: 'Les Aventures de Tintin',
+        wikidataSeriesQid: 'Q744536',
+        bookTitle: 'Le Secret de La Licorne',
+        volumeNumber: 11,
+        isHorsSerie: false,
+        isIntegral: false,
+        authors: ['Hergé'],
+        now
+      });
+      ctxLocal.repos.catalogRepo.upsertBookAutomatic({
+        id: 'bk_tintin_11',
+        workCanonicalId: 'wd:Q_TINTIN_11',
+        seriesId: series.id,
+        title: 'Le Secret de La Licorne',
+        normalizedTitle: 'le secret de la licorne',
+        volumeNumber: 11,
+        volumeLabel: '11',
+        sortOrder: 11,
+        isHorsSerie: false,
+        isIntegral: false,
+        includedVolumes: [],
+        authors: ['Hergé'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Casterman',
+        collectionName: null,
+        publishYear: '1943',
+        pageCount: 62,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: storedCovA.coverKey,
+        wikidataQid: 'Q_TINTIN_11',
+        inventaireUri: null,
+        sourceOrigin: 'auto',
+        now
+      });
+      ctxLocal.repos.catalogRepo.upsertBookEdition({
+        isbn13: '9782203001107',
+        bookId: 'bk_tintin_11',
+        publisher: 'Casterman',
+        collectionName: null,
+        publishYear: '1993',
+        pageCount: 62,
+        coverKey: storedCovA.coverKey,
+        source: 'bnf',
+        now
+      });
+      ctxLocal.repos.catalogRepo.upsertBookEdition({
+        isbn13: '9782203001114',
+        bookId: 'bk_tintin_11',
+        publisher: 'Casterman Fac-similé',
+        collectionName: null,
+        publishYear: '2006',
+        pageCount: 62,
+        coverKey: storedCovB.coverKey,
+        source: 'bnf',
+        now
+      });
+
+      // 1. Photo IA -> doit court-circuiter totalement BnF (0 appel réseau) et proposer 1 Œuvre abstraite locale
+      const dataUrl = await makeShelfPhotoDataUrl();
+      const createRes = await ctxLocal.app.request('/api/jobs/photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ mode: 'shelf', imageDataUrl: dataUrl, mimeType: 'image/png' })
+      });
+      expect(createRes.status).toBe(201);
+      const jobId = ((await createRes.json()) as { job: { id: string } }).job.id;
+
+      await ctxLocal.worker.processNextJob();
+      expect(bnfSearchCalls).toBe(0);
+
+      const jobsRes = await ctxLocal.app.request('/api/jobs', { headers: { cookie } });
+      const job = ((await jobsRes.json()) as {
+        jobs: Array<{
+          id: string;
+          result: {
+            items: Array<{
+              id: string;
+              options: Array<{
+                bookId?: string | null;
+                source: string;
+                editionCount?: number;
+                coverOptions?: Array<{ coverKey: string | null; coverUrl: string }>;
+              }>;
+            }>;
+          };
+        }>;
+      }).jobs.find((j) => j.id === jobId)!;
+
+      expect(job.result.items).toHaveLength(1);
+      const item = job.result.items[0];
+      expect(item.options).toHaveLength(1);
+      expect(item.options[0].source).toBe('local');
+      expect(item.options[0].bookId).toBe('bk_tintin_11');
+      expect(item.options[0].editionCount).toBe(2);
+      expect(item.options[0].coverOptions).toHaveLength(2);
+
+      // 2. Endpoint GET /api/jobs/photo/:jobId/items/:itemId/covers -> renvoie les 2 couvertures distinctes en 0 ms
+      const covRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/items/${item.id}/covers`, {
+        headers: { cookie }
+      });
+      expect(covRes.status).toBe(200);
+      const covBody = (await covRes.json()) as { covers: Array<{ coverKey: string | null; coverUrl: string }> };
+      expect(covBody.covers.map((c) => c.coverKey)).toEqual([storedCovA.coverKey, storedCovB.coverKey]);
+
+      // 3. L'utilisateur choisit explicitement la 2e couverture (Fac-similé) -> persistée et appliquée en Couche 3 Foyer au commit !
+      const patchRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/items/${item.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ selectedCoverKey: storedCovB.coverKey, selected: true })
+      });
+      expect(patchRes.status).toBe(200);
+
+      const commitRes = await ctxLocal.app.request(`/api/jobs/photo/${jobId}/commit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ targetStatus: 'owned' })
+      });
+      expect(commitRes.status).toBe(200);
+
+      // Vérifie que le Foyer voit bien la couverture B (Couche 3) tandis que le Catalogue Central garde intacte la couverture A !
+      const pullRes = await ctxLocal.app.request('/api/sync/pull', { headers: { cookie } });
+      const pullBody = (await pullRes.json()) as {
+        books: Array<{ id: string; coverKey: string | null; hasUserOverrides: boolean }>;
+      };
+      const userTintin = pullBody.books.find((b) => b.id === 'bk_tintin_11')!;
+      expect(userTintin.coverKey).toBe(storedCovB.coverKey);
+      expect(userTintin.hasUserOverrides).toBe(true);
+
+      const catalogRow = ctxLocal.repos.catalogRepo.findBookById('bk_tintin_11')!;
+      expect(catalogRow.cover_key).toBe(storedCovA.coverKey);
 
       ctxLocal.worker.stop();
     } finally {

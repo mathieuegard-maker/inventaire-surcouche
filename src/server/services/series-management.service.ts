@@ -2,7 +2,13 @@
 // Service métier Séries (Franchise -> Découpages, enrichissement à la demande, rattachement/fusion Couche 3, exclusion) & Profil Auteur.
 
 import crypto from 'node:crypto';
-import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
+import {
+  annotateIntegralCoverage,
+  formatIncludedVolumeNumbers,
+  formatIntegralRangeLabel,
+  parseIncludedVolumeNumbers
+} from '../../shared/bibliographic/integral.util';
+import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import {
   cleanSeriesName,
   cleanTitle,
@@ -174,9 +180,16 @@ export class SeriesManagementService {
     books: BookView[];
   } {
     const books = this.buildBookViewsForSeries(libraryId, userId, sRow.id);
-    const ownedCount = books.filter((b) => b.ownershipStatus === 'owned' || Boolean(b.ownedViaIntegral)).length;
+    const unitaryBooks = books.filter((b) => !b.isIntegral);
+    const progressPool = unitaryBooks.length > 0 ? unitaryBooks : books;
+    const ownedCount = progressPool.filter(
+      (b) => b.ownershipStatus === 'owned' || Boolean(b.ownedViaIntegral)
+    ).length;
     const coverBook =
-      books.find((b) => b.ownershipStatus === 'owned' && b.coverUrl) ?? books.find((b) => b.coverUrl);
+      books.find((b) => !b.isIntegral && b.ownershipStatus === 'owned' && b.coverUrl) ??
+      books.find((b) => b.ownershipStatus === 'owned' && b.coverUrl) ??
+      books.find((b) => !b.isIntegral && b.coverUrl) ??
+      books.find((b) => b.coverUrl);
 
     return {
       view: {
@@ -188,7 +201,7 @@ export class SeriesManagementService {
         primaryAuthors: parseJsonArray(sRow.primary_authors_json),
         wikidataQid: sRow.wikidata_qid,
         isCompleteExpanded: sRow.is_complete_expanded === 1,
-        knownVolumesCount: Math.max(sRow.known_volumes_count, books.length),
+        knownVolumesCount: unitaryBooks.length > 0 ? unitaryBooks.length : Math.max(sRow.known_volumes_count, books.length),
         ownedCount,
         coverUrl: coverBook?.coverUrl ?? null,
         updatedAt: sRow.updated_at
@@ -250,6 +263,157 @@ export class SeriesManagementService {
     }
     const detail = this.getSeriesDetail(libraryId, userId, seriesId);
     return { report, detail };
+  }
+
+  /**
+   * Crée ou rattache une œuvre Intégrale DISTINCTE dans une série SANS JAMAIS écraser un tome unitaire existant.
+   * Vérifie d'abord si une intégrale correspondante existe déjà en base ou à la BnF pour rapatrier son ISBN et sa couverture.
+   */
+  async createOrLinkIntegralForSeries(input: {
+    libraryId: string;
+    userId: string;
+    seriesId: string;
+    includedVolumes: string[];
+    title?: string;
+    isbn13?: string;
+    ownershipStatus?: 'owned' | 'wish' | 'none';
+  }): Promise<{ book: BookView; matchedExisting: boolean; matchedBnfIsbn: string | null }> {
+    const series = this.catalogRepo.findSeriesById(input.seriesId);
+    if (!series) {
+      throw new AppError(404, 'SERIES_NOT_FOUND', 'Série introuvable.');
+    }
+
+    const vols = parseIncludedVolumeNumbers(input.includedVolumes);
+    if (vols.length === 0) {
+      throw new AppError(400, 'INVALID_INCLUDED_VOLUMES', 'Indiquez au moins un numéro de tome inclus (ex. 1-3).');
+    }
+
+    const now = new Date().toISOString();
+    const targetSig = vols.join(',');
+    const cleanInputIsbn = input.isbn13 ? isbnUtil.normalizeToIsbn13(input.isbn13) : null;
+
+    // 1. Chercher une intégrale déjà existante dans cette série (par ISBN ou même plage de tomes)
+    const seriesBooks = this.catalogRepo.listBooksBySeriesId(series.id);
+    let targetBook =
+      (cleanInputIsbn ? this.catalogRepo.findBookByIsbn13(cleanInputIsbn) : null) ??
+      seriesBooks.find((b) => {
+        if (b.is_integral !== 1) return false;
+        const existingVols = parseIncludedVolumeNumbers(parseJsonArray(b.included_volumes_json));
+        return existingVols.length > 0 && existingVols.join(',') === targetSig;
+      }) ??
+      null;
+
+    // Garde-fou : ne JAMAIS réutiliser/écraser un tome unitaire !
+    if (targetBook && targetBook.is_integral !== 1) {
+      targetBook = null;
+    }
+
+    const matchedExisting = Boolean(targetBook);
+    let matchedBnfIsbn: string | null = cleanInputIsbn;
+    let bnfMatchTitle: string | null = null;
+    let bnfAuthors: string[] = [];
+    let bnfPublisher: string | null = null;
+    let bnfYear: string | null = null;
+    let bnfPages: number | null = null;
+
+    // 2. Si absente en base, interroger BnF Intégrales pour rapatrier ISBN & métadonnées officielles
+    if (!targetBook && !matchedBnfIsbn && this.connectors?.bnf.searchSeriesIntegrals) {
+      try {
+        const bnfIntegrals = await this.connectors.bnf.searchSeriesIntegrals(series.canonical_name, 20);
+        const exactMatch =
+          bnfIntegrals.find((it) => (it.includedVolumes ?? []).join(',') === targetSig) ??
+          bnfIntegrals.find((it) => {
+            const iv = it.includedVolumes ?? [];
+            return iv.length > 0 && vols.every((v) => iv.includes(v));
+          });
+        if (exactMatch) {
+          matchedBnfIsbn = exactMatch.isbn13s[0] ?? null;
+          bnfMatchTitle = exactMatch.title;
+          bnfAuthors = exactMatch.authors;
+          bnfPublisher = exactMatch.publisher ?? null;
+          bnfYear = exactMatch.publishYear ?? null;
+          bnfPages = exactMatch.pageCount ?? null;
+        }
+      } catch {
+        // continue sans BnF
+      }
+    }
+
+    // 3. Créer la nouvelle fiche œuvre Intégrale distincte si nécessaire
+    if (!targetBook) {
+      const formattedRange = formatIncludedVolumeNumbers(vols);
+      const effectiveTitle =
+        input.title?.trim() ||
+        bnfMatchTitle ||
+        `${series.canonical_name} — Intégrale (${formattedRange})`;
+      const primaryAuthors = parseJsonArray(series.primary_authors_json);
+      const firstUnitary = seriesBooks.find((b) => b.is_integral === 0);
+      const volumeLabel = formatIntegralRangeLabel(vols);
+
+      targetBook = this.catalogRepo.upsertBookAutomatic({
+        id: `bk_${crypto.randomBytes(6).toString('hex')}`,
+        workCanonicalId: `ser:${series.id}:int:${vols.join('-')}:${crypto.randomBytes(3).toString('hex')}`,
+        seriesId: series.id,
+        title: effectiveTitle,
+        normalizedTitle: normalizeTextKey(effectiveTitle),
+        volumeNumber: null,
+        volumeLabel,
+        sortOrder: 10000 + (parseInt(vols[0], 10) || 999),
+        isHorsSerie: false,
+        isIntegral: true,
+        includedVolumes: vols,
+        authors: bnfAuthors.length > 0 ? bnfAuthors : primaryAuthors,
+        scriptwriters: [],
+        illustrators: [],
+        publisher: bnfPublisher,
+        collectionName: null,
+        publishYear: bnfYear,
+        pageCount: bnfPages,
+        description: null,
+        language: 'fr',
+        mainCategory: firstUnitary?.main_category ?? 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: null,
+        inventaireUri: null,
+        sourceOrigin: matchedBnfIsbn ? 'auto' : 'manual',
+        now
+      });
+    }
+
+    // 4. Si un ISBN BnF/saisi a été trouvé, enrichir via le moteur Étage 2 unique (couverture + métadonnées)
+    if (matchedBnfIsbn) {
+      await this.ingestionService.enrichExistingBookByIsbn(targetBook.id, matchedBnfIsbn).catch(() => null);
+      targetBook = this.catalogRepo.findBookById(targetBook.id) ?? targetBook;
+    }
+
+    // 5. Enregistrer statut Foyer + surcharge Couche 3 des tomes inclus choisis par l'utilisateur
+    const status = input.ownershipStatus ?? 'owned';
+    if (status === 'owned' || status === 'wish') {
+      this.libraryRepo.upsertLibraryBookStatus({
+        libraryId: input.libraryId,
+        bookId: targetBook.id,
+        status,
+        wishedByUserId: status === 'wish' ? input.userId : null,
+        now
+      });
+    }
+    const existingLib = this.libraryRepo.findLibraryBook(input.libraryId, targetBook.id);
+    const existingOv = parseOverrides(existingLib?.overrides_json);
+    const updatedLib = this.libraryRepo.setLibraryBookOverrides(
+      input.libraryId,
+      targetBook.id,
+      {
+        ...existingOv,
+        isIntegral: true,
+        includedVolumes: vols,
+        volumeLabel: formatIntegralRangeLabel(vols)
+      },
+      now
+    );
+
+    const view = this.ingestionService.buildMergedBookView(targetBook, updatedLib);
+    return { book: view, matchedExisting, matchedBnfIsbn };
   }
 
   /**

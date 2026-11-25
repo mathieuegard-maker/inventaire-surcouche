@@ -12,8 +12,18 @@ import { useAuthStore } from './auth.store';
 
 export type ScanTab = 'photo' | 'burst' | 'simple' | 'search';
 
+export interface PhotoCoverOption {
+  coverKey: string | null;
+  coverUrl: string;
+  label: string;
+  isbn13?: string | null;
+}
+
 export interface PhotoCandidateOption {
+  bookId?: string | null;
   isbn13: string;
+  siblingIsbns?: string[];
+  editionCount?: number;
   title: string;
   seriesName: string | null;
   volumeNumber: string | null;
@@ -21,6 +31,9 @@ export interface PhotoCandidateOption {
   publisher: string | null;
   publishYear: string | null;
   coverUrl: string | null;
+  coverOptions?: PhotoCoverOption[];
+  isIntegral?: boolean;
+  includedVolumes?: string[];
   source: string;
 }
 
@@ -43,6 +56,8 @@ export interface PhotoJobItem {
   options: PhotoCandidateOption[];
   fallbackCoverUrl?: string | null;
   selectedOptionIsbn13: string | null;
+  selectedCoverKey?: string | null;
+  selectedCoverUrl?: string | null;
   selected: boolean;
   ignored: boolean;
   alreadyStatus: OwnershipStatus;
@@ -76,6 +91,9 @@ export interface ExternalSearchHit {
   publishYear: string | null;
   coverUrl: string | null;
   source: string;
+  isIntegral?: boolean;
+  includedVolumes?: string[];
+  editionCount?: number;
 }
 
 export interface SearchFormFields {
@@ -144,6 +162,8 @@ export const useScanStore = defineStore('scan', () => {
       selected?: boolean;
       ignored?: boolean;
       selectedOptionIsbn13?: string | null;
+      selectedCoverKey?: string | null;
+      selectedCoverUrl?: string | null;
       isIntegral?: boolean;
       includedVolumes?: string[];
     }
@@ -157,6 +177,23 @@ export const useScanStore = defineStore('scan', () => {
     );
     useJobsStore().upsertJob(res.job);
     return res.job;
+  }
+
+  async function fetchPhotoItemCovers(
+    jobId: string,
+    itemId: string,
+    options?: { isbn13?: string; refresh?: boolean }
+  ): Promise<PhotoCoverOption[]> {
+    const params = new URLSearchParams();
+    if (options?.isbn13) params.set('isbn13', options.isbn13);
+    if (options?.refresh) params.set('refresh', '1');
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await apiRequest<{ ok: true; covers: PhotoCoverOption[]; job: BackgroundJobView }>(
+      `/api/jobs/photo/${encodeURIComponent(jobId)}/items/${encodeURIComponent(itemId)}/covers${qs}`,
+      { timeoutMs: 30000 }
+    );
+    useJobsStore().upsertJob(res.job);
+    return res.covers;
   }
 
   async function retryPhotoItemBnf(
@@ -356,6 +393,7 @@ export const useScanStore = defineStore('scan', () => {
     searchExternalBooks,
     submitPhotoJob,
     updatePhotoItem,
+    fetchPhotoItemCovers,
     retryPhotoItemBnf,
     retryPhotoJobFailed,
     retryPhotoJobOcr,

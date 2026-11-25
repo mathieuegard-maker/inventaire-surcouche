@@ -610,6 +610,22 @@ export class SeriesGraphService {
       }
     }
 
+    // 4. Option A validée : Découverte automatique des Intégrales officielles de la série (isolées des tomes unitaires)
+    if (this.connectors.bnf.searchSeriesIntegrals) {
+      try {
+        const integrals = (await this.connectors.bnf.searchSeriesIntegrals(series.canonical_name, 20)).filter(
+          isCompatibleMediaWork
+        );
+        if (integrals.length > 0) {
+          if (!sourcesUsed.includes('bnf')) sourcesUsed.push('bnf');
+          // Les intégrales sont marquées `isIntegral: true` -> zéro collision avec les tomes unitaires
+          this.mergeGraphWorks(graphWorks, integrals, series.canonical_name, false);
+        }
+      } catch {
+        // continue
+      }
+    }
+
     let addedCount = 0;
     let updatedCount = 0;
 
@@ -703,7 +719,7 @@ export class SeriesGraphService {
           ? `wd:${work.wikidataQid}`
           : work.inventaireUri
             ? `inv:${work.inventaireUri}`
-            : `ser:${series.id}:vol:${work.volumeNumber ?? 'x'}:${effectiveNormTitle.slice(0, 40)}`);
+            : `ser:${series.id}:${work.isIntegral ? 'int' : 'vol'}:${work.volumeNumber ?? 'x'}:${effectiveNormTitle.slice(0, 40)}`);
 
       const classification = classifyBookMetadata({
         title: effectiveTitle,
@@ -724,7 +740,7 @@ export class SeriesGraphService {
         sortOrder: work.sortOrder ?? work.volumeNumber ?? null,
         isHorsSerie: Boolean(work.isHorsSerie),
         isIntegral: Boolean(work.isIntegral),
-        includedVolumes: [],
+        includedVolumes: work.includedVolumes ?? [],
         authors: work.authors,
         scriptwriters: work.scriptwriters ?? [],
         illustrators: work.illustrators ?? [],

@@ -168,6 +168,7 @@ export function createApp(options: CreateAppOptions) {
     coverService,
     ingestionService,
     libraryService,
+    bookIdentifier,
     onJobChanged: (row) => worker.notifyJobRow(row)
   });
 
@@ -175,7 +176,8 @@ export function createApp(options: CreateAppOptions) {
     catalogRepo,
     libraryRepo,
     connectors,
-    ingestionService
+    ingestionService,
+    bookIdentifier
   });
 
   const seriesManagementService = new SeriesManagementService({

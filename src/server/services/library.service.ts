@@ -710,24 +710,15 @@ export class LibraryService {
         for (const u of itunesRes.value) enqueueExt(u, 'Apple Books');
       }
 
-      // Vérification réelle en parallèle (lots de 6) pour ne présenter que des images valides (zéro 404/placeholder)
-      const toProbe = rawExternalQueue.slice(0, 18);
-      const verified: typeof toProbe = [];
-      for (let i = 0; i < toProbe.length && verified.length < 12; i += 6) {
-        const batch = toProbe.slice(i, i + 6);
-        const checks = await Promise.all(
-          batch.map(async (item) => ({
-            item,
-            ok: await this.coverService.probeExternalCoverUrl(item.url, {
-              minBytes: item.minBytes,
-              rejectExactBytes: item.rejectExactBytes
-            })
-          }))
-        );
-        for (const c of checks) {
-          if (c.ok && verified.length < 12) verified.push(c.item);
-        }
-      }
+      // Vérification réelle + déduplication visuelle par empreinte perceptuelle dHash (consensus + meilleure résolution)
+      const localCoverKeys = candidates
+        .filter((c) => c.kind === 'local' && Boolean(c.coverKey))
+        .map((c) => c.coverKey!);
+      const verified = await this.coverService.deduplicateExternalCandidatesVisually(
+        rawExternalQueue.slice(0, 18),
+        localCoverKeys,
+        12
+      );
 
       for (const item of verified) {
         candidates.push({

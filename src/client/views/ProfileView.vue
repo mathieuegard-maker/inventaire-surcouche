@@ -196,6 +196,7 @@ interface LibraryStatsData {
   periodDays: number | null;
   kpis: {
     ownedCount: number;
+    coveredVolumesCount?: number;
     wishedCount: number;
     lentCount: number;
     seriesCount: number;
@@ -833,6 +834,12 @@ async function disableWebPush(): Promise<void> {
           <router-link to="/collection" class="ds-card stats-kpi-card">
             <span class="ds-text-muted">{{ t('profile.statsKpiOwned') }}</span>
             <strong class="stats-kpi-value">{{ statsData.kpis.ownedCount }}</strong>
+            <small
+              v-if="statsData.kpis.coveredVolumesCount && statsData.kpis.coveredVolumesCount > statsData.kpis.ownedCount"
+              class="ds-text-muted"
+            >
+              {{ t('profile.statsKpiCoveredSub', { count: statsData.kpis.coveredVolumesCount }) }}
+            </small>
           </router-link>
           <router-link to="/wishlist" class="ds-card stats-kpi-card">
             <span class="ds-text-muted">{{ t('profile.statsKpiWish') }}</span>

@@ -279,18 +279,6 @@ describe('Jalon 4 — Fiche Livre, Primauté Couche 3, Lecture Individuelle, Int
   });
 
   it('trouve des couvertures externes vérifiées sur GET /api/books/:id/covers?external=1 même pour un livre sans ISBN', async () => {
-    const validPng = await sharp({
-      create: {
-        width: 240,
-        height: 360,
-        channels: 3,
-        background: { r: 30, g: 90, b: 160 },
-        noise: { type: 'gaussian', mean: 128, sigma: 35 }
-      }
-    })
-      .png()
-      .toBuffer();
-
     const customApp = createApp({
       db,
       config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpCoversDir }),
@@ -330,8 +318,31 @@ describe('Jalon 4 — Fiche Livre, Primauté Couche 3, Lecture Individuelle, Int
       },
       coverFetchImpl: (async (input: string | URL | Request) => {
         const url = String(input);
-        if (url.includes('validhash1234567890') || url.includes('images-eu.ssl-images-amazon.com')) {
-          return new Response(new Uint8Array(validPng), { status: 200, headers: { 'content-type': 'image/png' } });
+        if (url.includes('validhash1234567890')) {
+          const raw = Buffer.alloc(160 * 240 * 3);
+          for (let y = 0; y < 240; y++) {
+            for (let x = 0; x < 160; x++) {
+              const i = (y * 160 + x) * 3;
+              raw[i] = Math.round((x / 159) * 240);
+              raw[i + 1] = 80;
+              raw[i + 2] = 140;
+            }
+          }
+          const img = await sharp(raw, { raw: { width: 160, height: 240, channels: 3 } }).png().toBuffer();
+          return new Response(new Uint8Array(img), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        if (url.includes('images-eu.ssl-images-amazon.com')) {
+          const raw = Buffer.alloc(160 * 240 * 3);
+          for (let y = 0; y < 240; y++) {
+            for (let x = 0; x < 160; x++) {
+              const i = (y * 160 + x) * 3;
+              raw[i] = Math.round(((159 - x) / 159) * 240);
+              raw[i + 1] = 180;
+              raw[i + 2] = 40;
+            }
+          }
+          const img = await sharp(raw, { raw: { width: 160, height: 240, channels: 3 } }).png().toBuffer();
+          return new Response(new Uint8Array(img), { status: 200, headers: { 'content-type': 'image/png' } });
         }
         return new Response('', { status: 404 });
       }) as typeof fetch

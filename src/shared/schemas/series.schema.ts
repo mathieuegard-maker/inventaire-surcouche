@@ -18,3 +18,11 @@ export const attachSeriesSchema = z
 export const excludeFromSeriesSchema = z.object({
   bookIds: z.array(z.string().trim().min(1)).min(1).max(200)
 });
+
+export const createSeriesIntegralSchema = z.object({
+  title: z.string().trim().max(240).optional(),
+  includedVolumes: z.array(z.string().trim().min(1)).min(1).max(60),
+  sourceBookId: z.string().trim().optional(),
+  isbn13: z.string().trim().optional(),
+  ownershipStatus: z.enum(['owned', 'wish', 'none']).default('owned')
+});

@@ -444,7 +444,8 @@ export class IngestionService {
    */
   async enrichExistingBookByIsbn(
     bookId: string,
-    rawIsbn: string
+    rawIsbn: string,
+    siblingIsbns: string[] = []
   ): Promise<{ enriched: boolean; coverAdded: boolean }> {
     const existing = this.catalogRepo.findBookById(bookId);
     const isbn13 = isbnUtil.normalizeToIsbn13(rawIsbn);
@@ -459,8 +460,40 @@ export class IngestionService {
     const draft = await this.comparisonService.collectAndArbitrate(isbn13);
     if (!draft) return { enriched: false, coverAdded: false };
 
+    const safeSiblingIsbns = Array.from(
+      new Set(
+        [isbn13, ...siblingIsbns]
+          .map((x) => isbnUtil.normalizeToIsbn13(x))
+          .filter((x): x is string => {
+            if (!x) return false;
+            const owner = this.catalogRepo.findBookByIsbn13(x);
+            return !owner || owner.id === existing.id;
+          })
+      )
+    ).slice(0, 4);
+
     const hadCover = Boolean(existing.cover_key);
     let coverKey: string | null = existing.cover_key ?? null;
+    const coverByIsbn = new Map<string, string>();
+
+    if (!coverKey && safeSiblingIsbns.length >= 2) {
+      // Consensus visuel dHash multi-éditions : élit la couverture majoritaire la plus nette + stocke les variantes distinctes
+      const consensus = await this.coverService.electBestCoverFromMultiEditions({
+        isbn13s: safeSiblingIsbns,
+        candidateUrls: draft.coverCandidates,
+        maxEditions: 4,
+        maxDistinctStored: 4
+      });
+      if (consensus.winner) {
+        coverKey = consensus.winner.coverKey;
+      }
+      for (const entry of consensus.distinctCovers) {
+        if (entry.sourceIsbn && !coverByIsbn.has(entry.sourceIsbn)) {
+          coverByIsbn.set(entry.sourceIsbn, entry.cover.coverKey);
+        }
+      }
+    }
+
     if (!coverKey) {
       const stored = await this.coverService.resolveBestCoverFromCascade({
         isbn13,
@@ -522,10 +555,26 @@ export class IngestionService {
       collectionName: draft.collectionName,
       publishYear: draft.publishYear,
       pageCount: draft.pageCount,
-      coverKey,
+      coverKey: coverByIsbn.get(isbn13) ?? coverKey,
       source: draft.contributingSources[0] ?? 'auto',
       now
     });
+
+    // Enregistre également les éditions sœurs découvertes (et leurs couvertures distinctes) dans l'Œuvre abstraite
+    for (const sibIsbn of safeSiblingIsbns) {
+      if (sibIsbn === isbn13) continue;
+      this.catalogRepo.upsertBookEdition({
+        isbn13: sibIsbn,
+        bookId: existing.id,
+        publisher: null,
+        collectionName: null,
+        publishYear: null,
+        pageCount: null,
+        coverKey: coverByIsbn.get(sibIsbn) ?? null,
+        source: 'bnf',
+        now
+      });
+    }
 
     return {
       enriched: true,
@@ -584,18 +633,28 @@ export class IngestionService {
 
       try {
         if (editions.length > 0 && !book.cover_key) {
-          // ISBN déjà connu mais couverture absente -> cascade couvertures Étage 2 directe
+          // ISBN déjà connu(s) mais couverture absente -> consensus visuel multi-éditions (ou cascade directe)
           let coverKey: string | null = null;
-          for (const ed of editions.slice(0, 3)) {
-            const stored = await this.coverService.resolveBestCoverFromCascade({
-              isbn13: ed.isbn13,
-              candidateUrls: [],
-              title: book.title,
-              author: authors[0]
+          if (editions.length >= 2) {
+            const consensus = await this.coverService.electBestCoverFromMultiEditions({
+              isbn13s: editions.map((e) => e.isbn13),
+              maxEditions: 4,
+              maxDistinctStored: 4
             });
-            if (stored) {
-              coverKey = stored.coverKey;
-              break;
+            if (consensus.winner) coverKey = consensus.winner.coverKey;
+          }
+          if (!coverKey) {
+            for (const ed of editions.slice(0, 3)) {
+              const stored = await this.coverService.resolveBestCoverFromCascade({
+                isbn13: ed.isbn13,
+                candidateUrls: [],
+                title: book.title,
+                author: authors[0]
+              });
+              if (stored) {
+                coverKey = stored.coverKey;
+                break;
+              }
             }
           }
           if (coverKey) {
@@ -632,20 +691,23 @@ export class IngestionService {
             coversAdded++;
           }
         } else if (editions.length === 0) {
-          // Aucun ISBN -> Phase 3B (Étage 1) puis Phase 3C (Étage 2)
-          const resolvedIsbn = this.bookIdentifier
-            ? await this.bookIdentifier.findBestIsbnForSeriesVolume({
-                seriesName: series.canonical_name,
-                title: book.title,
-                volumeNumber: book.volume_number,
-                authors,
-                mediaFamily,
-                isIntegral: book.is_integral === 1
-              })
-            : null;
+          // Aucun ISBN -> Phase 3B (Étage 1 multi-éditions) puis Phase 3C (Étage 2 + consensus visuel dHash)
+          const resolvedIsbns = this.bookIdentifier
+            ? await this.bookIdentifier.findRankedIsbnsForSeriesVolume(
+                {
+                  seriesName: series.canonical_name,
+                  title: book.title,
+                  volumeNumber: book.volume_number,
+                  authors,
+                  mediaFamily,
+                  isIntegral: book.is_integral === 1
+                },
+                4
+              )
+            : [];
 
-          if (resolvedIsbn) {
-            const res = await this.enrichExistingBookByIsbn(book.id, resolvedIsbn);
+          if (resolvedIsbns.length > 0) {
+            const res = await this.enrichExistingBookByIsbn(book.id, resolvedIsbns[0], resolvedIsbns.slice(1));
             if (res.enriched) enrichedByIsbn++;
             if (res.coverAdded) coversAdded++;
           } else {

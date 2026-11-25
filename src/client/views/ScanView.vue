@@ -76,13 +76,25 @@ const photoCommitting = ref(false);
 const activePhotoItemId = ref<string | null>(null);
 const previewLightboxOpen = ref(false);
 
+function findSelectedPhotoOption(item: PhotoJobItem) {
+  return (
+    item.options.find(
+      (o) =>
+        o.isbn13 === item.selectedOptionIsbn13 ||
+        (item.selectedOptionIsbn13 ? (o.siblingIsbns ?? []).includes(item.selectedOptionIsbn13) : false)
+    ) ?? item.options[0]
+  );
+}
+
 function getPhotoItemCoverUrl(item: PhotoJobItem): string | null {
-  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
+  if (item.selectedCoverUrl) return item.selectedCoverUrl;
+  if (item.selectedCoverKey) return `/api/covers/${item.selectedCoverKey}`;
+  const chosen = findSelectedPhotoOption(item);
   return chosen?.coverUrl || item.fallbackCoverUrl || null;
 }
 
 function getPhotoItemDisplayTitle(item: PhotoJobItem): string {
-  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
+  const chosen = findSelectedPhotoOption(item);
   return chosen?.title || item.hint.title;
 }
 
@@ -95,7 +107,7 @@ function getPhotoItemPositionShort(item: PhotoJobItem): string {
 }
 
 function getPhotoItemSubtitle(item: PhotoJobItem): string {
-  const chosen = item.options.find((o) => o.isbn13 === item.selectedOptionIsbn13) ?? item.options[0];
+  const chosen = findSelectedPhotoOption(item);
   const parts: string[] = [];
   const series = chosen?.seriesName || item.hint.series;
   const vol = chosen?.volumeNumber || item.hint.volumeNumber;
@@ -106,7 +118,11 @@ function getPhotoItemSubtitle(item: PhotoJobItem): string {
   if (vol) parts.push(`T.${vol}`);
   if (publisher) parts.push(publisher);
   else if (author) parts.push(author);
-  if (item.selectedOptionIsbn13) parts.push(item.selectedOptionIsbn13);
+  if ((chosen?.editionCount ?? 1) > 1) {
+    parts.push(t('scan.photoEditionsGroupedBadge', { count: chosen!.editionCount! }));
+  } else if (item.selectedOptionIsbn13) {
+    parts.push(item.selectedOptionIsbn13);
+  }
   return parts.join(' · ') || '—';
 }
 
@@ -1009,10 +1025,22 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
               class="ds-panel ds-row ds-row--between"
             >
               <div>
-                <strong>{{ hit.title }}</strong>
+                <div class="ds-row">
+                  <strong>{{ hit.title }}</strong>
+                  <span v-if="hit.isIntegral" class="ds-badge ds-badge--accent">
+                    {{
+                      hit.includedVolumes && hit.includedVolumes.length > 0
+                        ? t('book.integralRangeLabel', { range: hit.includedVolumes.join(', ') })
+                        : t('book.integralLabel')
+                    }}
+                  </span>
+                  <span v-if="(hit.editionCount ?? 1) > 1" class="ds-badge">
+                    {{ t('scan.searchExternalEditionsCount', { count: hit.editionCount }) }}
+                  </span>
+                </div>
                 <p class="ds-text-muted">
                   <span v-if="hit.seriesName">{{ hit.seriesName }}</span>
-                  <span v-if="hit.volumeNumber"> T.{{ hit.volumeNumber }}</span>
+                  <span v-if="hit.volumeNumber && !hit.isIntegral"> T.{{ hit.volumeNumber }}</span>
                   <span v-if="hit.authors.length > 0"> · {{ hit.authors.join(', ') }}</span>
                   <span v-if="hit.publisher"> · {{ hit.publisher }}</span>
                   <span> · {{ hit.isbn13 }}</span>

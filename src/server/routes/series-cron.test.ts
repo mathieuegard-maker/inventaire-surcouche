@@ -436,4 +436,111 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
     const hourly2 = await appCtx.cronScheduler.runHourlyPass(new Date('2026-11-23T09:30:00.000Z'));
     expect(hourly2.skipped).toBe(true);
   });
+
+  it('Lot 2 (Intégrales) : normalise la franchise depuis une intégrale, crée une œuvre intégrale distincte sans écraser T.1, couvre T.1-T.3 et calcule stats physiques + progression unitaire', async () => {
+    const { extractFranchiseBaseName } = await import('../../shared/bibliographic/text-normalize.util');
+    expect(extractFranchiseBaseName("L'intégrale Lucky Luke").normalizedKey).toBe('lucky luke');
+    expect(extractFranchiseBaseName('Lucky Luke intégrale').normalizedKey).toBe('lucky luke');
+
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'IntTester',
+        email: 'int@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const cookie = extractCookie(reg);
+
+    // Création d'une série Lucky Luke avec 4 tomes unitaires (non possédés)
+    const now = new Date().toISOString();
+    const { series } = appCtx.services.seriesGraphService.resolveOrCreateSeriesCut({
+      seriesName: 'Lucky Luke',
+      bookTitle: 'La Mine d’or de Dick Digger',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      authors: ['Morris'],
+      now
+    });
+
+    for (const [n, title] of [
+      [1, 'La Mine d’or de Dick Digger'],
+      [2, 'Rodéo'],
+      [3, 'Arizona'],
+      [4, 'Sous le ciel de l’Ouest']
+    ] as const) {
+      appCtx.repos.catalogRepo.upsertBookAutomatic({
+        id: `bk_ll_${n}`,
+        workCanonicalId: `wd:Q_LL_${n}`,
+        seriesId: series.id,
+        title,
+        normalizedTitle: title.toLowerCase(),
+        volumeNumber: n,
+        volumeLabel: String(n),
+        sortOrder: n,
+        isHorsSerie: false,
+        isIntegral: false,
+        includedVolumes: [],
+        authors: ['Morris'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Dupuis',
+        collectionName: null,
+        publishYear: '1949',
+        pageCount: 48,
+        description: null,
+        language: 'fr',
+        mainCategory: 'BD',
+        subgenres: [],
+        coverKey: null,
+        wikidataQid: `Q_LL_${n}`,
+        inventaireUri: null,
+        sourceOrigin: 'auto',
+        now
+      });
+    }
+
+    // L'utilisateur déclare une intégrale couvrant les tomes 1 à 3 depuis la série (ou depuis T.1)
+    const intRes = await appCtx.app.request(`/api/series/${series.id}/integrals`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        includedVolumes: ['1', '2', '3'],
+        sourceBookId: 'bk_ll_1',
+        ownershipStatus: 'owned'
+      })
+    });
+    expect(intRes.status).toBe(201);
+    const intBody = (await intRes.json()) as { book: { id: string; isIntegral: boolean; includedVolumes: string[] } };
+    expect(intBody.book.isIntegral).toBe(true);
+    expect(intBody.book.id).not.toBe('bk_ll_1'); // Le tome 1 unitaire n'a JAMAIS été écrasé !
+    expect(intBody.book.includedVolumes).toEqual(['1', '2', '3']);
+
+    // Vérification détail série : T.1..T.3 intacts et marqués ownedViaIntegral, progression unitaire = 3 / 4 !
+    const detRes = await appCtx.app.request(`/api/series/${series.id}`, { headers: { cookie } });
+    const detBody = (await detRes.json()) as {
+      series: { ownedCount: number; knownVolumesCount: number };
+      books: Array<{ id: string; isIntegral: boolean; ownedViaIntegral: { integralBookId: string } | null }>;
+    };
+    expect(detBody.series.ownedCount).toBe(3);
+    expect(detBody.series.knownVolumesCount).toBe(4);
+    const t1 = detBody.books.find((b) => b.id === 'bk_ll_1');
+    const t3 = detBody.books.find((b) => b.id === 'bk_ll_3');
+    const t4 = detBody.books.find((b) => b.id === 'bk_ll_4');
+    expect(t1?.isIntegral).toBe(false);
+    expect(t1?.ownedViaIntegral?.integralBookId).toBe(intBody.book.id);
+    expect(t3?.ownedViaIntegral?.integralBookId).toBe(intBody.book.id);
+    expect(t4?.ownedViaIntegral).toBeNull();
+
+    // Stats globales : 1 livre physique possédé, couvrant 3 tomes !
+    const statsRes = await appCtx.app.request('/api/stats', { headers: { cookie } });
+    const statsBody = (await statsRes.json()) as {
+      stats: { kpis: { ownedCount: number; coveredVolumesCount: number } };
+    };
+    expect(statsBody.stats.kpis.ownedCount).toBe(1);
+    expect(statsBody.stats.kpis.coveredVolumesCount).toBe(3);
+  });
 });

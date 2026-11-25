@@ -111,6 +111,23 @@ export function createJobsRoutes(deps: {
     return c.json({ ok: true, ...created }, 201);
   });
 
+  router.get('/photo/:jobId/items/:itemId/covers', async (c) => {
+    const auth = c.get('auth')!;
+    const jobId = c.req.param('jobId');
+    const itemId = c.req.param('itemId');
+    const isbn13 = c.req.query('isbn13') || undefined;
+    const refreshExternal = c.req.query('refresh') === '1' || c.req.query('refresh') === 'true';
+    const outcome = await deps.photoAiService.listItemCoverOptions({
+      userId: auth.userId,
+      libraryId: auth.libraryId,
+      jobId,
+      itemId,
+      isbn13,
+      refreshExternal
+    });
+    return c.json({ ok: true, ...outcome });
+  });
+
   router.patch('/photo/:jobId/items/:itemId', zValidator('json', updatePhotoJobItemSchema), (c) => {
     const auth = c.get('auth')!;
     const jobId = c.req.param('jobId');
