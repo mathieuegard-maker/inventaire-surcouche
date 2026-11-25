@@ -733,6 +733,18 @@ export class SeriesGraphService {
         }
       }
 
+      // Garde-fou anti-écrasement d'une œuvre canonique Wikidata par une édition club BnF à titre divergent (ex. France Loisirs)
+      if (
+        existingBook?.wikidata_qid &&
+        work.source === 'bnf' &&
+        !work.wikidataQid &&
+        !isGenericT &&
+        !isGenericVolumeTitle(existingBook.title, series.canonical_name) &&
+        Math.max(tokenOverlapRatio(cleanT, existingBook.title), tokenOverlapRatio(existingBook.title, cleanT)) < 0.45
+      ) {
+        continue;
+      }
+
       // Ne jamais écraser un titre distinctif existant (ex. "Bug, Livre 4") par un titre générique ("Bug")
       const effectiveTitle =
         existingBook && !isGenericVolumeTitle(existingBook.title, series.canonical_name) && isGenericT
@@ -855,6 +867,16 @@ export class SeriesGraphService {
       const normTitle = normalizeTextKey(item.title);
       const itemIsGeneric = isGenericVolumeTitle(item.title, seriesName);
 
+      // Invariant anti-doublon ISBN : un ISBN déjà présent sur un tome consolidé (ex. corrigé T.7->T.8 via SUDOC)
+      // ne doit jamais être ré-ajouté sur un autre tome lors du bouchage de trous BnF !
+      const existingByIsbn =
+        item.isbn13s.length > 0
+          ? target.find((e) => e.isbn13s.some((isbn) => item.isbn13s.includes(isbn)))
+          : undefined;
+      if (existingByIsbn) {
+        continue;
+      }
+
       const match = target.find((existing) => {
         // 1. Même Q-ID Wikidata -> même œuvre garantie
         if (item.wikidataQid && existing.wikidataQid === item.wikidataQid) return true;
@@ -891,7 +913,12 @@ export class SeriesGraphService {
           !existing.isIntegral
         ) {
           if (tokenOverlapRatio(item.title, existing.title) >= 0.45) return true;
-          if (existing.source === 'wikidata' && item.source === 'bnf' && existing.isbn13s.length === 0) {
+          if (
+            existing.source === 'wikidata' &&
+            item.source === 'bnf' &&
+            existing.isbn13s.length === 0 &&
+            (itemIsGeneric || isGenericVolumeTitle(existing.title, seriesName))
+          ) {
             return true;
           }
         }

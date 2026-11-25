@@ -287,18 +287,13 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       if (!/^Q\d+$/.test(qid)) return [];
 
       const sparql = `
-        SELECT ?work ?workLabel ?ordinal (SAMPLE(?frLbl) AS ?frLabel) (SAMPLE(?foreignCopy) AS ?foreignMatch) (SAMPLE(?frWikiTitle) AS ?frWiki) (SAMPLE(?pubDate) AS ?date) (GROUP_CONCAT(DISTINCT ?authorLabel; separator="|") AS ?authors) (SAMPLE(?img) AS ?image)
+        SELECT ?work ?workLabel ?ordinal (SAMPLE(?frLbl) AS ?frLabel) (GROUP_CONCAT(DISTINCT ?altLbl; separator="|") AS ?foreignLabels) (SAMPLE(?frWikiTitle) AS ?frWiki) (SAMPLE(?pubDate) AS ?date) (GROUP_CONCAT(DISTINCT ?authorLabel; separator="|") AS ?authors) (SAMPLE(?img) AS ?image)
         WHERE {
           ?work p:P179 ?stmt .
           ?stmt ps:P179 wd:${qid} .
           OPTIONAL { ?stmt pq:P1545 ?ordinal . }
           OPTIONAL { ?work rdfs:label ?frLbl . FILTER(LANG(?frLbl) = "fr") }
-          OPTIONAL {
-            ?work rdfs:label ?altLbl .
-            FILTER(LANG(?altLbl) IN ("en", "it", "de", "es"))
-            FILTER(BOUND(?frLbl) && STR(?altLbl) = STR(?frLbl))
-            BIND(?altLbl AS ?foreignCopy)
-          }
+          OPTIONAL { ?work rdfs:label ?altLbl . FILTER(LANG(?altLbl) IN ("en", "it", "de", "es")) }
           OPTIONAL {
             ?frArticle schema:about ?work ;
                        schema:isPartOf <https://fr.wikipedia.org/> ;
@@ -324,7 +319,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         timeoutMs: 10000,
         minIntervalMs: 400,
         headers: { Accept: 'application/sparql-results+json' },
-        cacheKey: `wd:sparql:series:v2:${qid}`,
+        cacheKey: `wd:sparql:series:v3:${qid}`,
         cacheTtlSec: 60 * 60 * 24 * 3
       });
 
@@ -341,7 +336,11 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
 
         const rawLabel = row.workLabel?.value ?? '';
         const frLabel = row.frLabel?.value?.trim() ?? '';
-        const hasForeignCopy = Boolean(row.foreignMatch?.value?.trim());
+        const foreignList = (row.foreignLabels?.value ?? '')
+          .split('|')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        const hasForeignCopy = Boolean(frLabel && foreignList.includes(frLabel));
         const frWikiRaw = row.frWiki?.value?.trim() ?? '';
         const frWiki = frWikiRaw ? stripWikipediaDisambiguator(frWikiRaw) : '';
         const preferredLabel =

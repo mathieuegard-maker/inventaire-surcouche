@@ -547,7 +547,7 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
                   work: { value: 'http://www.wikidata.org/entity/Q30728090' },
                   workLabel: { value: "Asterix e la corsa d'Italia" },
                   frLabel: { value: "Asterix e la corsa d'Italia" },
-                  foreignMatch: { value: "Asterix e la corsa d'Italia" },
+                  foreignLabels: { value: "Asterix e la corsa d'Italia|Asterix and the Chariot Race" },
                   frWiki: { value: 'Astérix et la Transitalique' },
                   ordinal: { value: '37' }
                 },
@@ -571,6 +571,9 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
         );
       }
       if (url.includes('action=reverse-claims&property=wdt:P629')) {
+        if (url.includes('inv%3Afrench1')) {
+          return new Response(JSON.stringify({ uris: ['isbn:9782864971115'] }), { status: 200 });
+        }
         return new Response(JSON.stringify({ uris: [] }), { status: 200 });
       }
       if (url.includes('action=by-uris')) {

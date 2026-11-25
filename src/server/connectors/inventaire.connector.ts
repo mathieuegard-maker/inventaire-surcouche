@@ -422,11 +422,10 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         const hasFrenchIsbn = (resolvedEd?.isbn13s ?? []).some(
           (isbn) => isbn.startsWith('9782') || isbn.startsWith('97910')
         );
-        const hasFrenchMetadata = Boolean(work.labels?.fr || resolvedEd?.frTitle || hasFrenchIsbn);
 
         // Filtrer les fiches locales Inventaire (`inv:...`, sans Q-ID Wikidata) non numérotées et dépourvues
-        // de toute donnée francophone (évite "Asterix in French", "Asterix und der Kampf um's Kanzleramt" en hors-série)
-        if (!wikidataQid && volNum === null && !hasFrenchMetadata) {
+        // d'ISBN francophone ou d'édition vérifiable (évite "Asterix in French", "Asterix und der Kampf um's Kanzleramt")
+        if (!wikidataQid && volNum === null && !hasFrenchIsbn) {
           continue;
         }
 
