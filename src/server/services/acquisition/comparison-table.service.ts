@@ -9,7 +9,8 @@ import {
   isCompatibleSeriesName,
   isGenericVolumeTitle,
   normalizeSeriesNumber,
-  normalizeTextKey
+  normalizeTextKey,
+  tokenOverlapRatio
 } from '../../../shared/bibliographic/text-normalize.util';
 import type { BookMainCategory } from '../../../shared/types/domain.types';
 import type { BibliographicConnectors, SeriesLinkKind, SourceCandidateRecord, SourceName } from '../../connectors/types';
@@ -232,7 +233,20 @@ export class ComparisonTableService {
         : rejectedCollectionName);
 
     // 2. Titre principal (nettoyé du préfixe série redondant si pertinent)
-    const rawTitle = pickBestString(columns, (c) => c.title) ?? '';
+    // Si la BnF avait un 460$v corrompu/année (`hasStructuredEnsembleVolume === false`) alors que le SUDOC porte un
+    // ensemble structuré propre (`hasStructuredEnsembleVolume === true`) avec un titre proche (ex. faute de frappe BnF),
+    // préférer le titre propre du SUDOC.
+    const bnfCol = columns.find((c) => c.source === 'bnf');
+    const sudocCol = columns.find((c) => c.source === 'sudoc');
+    const preferSudocCleanTitle = Boolean(
+      bnfCol &&
+        bnfCol.hasStructuredEnsembleVolume === false &&
+        sudocCol?.hasStructuredEnsembleVolume === true &&
+        sudocCol.title &&
+        bnfCol.title &&
+        tokenOverlapRatio(bnfCol.title, sudocCol.title) >= 0.65
+    );
+    const rawTitle = (preferSudocCleanTitle ? sudocCol!.title : pickBestString(columns, (c) => c.title)) ?? '';
     if (!rawTitle) return null;
     const title = cleanTitle(stripRedundantSeriesPrefix(rawTitle, seriesName));
     const normalizedTitle = normalizeTextKey(title);
@@ -243,12 +257,20 @@ export class ComparisonTableService {
     let sortOrder: number | null = null;
 
     if (seriesName) {
+      const volumeReliabilityScore = (c: SourceCandidateRecord): number => {
+        if (c.seriesLinkKind === 'graph_p179') return 3;
+        if (c.hasStructuredEnsembleVolume === true) return 2;
+        if (c.hasStructuredEnsembleVolume === false) return 0;
+        return 1;
+      };
       const matchingSeriesCols = compatibleSeriesCols
         .filter((c) => c.seriesLinkKind === 'graph_p179' || c.seriesLinkKind === 'marc_ensemble_460' || c.volumeNumber)
         .sort((a, b) => {
           const ka = a.seriesLinkKind ? LINK_KIND_PRIORITY[a.seriesLinkKind] : 0;
           const kb = b.seriesLinkKind ? LINK_KIND_PRIORITY[b.seriesLinkKind] : 0;
           if (kb !== ka) return kb - ka;
+          const relDiff = volumeReliabilityScore(b) - volumeReliabilityScore(a);
+          if (relDiff !== 0) return relDiff;
           return (SOURCE_PRIORITY_TEXT[b.source] ?? 0) - (SOURCE_PRIORITY_TEXT[a.source] ?? 0);
         });
 

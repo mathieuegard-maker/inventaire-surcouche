@@ -40,7 +40,13 @@ export function normalizeSeriesNumber(raw?: string | number | null): string {
     .replace(/\.$/, '')
     .trim();
   if (!cleaned || cleaned.length > 12 || /\s/.test(cleaned)) return '';
-  return /^\d+$/.test(cleaned) ? String(parseInt(cleaned, 10)) : cleaned;
+  if (/^\d+$/.test(cleaned)) {
+    const parsed = parseInt(cleaned, 10);
+    // Rejette les années de publication glissées dans MARC 460$v par la BnF (ex. "2017", "2023")
+    if (parsed >= 1800 && parsed <= 2099) return '';
+    return String(parsed);
+  }
+  return cleaned;
 }
 
 export function getLevenshteinDistance(a: string, b: string): number {

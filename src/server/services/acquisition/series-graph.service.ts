@@ -8,6 +8,7 @@ import {
   getLevenshteinDistance,
   isCompatibleSeriesName,
   isGenericVolumeTitle,
+  normalizeSeriesNumber,
   normalizeTextKey,
   tokenOverlapRatio
 } from '../../../shared/bibliographic/text-normalize.util';
@@ -548,6 +549,47 @@ export class SeriesGraphService {
         }
       } catch {
         // continue
+      }
+    }
+
+    // Vérification ciblée SUDOC pour les rares notices BnF dont 460$v est corrompu/année (ex. Animal Jack T.8 catalogué "2023" & "7" à la BnF)
+    if (this.connectors.sudoc) {
+      const suspectBnfWorks = graphWorks
+        .filter(
+          (w) =>
+            w.source === 'bnf' &&
+            w.hasStructuredEnsembleVolume === false &&
+            !w.isIntegral &&
+            !w.isHorsSerie &&
+            w.isbn13s.length > 0
+        )
+        .slice(0, 5);
+
+      for (const work of suspectBnfWorks) {
+        try {
+          const sudocRec = await this.connectors.sudoc.lookupByIsbn(work.isbn13s[0]);
+          if (
+            sudocRec &&
+            sudocRec.hasStructuredEnsembleVolume === true &&
+            sudocRec.volumeNumber &&
+            (!sudocRec.seriesName || isCompatibleSeriesName(sudocRec.seriesName, series.canonical_name))
+          ) {
+            const normSudocVol = normalizeSeriesNumber(sudocRec.volumeNumber);
+            const parsedSudocVol = /^\d+$/.test(normSudocVol) ? parseInt(normSudocVol, 10) : null;
+            if (parsedSudocVol && parsedSudocVol > 0) {
+              work.volumeNumber = parsedSudocVol;
+              work.volumeLabel = normSudocVol;
+              work.sortOrder = parsedSudocVol;
+              work.hasStructuredEnsembleVolume = true;
+              if (sudocRec.title && tokenOverlapRatio(work.title, sudocRec.title) >= 0.65) {
+                work.title = cleanTitle(sudocRec.title);
+              }
+              if (!sourcesUsed.includes('sudoc')) sourcesUsed.push('sudoc');
+            }
+          }
+        } catch {
+          // SUDOC optionnel
+        }
       }
     }
 

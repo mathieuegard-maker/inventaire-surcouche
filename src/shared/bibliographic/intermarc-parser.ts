@@ -29,6 +29,8 @@ export interface ParsedMarcRecord {
   /** Série issue d'une notice d'ensemble MARC (`460`/`461` ou `245$a` + `$h/$i`, `200$a` + `$h/$i`). */
   ensembleSeriesName?: string;
   ensembleVolumeNumber?: string;
+  /** Vrai uniquement si le champ structuré `460$v`/`461$v` portait un vrai numéro de tome (pas vide, pas une année type 2023). */
+  hasStructuredEnsembleVolume?: boolean;
   bnfEnsembleId?: string;
   /** Collection éditoriale issue de `225`/`410`/`290` (distinction structurelle anti-fausses séries). */
   collectionName?: string;
@@ -129,6 +131,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   let subtitle: string | undefined;
   let ensembleSeriesName: string | undefined;
   let ensembleVolumeNumber: string | undefined;
+  let hasStructuredEnsembleVolume = false;
   let bnfEnsembleId: string | undefined;
   let collectionName: string | undefined;
   let collectionNumber: string | undefined;
@@ -208,7 +211,12 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       const v = normalizeSeriesNumber(sf('v'));
       const id3 = sf('3').replace(/\D/g, '');
       if (t && !ensembleSeriesName) ensembleSeriesName = t;
-      if (v && !ensembleVolumeNumber) ensembleVolumeNumber = v;
+      if (v) {
+        if (!hasStructuredEnsembleVolume) {
+          ensembleVolumeNumber = v;
+          hasStructuredEnsembleVolume = true;
+        }
+      }
       if (/^[34]\d{6,}$/.test(id3) && !bnfEnsembleId) bnfEnsembleId = id3;
     }
 
@@ -318,6 +326,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     subtitle,
     ensembleSeriesName,
     ensembleVolumeNumber,
+    hasStructuredEnsembleVolume,
     bnfEnsembleId,
     collectionName,
     collectionNumber,

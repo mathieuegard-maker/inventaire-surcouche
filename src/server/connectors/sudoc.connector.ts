@@ -63,6 +63,7 @@ export function createSudocConnector(http: HttpClient): SudocConnector {
             ? 'marc_collection_225'
             : undefined,
         volumeNumber: parsed.ensembleVolumeNumber ?? parsed.collectionNumber,
+        hasStructuredEnsembleVolume: parsed.hasStructuredEnsembleVolume,
         collectionName: parsed.collectionName,
         collectionNumber: parsed.collectionNumber,
         authors: parsed.authors,

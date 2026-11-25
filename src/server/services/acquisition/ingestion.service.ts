@@ -317,16 +317,30 @@ export class IngestionService {
           if (!existingWork && draft.volumeNumber && !draft.isHorsSerie && !draft.isIntegral) {
             const volCandidate = this.catalogRepo.findBookInSeriesByVolume(resolvedSeriesId, draft.volumeNumber);
             if (volCandidate) {
-              const cmp = compareSameVolumeContent(volCandidate, {
-                title: draft.title,
-                wikidataWorkQid: draft.wikidataWorkQid,
-                pageCount: draft.pageCount,
-                collectionName: draft.collectionName,
-                publisher: draft.publisher,
-                seriesName: seriesLabel
-              });
-              if (cmp.sameContent) {
-                existingWork = volCandidate;
+              // Garde-fou anti-décalage éditorial (ex. France Loisirs T.3 = "Le Tour de Gaule" vs Astérix canonique T.3 = "Astérix et les Goths") :
+              // si l'œuvre canonique en base porte un Q-ID Wikidata + titre distinctif et que l'édition entrante porte un titre distinctif
+              // incompatible sans le même Q-ID, ne pas écraser l'œuvre canonique !
+              const canonicalDistinct =
+                Boolean(volCandidate.wikidata_qid) &&
+                !isGenericVolumeTitle(volCandidate.title, seriesLabel) &&
+                !isGeneric &&
+                (!draft.wikidataWorkQid || draft.wikidataWorkQid !== volCandidate.wikidata_qid);
+              const titleOverlap = Math.max(
+                tokenOverlapRatio(draft.title, volCandidate.title),
+                tokenOverlapRatio(volCandidate.title, draft.title)
+              );
+              if (!canonicalDistinct || titleOverlap >= 0.4) {
+                const cmp = compareSameVolumeContent(volCandidate, {
+                  title: draft.title,
+                  wikidataWorkQid: draft.wikidataWorkQid,
+                  pageCount: draft.pageCount,
+                  collectionName: draft.collectionName,
+                  publisher: draft.publisher,
+                  seriesName: seriesLabel
+                });
+                if (cmp.sameContent) {
+                  existingWork = volCandidate;
+                }
               }
             }
           }
@@ -507,8 +521,18 @@ export class IngestionService {
     const now = new Date().toISOString();
     const seriesRow = existing.series_id ? this.catalogRepo.findSeriesById(existing.series_id) : null;
     const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
+    const isOfficialFrenchCatalogDraft =
+      (draft.contributingSources.includes('bnf') || draft.contributingSources.includes('sudoc')) &&
+      (!draft.language || draft.language === 'fr' || draft.language === 'fre') &&
+      Boolean(draft.title?.trim()) &&
+      !isGenericVolumeTitle(draft.title, seriesLabel);
+    const sameProvenWikidataWork = Boolean(
+      existing.wikidata_qid && draft.wikidataWorkQid && existing.wikidata_qid === draft.wikidataWorkQid
+    );
     const keepExistingTitle =
-      Boolean(existing.title?.trim()) && !isGenericVolumeTitle(existing.title, seriesLabel);
+      Boolean(existing.title?.trim()) &&
+      !isGenericVolumeTitle(existing.title, seriesLabel) &&
+      !(sameProvenWikidataWork && isOfficialFrenchCatalogDraft);
     const effectiveTitle = keepExistingTitle ? existing.title : draft.title;
     const effectiveNormTitle = keepExistingTitle ? existing.normalized_title : draft.normalizedTitle;
 

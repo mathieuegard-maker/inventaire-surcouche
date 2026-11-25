@@ -29,6 +29,7 @@ import type {
   GraphSeriesWork,
   SourceCandidateRecord
 } from '../../connectors/types';
+import { parseMarcRecord } from '../../../shared/bibliographic/intermarc-parser';
 import { isCompatibleSeriesName, matchesAuthorName } from '../../../shared/bibliographic/text-normalize.util';
 
 function createMockConnectors(overrides?: {
@@ -1362,5 +1363,145 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(saved.map((b) => b.volume_number)).toEqual([1, 2, 3, 4, 5]);
     // Le tome 4 (sans ISBN ni couverture) est bien comptabilisé pour la Phase 3B/3C en arrière-plan
     expect(report.incompleteVolumeCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Cas 16 (BnF 460$v corrompu en année vs SUDOC 461$v exact — ex. Animal Jack T.8) : SUDOC corrige le numéro de tome et le titre dans ComparisonTableService et en Phase 3A', async () => {
+    const bnfXmlCorrupted460 = `
+      <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+        <mxc:controlfield tag="008">230928s                      f     fre        </mxc:controlfield>
+        <mxc:datafield tag="020"><mxc:subfield code="a">979-10-347-6873-8</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245">
+          <mxc:subfield code="a">Animal Jack</mxc:subfield>
+          <mxc:subfield code="h">7</mxc:subfield>
+          <mxc:subfield code="i">Un tout petit mondes</mxc:subfield>
+        </mxc:datafield>
+        <mxc:datafield tag="460">
+          <mxc:subfield code="3">45670690</mxc:subfield>
+          <mxc:subfield code="a">Animal Jack</mxc:subfield>
+          <mxc:subfield code="v">2023</mxc:subfield>
+        </mxc:datafield>
+        <mxc:datafield tag="700"><mxc:subfield code="a">Toussaint</mxc:subfield><mxc:subfield code="m">Kid</mxc:subfield></mxc:datafield>
+      </mxc:record>
+    `;
+    const sudocXmlClean = `
+      <record>
+        <datafield tag="010"><subfield code="a">979-10-347-6873-8</subfield></datafield>
+        <datafield tag="200">
+          <subfield code="a">Animal Jack</subfield>
+          <subfield code="h">8</subfield>
+          <subfield code="i">Un tout petit monde</subfield>
+        </datafield>
+        <datafield tag="461">
+          <subfield code="t">Animal Jack</subfield>
+          <subfield code="v">8</subfield>
+        </datafield>
+        <datafield tag="700"><subfield code="a">Toussaint</subfield><subfield code="b">Kid</subfield></datafield>
+      </record>
+    `;
+
+    const parsedBnf = parseMarcRecord(bnfXmlCorrupted460);
+    const parsedSudoc = parseMarcRecord(sudocXmlClean);
+    expect(parsedBnf?.hasStructuredEnsembleVolume).toBe(false);
+    expect(parsedBnf?.ensembleVolumeNumber).toBe('7');
+    expect(parsedSudoc?.hasStructuredEnsembleVolume).toBe(true);
+    expect(parsedSudoc?.ensembleVolumeNumber).toBe('8');
+
+    const now = new Date().toISOString();
+    const connectors = createMockConnectors({
+      bnfByIsbn: {
+        '9791034768738': {
+          source: 'bnf',
+          isbn13: '9791034768738',
+          title: parsedBnf!.title,
+          seriesName: parsedBnf!.ensembleSeriesName,
+          seriesLinkKind: 'marc_ensemble_460',
+          volumeNumber: parsedBnf!.ensembleVolumeNumber,
+          hasStructuredEnsembleVolume: parsedBnf!.hasStructuredEnsembleVolume,
+          bnfEnsembleId: parsedBnf!.bnfEnsembleId,
+          authors: parsedBnf!.authors,
+          scriptwriters: [],
+          illustrators: [],
+          rawSubjects: []
+        }
+      },
+      bnfEnsemble: {
+        '45670690': [
+          {
+            title: 'Face à la meute',
+            volumeNumber: 6,
+            volumeLabel: '6',
+            hasStructuredEnsembleVolume: true,
+            sortOrder: 6,
+            bnfEnsembleId: '45670690',
+            authors: ['Kid Toussaint'],
+            isbn13s: ['9791034762729'],
+            source: 'bnf'
+          },
+          {
+            title: 'Un tout petit mondes',
+            volumeNumber: 7,
+            volumeLabel: '7',
+            hasStructuredEnsembleVolume: false,
+            sortOrder: 7,
+            bnfEnsembleId: '45670690',
+            authors: ['Kid Toussaint'],
+            isbn13s: ['9791034768738'],
+            source: 'bnf'
+          },
+          {
+            title: 'Terre des dragons',
+            volumeNumber: 9,
+            volumeLabel: '9',
+            hasStructuredEnsembleVolume: true,
+            sortOrder: 9,
+            bnfEnsembleId: '45670690',
+            authors: ['Kid Toussaint'],
+            isbn13s: ['9782808503419'],
+            source: 'bnf'
+          }
+        ]
+      }
+    });
+    connectors.sudoc.lookupByIsbn = async (isbn13: string) => {
+      if (isbn13 !== '9791034768738') return null;
+      return {
+        source: 'sudoc',
+        isbn13,
+        title: parsedSudoc!.title,
+        seriesName: parsedSudoc!.ensembleSeriesName,
+        seriesLinkKind: 'marc_ensemble_460',
+        volumeNumber: parsedSudoc!.ensembleVolumeNumber,
+        hasStructuredEnsembleVolume: parsedSudoc!.hasStructuredEnsembleVolume,
+        authors: parsedSudoc!.authors,
+        scriptwriters: [],
+        illustrators: [],
+        rawSubjects: []
+      };
+    };
+
+    // 1. Arbitrage Étage 2 : SUDOC (461$v=8 structuré) corrige BnF (460$v=2023 corrompu + 245$h=7)
+    const comparison = new ComparisonTableService({ connectors });
+    const draft = await comparison.collectAndArbitrate('9791034768738');
+    expect(draft?.volumeNumber).toBe(8);
+    expect(draft?.title).toBe('Un tout petit monde');
+
+    // 2. Expansion Phase 3A : la notice BnF suspecte est vérifiée au SUDOC -> rangée en T.8 et non en T.7 !
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const { series } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Animal Jack',
+      bnfEnsembleId: '45670690',
+      bookTitle: 'Face à la meute',
+      volumeNumber: 6,
+      isHorsSerie: false,
+      isIntegral: false,
+      mainCategory: 'BD',
+      authors: ['Kid Toussaint'],
+      now
+    });
+    await seriesGraph.expandSeriesByGraph(series.id);
+    const saved = catalogRepo.listBooksBySeriesId(series.id).sort((a, b) => (a.volume_number ?? 0) - (b.volume_number ?? 0));
+    const vol8 = saved.find((b) => b.volume_number === 8);
+    expect(vol8?.title).toBe('Un tout petit monde');
+    expect(saved.find((b) => b.volume_number === 7)).toBeUndefined();
   });
 });

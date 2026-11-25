@@ -416,11 +416,23 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         const work = entities[workUri];
         if (!work) continue;
         const resolvedEd = editionsByWork.get(workUri);
+        const wikidataQid = extractWikidataQid(workUri) ?? null;
+        const volStr = normalizeSeriesNumber(firstClaimString(work, 'wdt:P1545'));
+        const volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : null;
+        const hasFrenchIsbn = (resolvedEd?.isbn13s ?? []).some(
+          (isbn) => isbn.startsWith('9782') || isbn.startsWith('97910')
+        );
+        const hasFrenchMetadata = Boolean(work.labels?.fr || resolvedEd?.frTitle || hasFrenchIsbn);
+
+        // Filtrer les fiches locales Inventaire (`inv:...`, sans Q-ID Wikidata) non numérotées et dépourvues
+        // de toute donnée francophone (évite "Asterix in French", "Asterix und der Kampf um's Kanzleramt" en hors-série)
+        if (!wikidataQid && volNum === null && !hasFrenchMetadata) {
+          continue;
+        }
+
         const title = cleanTitle(work.labels?.fr || resolvedEd?.frTitle || pickLabel(work.labels));
         if (!title) continue;
 
-        const volStr = normalizeSeriesNumber(firstClaimString(work, 'wdt:P1545'));
-        const volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : null;
         const authorNames = claimStrings(work, 'wdt:P50')
           .map((u) => pickLabel(entities[u]?.labels))
           .filter(Boolean);
@@ -436,7 +448,7 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
           volumeNumber: volNum,
           volumeLabel: volStr || null,
           sortOrder: volNum,
-          wikidataQid: extractWikidataQid(workUri) ?? null,
+          wikidataQid,
           inventaireUri: workUri,
           authors: authorNames,
           isbn13s: resolvedEd?.isbn13s ?? [],

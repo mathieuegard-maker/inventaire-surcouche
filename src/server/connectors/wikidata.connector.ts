@@ -19,6 +19,9 @@ interface WdEntity {
   id: string;
   labels?: Record<string, { value: string }>;
   descriptions?: Record<string, { value: string }>;
+  sitelinks?: {
+    frwiki?: { title?: string };
+  };
   claims?: Record<
     string,
     Array<{
@@ -55,9 +58,30 @@ interface WdSearchResponse {
   }>;
 }
 
+function stripWikipediaDisambiguator(rawTitle: string): string {
+  const trimmed = rawTitle.trim();
+  const stripped = trimmed.replace(/\s+\([^)]+\)$/, '').trim();
+  return stripped.length >= 2 ? stripped : trimmed;
+}
+
 function getWdLabel(entity: WdEntity | undefined): string {
-  if (!entity?.labels) return '';
-  return entity.labels.fr?.value || entity.labels.en?.value || Object.values(entity.labels)[0]?.value || '';
+  if (!entity) return '';
+  const frLabel = entity.labels?.fr?.value?.trim() || '';
+  const frWikiRaw = entity.sitelinks?.frwiki?.title?.trim() || '';
+  const frWiki = frWikiRaw ? stripWikipediaDisambiguator(frWikiRaw) : '';
+
+  if (frWiki) {
+    if (!frLabel) return frWiki;
+    const copiedFromForeign = ['en', 'it', 'de', 'es'].some(
+      (lang) => entity.labels?.[lang]?.value?.trim() === frLabel
+    );
+    if (copiedFromForeign && normalizeTextKey(frWiki) !== normalizeTextKey(frLabel)) {
+      return frWiki;
+    }
+  }
+
+  if (!entity.labels) return frWiki;
+  return frLabel || entity.labels.en?.value || Object.values(entity.labels)[0]?.value || '';
 }
 
 function getWdClaimQids(entity: WdEntity | undefined, prop: string): string[] {
@@ -84,13 +108,13 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
     const clean = Array.from(new Set(qids.filter((q) => /^Q\d+$/i.test(q)).map((q) => q.toUpperCase())));
     if (clean.length === 0) return {};
 
-    const url = `${WD_API}?action=wbgetentities&ids=${encodeURIComponent(clean.join('|'))}&languages=fr|en&props=labels|descriptions|claims&format=json`;
+    const url = `${WD_API}?action=wbgetentities&ids=${encodeURIComponent(clean.join('|'))}&languages=fr|en|it|de|es&props=labels|descriptions|claims|sitelinks&sitefilter=frwiki&format=json`;
     const data = await http.fetchJson<WdEntitiesResponse>({
       source: 'wikidata',
       url,
       timeoutMs: 8000,
       minIntervalMs: 250,
-      cacheKey: `wd:entities:${clean.sort().join('|')}`,
+      cacheKey: `wd:entities:v2:${clean.sort().join('|')}`,
       cacheTtlSec: 60 * 60 * 24 * 7
     });
     return data?.entities ?? {};
@@ -263,11 +287,23 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       if (!/^Q\d+$/.test(qid)) return [];
 
       const sparql = `
-        SELECT ?work ?workLabel ?ordinal (SAMPLE(?pubDate) AS ?date) (GROUP_CONCAT(DISTINCT ?authorLabel; separator="|") AS ?authors) (SAMPLE(?img) AS ?image)
+        SELECT ?work ?workLabel ?ordinal (SAMPLE(?frLbl) AS ?frLabel) (SAMPLE(?foreignCopy) AS ?foreignMatch) (SAMPLE(?frWikiTitle) AS ?frWiki) (SAMPLE(?pubDate) AS ?date) (GROUP_CONCAT(DISTINCT ?authorLabel; separator="|") AS ?authors) (SAMPLE(?img) AS ?image)
         WHERE {
           ?work p:P179 ?stmt .
           ?stmt ps:P179 wd:${qid} .
           OPTIONAL { ?stmt pq:P1545 ?ordinal . }
+          OPTIONAL { ?work rdfs:label ?frLbl . FILTER(LANG(?frLbl) = "fr") }
+          OPTIONAL {
+            ?work rdfs:label ?altLbl .
+            FILTER(LANG(?altLbl) IN ("en", "it", "de", "es"))
+            FILTER(BOUND(?frLbl) && STR(?altLbl) = STR(?frLbl))
+            BIND(?altLbl AS ?foreignCopy)
+          }
+          OPTIONAL {
+            ?frArticle schema:about ?work ;
+                       schema:isPartOf <https://fr.wikipedia.org/> ;
+                       schema:name ?frWikiTitle .
+          }
           OPTIONAL { ?work wdt:P577 ?pubDate . }
           OPTIONAL {
             ?work wdt:P50 ?author .
@@ -288,7 +324,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         timeoutMs: 10000,
         minIntervalMs: 400,
         headers: { Accept: 'application/sparql-results+json' },
-        cacheKey: `wd:sparql:series:${qid}`,
+        cacheKey: `wd:sparql:series:v2:${qid}`,
         cacheTtlSec: 60 * 60 * 24 * 3
       });
 
@@ -303,7 +339,17 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         if (workQid && seenQids.has(workQid)) continue;
         if (workQid) seenQids.add(workQid);
 
-        const title = cleanTitle(row.workLabel?.value ?? '');
+        const rawLabel = row.workLabel?.value ?? '';
+        const frLabel = row.frLabel?.value?.trim() ?? '';
+        const hasForeignCopy = Boolean(row.foreignMatch?.value?.trim());
+        const frWikiRaw = row.frWiki?.value?.trim() ?? '';
+        const frWiki = frWikiRaw ? stripWikipediaDisambiguator(frWikiRaw) : '';
+        const preferredLabel =
+          frWiki && (!frLabel || (hasForeignCopy && normalizeTextKey(frWiki) !== normalizeTextKey(frLabel)))
+            ? frWiki
+            : rawLabel;
+
+        const title = cleanTitle(preferredLabel);
         if (!title || /^Q\d+$/i.test(title)) continue;
 
         const volStr = normalizeSeriesNumber(row.ordinal?.value);

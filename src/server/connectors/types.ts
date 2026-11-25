@@ -20,6 +20,8 @@ export interface SourceCandidateRecord {
   seriesName?: string;
   seriesLinkKind?: SeriesLinkKind;
   volumeNumber?: string;
+  /** Vrai si le numéro de tome provient d'un champ structuré MARC `460$v`/`461$v` valide (et non d'un fallback `245$h` avec `460$v` année/absent). */
+  hasStructuredEnsembleVolume?: boolean;
   bnfEnsembleId?: string;
   wikidataSeriesQid?: string;
   inventaireSeriesUri?: string;
@@ -52,6 +54,7 @@ export interface GraphSeriesWork {
   title: string;
   volumeNumber?: number | null;
   volumeLabel?: string | null;
+  hasStructuredEnsembleVolume?: boolean;
   sortOrder?: number | null;
   wikidataQid?: string | null;
   inventaireUri?: string | null;

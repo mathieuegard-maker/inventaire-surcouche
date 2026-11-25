@@ -501,4 +501,121 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     expect(await wd.searchSeriesQids!('Nestor Burma', 'graphic')).toEqual(['Q3144248']);
     expect(await wd.searchSeriesQids!('Nestor Burma', 'prose')).toEqual(['Q9999999']);
   });
+
+  it('corrige un label Wikidata fr copié depuis une langue étrangère via frwiki et filtre les fiches locales étrangères sans ISBN sur Inventaire', async () => {
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      if (url.includes('action=wbgetentities')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              Q30728090: {
+                id: 'Q30728090',
+                labels: {
+                  fr: { value: "Asterix e la corsa d'Italia" },
+                  it: { value: "Asterix e la corsa d'Italia" },
+                  en: { value: 'Asterix and the Chariot Race' }
+                },
+                sitelinks: {
+                  frwiki: { title: 'Astérix et la Transitalique' }
+                },
+                claims: {
+                  P179: [
+                    {
+                      mainsnak: { datavalue: { value: { id: 'Q42490' } } },
+                      qualifiers: { P1545: [{ datavalue: { value: '37' } }] }
+                    }
+                  ]
+                }
+              },
+              Q42490: {
+                id: 'Q42490',
+                labels: { fr: { value: 'Astérix' } },
+                sitelinks: { frwiki: { title: 'Astérix (bande dessinée)' } }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('query.wikidata.org/sparql')) {
+        return new Response(
+          JSON.stringify({
+            results: {
+              bindings: [
+                {
+                  work: { value: 'http://www.wikidata.org/entity/Q30728090' },
+                  workLabel: { value: "Asterix e la corsa d'Italia" },
+                  frLabel: { value: "Asterix e la corsa d'Italia" },
+                  foreignMatch: { value: "Asterix e la corsa d'Italia" },
+                  frWiki: { value: 'Astérix et la Transitalique' },
+                  ordinal: { value: '37' }
+                },
+                {
+                  work: { value: 'http://www.wikidata.org/entity/Q1196871' },
+                  workLabel: { value: 'Le Devin' },
+                  frLabel: { value: 'Le Devin' },
+                  frWiki: { value: 'Le Devin (Astérix)' },
+                  ordinal: { value: '19' }
+                }
+              ]
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('action=reverse-claims&property=wdt:P179')) {
+        return new Response(
+          JSON.stringify({ uris: ['inv:foreign1', 'inv:french1', 'wd:Q1682411'] }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('action=reverse-claims&property=wdt:P629')) {
+        return new Response(JSON.stringify({ uris: [] }), { status: 200 });
+      }
+      if (url.includes('action=by-uris')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'inv:foreign1': {
+                uri: 'inv:foreign1',
+                labels: { de: "Asterix und der Kampf um's Kanzleramt" },
+                claims: {}
+              },
+              'inv:french1': {
+                uri: 'inv:french1',
+                labels: { fr: "Le meilleur d'Astérix" },
+                claims: {}
+              },
+              'wd:Q1682411': {
+                uri: 'wd:Q1682411',
+                labels: { fr: 'Comment Obélix est tombé dans la marmite' },
+                claims: {}
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('', { status: 404 });
+    });
+
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const wd = createWikidataConnector(http);
+    const inv = createInventaireConnector(http);
+
+    const work = await wd.lookupWorkByQid('Q30728090', '9782864973270');
+    expect(work?.title).toBe('Astérix et la Transitalique');
+    expect(work?.seriesName).toBe('Astérix');
+
+    const seriesWorks = await wd.fetchSeriesWorksByQid('Q42490');
+    expect(seriesWorks.find((w) => w.wikidataQid === 'Q30728090')?.title).toBe('Astérix et la Transitalique');
+    expect(seriesWorks.find((w) => w.wikidataQid === 'Q1196871')?.title).toBe('Le Devin');
+
+    const invWorks = await inv.fetchSeriesWorks('wd:Q42490');
+    expect(invWorks.map((w) => w.title)).toEqual([
+      "Le meilleur d'Astérix",
+      'Comment Obélix est tombé dans la marmite'
+    ]);
+  });
 });
