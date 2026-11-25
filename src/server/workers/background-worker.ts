@@ -24,12 +24,24 @@ export function mapJobRowToView(row: BackgroundJobRow): BackgroundJobView {
       result = null;
     }
   }
+  let targetSeriesId: string | null = null;
+  if (row.payload_json && (row.type === 'series_expand' || row.type === 'series_enrich_volumes')) {
+    try {
+      const payload = JSON.parse(row.payload_json) as { seriesId?: unknown };
+      if (typeof payload?.seriesId === 'string' && payload.seriesId.trim()) {
+        targetSeriesId = payload.seriesId.trim();
+      }
+    } catch {
+      targetSeriesId = null;
+    }
+  }
   return {
     id: row.id,
     type: row.type,
     status: row.status,
     progressDone: row.progress_done,
     progressTotal: row.progress_total,
+    targetSeriesId,
     errorMessage: row.error_message,
     result,
     createdAt: row.created_at,

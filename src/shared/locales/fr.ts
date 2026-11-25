@@ -386,6 +386,9 @@ export const fr = {
     refreshSeriesBtn: 'Actualiser la série',
     enrichAddedResult: '{added} nouveau(x) tome(s) détecté(s) et ajouté(s) ({total} au total).',
     enrichNoNewResult: 'Vérification terminée : aucun tome supplémentaire détecté ({total} connu(s)).',
+    expandingBanner: 'Recherche des tomes de la série en cours… les nouveaux albums apparaîtront automatiquement.',
+    enrichingCoversBanner:
+      'Récupération des couvertures et éditions en cours ({done}/{total})… mise à jour automatique.',
     otherEditionsOfFranchise: 'Autres découpages de cette saga',
     mergeSeriesBtn: 'Rattacher / Fusionner',
     mergeWholeSeriesBtn: 'Fusionner cette série…',

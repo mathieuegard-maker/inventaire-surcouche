@@ -312,15 +312,35 @@ export function createInventaireConnector(http: HttpClient): InventaireConnector
         url,
         timeoutMs: 6500,
         minIntervalMs: 150,
-        cacheKey: `inv:search:series:${normalizeTextKey(q)}`,
+        cacheKey: `inv:search:series:v2:${normalizeTextKey(q)}`,
         cacheTtlSec: 60 * 60 * 24 * 3
       });
 
       const normTarget = normalizeTextKey(q);
-      const results = data?.results ?? [];
+      const results = (data?.results ?? []).filter((r) => Boolean(r.uri));
+      const printedAlbumHintRe = /\b(?:en\s+albums?|s[ée]ries?\s+d['’]albums?|in\s+books|printed\s+books?)\b/i;
+      const spinoffOrHsRe = /\b(?:hors[\s-]s[ée]rie|d[ée]riv[ée]e?|spin[\s-]off|int[ée]grale)\b/i;
+      const targetWantsSpinoff = spinoffOrHsRe.test(q);
+
+      const isAlbumSeriesForTarget = (r: { label?: string; description?: string }): boolean => {
+        const labelNorm = normalizeTextKey(r.label ?? '');
+        const combined = `${r.label ?? ''} ${r.description ?? ''}`;
+        if (!targetWantsSpinoff && spinoffOrHsRe.test(combined)) return false;
+        return (
+          (labelNorm === normTarget || labelNorm.startsWith(`${normTarget} `)) &&
+          printedAlbumHintRe.test(combined)
+        );
+      };
+
       const best =
-        results.find((r) => r.uri && normalizeTextKey(r.label ?? '') === normTarget) ??
-        results.find((r) => r.uri && normalizeTextKey(r.label ?? '').includes(normTarget));
+        results.find((r) => isAlbumSeriesForTarget(r)) ??
+        results.find(
+          (r) =>
+            normalizeTextKey(r.label ?? '') === normTarget &&
+            (targetWantsSpinoff || !spinoffOrHsRe.test(`${r.label ?? ''} ${r.description ?? ''}`))
+        ) ??
+        results.find((r) => normalizeTextKey(r.label ?? '') === normTarget) ??
+        results.find((r) => normalizeTextKey(r.label ?? '').includes(normTarget));
 
       if (!best?.uri) return null;
       return {

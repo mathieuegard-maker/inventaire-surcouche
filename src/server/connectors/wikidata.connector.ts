@@ -291,6 +291,8 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         WHERE {
           ?work p:P179 ?stmt .
           ?stmt ps:P179 wd:${qid} .
+          FILTER NOT EXISTS { ?work wdt:P31 wd:Q14406742 . }
+          FILTER NOT EXISTS { ?work wdt:P31 wd:Q277759 . }
           OPTIONAL { ?stmt pq:P1545 ?ordinal . }
           OPTIONAL { ?work rdfs:label ?frLbl . FILTER(LANG(?frLbl) = "fr") }
           OPTIONAL { ?work rdfs:label ?altLbl . FILTER(LANG(?altLbl) IN ("en", "it", "de", "es")) }
@@ -319,7 +321,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         timeoutMs: 10000,
         minIntervalMs: 400,
         headers: { Accept: 'application/sparql-results+json' },
-        cacheKey: `wd:sparql:series:v3:${qid}`,
+        cacheKey: `wd:sparql:series:v4:${qid}`,
         cacheTtlSec: 60 * 60 * 24 * 3
       });
 
@@ -393,7 +395,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
           url,
           timeoutMs: 7000,
           minIntervalMs: 250,
-          cacheKey: `wd:search:series:fr:${queryText.toLowerCase()}`,
+          cacheKey: `wd:search:series:fr:v2:${queryText.toLowerCase()}`,
           cacheTtlSec: 60 * 60 * 24 * 7
         });
         return (data?.search ?? []).filter((c) => c.id && /^Q\d+$/i.test(c.id));
@@ -412,27 +414,45 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       const nonBookNoiseRe =
         /\b(franchise\s+m[ée]dia(?:tique)?|media\s+franchise|jeu\s+vid[ée]o|video\s*game|arcade\s+game|film|movie|t[ée]l[ée]vis|television|s[ée]rie\s+d['’]animation|animated|personnage|character|bande\s+originale|soundtrack|parc\s+d['’]attractions|theme\s+park)\b/i;
       const graphicSeriesRe =
-        /\b(s[ée]ries?\s+(?:[a-zà-ÿ-]+\s+)?de\s+bandes?\s+dessin[ée]es?|bandes?\s+dessin[ée]es?|comic\s*books?\s+series|series\s+of\s+.*comic\s*books?|comic\s*books?|comics?|mangas?|romans?\s+graphiques?)\b/i;
+        /\b(s[ée]ries?\s+(?:[a-zà-ÿ'’-]+\s+)*de\s+bandes?\s+dessin[ée]es?|s[ée]ries?\s+d['’]albums?\s+de\s+bandes?\s+dessin[ée]es?|bandes?\s+dessin[ée]es?|comic\s*books?\s+series|series\s+of\s+.*comic\s*books?|comic\s*books?|comics?|mangas?|romans?\s+graphiques?)\b/i;
       const proseSeriesRe =
         /\b(s[ée]ries?\s+litt[ée]raires?|s[ée]ries?\s+de\s+romans?|cycles?\s+litt[ée]raires?|book\s+series|novel\s+series)\b/i;
       const genericBookHintRe = /\b(s[ée]ries?|romans?|litt[ée]rature|albums?)\b/i;
+      const singleWorkOnlyRe =
+        /\b(?:album\s+de\s+bande\s+dessin[ée]e|histoire\s+de\s+la\s+s[ée]rie|tome\s+de\s+la\s+s[ée]rie)\b/i;
+      const seriesWordRe = /\b(?:s[ée]ries?|cycles?|series)\b/i;
+      const printedAlbumSeriesRe = /\b(?:en\s+albums?|s[ée]ries?\s+d['’]albums?|in\s+books|printed\s+books?)\b/i;
+      const spinoffOrHsRe = /\b(?:hors[\s-]s[ée]rie|d[ée]riv[ée]e?|spin[\s-]off|int[ée]grale)\b/i;
+      const targetWantsSpinoff = spinoffOrHsRe.test(q);
 
-      const scoreCandidate = (desc: string): number => {
+      const scoreCandidate = (label: string, desc: string): number => {
         if (nonBookNoiseRe.test(desc)) return -50;
+        const combined = `${label} ${desc}`;
+        if (!targetWantsSpinoff && spinoffOrHsRe.test(combined)) return -10;
+        // Rejette un album ou une histoire isolée ("album de bande dessinée", "Histoire de la série ...") quand il ne s'agit pas d'une série
+        if (singleWorkOnlyRe.test(desc) && !seriesWordRe.test(desc)) return -15;
+
         const isGraphic = graphicSeriesRe.test(desc);
         const isProse = proseSeriesRe.test(desc);
         if (mediaFamily === 'prose' && isGraphic) return -30;
         if (mediaFamily === 'graphic' && isProse && !isGraphic) return -20;
-        if (isGraphic) return 30;
-        if (isProse) return 25;
-        if (genericBookHintRe.test(desc)) return 10;
-        return 0;
+
+        let score = 0;
+        if (isGraphic) score = 30;
+        else if (isProse) score = 25;
+        else if (genericBookHintRe.test(desc)) score = 10;
+
+        // Bonus explicite pour les éditions "en albums" / "printed books" face aux séries de prépublications magazines
+        if (score >= 10 && printedAlbumSeriesRe.test(combined)) {
+          score += 15;
+        }
+        return score;
       };
 
       const ranked = candidates
         .map((c, idx) => ({
           qid: c.id!.toUpperCase(),
-          score: scoreCandidate(c.description ?? ''),
+          score: scoreCandidate(c.label ?? '', c.description ?? ''),
           idx
         }))
         .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx));

@@ -15,6 +15,7 @@ import { apiRequest, ApiClientError } from '../api/client';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
+import { useJobsStore } from '../stores/jobs.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
 import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type { BookView, SeriesView } from '../../shared/types/domain.types';
@@ -33,6 +34,33 @@ const router = useRouter();
 const libraryStore = useLibraryStore();
 const authStore = useAuthStore();
 const uiStore = useUiStore();
+const jobsStore = useJobsStore();
+
+const currentSeriesId = computed(() => (typeof route.params.seriesId === 'string' ? route.params.seriesId : ''));
+
+const activeSeriesJob = computed(() => {
+  const sid = currentSeriesId.value;
+  if (!sid) return null;
+  return (
+    jobsStore.jobs.find(
+      (j) =>
+        (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+        (j.status === 'pending' || j.status === 'running') &&
+        (!j.targetSeriesId || j.targetSeriesId === sid)
+    ) ?? null
+  );
+});
+
+const latestCompletedSeriesJobSig = computed(() => {
+  const sid = currentSeriesId.value;
+  if (!sid) return '';
+  const matching = jobsStore.jobs.filter(
+    (j) =>
+      (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+      (!j.targetSeriesId || j.targetSeriesId === sid)
+  );
+  return matching.map((j) => `${j.id}:${j.status}:${j.progressDone}`).join('|');
+});
 
 const loading = ref(true);
 const expanding = ref(false);
@@ -77,30 +105,61 @@ async function handleSeriesAttached(targetSeriesId: string): Promise<void> {
   await loadSeries();
 }
 
-async function loadSeries(): Promise<void> {
-  const id = typeof route.params.seriesId === 'string' ? route.params.seriesId : '';
+let silentReloadInFlight = false;
+let lastJobReloadDone = -1;
+
+async function loadSeries(options?: { silent?: boolean }): Promise<void> {
+  const id = currentSeriesId.value;
   if (!id) return;
-  loading.value = true;
-  selectedIds.value = new Set();
+  const silent = Boolean(options?.silent);
+  if (silent) {
+    if (silentReloadInFlight) return;
+    silentReloadInFlight = true;
+  } else {
+    loading.value = true;
+    selectedIds.value = new Set();
+  }
   try {
     const res = await apiRequest<SeriesDetailResponse>(`/api/series/${encodeURIComponent(id)}`);
     series.value = res.series;
     siblingCuts.value = res.siblingCuts;
     books.value = res.books;
     // Déplier automatiquement la section Intégrales si l'utilisateur en possède déjà une dans cette série
-    if (res.books.some((b) => b.isIntegral && b.ownershipStatus === 'owned')) {
+    if (!silent && res.books.some((b) => b.isIntegral && b.ownershipStatus === 'owned')) {
       integralsExpanded.value = true;
     }
   } catch {
-    series.value = null;
+    if (!silent) series.value = null;
   } finally {
-    loading.value = false;
+    if (silent) silentReloadInFlight = false;
+    else loading.value = false;
   }
 }
 
 watch(() => route.params.seriesId, () => {
+  lastJobReloadDone = -1;
   void loadSeries();
 }, { immediate: true });
+
+// Rafraîchissement silencieux en direct au fil de l'eau et à la fin de l'enrichissement de la série
+watch(latestCompletedSeriesJobSig, (nextSig, prevSig) => {
+  if (!nextSig || nextSig === prevSig || !series.value) return;
+  const sid = currentSeriesId.value;
+  const matching = jobsStore.jobs.filter(
+    (j) =>
+      (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+      (!j.targetSeriesId || j.targetSeriesId === sid)
+  );
+  const justFinished = matching.some((j) => j.status === 'done' && prevSig && !prevSig.includes(`${j.id}:done:`));
+  const runningEnrich = matching.find((j) => j.type === 'series_enrich_volumes' && j.status === 'running');
+  if (justFinished) {
+    lastJobReloadDone = -1;
+    void loadSeries({ silent: true });
+  } else if (runningEnrich && runningEnrich.progressDone > 0 && runningEnrich.progressDone !== lastJobReloadDone && runningEnrich.progressDone % 4 === 0) {
+    lastJobReloadDone = runningEnrich.progressDone;
+    void loadSeries({ silent: true });
+  }
+});
 
 // Première intention : tomes unitaires ; les intégrales vivent dans leur propre section repliable
 const unitaryBooks = computed(() => books.value.filter((b) => !b.isIntegral));
@@ -351,6 +410,17 @@ async function confirmGenres(genres: string[]): Promise<void> {
         <div class="series-progress-bar" role="progressbar" :aria-valuenow="progressPercent" aria-valuemin="0" aria-valuemax="100">
           <div class="series-progress-bar__fill" :style="{ width: `${progressPercent}%` }" />
         </div>
+
+        <p v-if="activeSeriesJob" class="ds-text-muted" role="status">
+          {{
+            activeSeriesJob.type === 'series_expand'
+              ? t('series.expandingBanner')
+              : t('series.enrichingCoversBanner', {
+                  done: activeSeriesJob.progressDone,
+                  total: Math.max(1, activeSeriesJob.progressTotal)
+                })
+          }}
+        </p>
       </div>
 
       <!-- Autres découpages éditoriaux de la même Franchise -->

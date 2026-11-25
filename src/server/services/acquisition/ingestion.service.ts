@@ -1008,13 +1008,15 @@ export class IngestionService {
     // Niveau 3 : dernier recours Apple Books / iTunes FR régulé
     if (!coverKey) {
       const baseSeries = stripCompilationSeriesPrefix(input.series.canonical_name) || input.series.canonical_name;
-      const titleQuery = isGenericVolumeTitle(input.book.title, input.series.canonical_name)
+      const isGeneric = isGenericVolumeTitle(input.book.title, input.series.canonical_name);
+      const titleQuery = isGeneric
         ? `${baseSeries} ${input.book.volume_number ?? ''}`.trim()
         : `${baseSeries} ${input.book.title}`.trim();
       const stored = await this.coverService.resolveBestCoverFromCascade({
         isbn13: null,
         candidateUrls: [],
         title: titleQuery,
+        expectedTitle: isGeneric ? undefined : input.book.title,
         author: input.authors[0],
         skipTitleFallback: false
       });

@@ -487,4 +487,42 @@ describe('Jalon 2 — Couvertures WebP disque, Jobs Serveur & Routes Acquisition
       customApp.worker.stop();
     }
   });
+
+  it('rejette les couvertures Apple iTunes génériques dont trackName ne correspond pas au titre attendu', async () => {
+    const itunesCoverService = new CoverService({
+      coversDir: tmpCoversDir,
+      catalogRepo: appCtx.repos.catalogRepo,
+      libraryRepo: appCtx.repos.libraryRepo,
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                trackName: "Spirou et Fantasio - L'Aventure",
+                artworkUrl100: 'https://is1-ssl.mzstatic.com/fake/generic-100x100bb.jpg'
+              },
+              {
+                trackName: 'Spirou et Fantasio - Le Prisonnier du Bouddha',
+                artworkUrl100: 'https://is1-ssl.mzstatic.com/fake/bouddha-100x100bb.jpg'
+              }
+            ]
+          }),
+          { status: 200 }
+        )) as typeof fetch
+    });
+
+    const rejected = await itunesCoverService.searchItunesCoverUrls(
+      'Spirou et Fantasio La Jeep de Fantasio',
+      2,
+      'La Jeep de Fantasio'
+    );
+    expect(rejected).toEqual([]);
+
+    const accepted = await itunesCoverService.searchItunesCoverUrls(
+      'Spirou et Fantasio Le Prisonnier du Bouddha',
+      2,
+      'Le Prisonnier du Bouddha'
+    );
+    expect(accepted).toEqual(['https://is1-ssl.mzstatic.com/fake/bouddha-600x600bb.jpg']);
+  });
 });

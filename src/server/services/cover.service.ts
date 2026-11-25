@@ -17,6 +17,7 @@ import {
   hammingDistanceHex
 } from '../../shared/bibliographic/cover-dhash.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
+import { normalizeTextKey, tokenOverlapRatio } from '../../shared/bibliographic/text-normalize.util';
 import { PriorityRateLimiter } from '../connectors/request-priority';
 import type { CatalogRepository, CoverRow } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
@@ -56,6 +57,8 @@ export interface CoverCascadeInput {
   isbn13?: string | null;
   candidateUrls?: string[];
   title?: string;
+  /** Titre distinctif attendu (sans préfixe de série) pour rejeter les couvertures génériques iTunes hors-sujet. */
+  expectedTitle?: string;
   author?: string;
   /** Évite l'appel iTunes par titre lors des déploiements massifs de séries (garde la cascade ISBN rapide). */
   skipTitleFallback?: boolean;
@@ -306,20 +309,27 @@ export class CoverService {
   /**
    * Recherche des URLs de couvertures haute résolution sur Apple Books / iTunes FR.
    * Régulée par le PriorityRateLimiter (`itunes`: 1 req / 3,2 s, HIGH interactif > LOW tâche de fond)
-   * avec déduplication des requêtes simultanées identiques et backoff automatique sur HTTP 429/403.
+   * avec déduplication des requêtes simultanées identiques, filtrage par pertinence de titre (`expectedTitle`)
+   * et backoff automatique sur HTTP 429/403.
    */
-  async searchItunesCoverUrls(term: string, limit = 4): Promise<string[]> {
+  async searchItunesCoverUrls(term: string, limit = 4, expectedTitle?: string): Promise<string[]> {
     const clean = term.trim();
     if (!clean) return [];
     const safeLimit = Math.min(8, Math.max(1, limit));
-    const inflightKey = `${clean.toLowerCase()}|${safeLimit}`;
+    const cleanExpected = (expectedTitle ?? '').trim();
+    const shouldVerifyTitle =
+      Boolean(cleanExpected) &&
+      !isbnUtil.normalizeToIsbn13(cleanExpected) &&
+      normalizeTextKey(cleanExpected).length >= 4;
+    const inflightKey = `${clean.toLowerCase()}|${safeLimit}|${shouldVerifyTitle ? normalizeTextKey(cleanExpected) : ''}`;
     const existing = this.inFlightItunes.get(inflightKey);
     if (existing) return existing;
 
     const promise = (async (): Promise<string[]> => {
       try {
         return await this.rateLimiter.schedule('itunes', async () => {
-          const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&country=fr&entity=ebook&limit=${safeLimit}`;
+          const queryLimit = shouldVerifyTitle ? Math.max(safeLimit, 4) : safeLimit;
+          const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&country=fr&entity=ebook&limit=${Math.min(8, queryLimit)}`;
           const res = await this.fetchImpl(itunesUrl, {
             headers: { 'User-Agent': BROWSER_USER_AGENT },
             signal: AbortSignal.timeout(4500)
@@ -330,12 +340,21 @@ export class CoverService {
             return [];
           }
           if (!res.ok) return [];
-          const data = (await res.json()) as { results?: Array<{ artworkUrl100?: string }> };
+          const data = (await res.json()) as {
+            results?: Array<{ artworkUrl100?: string; trackName?: string; collectionName?: string }>;
+          };
           const out: string[] = [];
           for (const item of data?.results ?? []) {
             if (!item.artworkUrl100) continue;
+            if (shouldVerifyTitle) {
+              const hitTitle = [item.trackName, item.collectionName].filter(Boolean).join(' ').trim();
+              if (hitTitle && tokenOverlapRatio(cleanExpected, hitTitle) < 0.6) {
+                continue;
+              }
+            }
             const hiRes = item.artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
             if (!out.includes(hiRes)) out.push(hiRes);
+            if (out.length >= safeLimit) break;
           }
           return out;
         });
@@ -728,7 +747,7 @@ export class CoverService {
         ? `${input.title} ${input.author || ''}`.trim()
         : cleanIsbn13 ?? '';
       if (term) {
-        const urls = await this.searchItunesCoverUrls(term, 1);
+        const urls = await this.searchItunesCoverUrls(term, 1, input.expectedTitle ?? input.title);
         for (const hiRes of urls) {
           const stored = await this.ingestFromExternalUrl(hiRes, { minBytes: 1500 });
           if (stored) return stored;

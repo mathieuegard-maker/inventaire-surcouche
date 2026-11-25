@@ -744,4 +744,58 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     expect(integrals[0].title).not.toContain('Marco Polo');
     expect(integrals[0].isbn13s).toEqual(['9782227490123']);
   });
+
+  it('priorise la série d’albums imprimés (Q102237771 "en albums") devant la série magazine (Q1130014) sur Wikidata et Inventaire', async () => {
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = String(input);
+      if (url.includes('wikidata.org') && url.includes('wbsearchentities')) {
+        return new Response(
+          JSON.stringify({
+            search: [
+              { id: 'Q1130014', label: 'Spirou et Fantasio', description: 'série de bande dessinée franco-belge' },
+              { id: 'Q657101', label: 'Spirou et Fantasio', description: 'album de bande dessinée' },
+              {
+                id: 'Q102237771',
+                label: 'Spirou et Fantasio en albums',
+                description: 'série d’album de bande dessinée franco-belge'
+              },
+              { id: 'Q3493600', label: 'Spirou et Fantasio Hors Série', description: 'série de bande dessinée' }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('inventaire.io/api/search') && url.includes('types=series')) {
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                uri: 'wd:Q102237771',
+                label: 'Spirou et Fantasio en albums',
+                description: 'série d’album de bande dessinée franco-belge'
+              },
+              {
+                uri: 'wd:Q1130014',
+                label: 'Spirou et Fantasio',
+                description: 'série de bande dessinée franco-belge'
+              }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('', { status: 404 });
+    });
+
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const wd = createWikidataConnector(http);
+    const inv = createInventaireConnector(http);
+
+    const wdQids = await wd.searchSeriesQids!('Spirou et Fantasio', 'graphic');
+    expect(wdQids[0]).toBe('Q102237771');
+    expect(wdQids[1]).toBe('Q1130014');
+
+    const invFound = await inv.searchSeriesUri!('Spirou et Fantasio');
+    expect(invFound?.wikidataQid).toBe('Q102237771');
+  });
 });

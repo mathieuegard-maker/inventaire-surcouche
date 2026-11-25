@@ -164,6 +164,7 @@ export interface BackgroundJobView {
   status: BackgroundJobStatus;
   progressDone: number;
   progressTotal: number;
+  targetSeriesId?: string | null;
   errorMessage: string | null;
   result: unknown;
   createdAt: string;

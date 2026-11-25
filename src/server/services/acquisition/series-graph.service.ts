@@ -724,7 +724,14 @@ export class SeriesGraphService {
             publisher: work.publisher,
             seriesName: series.canonical_name
           });
-          if (cmp.sameContent) {
+          const candidateHasVerifiedIsbn = this.catalogRepo.listEditionsByBookId(volCandidate.id).length > 0;
+          if (cmp.sameContent && cmp.reason === 'same_edition_probable_retranslation' && candidateHasVerifiedIsbn) {
+            // Un livre déjà en base avec ISBN vérifié et titre distinctif (ex. "Inventions maléfiques" T.6)
+            // ne doit JAMAIS être écrasé par un tome du graphe au même numéro mais de titre totalement incompatible !
+            if (work.source !== 'wikidata') {
+              continue;
+            }
+          } else if (cmp.sameContent) {
             existingBook = volCandidate;
           } else {
             // Ce tome BnF appartient à un autre découpage éditorial -> ne pas polluer ce découpage
@@ -745,11 +752,20 @@ export class SeriesGraphService {
         continue;
       }
 
-      // Ne jamais écraser un titre distinctif existant (ex. "Bug, Livre 4") par un titre générique ("Bug")
-      const effectiveTitle =
-        existingBook && !isGenericVolumeTitle(existingBook.title, series.canonical_name) && isGenericT
-          ? existingBook.title
-          : cleanT;
+      // Ne jamais écraser un titre distinctif existant par un titre générique ("Bug") ou par un titre incompatible sans ISBN
+      const existingHasDistinctiveTitle = Boolean(
+        existingBook && !isGenericVolumeTitle(existingBook.title, series.canonical_name)
+      );
+      const existingHasIsbn = existingBook ? this.catalogRepo.listEditionsByBookId(existingBook.id).length > 0 : false;
+      const incomingTitleDiverges =
+        existingBook &&
+        !isGenericT &&
+        Math.max(tokenOverlapRatio(cleanT, existingBook.title), tokenOverlapRatio(existingBook.title, cleanT)) < 0.45;
+      const preserveExistingTitle =
+        existingHasDistinctiveTitle &&
+        (isGenericT || (existingHasIsbn && work.isbn13s.length === 0 && Boolean(incomingTitleDiverges)));
+
+      const effectiveTitle = preserveExistingTitle && existingBook ? existingBook.title : cleanT;
       const effectiveNormTitle = normalizeTextKey(effectiveTitle);
 
       // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + jusqu'à 2 ISBNs) si pas encore de couverture
