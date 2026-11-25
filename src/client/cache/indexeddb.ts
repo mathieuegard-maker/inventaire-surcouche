@@ -70,4 +70,7 @@ export async function clearAllLocalCache(): Promise<void> {
       await localDb.meta.clear();
     }
   );
+  if (typeof caches !== 'undefined') {
+    await caches.delete('biblio-covers-v2').catch(() => {});
+  }
 }

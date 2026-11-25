@@ -310,4 +310,55 @@ describe('Jalon 3 — Sync Offline (PUSH -> PULL LWW), Prêts & Actions par Lot'
     expect(pullBody.books[0].id).toBe(validBookId);
     expect(pullBody.books[0].ownershipStatus).toBe('owned');
   });
+
+  it('force isFullSync=true sur GET /api/sync/pull?since=... si la bibliothèque est vide ou après un catalog_reset (purge automatique IndexedDB client)', async () => {
+    const [b1, b2] = seedCentralBooks(db, 2);
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'ResetSyncTester',
+        email: 'resetsync@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const cookie = extractCookie(reg);
+
+    // 1. Bibliothèque vide -> même avec ?since=..., le serveur force isFullSync=true pour purger tout ancien cache client
+    const emptyPull = await appCtx.app.request('/api/sync/pull?since=2026-11-25T10:00:00.000Z', {
+      headers: { cookie }
+    });
+    const emptyBody = (await emptyPull.json()) as { isFullSync: boolean; books: unknown[] };
+    expect(emptyBody.isFullSync).toBe(true);
+    expect(emptyBody.books).toHaveLength(0);
+
+    // 2. Ajout d'un livre + enregistrement d'un catalog_reset ultérieur à `since` -> force isFullSync=true même si un nouveau livre existe déjà
+    await appCtx.app.request('/api/library/books/batch-status', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ bookIds: [b1, b2], status: 'owned' })
+    });
+    appCtx.repos.jobRepo.upsertCronRun({
+      job_name: 'catalog_reset',
+      last_run_key: '2026-11-25T12:00:00.000Z',
+      last_run_at: '2026-11-25T12:00:00.000Z',
+      status: 'ok',
+      summary_json: '{}'
+    });
+
+    const staleClientPull = await appCtx.app.request('/api/sync/pull?since=2026-11-25T11:00:00.000Z', {
+      headers: { cookie }
+    });
+    const staleBody = (await staleClientPull.json()) as { isFullSync: boolean; books: unknown[] };
+    expect(staleBody.isFullSync).toBe(true);
+    expect(staleBody.books).toHaveLength(2);
+
+    // 3. Un client déjà synchronisé APRÈS le reset reste en delta (isFullSync=false)
+    const freshClientPull = await appCtx.app.request('/api/sync/pull?since=2026-11-25T13:00:00.000Z', {
+      headers: { cookie }
+    });
+    const freshBody = (await freshClientPull.json()) as { isFullSync: boolean };
+    expect(freshBody.isFullSync).toBe(false);
+  });
 });

@@ -117,6 +117,15 @@ export async function runSyncCycle(options?: { forceFullPull?: boolean; libraryI
     }
   );
 
+  // Si la base serveur est entièrement vide lors d'un fullSync (ex. remise à zéro catalogue),
+  // purger également les scans en attente et le cache binaire couvertures PWA.
+  if (pullRes.isFullSync && pullRes.books.length === 0) {
+    await localDb.pending_offline_scans.clear();
+    if (typeof caches !== 'undefined') {
+      await caches.delete('biblio-covers-v2').catch(() => {});
+    }
+  }
+
   return {
     pushedCount,
     pulledBooksCount: pullRes.books.length,

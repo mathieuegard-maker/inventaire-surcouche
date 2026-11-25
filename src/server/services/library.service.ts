@@ -144,11 +144,14 @@ export class LibraryService {
    */
   buildSyncPullPayload(libraryId: string, userId: string, since?: string): SyncPullPayload {
     const serverTime = new Date().toISOString();
-    const isFullSync = !since;
 
     // 1. Récupération des lignes library_books du foyer
     const allActiveLibRows = this.libraryRepo.listLibraryBooks(libraryId);
-    const deltaLibRows = since ? this.libraryRepo.listLibraryBooks(libraryId, since) : allActiveLibRows;
+    const resetRun = this.jobRepo.getCronRun('catalog_reset');
+    const resetAfterClientSync = Boolean(since && resetRun?.last_run_at && since < resetRun.last_run_at);
+    // Force un snapshot complet (qui purge IndexedDB côté client) si première sync, foyer vide ou reset catalogue serveur
+    const isFullSync = !since || allActiveLibRows.length === 0 || resetAfterClientSync;
+    const deltaLibRows = !isFullSync && since ? this.libraryRepo.listLibraryBooks(libraryId, since) : allActiveLibRows;
 
     const libRowByBookId = new Map<string, LibraryBookRow>();
     for (const r of allActiveLibRows) {
@@ -156,7 +159,7 @@ export class LibraryService {
     }
 
     const deletedBookIds: string[] = [];
-    if (since) {
+    if (!isFullSync && since) {
       for (const r of deltaLibRows) {
         if (r.deleted_at || r.status === 'none') {
           deletedBookIds.push(r.book_id);
@@ -242,9 +245,9 @@ export class LibraryService {
       });
     }
 
-    // 6. Filtrage delta si `since` est fourni (tout en conservant les recalculs d'intégrales / prêts / lectures modifiés)
+    // 6. Filtrage delta si `since` est fourni (sauf reset / fullSync forcé)
     let booksToReturn = annotatedActiveViews;
-    if (since) {
+    if (!isFullSync && since) {
       const changedLoanBookIds = new Set(this.loanRepo.listLoansSince(libraryId, since).map((l) => l.book_id));
       const changedReadingBookIds = new Set(this.readingRepo.listByUser(userId, since).map((r) => r.book_id));
       const changedLibBookIds = new Set(deltaLibRows.map((r) => r.book_id));
