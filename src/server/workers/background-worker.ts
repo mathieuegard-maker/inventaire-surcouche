@@ -3,6 +3,7 @@
 
 import { EventEmitter } from 'node:events';
 import type { BackgroundJobType, BackgroundJobView } from '../../shared/types/domain.types';
+import { runWithRequestPriority, type RequestPriority } from '../connectors/request-priority';
 import type { BackgroundJobRow, JobRepository } from '../repositories/job.repo';
 import type { LogRepository } from '../repositories/log.repo';
 
@@ -176,15 +177,18 @@ export class BackgroundWorker {
     }
 
     const startedAt = Date.now();
+    const lanePriority: RequestPriority = CATALOG_LANE_TYPES.includes(job.type) ? 'low' : 'high';
     try {
-      const { result, total } = await handler({
-        job,
-        payload,
-        reportProgress: (done, nextTotal, partialResult) => {
-          this.jobRepo.updateJobProgress(job.id, done, nextTotal, new Date().toISOString(), partialResult);
-          this.emitRow(this.jobRepo.findJobById(job.id));
-        }
-      });
+      const { result, total } = await runWithRequestPriority(lanePriority, () =>
+        handler({
+          job,
+          payload,
+          reportProgress: (done, nextTotal, partialResult) => {
+            this.jobRepo.updateJobProgress(job.id, done, nextTotal, new Date().toISOString(), partialResult);
+            this.emitRow(this.jobRepo.findJobById(job.id));
+          }
+        })
+      );
 
       const finalTotal = total ?? Math.max(1, job.progress_total);
       const completed = this.jobRepo.completeJob(job.id, result, finalTotal, new Date().toISOString());

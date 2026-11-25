@@ -4,12 +4,16 @@
 import http from 'node:http';
 import https from 'node:https';
 import type { JobRepository } from '../repositories/job.repo';
+import {
+  getCurrentRequestPriority,
+  PriorityRateLimiter,
+  type RequestPriority
+} from './request-priority';
 import type { SourceName } from './types';
 
 interface CircuitState {
   failures: number;
   openUntil: number;
-  nextAllowedAt: number;
 }
 
 export interface HttpFetchOptions {
@@ -22,6 +26,8 @@ export interface HttpFetchOptions {
   minIntervalMs?: number;
   /** Force node:http/https en IPv4 (contourne les resets/timeouts undici sur catalogue.bnf.fr). */
   forceIpv4?: boolean;
+  /** Priorité explicite (par défaut héritée du contexte AsyncLocalStorage : 'high' interactif / 'low' fond). */
+  priority?: RequestPriority;
 }
 
 const DEFAULT_TIMEOUT_MS = 8000;
@@ -96,31 +102,29 @@ function fetchWithNodeIpv4(
 export class HttpClient {
   private readonly jobRepo?: JobRepository;
   private readonly circuits = new Map<SourceName, CircuitState>();
+  private readonly inFlight = new Map<string, Promise<string | null>>();
+  private readonly rateLimiter: PriorityRateLimiter;
   private readonly fetchImpl: typeof fetch;
   private readonly hasCustomFetch: boolean;
 
-  constructor(options?: { jobRepo?: JobRepository; fetchImpl?: typeof fetch }) {
+  constructor(options?: {
+    jobRepo?: JobRepository;
+    fetchImpl?: typeof fetch;
+    rateLimiter?: PriorityRateLimiter;
+  }) {
     this.jobRepo = options?.jobRepo;
     this.fetchImpl = options?.fetchImpl ?? fetch;
     this.hasCustomFetch = Boolean(options?.fetchImpl);
+    this.rateLimiter = options?.rateLimiter ?? new PriorityRateLimiter({ bypassTiming: this.hasCustomFetch });
   }
 
   private getCircuit(source: SourceName): CircuitState {
     let state = this.circuits.get(source);
     if (!state) {
-      state = { failures: 0, openUntil: 0, nextAllowedAt: 0 };
+      state = { failures: 0, openUntil: 0 };
       this.circuits.set(source, state);
     }
     return state;
-  }
-
-  private async waitSlot(circuit: CircuitState, minIntervalMs: number): Promise<void> {
-    const now = Date.now();
-    const waitMs = Math.max(0, circuit.nextAllowedAt - now);
-    circuit.nextAllowedAt = Math.max(now, circuit.nextAllowedAt) + Math.max(0, minIntervalMs);
-    if (waitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
-    }
   }
 
   isCircuitOpen(source: SourceName): boolean {
@@ -146,8 +150,25 @@ export class HttpClient {
       return null;
     }
 
+    // Déduplication en vol (in-flight coalescing) : si 2 flux/utilisateurs demandent exactement la même ressource
+    // au même instant, 1 seule requête réseau part et les 2 flux partagent la même promesse.
+    const flightKey = options.cacheKey ? `ck:${options.cacheKey}` : `url:${options.source}:${options.url}`;
+    const existingFlight = this.inFlight.get(flightKey);
+    if (existingFlight) {
+      return existingFlight;
+    }
+
+    const promise = this.executeFetchText(options).finally(() => {
+      this.inFlight.delete(flightKey);
+    });
+    this.inFlight.set(flightKey, promise);
+    return promise;
+  }
+
+  private async executeFetchText(options: HttpFetchOptions): Promise<string | null> {
     const circuit = this.getCircuit(options.source);
-    const minInterval = options.minIntervalMs ?? 0;
+    const minInterval = options.minIntervalMs;
+    const priority = options.priority ?? getCurrentRequestPriority();
 
     const headers: Record<string, string> = {
       'User-Agent': options.source === 'bnf' ? BROWSER_USER_AGENT : API_USER_AGENT,
@@ -156,70 +177,87 @@ export class HttpClient {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
     for (let attempt = 1; attempt <= 2; attempt++) {
-      await this.waitSlot(circuit, minInterval);
       if (this.isCircuitOpen(options.source)) {
         return null;
       }
 
-      try {
-        let status: number;
-        let ok: boolean;
-        let text: string;
-
-        if (options.forceIpv4 && !this.hasCustomFetch) {
-          const result = await fetchWithNodeIpv4(options.url, headers, timeoutMs);
-          status = result.status;
-          ok = result.ok;
-          text = result.text;
-        } else {
-          const res = await this.fetchImpl(options.url, {
-            headers,
-            signal: AbortSignal.timeout(timeoutMs)
-          });
-          status = res.status;
-          ok = res.ok;
-          text = ok ? await res.text() : '';
-        }
-
-        if (status === 429) {
-          if (options.source === 'google_books') {
-            circuit.openUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
-            return null;
+      const outcome = await this.rateLimiter.schedule(
+        options.source,
+        async (): Promise<{ kind: 'ok'; text: string } | { kind: 'retry' } | { kind: 'stop' }> => {
+          if (this.isCircuitOpen(options.source)) {
+            return { kind: 'stop' };
           }
-          // Sur Inventaire / Wikidata / BnF : micro-limitation de débit -> courte pause 3 s + 1 retry (jamais 10 min de coupure)
-          circuit.nextAllowedAt = Math.max(circuit.nextAllowedAt, Date.now() + BURST_RETRY_BACKOFF_MS);
-          if (attempt === 1) continue;
-          return null;
-        }
+          try {
+            let status: number;
+            let ok: boolean;
+            let text: string;
 
-        if (!ok) {
-          // Les réponses 4xx (ex. 404 ISBN absent d'Inventaire) ne sont PAS des pannes serveur -> ne jamais ouvrir le circuit-breaker dessus !
-          if (status >= 500) {
+            if (options.forceIpv4 && !this.hasCustomFetch) {
+              const result = await fetchWithNodeIpv4(options.url, headers, timeoutMs);
+              status = result.status;
+              ok = result.ok;
+              text = result.text;
+            } else {
+              const res = await this.fetchImpl(options.url, {
+                headers,
+                signal: AbortSignal.timeout(timeoutMs)
+              });
+              status = res.status;
+              ok = res.ok;
+              text = ok ? await res.text() : '';
+            }
+
+            if (status === 429) {
+              if (options.source === 'google_books') {
+                circuit.openUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+                return { kind: 'stop' };
+              }
+              // Sur Inventaire / Wikidata / BnF : micro-limitation de débit -> courte pause 3 s + 1 retry
+              this.rateLimiter.pushBackoff(options.source, BURST_RETRY_BACKOFF_MS);
+              if (attempt === 1) {
+                return { kind: 'retry' };
+              }
+              return { kind: 'stop' };
+            }
+
+            if (!ok) {
+              // Les réponses 4xx (ex. 404 ISBN absent d'Inventaire) ne sont PAS des pannes serveur -> ne jamais ouvrir le circuit-breaker dessus !
+              if (status >= 500) {
+                circuit.failures++;
+                if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
+                  circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
+                  circuit.failures = 0;
+                }
+              }
+              return { kind: 'stop' };
+            }
+
+            circuit.failures = 0;
+
+            if (options.cacheKey && this.jobRepo && !isJsonErrorPayload(text)) {
+              const ttlSec = options.cacheTtlSec ?? 86400;
+              const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
+              this.jobRepo.setExternalCache(options.cacheKey, options.source, { text }, expiresAt);
+            }
+
+            return { kind: 'ok', text };
+          } catch {
             circuit.failures++;
             if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
               circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
               circuit.failures = 0;
             }
+            return { kind: 'stop' };
           }
-          return null;
-        }
+        },
+        { priority, minIntervalMs: minInterval }
+      );
 
-        circuit.failures = 0;
-
-        if (options.cacheKey && this.jobRepo && !isJsonErrorPayload(text)) {
-          const ttlSec = options.cacheTtlSec ?? 86400;
-          const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
-          this.jobRepo.setExternalCache(options.cacheKey, options.source, { text }, expiresAt);
-        }
-
-        return text;
-      } catch {
-        circuit.failures++;
-        if (circuit.failures >= FAILURE_TRIP_THRESHOLD) {
-          circuit.openUntil = Date.now() + FAILURE_COOLDOWN_MS;
-          circuit.failures = 0;
-        }
-        return null;
+      if (outcome.kind === 'ok') return outcome.text;
+      if (outcome.kind === 'stop') return null;
+      // En mode mock/test avec `bypassTiming` (tests fakeTimers 429), respecter explicitement le backoff 3 s avant retry
+      if (this.hasCustomFetch) {
+        await new Promise((resolve) => setTimeout(resolve, BURST_RETRY_BACKOFF_MS));
       }
     }
 

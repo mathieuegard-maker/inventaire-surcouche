@@ -106,24 +106,38 @@ export class JobRepository {
 
   claimNextPendingJob(now: string, allowedTypes?: BackgroundJobType[]): BackgroundJobRow | null {
     return this.db.transaction(() => {
-      let next: BackgroundJobRow | null;
+      let candidates: BackgroundJobRow[];
       if (allowedTypes && allowedTypes.length > 0) {
         const placeholders = allowedTypes.map(() => '?').join(', ');
-        next = this.db.get<BackgroundJobRow>(
+        candidates = this.db.all<BackgroundJobRow>(
           `SELECT * FROM background_jobs
            WHERE status = 'pending' AND type IN (${placeholders})
            ORDER BY created_at ASC
-           LIMIT 1`,
+           LIMIT 25`,
           allowedTypes
         );
       } else {
-        next = this.db.get<BackgroundJobRow>(
+        candidates = this.db.all<BackgroundJobRow>(
           `SELECT * FROM background_jobs
            WHERE status = 'pending'
            ORDER BY created_at ASC
-           LIMIT 1`
+           LIMIT 25`
         );
       }
+
+      const next = candidates.find((row) => {
+        if (!row.payload_json || !row.payload_json.includes('runAfter')) return true;
+        try {
+          const parsed = JSON.parse(row.payload_json) as { runAfter?: unknown };
+          if (typeof parsed?.runAfter === 'string' && parsed.runAfter > now) {
+            return false;
+          }
+        } catch {
+          // payload illisible -> éligible
+        }
+        return true;
+      });
+
       if (!next) return null;
       this.db.run(
         `UPDATE background_jobs

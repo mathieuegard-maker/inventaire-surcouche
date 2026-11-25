@@ -1,7 +1,10 @@
 // src/server/workers/cron-scheduler.ts
 // CRON calendaire idempotent basé sur `cron_runs` : digests horaires, veille nocturne + purge logs & couvertures orphelines (> 30j), avec rattrapage au démarrage.
 
+import crypto from 'node:crypto';
 import type { ServerConfig } from '../config';
+import { runWithRequestPriority } from '../connectors/request-priority';
+import type { CatalogRepository } from '../repositories/catalog.repo';
 import type { JobRepository } from '../repositories/job.repo';
 import type { LogRepository } from '../repositories/log.repo';
 import type { NotificationRepository } from '../repositories/notification.repo';
@@ -24,6 +27,7 @@ export interface NightlyCronReport {
   newAlertsCount: number;
   logsPurged: number;
   orphanCoversDeleted: number;
+  coverCatchupJobsEnqueued: number;
 }
 
 export class CronScheduler {
@@ -33,6 +37,8 @@ export class CronScheduler {
   private readonly notifRepo: NotificationRepository;
   private readonly notificationService: NotificationService;
   private readonly coverService: CoverService;
+  private readonly catalogRepo?: CatalogRepository;
+  private readonly onJobEnqueued?: () => void;
   private timer: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: {
@@ -42,6 +48,8 @@ export class CronScheduler {
     notifRepo: NotificationRepository;
     notificationService: NotificationService;
     coverService: CoverService;
+    catalogRepo?: CatalogRepository;
+    onJobEnqueued?: () => void;
   }) {
     this.config = deps.config;
     this.jobRepo = deps.jobRepo;
@@ -49,6 +57,8 @@ export class CronScheduler {
     this.notifRepo = deps.notifRepo;
     this.notificationService = deps.notificationService;
     this.coverService = deps.coverService;
+    this.catalogRepo = deps.catalogRepo;
+    this.onJobEnqueued = deps.onJobEnqueued;
   }
 
   /**
@@ -102,7 +112,8 @@ export class CronScheduler {
           librariesChecked: 0,
           newAlertsCount: 0,
           logsPurged: 0,
-          orphanCoversDeleted: 0
+          orphanCoversDeleted: 0,
+          coverCatchupJobsEnqueued: 0
         };
       }
       if (existing && existing.last_run_key === runKey && existing.status === 'ok') {
@@ -112,7 +123,8 @@ export class CronScheduler {
           librariesChecked: 0,
           newAlertsCount: 0,
           logsPurged: 0,
-          orphanCoversDeleted: 0
+          orphanCoversDeleted: 0,
+          coverCatchupJobsEnqueued: 0
         };
       }
     }
@@ -121,20 +133,47 @@ export class CronScheduler {
     const libraryIds = this.notifRepo.listAllLibraryIds();
     let newAlertsCount = 0;
 
-    for (const libId of libraryIds) {
-      const res = await this.notificationService.checkReleasesForLibrary(libId);
-      newAlertsCount += res.newAlertsCount;
-    }
+    await runWithRequestPriority('low', async () => {
+      for (const libId of libraryIds) {
+        const res = await this.notificationService.checkReleasesForLibrary(libId);
+        newAlertsCount += res.newAlertsCount;
+      }
+    });
 
     const logsCutoff = new Date(nowDate.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const logsPurged = this.logRepo.purgeOlderThan(logsCutoff);
     const coverPurge = await this.coverService.purgeOrphanCovers(30, nowDate.getTime());
 
+    // Filet de sécurité nocturne : reprogramme jusqu'à 3 séries ayant encore des tomes sans couverture
+    let coverCatchupJobsEnqueued = 0;
+    if (this.catalogRepo) {
+      const seriesWithMissingCovers = this.catalogRepo.listSeriesIdsWithMissingCovers(3);
+      for (const seriesId of seriesWithMissingCovers) {
+        const activeExpand = this.jobRepo.findActiveJobByTypeAndPayloadKey('series_expand', seriesId);
+        const activeEnrich = this.jobRepo.findActiveJobByTypeAndPayloadKey('series_enrich_volumes', seriesId);
+        if (activeExpand || activeEnrich) continue;
+        this.jobRepo.createJob({
+          id: `job_${crypto.randomBytes(6).toString('hex')}`,
+          type: 'series_enrich_volumes',
+          userId: null,
+          libraryId: null,
+          payload: { seriesId, source: 'nightly_catchup' },
+          progressTotal: 1,
+          now: nowIso
+        });
+        coverCatchupJobsEnqueued++;
+      }
+      if (coverCatchupJobsEnqueued > 0) {
+        this.onJobEnqueued?.();
+      }
+    }
+
     const summary = {
       librariesChecked: libraryIds.length,
       newAlertsCount,
       logsPurged,
-      orphanCoversDeleted: coverPurge.deletedCount
+      orphanCoversDeleted: coverPurge.deletedCount,
+      coverCatchupJobsEnqueued
     };
 
     this.jobRepo.upsertCronRun({
@@ -151,7 +190,7 @@ export class CronScheduler {
       stage: 'nightly_sweep',
       step: 'complete',
       status: 'ok',
-      summary: `Veille nocturne : ${libraryIds.length} foyer(s), ${newAlertsCount} alerte(s), ${coverPurge.deletedCount} couverture(s) orpheline(s) purgée(s).`,
+      summary: `Veille nocturne : ${libraryIds.length} foyer(s), ${newAlertsCount} alerte(s), ${coverPurge.deletedCount} couverture(s) orpheline(s) purgée(s), ${coverCatchupJobsEnqueued} rattrapage(s) couverture programmé(s).`,
       payload: summary,
       now: nowIso
     });

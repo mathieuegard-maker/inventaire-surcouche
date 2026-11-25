@@ -773,4 +773,129 @@ export class CatalogRepository {
 
     return { series: seriesRows, books: bookRows };
   }
+
+  /**
+   * Recherche O(1) d'une couverture WebP déjà présente sur un autre découpage de la même franchise
+   * pour le même titre normalisé et le même type (tome unitaire vs intégrale).
+   */
+  findFranchiseCoverByNormalizedTitle(
+    franchiseId: string,
+    normalizedTitle: string,
+    isIntegral: boolean,
+    excludeBookId?: string
+  ): string | null {
+    if (!franchiseId || !normalizedTitle) return null;
+    const integralFlag = isIntegral ? 1 : 0;
+    const row = excludeBookId
+      ? this.db.get<{ cover_key: string }>(
+          `SELECT b.cover_key
+           FROM books b
+           JOIN series s ON s.id = b.series_id
+           WHERE s.franchise_id = ?
+             AND b.normalized_title = ?
+             AND b.is_integral = ?
+             AND b.cover_key IS NOT NULL
+             AND b.id != ?
+           ORDER BY b.updated_at DESC
+           LIMIT 1`,
+          [franchiseId, normalizedTitle, integralFlag, excludeBookId]
+        )
+      : this.db.get<{ cover_key: string }>(
+          `SELECT b.cover_key
+           FROM books b
+           JOIN series s ON s.id = b.series_id
+           WHERE s.franchise_id = ?
+             AND b.normalized_title = ?
+             AND b.is_integral = ?
+             AND b.cover_key IS NOT NULL
+           ORDER BY b.updated_at DESC
+           LIMIT 1`,
+          [franchiseId, normalizedTitle, integralFlag]
+        );
+    return row?.cover_key ?? null;
+  }
+
+  /**
+   * Liste légère des ouvrages disposant déjà d'une couverture dans une franchise donnée.
+   */
+  listCoveredBooksInFranchise(
+    franchiseId: string
+  ): Array<{ id: string; title: string; normalized_title: string; is_integral: number; cover_key: string }> {
+    if (!franchiseId) return [];
+    return this.db.all<{ id: string; title: string; normalized_title: string; is_integral: number; cover_key: string }>(
+      `SELECT b.id, b.title, b.normalized_title, b.is_integral, b.cover_key
+       FROM books b
+       JOIN series s ON s.id = b.series_id
+       WHERE s.franchise_id = ?
+         AND b.cover_key IS NOT NULL
+       ORDER BY b.updated_at DESC
+       LIMIT 300`,
+      [franchiseId]
+    );
+  }
+
+  /**
+   * Recherche locale d'ouvrages déjà couverts portant le même titre normalisé (ex. réédition kiosque
+   * vs série canonique sous un autre libellé de franchise), filtrés ensuite par auteur / série.
+   */
+  listCoveredBooksByNormalizedTitle(
+    normalizedTitle: string,
+    isIntegral: boolean,
+    excludeBookId?: string
+  ): Array<{ id: string; series_id: string | null; title: string; authors_json: string; cover_key: string }> {
+    if (!normalizedTitle) return [];
+    const integralFlag = isIntegral ? 1 : 0;
+    if (excludeBookId) {
+      return this.db.all<{
+        id: string;
+        series_id: string | null;
+        title: string;
+        authors_json: string;
+        cover_key: string;
+      }>(
+        `SELECT id, series_id, title, authors_json, cover_key
+         FROM books
+         WHERE normalized_title = ?
+           AND is_integral = ?
+           AND cover_key IS NOT NULL
+           AND id != ?
+         ORDER BY updated_at DESC
+         LIMIT 15`,
+        [normalizedTitle, integralFlag, excludeBookId]
+      );
+    }
+    return this.db.all<{
+      id: string;
+      series_id: string | null;
+      title: string;
+      authors_json: string;
+      cover_key: string;
+    }>(
+      `SELECT id, series_id, title, authors_json, cover_key
+       FROM books
+       WHERE normalized_title = ?
+         AND is_integral = ?
+         AND cover_key IS NOT NULL
+       ORDER BY updated_at DESC
+       LIMIT 15`,
+      [normalizedTitle, integralFlag]
+    );
+  }
+
+  /**
+   * Retourne les identifiants de séries comportant encore des tomes sans couverture (rattrapage nocturne CRON).
+   */
+  listSeriesIdsWithMissingCovers(limit = 5): string[] {
+    const rows = this.db.all<{ series_id: string }>(
+      `SELECT b.series_id
+       FROM books b
+       WHERE b.series_id IS NOT NULL
+         AND b.cover_key IS NULL
+       GROUP BY b.series_id
+       ORDER BY COUNT(*) DESC
+       LIMIT ?`,
+      [limit]
+    );
+    return rows.map((r) => r.series_id);
+  }
 }

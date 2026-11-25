@@ -244,14 +244,33 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
 
       for (const rec of records) {
         if (isPressOrKioskOnlyRecord(rec)) continue;
+        // Exclut les éditions étrangères explicites (ex. "Marco Polo il Milione. Prima edizione integrale..." en italien)
+        const recLang = (rec.language ?? '').trim().toLowerCase();
+        if (recLang && recLang !== 'fr' && recLang !== 'fre') continue;
+
         const fullText = [rec.ensembleSeriesName ?? '', rec.title, rec.subtitle ?? '', rec.description ?? ''].join(' ');
         const hasIntegralWord = rec.isIntegralHint || /\bint[ée]grale\b/i.test(fullText);
         if (!hasIntegralWord) continue;
 
         const ensBase = rec.ensembleSeriesName ? extractFranchiseBaseName(rec.ensembleSeriesName).normalizedKey : '';
-        const belongsToSeries =
-          (Boolean(ensBase) && ensBase === baseKey) ||
-          tokenOverlapRatio(safeSeries, `${rec.ensembleSeriesName ?? ''} ${rec.title} ${rec.subtitle ?? ''}`) >= 0.7;
+        const isShortSingleWordSeries = baseKey.split(' ').length === 1 && baseKey.length <= 5;
+        let belongsToSeries: boolean;
+        if (Boolean(ensBase) && ensBase === baseKey) {
+          belongsToSeries = true;
+        } else if (isShortSingleWordSeries) {
+          // Pour les séries d'un seul mot court (ex. "Polo"), exiger que la série ou le titre DÉMARRE par ce mot
+          // afin d'éviter les faux positifs partiels ("Marco Polo il Milione").
+          const normTitle = normalizeTextKey(rec.title);
+          const normSeries = normalizeTextKey(rec.ensembleSeriesName ?? '');
+          belongsToSeries =
+            normSeries === baseKey ||
+            normSeries.startsWith(`${baseKey} `) ||
+            normTitle === baseKey ||
+            normTitle.startsWith(`${baseKey} `);
+        } else {
+          belongsToSeries =
+            tokenOverlapRatio(safeSeries, `${rec.ensembleSeriesName ?? ''} ${rec.title} ${rec.subtitle ?? ''}`) >= 0.7;
+        }
         if (!belongsToSeries) continue;
 
         const parsedVols = parseIncludedVolumeNumbers(

@@ -6,7 +6,11 @@ import { Hono } from 'hono';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
 import { createResendConnector, type MailSender } from './connectors/resend.connector';
-import { createBibliographicConnectors, type BibliographicConnectors } from './connectors';
+import {
+  createBibliographicConnectors,
+  PriorityRateLimiter,
+  type BibliographicConnectors
+} from './connectors';
 import { createGeminiConnector, type GeminiConnector } from './connectors/gemini.connector';
 import { createWebPushConnector, type WebPushSender } from './connectors/webpush.connector';
 import { UserRepository } from './repositories/user.repo';
@@ -83,6 +87,11 @@ export function createApp(options: CreateAppOptions) {
   const socialRepo = new SocialRepository(options.db);
   const adminRepo = new AdminRepository(options.db);
 
+  // Ordonnanceur réseau prioritaire partagé (HIGH interactif > LOW tâches de fond)
+  const rateLimiter = new PriorityRateLimiter({
+    bypassTiming: options.config.nodeEnv === 'test' || Boolean(options.coverFetchImpl)
+  });
+
   // Connecteurs isolés
   const mailSender =
     options.mailSender ?? createResendConnector(options.config.resendApiKey, options.config.mailFrom);
@@ -93,7 +102,7 @@ export function createApp(options: CreateAppOptions) {
       vapidPrivateJwk: options.config.vapidPrivateJwk,
       vapidSubject: options.config.vapidSubject
     });
-  const connectors = options.connectors ?? createBibliographicConnectors({ jobRepo });
+  const connectors = options.connectors ?? createBibliographicConnectors({ jobRepo, rateLimiter });
   const gemini = options.geminiConnector ?? createGeminiConnector(options.config.geminiApiKey);
 
   // Services métier
@@ -109,7 +118,8 @@ export function createApp(options: CreateAppOptions) {
     coversDir: options.config.coversDir,
     catalogRepo,
     libraryRepo,
-    fetchImpl: options.coverFetchImpl
+    fetchImpl: options.coverFetchImpl,
+    rateLimiter
   });
 
   const collectionGuard = new CollectionGuardService({ bnf: connectors.bnf });
@@ -128,6 +138,7 @@ export function createApp(options: CreateAppOptions) {
     seriesGraphService,
     coverService,
     bookIdentifier,
+    connectors,
     onJobEnqueued: () => worker.nudge()
   });
 
@@ -210,7 +221,9 @@ export function createApp(options: CreateAppOptions) {
     logRepo,
     notifRepo,
     notificationService,
-    coverService
+    coverService,
+    catalogRepo,
+    onJobEnqueued: () => worker.nudge()
   });
 
   const socialService = new SocialService({
@@ -282,14 +295,39 @@ export function createApp(options: CreateAppOptions) {
     return { result: report, total: 1 };
   });
 
-  worker.registerHandler('series_enrich_volumes', async ({ payload, reportProgress }) => {
+  worker.registerHandler('series_enrich_volumes', async ({ job, payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {
-      return { result: { processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 }, total: 1 };
+      return {
+        result: { processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0, rateLimitedCount: 0 },
+        total: 1
+      };
     }
     const report = await ingestionService.enrichIncompleteSeriesVolumes(seriesId, (done, total) => {
       reportProgress(done, total);
     });
+
+    // Zéro couverture oubliée : si iTunes a appliqué un rate-limit temporaire (HTTP 429/403),
+    // reprogramme automatiquement une passe différée (+75 s, max 2 relances).
+    const retryAttempt = typeof payload.retryAttempt === 'number' ? payload.retryAttempt : 0;
+    if (report.rateLimitedCount > 0 && retryAttempt < 2) {
+      const now = new Date();
+      const runAfter = new Date(now.getTime() + 75_000).toISOString();
+      jobRepo.createJob({
+        id: `job_${crypto.randomBytes(6).toString('hex')}`,
+        type: 'series_enrich_volumes',
+        userId: job.user_id,
+        libraryId: job.library_id,
+        payload: {
+          seriesId,
+          retryAttempt: retryAttempt + 1,
+          runAfter
+        },
+        progressTotal: report.rateLimitedCount,
+        now: now.toISOString()
+      });
+    }
+
     return { result: report, total: Math.max(1, report.processed) };
   });
 

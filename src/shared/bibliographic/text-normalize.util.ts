@@ -173,6 +173,19 @@ export function extractAuthorLastNameForQuery(rawAuthor?: string): string {
 }
 
 /**
+ * Retire les préfixes de compilations/collections kiosque ("La collection ...", "Les archives ...",
+ * "Coffret ...", "L'intégrale de ...") pour retrouver le nom de série canonique lors d'une recherche multi-éditions.
+ */
+export function stripCompilationSeriesPrefix(rawSeriesName: string): string {
+  const cleaned = cleanSeriesName(rawSeriesName);
+  const head = cleaned.split(/\s*[,—–]\s*/)[0].trim();
+  const withoutCompilation = head.replace(COMPILATION_SERIES_PREFIX_RE, '').trim();
+  const withoutNoise = withoutCompilation.replace(SERIES_PREFIX_NOISE_RE, '').trim();
+  const stripped = withoutNoise.replace(SERIES_INTEGRAL_SUFFIX_RE, '').trim();
+  return stripped.length >= 2 ? stripped : withoutCompilation.length >= 2 ? withoutCompilation : cleaned;
+}
+
+/**
  * Extrait le tronc commun normalisé d'une franchise (ex: "Astérix, la grande collection" -> "asterix",
  * "Les Aventures d'Astérix" -> "asterix") sans liste éditoriale codée en dur.
  */

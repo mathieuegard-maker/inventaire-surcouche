@@ -6,10 +6,13 @@ import { isbnUtil } from '../../../shared/bibliographic/isbn.util';
 import {
   extractFranchiseBaseName,
   isGenericVolumeTitle,
+  matchesAuthorName,
+  stripCompilationSeriesPrefix,
   tokenOverlapRatio
 } from '../../../shared/bibliographic/text-normalize.util';
 import type { AcquisitionChannel, BookView, LibraryBookOverrides } from '../../../shared/types/domain.types';
-import type { BookRow, CatalogRepository } from '../../repositories/catalog.repo';
+import type { BibliographicConnectors } from '../../connectors/types';
+import type { BookRow, CatalogRepository, SeriesRow } from '../../repositories/catalog.repo';
 import type { LibraryBookRow, LibraryRepository } from '../../repositories/library.repo';
 import type { JobRepository } from '../../repositories/job.repo';
 import type { LogRepository } from '../../repositories/log.repo';
@@ -24,6 +27,7 @@ export interface SeriesVolumeEnrichmentReport {
   enrichedByIsbn: number;
   coversAdded: number;
   stillMissingIsbn: number;
+  rateLimitedCount: number;
 }
 
 export interface ResolveIsbnItemResult {
@@ -68,6 +72,7 @@ export class IngestionService {
   private readonly seriesGraphService: SeriesGraphService;
   private readonly coverService: CoverService;
   private readonly bookIdentifier?: BookIdentifierService;
+  private readonly connectors?: BibliographicConnectors;
   private readonly onJobEnqueued?: () => void;
 
   constructor(deps: {
@@ -79,6 +84,7 @@ export class IngestionService {
     seriesGraphService: SeriesGraphService;
     coverService: CoverService;
     bookIdentifier?: BookIdentifierService;
+    connectors?: BibliographicConnectors;
     onJobEnqueued?: () => void;
   }) {
     this.catalogRepo = deps.catalogRepo;
@@ -89,6 +95,7 @@ export class IngestionService {
     this.seriesGraphService = deps.seriesGraphService;
     this.coverService = deps.coverService;
     this.bookIdentifier = deps.bookIdentifier;
+    this.connectors = deps.connectors;
     this.onJobEnqueued = deps.onJobEnqueued;
   }
 
@@ -272,29 +279,15 @@ export class IngestionService {
           }
         }
 
-        // 3. Téléchargement & compression WebP via cascade multi-sources vérifiée (disque /data/covers/)
-        let coverKey: string | null = bookRow?.cover_key ?? null;
-        if (!coverKey) {
-          const stored = await this.coverService.resolveBestCoverFromCascade({
-            isbn13,
-            candidateUrls: draft.coverCandidates,
-            title: draft.title,
-            author: draft.authors[0]
-          });
-          if (stored) {
-            coverKey = stored.coverKey;
-          }
-        }
-
-        // 4. Rattachement éventuel à une œuvre déjà existante :
+        // 3. Rattachement éventuel à une œuvre déjà existante :
         //    Ordre strict : ISBN -> Q-ID Wikidata -> titre distinctif dans la série -> n° de tome (UNIQUEMENT si contenu compatible)
+        const resolvedSeriesRow = resolvedSeriesId ? this.catalogRepo.findSeriesById(resolvedSeriesId) : null;
         let existingWork: BookRow | null =
           bookRow ??
           (draft.wikidataWorkQid ? this.catalogRepo.findBookByWikidataQid(draft.wikidataWorkQid) : null);
 
         if (!existingWork && resolvedSeriesId) {
-          const seriesRow = this.catalogRepo.findSeriesById(resolvedSeriesId);
-          const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
+          const seriesLabel = resolvedSeriesRow?.canonical_name ?? draft.seriesName ?? '';
           const isGeneric = isGenericVolumeTitle(draft.title, seriesLabel);
 
           if (!isGeneric && draft.normalizedTitle) {
@@ -343,6 +336,64 @@ export class IngestionService {
                 }
               }
             }
+          }
+        }
+
+        // 4. Téléchargement & compression WebP via cascade multi-éditions avant iTunes (disque /data/covers/)
+        let coverKey: string | null = bookRow?.cover_key ?? existingWork?.cover_key ?? null;
+        if (!coverKey) {
+          // Niveau 1 : Candidats API directs + CDN librairies sur l'ISBN scanné (sans iTunes)
+          const storedCdn = await this.coverService.resolveBestCoverFromCascade({
+            isbn13,
+            candidateUrls: draft.coverCandidates,
+            skipTitleFallback: true
+          });
+          if (storedCdn) {
+            coverKey = storedCdn.coverKey;
+          }
+        }
+        if (!coverKey) {
+          // Niveau 2a (0 ms) : Réutilisation locale d'une couverture de la même franchise / même album
+          coverKey = this.findLocalReusableCover({
+            franchiseId: resolvedSeriesRow?.franchise_id ?? null,
+            seriesName: resolvedSeriesRow?.canonical_name ?? draft.seriesName ?? '',
+            title: draft.title,
+            normalizedTitle: draft.normalizedTitle,
+            authors: draft.authors,
+            isIntegral: draft.isIntegral,
+            excludeBookId: existingWork?.id
+          });
+        }
+        if (!coverKey && this.connectors?.inventaire.fetchWorkEditions && (draft.wikidataWorkQid || draft.inventaireWorkUri)) {
+          // Niveau 2b (multi-éditions Graphe avant iTunes) : éditions sœurs Inventaire.io P629
+          const workUri = draft.wikidataWorkQid ? `wd:${draft.wikidataWorkQid}` : draft.inventaireWorkUri!;
+          const workEd = await this.connectors.inventaire
+            .fetchWorkEditions(workUri)
+            .catch(() => ({ isbn13s: [] as string[], coverUrls: [] as string[] }));
+          const siblingIsbns = workEd.isbn13s.filter((sib) => sib !== isbn13).slice(0, 4);
+          if (siblingIsbns.length > 0 || workEd.coverUrls.length > 0) {
+            const consensus = await this.coverService.electBestCoverFromMultiEditions({
+              isbn13s: siblingIsbns,
+              candidateUrls: workEd.coverUrls,
+              maxEditions: 4,
+              maxDistinctStored: 4
+            });
+            if (consensus.winner) {
+              coverKey = consensus.winner.coverKey;
+            }
+          }
+        }
+        if (!coverKey) {
+          // Niveau 3 (dernier recours régulé) : Apple Books / iTunes FR
+          const storedItunes = await this.coverService.resolveBestCoverFromCascade({
+            isbn13: null,
+            candidateUrls: [],
+            title: draft.title,
+            author: draft.authors[0],
+            skipTitleFallback: false
+          });
+          if (storedItunes) {
+            coverKey = storedItunes.coverKey;
           }
         }
 
@@ -489,9 +540,13 @@ export class IngestionService {
     const hadCover = Boolean(existing.cover_key);
     let coverKey: string | null = existing.cover_key ?? null;
     const coverByIsbn = new Map<string, string>();
+    const seriesRow = existing.series_id ? this.catalogRepo.findSeriesById(existing.series_id) : null;
+    const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
+    const existingAuthors = parseJsonStringArray(existing.authors_json);
+    const effectiveAuthors = draft.authors.length > 0 ? draft.authors : existingAuthors;
 
     if (!coverKey && safeSiblingIsbns.length >= 2) {
-      // Consensus visuel dHash multi-éditions : élit la couverture majoritaire la plus nette + stocke les variantes distinctes
+      // Niveau 1 (multi-éditions) : consensus visuel dHash CDN sans iTunes
       const consensus = await this.coverService.electBestCoverFromMultiEditions({
         isbn13s: safeSiblingIsbns,
         candidateUrls: draft.coverCandidates,
@@ -509,18 +564,41 @@ export class IngestionService {
     }
 
     if (!coverKey) {
-      const stored = await this.coverService.resolveBestCoverFromCascade({
+      // Niveau 1 (single ISBN) : candidats directs API + CDN librairies sans iTunes
+      const storedCdn = await this.coverService.resolveBestCoverFromCascade({
         isbn13,
         candidateUrls: draft.coverCandidates,
-        title: existing.title || draft.title,
-        author: draft.authors[0]
+        skipTitleFallback: true
       });
-      if (stored) coverKey = stored.coverKey;
+      if (storedCdn) coverKey = storedCdn.coverKey;
+    }
+
+    if (!coverKey) {
+      // Niveau 2a (0 ms local) : réutilisation depuis une autre édition/découpage de la même franchise ou du même album
+      coverKey = this.findLocalReusableCover({
+        franchiseId: seriesRow?.franchise_id ?? null,
+        seriesName: seriesLabel,
+        title: existing.title || draft.title,
+        normalizedTitle: existing.normalized_title || draft.normalizedTitle,
+        authors: effectiveAuthors,
+        isIntegral: existing.is_integral === 1,
+        excludeBookId: existing.id
+      });
+    }
+
+    if (!coverKey) {
+      // Niveau 3 (dernier recours régulé) : Apple Books / iTunes FR
+      const storedItunes = await this.coverService.resolveBestCoverFromCascade({
+        isbn13: null,
+        candidateUrls: [],
+        title: existing.title || draft.title,
+        author: effectiveAuthors[0],
+        skipTitleFallback: false
+      });
+      if (storedItunes) coverKey = storedItunes.coverKey;
     }
 
     const now = new Date().toISOString();
-    const seriesRow = existing.series_id ? this.catalogRepo.findSeriesById(existing.series_id) : null;
-    const seriesLabel = seriesRow?.canonical_name ?? draft.seriesName ?? '';
     const isOfficialFrenchCatalogDraft =
       (draft.contributingSources.includes('bnf') || draft.contributingSources.includes('sudoc')) &&
       (!draft.language || draft.language === 'fr' || draft.language === 'fre') &&
@@ -536,7 +614,6 @@ export class IngestionService {
     const effectiveTitle = keepExistingTitle ? existing.title : draft.title;
     const effectiveNormTitle = keepExistingTitle ? existing.normalized_title : draft.normalizedTitle;
 
-    const existingAuthors = parseJsonStringArray(existing.authors_json);
     const existingScriptwriters = parseJsonStringArray(existing.scriptwriters_json);
     const existingIllustrators = parseJsonStringArray(existing.illustrators_json);
     const existingSubgenres = parseJsonStringArray(existing.subgenres_json);
@@ -554,7 +631,7 @@ export class IngestionService {
       isHorsSerie: existing.is_hors_serie === 1,
       isIntegral: existing.is_integral === 1,
       includedVolumes: existingIncluded.length > 0 ? existingIncluded : draft.includedVolumes,
-      authors: draft.authors.length > 0 ? draft.authors : existingAuthors,
+      authors: effectiveAuthors,
       scriptwriters: draft.scriptwriters.length > 0 ? draft.scriptwriters : existingScriptwriters,
       illustrators: draft.illustrators.length > 0 ? draft.illustrators : existingIllustrators,
       publisher: draft.publisher ?? existing.publisher,
@@ -607,10 +684,359 @@ export class IngestionService {
   }
 
   /**
+   * Niveau 2a (0 ms local) : cherche une couverture WebP déjà présente dans le Catalogue Central
+   * sur un autre découpage de la même franchise (ex. "Spirou et Fantasio en albums" pour un tome
+   * de "La collection Spirou et Fantasio") ou un autre ouvrage portant exactement le même titre distinctif
+   * avec auteur ou série compatible.
+   */
+  private findLocalReusableCover(input: {
+    franchiseId?: string | null;
+    seriesName: string;
+    title: string;
+    normalizedTitle: string;
+    authors: string[];
+    isIntegral: boolean;
+    excludeBookId?: string;
+  }): string | null {
+    if (!input.normalizedTitle || isGenericVolumeTitle(input.title, input.seriesName)) {
+      return null;
+    }
+
+    // 1. Même franchise (exact puis fuzzy)
+    if (input.franchiseId) {
+      const exact = this.catalogRepo.findFranchiseCoverByNormalizedTitle(
+        input.franchiseId,
+        input.normalizedTitle,
+        input.isIntegral,
+        input.excludeBookId
+      );
+      if (exact) return exact;
+
+      const strippedIn = extractFranchiseBaseName(input.title).normalizedKey;
+      const franchiseBooks = this.catalogRepo.listCoveredBooksInFranchise(input.franchiseId);
+      for (const cand of franchiseBooks) {
+        if (input.excludeBookId && cand.id === input.excludeBookId) continue;
+        if (Boolean(cand.is_integral) !== input.isIntegral) continue;
+        if (isGenericVolumeTitle(cand.title, input.seriesName)) continue;
+        if (strippedIn && extractFranchiseBaseName(cand.title).normalizedKey === strippedIn) {
+          return cand.cover_key;
+        }
+        if (tokenOverlapRatio(input.title, cand.title) >= 0.8 && tokenOverlapRatio(cand.title, input.title) >= 0.8) {
+          return cand.cover_key;
+        }
+      }
+    }
+
+    // 2. Même titre normalisé distinctif (>= 4 car.) dans le catalogue local avec auteur ou série compatible
+    if (input.normalizedTitle.length >= 4) {
+      const sameTitleBooks = this.catalogRepo.listCoveredBooksByNormalizedTitle(
+        input.normalizedTitle,
+        input.isIntegral,
+        input.excludeBookId
+      );
+      const strippedSelfSeries = input.seriesName ? stripCompilationSeriesPrefix(input.seriesName) : '';
+
+      for (const cand of sameTitleBooks) {
+        const candAuthors = parseJsonStringArray(cand.authors_json);
+        const authorMatches =
+          input.authors.length > 0 &&
+          candAuthors.some((ca) => input.authors.some((ia) => matchesAuthorName(ca, ia)));
+        if (authorMatches) return cand.cover_key;
+
+        if (cand.series_id && strippedSelfSeries) {
+          const candSeries = this.catalogRepo.findSeriesById(cand.series_id);
+          if (candSeries) {
+            const strippedCandSeries = stripCompilationSeriesPrefix(candSeries.canonical_name);
+            const overlap = Math.max(
+              tokenOverlapRatio(strippedSelfSeries, strippedCandSeries),
+              tokenOverlapRatio(strippedCandSeries, strippedSelfSeries)
+            );
+            if (overlap >= 0.6) return cand.cover_key;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Niveau 2b (Multi-éditions avant iTunes) : cherche des ISBNs / couvertures d'éditions sœurs
+   * (Graphe Inventaire.io P629 + BookIdentifierService BnF/Inventaire) afin d'obtenir une couverture
+   * sur les CDN librairies (Amazon, Eyrolles, OpenLibrary) sans solliciter Apple iTunes.
+   */
+  private async discoverSiblingEditionCover(input: {
+    book: BookRow;
+    knownIsbns: string[];
+    series: SeriesRow | null;
+    authors: string[];
+    mediaFamily: 'graphic' | 'prose' | 'neutral';
+  }): Promise<{
+    coverKey: string;
+    newEditions: Array<{ isbn13: string; coverKey: string | null; source: string }>;
+  } | null> {
+    const knownSet = new Set(input.knownIsbns);
+    const siblingIsbns: string[] = [];
+    const candidateCoverUrls: string[] = [];
+
+    const pushSiblingIsbn = (raw: string) => {
+      const norm = isbnUtil.normalizeToIsbn13(raw);
+      if (norm && !knownSet.has(norm) && !siblingIsbns.includes(norm)) {
+        siblingIsbns.push(norm);
+      }
+    };
+
+    // 1. Graphe Inventaire.io (éditions sœurs P629) si Q-ID Wikidata ou URI Inventaire disponible
+    if (this.connectors?.inventaire.fetchWorkEditions && (input.book.wikidata_qid || input.book.inventaire_uri)) {
+      const workUri = input.book.wikidata_qid ? `wd:${input.book.wikidata_qid}` : input.book.inventaire_uri!;
+      const workEd = await this.connectors.inventaire
+        .fetchWorkEditions(workUri)
+        .catch(() => ({ isbn13s: [] as string[], coverUrls: [] as string[] }));
+      for (const isbn of workEd.isbn13s) pushSiblingIsbn(isbn);
+      for (const url of workEd.coverUrls) {
+        if (url && !candidateCoverUrls.includes(url)) candidateCoverUrls.push(url);
+      }
+    }
+
+    // 2. Recherche catalogue multi-éditions (BnF -> Inventaire) en retirant un éventuel préfixe kiosque/collection
+    //    UNIQUEMENT lorsque le titre est distinctif (évite les faux positifs sur les titres génériques "Tome N").
+    if (this.bookIdentifier && siblingIsbns.length < 4) {
+      const rawSeriesName = input.series?.canonical_name ?? '';
+      const isGeneric = isGenericVolumeTitle(input.book.title, rawSeriesName);
+      const strippedSeriesName =
+        !isGeneric && rawSeriesName ? stripCompilationSeriesPrefix(rawSeriesName) : rawSeriesName;
+      const strippedChanged = Boolean(rawSeriesName && strippedSeriesName !== rawSeriesName);
+
+      const discovered = await this.bookIdentifier
+        .findRankedIsbnsForSeriesVolume(
+          {
+            seriesName: strippedSeriesName,
+            title: input.book.title,
+            volumeNumber: strippedChanged ? null : input.book.volume_number,
+            authors: input.authors,
+            mediaFamily: input.mediaFamily,
+            isIntegral: input.book.is_integral === 1
+          },
+          4
+        )
+        .catch(() => []);
+      for (const isbn of discovered) pushSiblingIsbn(isbn);
+    }
+
+    if (siblingIsbns.length === 0 && candidateCoverUrls.length === 0) {
+      return null;
+    }
+
+    // 3. Vérification des propriétaires locaux d'ISBN :
+    //    - ISBN déjà possédé par un autre livre compatible ayant une couverture -> réutilisation instantanée (0 ms) sans voler l'ISBN !
+    //    - ISBN libre -> peut être sondé ET enregistré dans `book_editions`.
+    const freeSiblingIsbns: string[] = [];
+    const borrowedProbeIsbns: string[] = [];
+
+    for (const sib of siblingIsbns) {
+      const owner = this.catalogRepo.findBookByIsbn13(sib);
+      if (!owner || owner.id === input.book.id) {
+        freeSiblingIsbns.push(sib);
+      } else {
+        const compatibleTitle =
+          owner.is_integral === input.book.is_integral &&
+          (owner.normalized_title === input.book.normalized_title ||
+            Math.max(tokenOverlapRatio(input.book.title, owner.title), tokenOverlapRatio(owner.title, input.book.title)) >=
+              0.65);
+        if (compatibleTitle) {
+          if (owner.cover_key) {
+            return { coverKey: owner.cover_key, newEditions: [] };
+          }
+          borrowedProbeIsbns.push(sib);
+        }
+      }
+    }
+
+    const probeIsbns = [...freeSiblingIsbns, ...borrowedProbeIsbns].slice(0, 4);
+    if (probeIsbns.length === 0 && candidateCoverUrls.length === 0) {
+      return null;
+    }
+
+    // 4. Consensus visuel dHash CDN (Amazon, Eyrolles, OpenLibrary, Inventaire) — ZÉRO iTunes
+    const consensus = await this.coverService.electBestCoverFromMultiEditions({
+      isbn13s: probeIsbns,
+      candidateUrls: candidateCoverUrls,
+      maxEditions: 4,
+      maxDistinctStored: 4
+    });
+
+    if (!consensus.winner) {
+      return null;
+    }
+
+    const coverByIsbn = new Map<string, string>();
+    for (const entry of consensus.distinctCovers) {
+      if (entry.sourceIsbn && !coverByIsbn.has(entry.sourceIsbn)) {
+        coverByIsbn.set(entry.sourceIsbn, entry.cover.coverKey);
+      }
+    }
+
+    return {
+      coverKey: consensus.winner.coverKey,
+      newEditions: freeSiblingIsbns.slice(0, 4).map((isbn13) => ({
+        isbn13,
+        coverKey: coverByIsbn.get(isbn13) ?? null,
+        source: 'auto'
+      }))
+    };
+  }
+
+  private persistBookCoverAndEditions(
+    book: BookRow,
+    coverKey: string,
+    newEditions: Array<{ isbn13: string; coverKey: string | null; source: string }> = []
+  ): void {
+    const now = new Date().toISOString();
+    this.catalogRepo.upsertBookAutomatic({
+      id: book.id,
+      workCanonicalId: book.work_canonical_id,
+      seriesId: book.series_id,
+      title: book.title,
+      normalizedTitle: book.normalized_title,
+      volumeNumber: book.volume_number,
+      volumeLabel: book.volume_label,
+      sortOrder: book.sort_order,
+      isHorsSerie: book.is_hors_serie === 1,
+      isIntegral: book.is_integral === 1,
+      includedVolumes: parseJsonStringArray(book.included_volumes_json),
+      authors: parseJsonStringArray(book.authors_json),
+      scriptwriters: parseJsonStringArray(book.scriptwriters_json),
+      illustrators: parseJsonStringArray(book.illustrators_json),
+      publisher: book.publisher,
+      collectionName: book.collection_name,
+      publishYear: book.publish_year,
+      pageCount: book.page_count,
+      description: book.description,
+      language: book.language,
+      mainCategory: book.main_category,
+      subgenres: parseJsonStringArray(book.subgenres_json),
+      coverKey,
+      wikidataQid: book.wikidata_qid,
+      inventaireUri: book.inventaire_uri,
+      sourceOrigin: book.source_origin,
+      now
+    });
+
+    for (const ed of newEditions) {
+      const owner = this.catalogRepo.findBookByIsbn13(ed.isbn13);
+      if (owner && owner.id !== book.id) continue;
+      this.catalogRepo.upsertBookEdition({
+        isbn13: ed.isbn13,
+        bookId: book.id,
+        publisher: null,
+        collectionName: null,
+        publishYear: null,
+        pageCount: null,
+        coverKey: ed.coverKey,
+        source: ed.source,
+        now
+      });
+    }
+  }
+
+  /**
+   * Cascade couvertures complète en 3 niveaux pour un tome dépourvu de couverture :
+   * - Niveau 1 : CDN directs sur les ISBNs déjà connus (sans iTunes)
+   * - Niveau 2a (0 ms) : réutilisation locale depuis la même franchise / même album
+   * - Niveau 2b : recherche d'éditions sœurs (Graphe Inventaire + BnF/Inventaire) sur CDN (sans iTunes)
+   * - Niveau 3 : dernier recours Apple Books / iTunes FR régulé (1 req / 3,2 s, HIGH > LOW).
+   */
+  private async resolveCoverWithMultiEditionCascade(input: {
+    book: BookRow;
+    knownIsbns: string[];
+    series: SeriesRow;
+    authors: string[];
+    mediaFamily: 'graphic' | 'prose' | 'neutral';
+    skipKnownIsbnsCdn?: boolean;
+  }): Promise<{ coverAdded: boolean; rateLimited: boolean }> {
+    const startedAt = Date.now();
+    let coverKey: string | null = null;
+    let newEditions: Array<{ isbn13: string; coverKey: string | null; source: string }> = [];
+
+    // Niveau 1 : CDN directs sur les ISBNs déjà connus (sans iTunes)
+    if (!input.skipKnownIsbnsCdn && input.knownIsbns.length > 0) {
+      if (input.knownIsbns.length >= 2) {
+        const consensus = await this.coverService.electBestCoverFromMultiEditions({
+          isbn13s: input.knownIsbns,
+          maxEditions: 4,
+          maxDistinctStored: 4
+        });
+        if (consensus.winner) coverKey = consensus.winner.coverKey;
+      } else {
+        const stored = await this.coverService.resolveBestCoverFromCascade({
+          isbn13: input.knownIsbns[0],
+          candidateUrls: [],
+          skipTitleFallback: true
+        });
+        if (stored) coverKey = stored.coverKey;
+      }
+    }
+
+    // Niveau 2a (0 ms) : réutilisation locale même franchise / même album
+    if (!coverKey) {
+      coverKey = this.findLocalReusableCover({
+        franchiseId: input.series.franchise_id,
+        seriesName: input.series.canonical_name,
+        title: input.book.title,
+        normalizedTitle: input.book.normalized_title,
+        authors: input.authors,
+        isIntegral: input.book.is_integral === 1,
+        excludeBookId: input.book.id
+      });
+    }
+
+    // Niveau 2b : recherche d'éditions sœurs multi-éditions avant iTunes
+    if (!coverKey) {
+      const siblingResult = await this.discoverSiblingEditionCover({
+        book: input.book,
+        knownIsbns: input.knownIsbns,
+        series: input.series,
+        authors: input.authors,
+        mediaFamily: input.mediaFamily
+      });
+      if (siblingResult) {
+        coverKey = siblingResult.coverKey;
+        newEditions = siblingResult.newEditions;
+      }
+    }
+
+    // Niveau 3 : dernier recours Apple Books / iTunes FR régulé
+    if (!coverKey) {
+      const baseSeries = stripCompilationSeriesPrefix(input.series.canonical_name) || input.series.canonical_name;
+      const titleQuery = isGenericVolumeTitle(input.book.title, input.series.canonical_name)
+        ? `${baseSeries} ${input.book.volume_number ?? ''}`.trim()
+        : `${baseSeries} ${input.book.title}`.trim();
+      const stored = await this.coverService.resolveBestCoverFromCascade({
+        isbn13: null,
+        candidateUrls: [],
+        title: titleQuery,
+        author: input.authors[0],
+        skipTitleFallback: false
+      });
+      if (stored) coverKey = stored.coverKey;
+    }
+
+    if (coverKey) {
+      this.persistBookCoverAndEditions(input.book, coverKey, newEditions);
+      return { coverAdded: true, rateLimited: false };
+    }
+
+    return {
+      coverAdded: false,
+      rateLimited: this.coverService.wasItunesRateLimitedSince(startedAt)
+    };
+  }
+
+  /**
    * Phases 3B + 3C — Complète en tâche de fond tous les tomes d'une série encore dépourvus d'ISBN ou de couverture :
-   * 1. Si ISBN déjà présent sans couverture -> cascade couvertures Étage 2 directe ;
+   * 1. Si ISBN déjà présent sans couverture -> cascade multi-éditions (CDN -> Franchise locale -> Éditions sœurs -> iTunes régulé) ;
    * 2. Si aucun ISBN -> BookIdentifierService (Étage 1) puis enrichExistingBookByIsbn (Étage 2) ;
-   * 3. Si introuvable (tome ancien sans ISBN / à paraître) -> tente la couverture par titre et conserve la fiche.
+   * 3. Si introuvable ou sans couverture -> cascade multi-éditions (Franchise locale -> Éditions sœurs -> iTunes régulé).
    */
   async enrichIncompleteSeriesVolumes(
     seriesId: string,
@@ -618,7 +1044,7 @@ export class IngestionService {
   ): Promise<SeriesVolumeEnrichmentReport> {
     const series = this.catalogRepo.findSeriesById(seriesId);
     if (!series) {
-      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 };
+      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0, rateLimitedCount: 0 };
     }
 
     const allBooks = this.catalogRepo.listBooksBySeriesId(series.id);
@@ -644,78 +1070,32 @@ export class IngestionService {
     const total = incomplete.length;
     onProgress?.(0, Math.max(1, total));
     if (total === 0) {
-      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0 };
+      return { seriesId, processed: 0, enrichedByIsbn: 0, coversAdded: 0, stillMissingIsbn: 0, rateLimitedCount: 0 };
     }
 
     let processed = 0;
     let enrichedByIsbn = 0;
     let coversAdded = 0;
     let stillMissingIsbn = 0;
+    let rateLimitedCount = 0;
 
     for (const { book, editions } of incomplete) {
       const authors = parseJsonStringArray(book.authors_json);
 
       try {
         if (editions.length > 0 && !book.cover_key) {
-          // ISBN déjà connu(s) mais couverture absente -> consensus visuel multi-éditions (ou cascade directe)
-          let coverKey: string | null = null;
-          if (editions.length >= 2) {
-            const consensus = await this.coverService.electBestCoverFromMultiEditions({
-              isbn13s: editions.map((e) => e.isbn13),
-              maxEditions: 4,
-              maxDistinctStored: 4
-            });
-            if (consensus.winner) coverKey = consensus.winner.coverKey;
-          }
-          if (!coverKey) {
-            for (const ed of editions.slice(0, 3)) {
-              const stored = await this.coverService.resolveBestCoverFromCascade({
-                isbn13: ed.isbn13,
-                candidateUrls: [],
-                title: book.title,
-                author: authors[0]
-              });
-              if (stored) {
-                coverKey = stored.coverKey;
-                break;
-              }
-            }
-          }
-          if (coverKey) {
-            const now = new Date().toISOString();
-            this.catalogRepo.upsertBookAutomatic({
-              id: book.id,
-              workCanonicalId: book.work_canonical_id,
-              seriesId: book.series_id,
-              title: book.title,
-              normalizedTitle: book.normalized_title,
-              volumeNumber: book.volume_number,
-              volumeLabel: book.volume_label,
-              sortOrder: book.sort_order,
-              isHorsSerie: book.is_hors_serie === 1,
-              isIntegral: book.is_integral === 1,
-              includedVolumes: parseJsonStringArray(book.included_volumes_json),
-              authors,
-              scriptwriters: parseJsonStringArray(book.scriptwriters_json),
-              illustrators: parseJsonStringArray(book.illustrators_json),
-              publisher: book.publisher,
-              collectionName: book.collection_name,
-              publishYear: book.publish_year,
-              pageCount: book.page_count,
-              description: book.description,
-              language: book.language,
-              mainCategory: book.main_category,
-              subgenres: parseJsonStringArray(book.subgenres_json),
-              coverKey,
-              wikidataQid: book.wikidata_qid,
-              inventaireUri: book.inventaire_uri,
-              sourceOrigin: book.source_origin,
-              now
-            });
-            coversAdded++;
-          }
+          const outcome = await this.resolveCoverWithMultiEditionCascade({
+            book,
+            knownIsbns: editions.map((e) => e.isbn13),
+            series,
+            authors,
+            mediaFamily
+          });
+          if (outcome.coverAdded) coversAdded++;
+          if (outcome.rateLimited) rateLimitedCount++;
         } else if (editions.length === 0) {
           // Aucun ISBN -> Phase 3B (Étage 1 multi-éditions) puis Phase 3C (Étage 2 + consensus visuel dHash)
+          const bookStartedAt = Date.now();
           const resolvedIsbns = this.bookIdentifier
             ? await this.bookIdentifier.findRankedIsbnsForSeriesVolume(
                 {
@@ -733,53 +1113,42 @@ export class IngestionService {
           if (resolvedIsbns.length > 0) {
             const res = await this.enrichExistingBookByIsbn(book.id, resolvedIsbns[0], resolvedIsbns.slice(1));
             if (res.enriched) enrichedByIsbn++;
-            if (res.coverAdded) coversAdded++;
+            if (res.coverAdded) {
+              coversAdded++;
+            } else if (!book.cover_key) {
+              const refreshed = this.catalogRepo.findBookById(book.id);
+              if (!refreshed?.cover_key) {
+                if (!res.enriched) {
+                  // ISBN trouvé appartient déjà à un autre livre (ex. autre découpage) -> récupérer la couverture quand même !
+                  const outcome = await this.resolveCoverWithMultiEditionCascade({
+                    book,
+                    knownIsbns: [],
+                    series,
+                    authors,
+                    mediaFamily,
+                    skipKnownIsbnsCdn: true
+                  });
+                  if (outcome.coverAdded) coversAdded++;
+                  if (outcome.rateLimited) rateLimitedCount++;
+                } else if (this.coverService.wasItunesRateLimitedSince(bookStartedAt)) {
+                  rateLimitedCount++;
+                }
+              }
+            }
           } else {
             stillMissingIsbn++;
-            // Dernier recours sans ISBN : tentative de couverture par titre + série afin d'éviter une tuile vide
+            // Aucun ISBN sur le nom de série exact : cascade multi-éditions (Franchise locale -> Éditions sœurs -> iTunes)
             if (!book.cover_key) {
-              const titleQuery = isGenericVolumeTitle(book.title, series.canonical_name)
-                ? `${series.canonical_name} ${book.volume_number ?? ''}`.trim()
-                : `${series.canonical_name} ${book.title}`;
-              const stored = await this.coverService.resolveBestCoverFromCascade({
-                isbn13: null,
-                candidateUrls: [],
-                title: titleQuery,
-                author: authors[0]
+              const outcome = await this.resolveCoverWithMultiEditionCascade({
+                book,
+                knownIsbns: [],
+                series,
+                authors,
+                mediaFamily,
+                skipKnownIsbnsCdn: true
               });
-              if (stored) {
-                const now = new Date().toISOString();
-                this.catalogRepo.upsertBookAutomatic({
-                  id: book.id,
-                  workCanonicalId: book.work_canonical_id,
-                  seriesId: book.series_id,
-                  title: book.title,
-                  normalizedTitle: book.normalized_title,
-                  volumeNumber: book.volume_number,
-                  volumeLabel: book.volume_label,
-                  sortOrder: book.sort_order,
-                  isHorsSerie: book.is_hors_serie === 1,
-                  isIntegral: book.is_integral === 1,
-                  includedVolumes: parseJsonStringArray(book.included_volumes_json),
-                  authors,
-                  scriptwriters: parseJsonStringArray(book.scriptwriters_json),
-                  illustrators: parseJsonStringArray(book.illustrators_json),
-                  publisher: book.publisher,
-                  collectionName: book.collection_name,
-                  publishYear: book.publish_year,
-                  pageCount: book.page_count,
-                  description: book.description,
-                  language: book.language,
-                  mainCategory: book.main_category,
-                  subgenres: parseJsonStringArray(book.subgenres_json),
-                  coverKey: stored.coverKey,
-                  wikidataQid: book.wikidata_qid,
-                  inventaireUri: book.inventaire_uri,
-                  sourceOrigin: book.source_origin,
-                  now
-                });
-                coversAdded++;
-              }
+              if (outcome.coverAdded) coversAdded++;
+              if (outcome.rateLimited) rateLimitedCount++;
             }
           }
         }
@@ -791,6 +1160,6 @@ export class IngestionService {
       onProgress?.(processed, total);
     }
 
-    return { seriesId, processed, enrichedByIsbn, coversAdded, stillMissingIsbn };
+    return { seriesId, processed, enrichedByIsbn, coversAdded, stillMissingIsbn, rateLimitedCount };
   }
 }

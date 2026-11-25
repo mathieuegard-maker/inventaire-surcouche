@@ -17,6 +17,7 @@ import {
   hammingDistanceHex
 } from '../../shared/bibliographic/cover-dhash.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
+import { PriorityRateLimiter } from '../connectors/request-priority';
 import type { CatalogRepository, CoverRow } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
 import { AppError } from '../middleware/error.middleware';
@@ -128,18 +129,32 @@ export class CoverService {
   private readonly libraryRepo: LibraryRepository;
   private readonly fetchImpl: typeof fetch;
   private readonly hasCustomFetch: boolean;
+  private readonly rateLimiter: PriorityRateLimiter;
+  private readonly inFlightItunes = new Map<string, Promise<string[]>>();
+  private readonly inFlightIngest = new Map<string, Promise<StoredCoverResult | null>>();
+  private lastItunesRateLimitedAt = 0;
 
   constructor(deps: {
     coversDir: string;
     catalogRepo: CatalogRepository;
     libraryRepo: LibraryRepository;
     fetchImpl?: typeof fetch;
+    rateLimiter?: PriorityRateLimiter;
   }) {
     this.coversDir = path.resolve(deps.coversDir);
     this.catalogRepo = deps.catalogRepo;
     this.libraryRepo = deps.libraryRepo;
     this.fetchImpl = deps.fetchImpl ?? fetch;
     this.hasCustomFetch = Boolean(deps.fetchImpl);
+    this.rateLimiter = deps.rateLimiter ?? new PriorityRateLimiter({ bypassTiming: this.hasCustomFetch });
+  }
+
+  /**
+   * Indique si Apple iTunes Search API a répondu HTTP 429 ou 403 (throttling) depuis `sinceMs`,
+   * permettant aux jobs de fond de reprogrammer une reprise différée sans jamais abandonner de couvertures.
+   */
+  wasItunesRateLimitedSince(sinceMs: number): boolean {
+    return this.lastItunesRateLimitedAt >= sinceMs;
   }
 
   private async ensureCoversDir(): Promise<void> {
@@ -290,28 +305,49 @@ export class CoverService {
 
   /**
    * Recherche des URLs de couvertures haute résolution sur Apple Books / iTunes FR.
+   * Régulée par le PriorityRateLimiter (`itunes`: 1 req / 3,2 s, HIGH interactif > LOW tâche de fond)
+   * avec déduplication des requêtes simultanées identiques et backoff automatique sur HTTP 429/403.
    */
   async searchItunesCoverUrls(term: string, limit = 4): Promise<string[]> {
     const clean = term.trim();
     if (!clean) return [];
-    try {
-      const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&country=fr&entity=ebook&limit=${Math.min(8, limit)}`;
-      const res = await this.fetchImpl(itunesUrl, {
-        headers: { 'User-Agent': BROWSER_USER_AGENT },
-        signal: AbortSignal.timeout(3500)
-      });
-      if (!res.ok) return [];
-      const data = (await res.json()) as { results?: Array<{ artworkUrl100?: string }> };
-      const out: string[] = [];
-      for (const item of data?.results ?? []) {
-        if (!item.artworkUrl100) continue;
-        const hiRes = item.artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
-        if (!out.includes(hiRes)) out.push(hiRes);
+    const safeLimit = Math.min(8, Math.max(1, limit));
+    const inflightKey = `${clean.toLowerCase()}|${safeLimit}`;
+    const existing = this.inFlightItunes.get(inflightKey);
+    if (existing) return existing;
+
+    const promise = (async (): Promise<string[]> => {
+      try {
+        return await this.rateLimiter.schedule('itunes', async () => {
+          const itunesUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(clean)}&country=fr&entity=ebook&limit=${safeLimit}`;
+          const res = await this.fetchImpl(itunesUrl, {
+            headers: { 'User-Agent': BROWSER_USER_AGENT },
+            signal: AbortSignal.timeout(4500)
+          });
+          if (res.status === 429 || res.status === 403) {
+            this.lastItunesRateLimitedAt = Date.now();
+            this.rateLimiter.pushBackoff('itunes', 15_000);
+            return [];
+          }
+          if (!res.ok) return [];
+          const data = (await res.json()) as { results?: Array<{ artworkUrl100?: string }> };
+          const out: string[] = [];
+          for (const item of data?.results ?? []) {
+            if (!item.artworkUrl100) continue;
+            const hiRes = item.artworkUrl100.replace('100x100bb.jpg', '600x600bb.jpg');
+            if (!out.includes(hiRes)) out.push(hiRes);
+          }
+          return out;
+        });
+      } catch {
+        return [];
+      } finally {
+        this.inFlightItunes.delete(inflightKey);
       }
-      return out;
-    } catch {
-      return [];
-    }
+    })();
+
+    this.inFlightItunes.set(inflightKey, promise);
+    return promise;
   }
 
   private async fetchAndValidateImageBuffer(
@@ -326,27 +362,25 @@ export class CoverService {
     }
 
     try {
-      let contentType = '';
-      let rawBuf: Buffer | null = null;
       const timeoutMs = options?.timeoutMs ?? 4000;
-
-      if (!this.hasCustomFetch && /^https?:\/\/catalogue\.bnf\.fr\b/i.test(cleanUrl)) {
-        const res = await fetchBinaryIpv4(cleanUrl, Math.max(timeoutMs, 4500));
-        if (!res) return null;
-        contentType = res.contentType;
-        rawBuf = res.buffer;
-      } else {
+      const downloaded = await this.rateLimiter.schedule('covers_cdn', async () => {
+        if (!this.hasCustomFetch && /^https?:\/\/catalogue\.bnf\.fr\b/i.test(cleanUrl)) {
+          const res = await fetchBinaryIpv4(cleanUrl, Math.max(timeoutMs, 4500));
+          if (!res) return null;
+          return { contentType: res.contentType, rawBuf: res.buffer };
+        }
         const res = await this.fetchImpl(cleanUrl, {
           headers: { 'User-Agent': BROWSER_USER_AGENT, Accept: 'image/*,*/*;q=0.8' },
           signal: AbortSignal.timeout(timeoutMs)
         });
         if (!res.ok) return null;
-        contentType = (res.headers.get('content-type') || '').toLowerCase();
+        const contentType = (res.headers.get('content-type') || '').toLowerCase();
         const arrayBuf = await res.arrayBuffer();
-        rawBuf = Buffer.from(arrayBuf);
-      }
+        return { contentType, rawBuf: Buffer.from(arrayBuf) };
+      });
 
-      if (!rawBuf) return null;
+      if (!downloaded || !downloaded.rawBuf) return null;
+      const { contentType, rawBuf } = downloaded;
       if (contentType.includes('svg')) return null;
       if (contentType && !contentType.startsWith('image/') && !contentType.includes('octet-stream')) {
         return null;
@@ -625,13 +659,23 @@ export class CoverService {
       };
     }
 
-    const rawBuf = await this.fetchAndValidateImageBuffer(cleanUrl, options);
-    if (!rawBuf) return null;
-    try {
-      return await this.storeBufferAsWebp(rawBuf, cleanUrl);
-    } catch {
-      return null;
-    }
+    const inFlight = this.inFlightIngest.get(cleanUrl);
+    if (inFlight) return inFlight;
+
+    const promise = (async (): Promise<StoredCoverResult | null> => {
+      try {
+        const rawBuf = await this.fetchAndValidateImageBuffer(cleanUrl, options);
+        if (!rawBuf) return null;
+        return await this.storeBufferAsWebp(rawBuf, cleanUrl);
+      } catch {
+        return null;
+      } finally {
+        this.inFlightIngest.delete(cleanUrl);
+      }
+    })();
+
+    this.inFlightIngest.set(cleanUrl, promise);
+    return promise;
   }
 
   /**
@@ -678,14 +722,12 @@ export class CoverService {
       }
     }
 
-    // 5. Apple Books / iTunes FR (ISBN puis Titre + Auteur)
+    // 5. Apple Books / iTunes FR (1 seule requête régulée par ouvrage : Titre + Auteur prioritaire, sinon ISBN)
     if (!input.skipTitleFallback) {
-      const searchTerms = [
-        cleanIsbn13 ?? '',
-        input.title ? `${input.title} ${input.author || ''}`.trim() : ''
-      ].filter(Boolean);
-
-      for (const term of searchTerms) {
+      const term = input.title
+        ? `${input.title} ${input.author || ''}`.trim()
+        : cleanIsbn13 ?? '';
+      if (term) {
         const urls = await this.searchItunesCoverUrls(term, 1);
         for (const hiRes of urls) {
           const stored = await this.ingestFromExternalUrl(hiRes, { minBytes: 1500 });

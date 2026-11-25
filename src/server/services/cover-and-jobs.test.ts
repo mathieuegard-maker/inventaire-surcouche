@@ -336,4 +336,155 @@ describe('Jalon 2 — Couvertures WebP disque, Jobs Serveur & Routes Acquisition
     expect(deduped).toHaveLength(1);
     expect(deduped[0].url).toBe('https://cdn.example.test/ed-outlier.png');
   });
+
+  it('applique la cascade couvertures multi-éditions avant iTunes (franchise locale -> édition sœur -> iTunes 429) et respecte payload.runAfter', async () => {
+    const rawGrad = Buffer.alloc(240 * 360 * 3);
+    for (let i = 0; i < rawGrad.length; i++) {
+      rawGrad[i] = (i * 37 + (i >> 5)) & 0xff;
+    }
+    const dupuisPng = await sharp(rawGrad, { raw: { width: 240, height: 360, channels: 3 } }).png().toBuffer();
+    const localPng = await makeTinyPngBuffer(180, 60, 40);
+    const itunesCalls: string[] = [];
+
+    const customConnectors: BibliographicConnectors = {
+      bnf: {
+        async lookupByIsbn() { return null; },
+        async searchByEnsembleId() { return []; },
+        async sampleByCollectionName() { return []; },
+        async searchByTitleAndAuthor(title) {
+          if (title.toLowerCase().includes('mourir')) {
+            return [
+              {
+                source: 'bnf',
+                isbn13: '9782800136943',
+                title: "L'homme qui ne voulait pas mourir",
+                seriesName: 'Spirou et Fantasio',
+                volumeNumber: '48',
+                authors: ['Jean-David Morvan', 'José Luis Munuera'],
+                scriptwriters: ['Jean-David Morvan'],
+                illustrators: ['José Luis Munuera'],
+                rawSubjects: ['Bandes dessinées'],
+                language: 'fr',
+                contentKind: 'illustrated'
+              }
+            ];
+          }
+          return [];
+        }
+      },
+      sudoc: { async lookupByIsbn() { return null; } },
+      inventaire: {
+        async lookupByIsbn() { return null; },
+        async fetchSeriesWorks() { return []; },
+        async fetchWorkEditions() { return { isbn13s: [], coverUrls: [] }; }
+      },
+      wikidata: {
+        async lookupWorkByQid() { return null; },
+        async fetchSeriesWorksByQid() { return []; }
+      },
+      googleBooks: { async lookupByIsbn() { return null; } },
+      openLibrary: { async lookupByIsbn() { return null; } }
+    };
+
+    const customApp = createApp({
+      db,
+      config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpCoversDir }),
+      connectors: customConnectors,
+      coverFetchImpl: (async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes('itunes.apple.com')) {
+          itunesCalls.push(url);
+          return new Response('Rate Limited', { status: 429 });
+        }
+        // L'édition kiosque 9782815206xxx est absente des CDN, mais l'édition Dupuis sœur 9782800136943 répond !
+        if (url.includes('9782800136943') || url.includes('2800136946')) {
+          return new Response(new Uint8Array(dupuisPng), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        return new Response('', { status: 404 });
+      }) as typeof fetch
+    });
+
+    try {
+      const now = new Date().toISOString();
+      const storedLocal = await customApp.services.coverService.storeBufferAsWebp(localPng, 'https://local.test/bouddha.png');
+
+      // Série canonique déjà couverte en base ("Spirou et Fantasio en albums")
+      db.run(
+        `INSERT INTO franchises (id, canonical_name, normalized_key, created_at, updated_at)
+         VALUES ('fra_spirou_albums', 'Spirou et Fantasio en albums', 'spirou et fantasio en albums', ?, ?),
+                ('fra_spirou_kiosque', 'La collection Spirou et Fantasio', 'la collection spirou et fantasio', ?, ?)`,
+        [now, now, now, now]
+      );
+      db.run(
+        `INSERT INTO series (id, franchise_id, canonical_name, normalized_key, created_at, updated_at)
+         VALUES ('ser_spirou_albums', 'fra_spirou_albums', 'Spirou et Fantasio en albums', 'spirou et fantasio en albums', ?, ?),
+                ('ser_spirou_kiosque', 'fra_spirou_kiosque', 'La collection Spirou et Fantasio', 'la collection spirou et fantasio', ?, ?)`,
+        [now, now, now, now]
+      );
+
+      // Livre canonique déjà couvert en local
+      db.run(
+        `INSERT INTO books (id, work_canonical_id, series_id, title, normalized_title, volume_number, authors_json, main_category, cover_key, created_at, updated_at)
+         VALUES ('bk_canon_bouddha', 'w_canon_1', 'ser_spirou_albums', 'Le prisonnier du Bouddha', 'le prisonnier du bouddha', 14, '["André Franquin"]', 'BD', ?, ?, ?)`,
+        [storedLocal.coverKey, now, now]
+      );
+
+      // 3 livres kiosque sans couverture
+      db.run(
+        `INSERT INTO books (id, work_canonical_id, series_id, title, normalized_title, volume_number, authors_json, main_category, cover_key, created_at, updated_at)
+         VALUES ('bk_kiosk_a', 'w_kiosk_a', 'ser_spirou_kiosque', 'Le prisonnier du Bouddha', 'le prisonnier du bouddha', 14, '["André Franquin"]', 'BD', NULL, ?, ?),
+                ('bk_kiosk_b', 'w_kiosk_b', 'ser_spirou_kiosque', 'L''homme qui ne voulait pas mourir', 'l homme qui ne voulait pas mourir', 37, '["Jean-David Morvan"]', 'BD', NULL, ?, ?),
+                ('bk_kiosk_c', 'w_kiosk_c', 'ser_spirou_kiosque', 'Album introuvable rare', 'album introuvable rare', 99, '["Inconnu"]', 'BD', NULL, ?, ?)`,
+        [now, now, now, now, now, now]
+      );
+      db.run(
+        `INSERT INTO book_editions (isbn13, book_id, source, created_at)
+         VALUES ('9782815206142', 'bk_kiosk_a', 'bnf', ?),
+                ('9782815206371', 'bk_kiosk_b', 'bnf', ?),
+                ('9782815206999', 'bk_kiosk_c', 'bnf', ?)`,
+        [now, now, now]
+      );
+
+      const report = await customApp.services.ingestionService.enrichIncompleteSeriesVolumes('ser_spirou_kiosque');
+      expect(report.processed).toBe(3);
+      expect(report.coversAdded).toBe(2);
+      expect(report.rateLimitedCount).toBe(1);
+
+      // Livre A : réutilisation locale 0 ms (exactement le même cover_key WebP que la série canonique)
+      const bookA = customApp.repos.catalogRepo.findBookById('bk_kiosk_a');
+      expect(bookA?.cover_key).toBe(storedLocal.coverKey);
+
+      // Livre B : couvert via l'édition sœur Dupuis (9782800136943) découverte avant iTunes + enregistrée dans book_editions
+      const bookB = customApp.repos.catalogRepo.findBookById('bk_kiosk_b');
+      expect(bookB?.cover_key).toBeTruthy();
+      const editionsB = customApp.repos.catalogRepo.listEditionsByBookId('bk_kiosk_b').map((e) => e.isbn13);
+      expect(editionsB).toContain('9782800136943');
+
+      // iTunes n'a été appelé QU'UNE SEULE FOIS (uniquement pour Livre C après échec des niveaux 1, 2a et 2b !)
+      expect(itunesCalls).toHaveLength(1);
+      expect(itunesCalls[0]).toContain('Album%20introuvable%20rare');
+
+      // Vérification de la reprise différée `runAfter` dans JobRepository.claimNextPendingJob
+      const t0 = '2026-11-25T16:00:00.000Z';
+      const tFuture = '2026-11-25T16:01:15.000Z';
+      const tAfter = '2026-11-25T16:02:00.000Z';
+      customApp.repos.jobRepo.createJob({
+        id: 'job_delayed_1',
+        type: 'series_enrich_volumes',
+        userId: null,
+        libraryId: null,
+        payload: { seriesId: 'ser_spirou_kiosque', retryAttempt: 1, runAfter: tFuture },
+        now: t0
+      });
+
+      // Avant runAfter : non réclamé
+      expect(customApp.repos.jobRepo.claimNextPendingJob(t0, ['series_enrich_volumes'])).toBeNull();
+      // Après runAfter : réclamé proprement
+      const claimed = customApp.repos.jobRepo.claimNextPendingJob(tAfter, ['series_enrich_volumes']);
+      expect(claimed?.id).toBe('job_delayed_1');
+      expect(claimed?.status).toBe('running');
+    } finally {
+      customApp.worker.stop();
+    }
+  });
 });

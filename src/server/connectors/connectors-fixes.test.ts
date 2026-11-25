@@ -14,6 +14,8 @@ import { CoverService } from '../services/cover.service';
 import { SeriesGraphService } from '../services/acquisition/series-graph.service';
 import type { BibliographicConnectors } from './types';
 import { HttpClient } from './http-client';
+import { createBnfConnector } from './bnf.connector';
+import { PriorityRateLimiter, runWithRequestPriority } from './request-priority';
 import { createInventaireConnector } from './inventaire.connector';
 import { createWikidataConnector } from './wikidata.connector';
 import { createGeminiConnector, PREFERRED_GEMINI_MODELS } from './gemini.connector';
@@ -620,5 +622,126 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
       "Le meilleur d'Astérix",
       'Comment Obélix est tombé dans la marmite'
     ]);
+  });
+
+  it('préempte les tâches de fond (LOW) au profit des requêtes utilisateur (HIGH) et fusionne les appels réseau identiques simultanés', async () => {
+    const limiter = new PriorityRateLimiter({
+      policies: { bnf: { maxConcurrency: 1, defaultMinIntervalMs: 0 } },
+      bypassTiming: true
+    });
+
+    const executionOrder: string[] = [];
+    let releaseBlocker!: () => void;
+    const blockerPromise = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+
+    // 1. Une tâche LOW occupe l'unique créneau BnF
+    const low1 = runWithRequestPriority('low', () =>
+      limiter.schedule('bnf', async () => {
+        executionOrder.push('low-1-start');
+        await blockerPromise;
+        executionOrder.push('low-1-end');
+      })
+    );
+
+    // 2. Deux autres tâches LOW sont mises en file d'attente
+    const low2 = runWithRequestPriority('low', () =>
+      limiter.schedule('bnf', async () => {
+        executionOrder.push('low-2');
+      })
+    );
+    const low3 = runWithRequestPriority('low', () =>
+      limiter.schedule('bnf', async () => {
+        executionOrder.push('low-3');
+      })
+    );
+
+    // 3. Une requête interactive HIGH arrive ensuite : elle DOIT passer avant low-2 et low-3 !
+    const high1 = runWithRequestPriority('high', () =>
+      limiter.schedule('bnf', async () => {
+        executionOrder.push('high-1');
+      })
+    );
+
+    releaseBlocker();
+    await Promise.all([low1, low2, low3, high1]);
+
+    expect(executionOrder).toEqual(['low-1-start', 'low-1-end', 'high-1', 'low-2', 'low-3']);
+
+    // 4. Fusion in-flight sur HttpClient : 2 appels simultanés sur la même URL ne déclenchent qu'1 seul fetch !
+    let fetchCalls = 0;
+    const mockFetch = vi.fn(async () => {
+      fetchCalls++;
+      await new Promise((r) => setTimeout(r, 20));
+      return new Response('{"ok":true}', { status: 200 });
+    });
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch, rateLimiter: limiter });
+
+    const [r1, r2] = await Promise.all([
+      http.fetchJson<{ ok: boolean }>({
+        source: 'inventaire',
+        url: 'https://inventaire.io/api/same-flight',
+        cacheKey: 'inv:flight:test'
+      }),
+      http.fetchJson<{ ok: boolean }>({
+        source: 'inventaire',
+        url: 'https://inventaire.io/api/same-flight',
+        cacheKey: 'inv:flight:test'
+      })
+    ]);
+
+    expect(r1?.ok).toBe(true);
+    expect(r2?.ok).toBe(true);
+    expect(fetchCalls).toBe(1);
+  });
+
+  it('filtre les intégrales étrangères et les faux positifs partiels sur série courte dans bnf.searchSeriesIntegrals (ex. Polo vs Marco Polo il Milione)', async () => {
+    const sruXml = `<?xml version="1.0" encoding="UTF-8"?>
+<srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/" xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+  <srw:records>
+    <srw:record>
+      <srw:recordData>
+        <mxc:record>
+          <mxc:datafield tag="008"><mxc:subfield code="a">200101s1928    it            000 0 ita  </mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="041"><mxc:subfield code="a">ita</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245"><mxc:subfield code="a">Marco Polo il Milione. Prima edizione integrale</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Benedetto</mxc:subfield><mxc:subfield code="m">Luigi Foscolo</mxc:subfield></mxc:datafield>
+        </mxc:record>
+      </srw:recordData>
+    </srw:record>
+    <srw:record>
+      <srw:recordData>
+        <mxc:record>
+          <mxc:datafield tag="041"><mxc:subfield code="a">fre</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="020"><mxc:subfield code="a">978-2-227-71500-4</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245"><mxc:subfield code="a">Marco Polo, intégrale des voyages</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Polo</mxc:subfield><mxc:subfield code="m">Marco</mxc:subfield></mxc:datafield>
+        </mxc:record>
+      </srw:recordData>
+    </srw:record>
+    <srw:record>
+      <srw:recordData>
+        <mxc:record>
+          <mxc:datafield tag="041"><mxc:subfield code="a">fre</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="020"><mxc:subfield code="a">978-2-227-49012-3</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="245"><mxc:subfield code="a">Polo, l'intégrale</mxc:subfield><mxc:subfield code="e">Tomes 1 à 3</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="460"><mxc:subfield code="t">Polo</mxc:subfield><mxc:subfield code="v">1</mxc:subfield></mxc:datafield>
+          <mxc:datafield tag="100"><mxc:subfield code="a">Faller</mxc:subfield><mxc:subfield code="m">Régis</mxc:subfield></mxc:datafield>
+        </mxc:record>
+      </srw:recordData>
+    </srw:record>
+  </srw:records>
+</srw:searchRetrieveResponse>`;
+
+    const mockFetch = vi.fn(async () => new Response(sruXml, { status: 200 }));
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const bnf = createBnfConnector(http);
+
+    const integrals = await bnf.searchSeriesIntegrals!('Polo');
+    expect(integrals).toHaveLength(1);
+    expect(integrals[0].title).toContain('Polo');
+    expect(integrals[0].title).not.toContain('Marco Polo');
+    expect(integrals[0].isbn13s).toEqual(['9782227490123']);
   });
 });
