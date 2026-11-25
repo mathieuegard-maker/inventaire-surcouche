@@ -807,4 +807,28 @@ export class CoverService {
 
     return { deletedCount, freedBytes };
   }
+
+  /**
+   * Supprime tous les fichiers `.webp` stockés sur disque dans `coversDir` (utilisé lors d'un reset catalogue admin de tests).
+   */
+  async deleteAllStoredCoverFiles(): Promise<number> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.coversDir);
+    } catch {
+      return 0;
+    }
+
+    let deleted = 0;
+    for (const name of entries) {
+      if (!name.toLowerCase().endsWith('.webp')) continue;
+      try {
+        await fs.unlink(path.join(this.coversDir, path.basename(name)));
+        deleted++;
+      } catch {
+        // fichier déjà supprimé
+      }
+    }
+    return deleted;
+  }
 }

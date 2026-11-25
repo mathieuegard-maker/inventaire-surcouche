@@ -3,7 +3,7 @@
 
 import { isbnUtil } from './isbn.util';
 import { parseIncludedVolumeNumbers } from './integral.util';
-import type { OwnershipStatus, ReadingStatus } from '../types/domain.types';
+import type { ImportInputProfileCode, OwnershipStatus, ReadingStatus } from '../types/domain.types';
 
 export interface ImportedBookRow {
   rowNumber: number;
@@ -19,6 +19,7 @@ export interface ImportedBookRow {
   readingStatus: ReadingStatus | null;
   rating: number | null;
   notes: string | null;
+  testCategory?: string | null;
 }
 
 type ImportFieldKey =
@@ -33,7 +34,8 @@ type ImportFieldKey =
   | 'includedVolumes'
   | 'readingStatus'
   | 'rating'
-  | 'notes';
+  | 'notes'
+  | 'testCategory';
 
 const HEADER_ALIASES: Record<string, ImportFieldKey> = {
   // ISBN
@@ -117,7 +119,18 @@ const HEADER_ALIASES: Record<string, ImportFieldKey> = {
   commentaire: 'notes',
   commentaires: 'notes',
   avis: 'notes',
-  review: 'notes'
+  review: 'notes',
+  // Catégorie / Profil de test (fichiers CSV benchmark IA)
+  categorie: 'testCategory',
+  categorietest: 'testCategory',
+  castest: 'testCategory',
+  category: 'testCategory',
+  groupe: 'testCategory',
+  typetest: 'testCategory',
+  profil: 'testCategory',
+  typeentree: 'testCategory',
+  attendu: 'testCategory',
+  scenario: 'testCategory'
 };
 
 function normalizeHeaderKey(raw: string): string {
@@ -274,6 +287,7 @@ function buildRowFromRecord(record: Partial<Record<ImportFieldKey, unknown>>, ro
   const readingStatus = parseReadingStatus(record.readingStatus);
   const rating = parseRatingValue(record.rating);
   const notes = cleanString(record.notes);
+  const testCategory = cleanString(record.testCategory);
 
   if (!isbn && !title && !series) return null;
 
@@ -290,8 +304,42 @@ function buildRowFromRecord(record: Partial<Record<ImportFieldKey, unknown>>, ro
     includedVolumes,
     readingStatus,
     rating,
-    notes
+    notes,
+    testCategory
   };
+}
+
+/**
+ * Classe le profil d'entrée d'une ligne importée (ISBN seul, Série + Tome, Titre + Auteur, etc.)
+ * sous forme de code typé pour l'analyse de benchmark.
+ */
+export function describeImportInputProfile(
+  row: Pick<ImportedBookRow, 'isbn' | 'title' | 'series' | 'volumeNumber' | 'author'>
+): ImportInputProfileCode {
+  const hasIsbn = Boolean(row.isbn && row.isbn.trim());
+  const hasTitle = Boolean(row.title && row.title.trim());
+  const hasSeries = Boolean(row.series && row.series.trim());
+  const hasVol = Boolean(row.volumeNumber && row.volumeNumber.trim());
+  const hasAuthor = Boolean(row.author && row.author.trim());
+
+  if (hasIsbn) {
+    if (!hasTitle && !hasSeries && !hasAuthor) return 'isbn_only';
+    if (hasSeries && hasVol) return 'isbn_series_vol';
+    if (hasTitle) return 'isbn_title';
+    return 'isbn_meta';
+  }
+  if (hasSeries && hasVol) {
+    return hasTitle ? 'series_vol_title' : 'series_vol';
+  }
+  if (hasSeries) {
+    return hasAuthor ? 'series_author' : 'series_only';
+  }
+  if (hasTitle && hasVol) {
+    return hasAuthor ? 'title_vol_author' : 'title_vol';
+  }
+  if (hasTitle && hasAuthor) return 'title_author';
+  if (hasTitle) return 'title_only';
+  return 'other';
 }
 
 /**

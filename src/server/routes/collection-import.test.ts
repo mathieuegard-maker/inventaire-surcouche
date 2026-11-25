@@ -248,6 +248,7 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
 
     const config = loadServerConfig({
       NODE_ENV: 'test',
+      ADMIN_EMAIL: 'admin@biblio.test',
       COVERS_DIR: tmpCoversDir,
       CRON_ENABLED: 'false'
     });
@@ -398,5 +399,168 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     expect(pull2.books).toHaveLength(2);
     expect(pull2.books.find((b) => b.primaryIsbn13 === '9782871293019')?.ownershipStatus).toBe('owned');
     expect(pull2.books.find((b) => b.primaryIsbn13 === '9782205051230')?.ownershipStatus).toBe('wish');
+  });
+
+  it('expose la trace ligne par ligne enrichie dans GET /api/admin/import-benchmarks et vide la DB livres via POST /api/admin/reset-book-catalog', async () => {
+    const adminCookie = await registerUser('AdminBench', 'admin@biblio.test');
+    const userCookie = await registerUser('RegularUser', 'user@biblio.test');
+
+    // CSV avec colonne Catégorie de test, tome volontairement erroné sur la ligne 1, recherche texte ligne 2, échec ligne 3
+    const csv =
+      'Catégorie;ISBN;Titre;Série;Tome;Auteur\r\n' +
+      'BD classique;9782871293019;La Marque du diable;Le Scorpion;9;Marini\r\n' +
+      'Sans ISBN;;Blacksad;;1;Guarnido\r\n' +
+      'Cas piège;;Ouvrage Fantôme 9999;;;Inconnu\r\n';
+
+    const importRes = await appCtx.app.request('/api/me/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        filename: 'recette-ia.csv',
+        contentBase64: Buffer.from(csv, 'utf8').toString('base64'),
+        defaultStatus: 'owned'
+      })
+    });
+    expect(importRes.status).toBe(202);
+    while (await appCtx.worker.processNextJob()) {
+      // exécution
+    }
+
+    // 1. Protection stricte Admin (403 pour utilisateur normal)
+    const forbiddenBench = await appCtx.app.request('/api/admin/import-benchmarks', {
+      headers: { cookie: userCookie }
+    });
+    expect(forbiddenBench.status).toBe(403);
+
+    const forbiddenReset = await appCtx.app.request('/api/admin/reset-book-catalog', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: userCookie },
+      body: JSON.stringify({ confirmation: 'VIDER' })
+    });
+    expect(forbiddenReset.status).toBe(403);
+
+    // 2. Lecture benchmark enrichi côté Admin
+    const benchRes = await appCtx.app.request('/api/admin/import-benchmarks', {
+      headers: { cookie: adminCookie }
+    });
+    expect(benchRes.status).toBe(200);
+    const benchBody = (await benchRes.json()) as {
+      ok: true;
+      activeCatalogJobsCount: number;
+      jobs: Array<{
+        filename: string;
+        summary: {
+          totalRows: number;
+          matchedCount: number;
+          warningCount: number;
+          unmatchedCount: number;
+          missingCoverCount: number;
+          resolvedByIsbnCount: number;
+          resolvedBySearchCount: number;
+        };
+        items: Array<{
+          rowNumber: number;
+          status: string;
+          resolutionChannel: string;
+          verdict: string;
+          warnings: string[];
+          input: { testCategory: string | null; inputProfile: string };
+          live: { title: string; seriesName: string | null; volumeNumber: number | null } | null;
+        }>;
+      }>;
+    };
+
+    expect(benchBody.jobs).toHaveLength(1);
+    const job = benchBody.jobs[0];
+    expect(job.filename).toBe('recette-ia.csv');
+    expect(job.summary.totalRows).toBe(3);
+    expect(job.summary.matchedCount).toBe(2);
+    expect(job.summary.unmatchedCount).toBe(1);
+    expect(job.summary.resolvedByIsbnCount).toBe(1);
+    expect(job.summary.resolvedBySearchCount).toBe(1);
+    expect(job.items).toHaveLength(3);
+
+    // Ligne 1 (ISBN direct + tome 9 attendu vs tome 1 trouvé -> volume_mismatch)
+    expect(job.items[0].input.testCategory).toBe('BD classique');
+    expect(job.items[0].input.inputProfile).toBe('isbn_series_vol');
+    expect(job.items[0].resolutionChannel).toBe('isbn_direct');
+    expect(job.items[0].verdict).toBe('warning');
+    expect(job.items[0].warnings).toContain('volume_mismatch');
+    expect(job.items[0].live?.seriesName).toBe('Le Scorpion');
+
+    // Vérification de l'enrichissement LIVE : si la couverture est retirée en base, `missing_cover` remonte immédiatement
+    db.run('UPDATE books SET cover_key = NULL');
+    const liveBenchRes = await appCtx.app.request('/api/admin/import-benchmarks', {
+      headers: { cookie: adminCookie }
+    });
+    expect(liveBenchRes.status).toBe(200);
+    const liveBenchBody = (await liveBenchRes.json()) as typeof benchBody;
+    expect(liveBenchBody.jobs[0].items[0].warnings).toEqual(
+      expect.arrayContaining(['volume_mismatch', 'missing_cover'])
+    );
+    expect(liveBenchBody.jobs[0].summary.missingCoverCount).toBe(2);
+
+    // Ligne 2 (Sans ISBN -> recherche BnF -> Blacksad T1 trouvé, titre nettoyé sans faux positif title_mismatch)
+    expect(job.items[1].input.testCategory).toBe('Sans ISBN');
+    expect(job.items[1].input.inputProfile).toBe('title_vol_author');
+    expect(job.items[1].resolutionChannel).toBe('search_to_isbn');
+    expect(job.items[1].live?.seriesName).toBe('Blacksad');
+    expect(job.items[1].live?.title).toBe('Quelque part entre les ombres');
+    expect(job.items[1].warnings).not.toContain('title_mismatch');
+
+    // Ligne 3 (échec)
+    expect(job.items[2].status).toBe('unmatched');
+    expect(job.items[2].verdict).toBe('failed');
+
+    // 3. Reset DB livres : confirmation invalide refusée (400)
+    const badReset = await appCtx.app.request('/api/admin/reset-book-catalog', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ confirmation: 'OUI' })
+    });
+    expect(badReset.status).toBe(400);
+
+    // Dépose un fichier .webp témoin pour vérifier le nettoyage disque
+    fs.writeFileSync(path.join(tmpCoversDir, 'cov_test123456.webp'), Buffer.from('fake-webp'));
+
+    const okReset = await appCtx.app.request('/api/admin/reset-book-catalog', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ confirmation: 'VIDER' })
+    });
+    expect(okReset.status).toBe(200);
+    const resetBody = (await okReset.json()) as {
+      ok: true;
+      deletedBooks: number;
+      deletedSeries: number;
+      deletedCoverFiles: number;
+      resetAt: string;
+    };
+    expect(resetBody.deletedBooks).toBe(2);
+    expect(resetBody.deletedSeries).toBeGreaterThanOrEqual(2);
+    expect(resetBody.deletedCoverFiles).toBeGreaterThanOrEqual(1);
+    expect(fs.readdirSync(tmpCoversDir).filter((f) => f.endsWith('.webp'))).toHaveLength(0);
+
+    // Vérifie que les comptes, sessions et foyers sont préservés et que catalog_reset est horodaté
+    const overviewRes = await appCtx.app.request('/api/admin/overview', {
+      headers: { cookie: adminCookie }
+    });
+    expect(overviewRes.status).toBe(200);
+    const overview = ((await overviewRes.json()) as {
+      overview: {
+        usersCount: number;
+        librariesCount: number;
+        booksCount: number;
+        seriesCount: number;
+        jobsCount: number;
+        cronRuns: Array<{ job_name: string; last_run_at: string }>;
+      };
+    }).overview;
+    expect(overview.usersCount).toBe(2);
+    expect(overview.librariesCount).toBe(2);
+    expect(overview.booksCount).toBe(0);
+    expect(overview.seriesCount).toBe(0);
+    expect(overview.jobsCount).toBe(0);
+    expect(overview.cronRuns.some((r) => r.job_name === 'catalog_reset')).toBe(true);
   });
 });

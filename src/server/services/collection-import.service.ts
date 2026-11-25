@@ -5,13 +5,18 @@
 import crypto from 'node:crypto';
 import { readSheet } from 'read-excel-file/node';
 import {
+  describeImportInputProfile,
   parseCsvToMatrix,
   parseImportJson,
   parseImportRowsFromMatrix,
   type ImportedBookRow
 } from '../../shared/bibliographic/collection-import.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
-import type { BackgroundJobView } from '../../shared/types/domain.types';
+import type {
+  BackgroundJobView,
+  CollectionImportComparisonItem,
+  CollectionImportResolutionChannel
+} from '../../shared/types/domain.types';
 import { AppError } from '../middleware/error.middleware';
 import type { BackgroundJobRow, JobRepository } from '../repositories/job.repo';
 import { mapJobRowToView, type JobHandlerContext } from '../workers/background-worker';
@@ -41,6 +46,7 @@ export interface CollectionImportResultPayload {
   skippedCount: number;
   unmatchedCount: number;
   unmatched: CollectionImportUnmatchedItem[];
+  items?: CollectionImportComparisonItem[];
 }
 
 interface CollectionImportJobPayload {
@@ -217,10 +223,29 @@ export class CollectionImportService {
       resolvedBySearchCount: 0,
       skippedCount: payload.skippedNoneCount ?? 0,
       unmatchedCount: 0,
-      unmatched: []
+      unmatched: [],
+      items: []
     };
 
-    const recordUnmatched = (row: ImportedBookRow, reason: 'isbn_not_found' | 'catalog_not_found') => {
+    const buildInputTrace = (row: ImportedBookRow): CollectionImportComparisonItem['input'] => ({
+      isbn: row.isbn,
+      title: row.title,
+      series: row.series,
+      volumeNumber: row.volumeNumber,
+      author: row.author,
+      publisher: row.publisher,
+      isIntegral: row.isIntegral,
+      includedVolumes: row.includedVolumes,
+      testCategory: row.testCategory ?? null,
+      notes: row.notes,
+      inputProfile: describeImportInputProfile(row)
+    });
+
+    const recordUnmatched = (
+      row: ImportedBookRow,
+      reason: 'isbn_not_found' | 'catalog_not_found',
+      startedAtMs: number
+    ) => {
       result.unmatched.push({
         rowNumber: row.rowNumber,
         isbn: row.isbn,
@@ -230,10 +255,22 @@ export class CollectionImportService {
         reason
       });
       result.unmatchedCount = result.unmatched.length;
+      result.items?.push({
+        rowNumber: row.rowNumber,
+        input: buildInputTrace(row),
+        status: 'unmatched',
+        resolutionChannel: 'unmatched',
+        unmatchedReason: reason,
+        durationMs: Math.max(0, Date.now() - startedAtMs),
+        resolvedBookId: null,
+        resolvedIsbn13: null,
+        snapshot: null
+      });
     };
 
     for (let i = 0; i < total; i++) {
       const row = rows[i];
+      const rowStartedAt = Date.now();
       const targetStatus: 'owned' | 'wish' =
         row.ownershipStatus === 'wish' || row.ownershipStatus === 'owned'
           ? row.ownershipStatus
@@ -257,7 +294,7 @@ export class CollectionImportService {
         }
 
         if (!isbn13) {
-          recordUnmatched(row, 'isbn_not_found');
+          recordUnmatched(row, 'isbn_not_found', rowStartedAt);
           ctx.reportProgress(i + 1, total, { ...result });
           continue;
         }
@@ -298,7 +335,7 @@ export class CollectionImportService {
         }
 
         if (!item?.found || !item.book) {
-          recordUnmatched(row, 'catalog_not_found');
+          recordUnmatched(row, 'catalog_not_found', rowStartedAt);
           ctx.reportProgress(i + 1, total, { ...result });
           continue;
         }
@@ -306,6 +343,35 @@ export class CollectionImportService {
         result.importedCount++;
         if (resolvedViaSearch) result.resolvedBySearchCount++;
         else result.resolvedByIsbnCount++;
+
+        const resolutionChannel: CollectionImportResolutionChannel = resolvedViaSearch
+          ? 'search_to_isbn'
+          : item.fromCache
+            ? 'cache'
+            : 'isbn_direct';
+
+        result.items?.push({
+          rowNumber: row.rowNumber,
+          input: buildInputTrace(row),
+          status: 'matched',
+          resolutionChannel,
+          unmatchedReason: null,
+          durationMs: Math.max(0, Date.now() - rowStartedAt),
+          resolvedBookId: item.book.id,
+          resolvedIsbn13: item.book.primaryIsbn13 ?? item.isbn13 ?? isbn13,
+          snapshot: {
+            title: item.book.title,
+            seriesId: item.book.seriesId,
+            seriesName: item.book.seriesName,
+            volumeNumber: item.book.volumeNumber,
+            isIntegral: item.book.isIntegral,
+            includedVolumes: item.book.includedVolumes,
+            authors: item.book.authors,
+            publisher: item.book.publisher,
+            mainCategory: item.book.mainCategory,
+            coverUrl: item.book.coverUrl
+          }
+        });
 
         // Restauration optionnelle des métadonnées intégrale en Couche 3
         if (row.isIntegral === true || row.includedVolumes.length > 0) {
@@ -331,7 +397,7 @@ export class CollectionImportService {
           });
         }
       } catch {
-        recordUnmatched(row, 'catalog_not_found');
+        recordUnmatched(row, 'catalog_not_found', rowStartedAt);
       }
 
       ctx.reportProgress(i + 1, total, { ...result });

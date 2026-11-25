@@ -3,13 +3,30 @@
 // Zéro SQL brut : délègue 100 % des requêtes à AdminRepository / CatalogRepository / UserRepository / LogRepository.
 
 import crypto from 'node:crypto';
-import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
-import type { BookMainCategory } from '../../shared/types/domain.types';
+import {
+  isCompatibleSeriesName,
+  isGenericVolumeTitle,
+  matchesAuthorName,
+  normalizeSeriesNumber,
+  normalizeTextKey,
+  tokenOverlapRatio
+} from '../../shared/bibliographic/text-normalize.util';
+import type {
+  AdminBenchmarkJobView,
+  AdminBenchmarkLiveBookState,
+  AdminBenchmarkLiveItem,
+  BenchmarkVerdict,
+  BenchmarkWarningCode,
+  BookMainCategory,
+  CollectionImportComparisonItem,
+  CollectionImportComparisonSnapshot
+} from '../../shared/types/domain.types';
 import type { DatabaseAdapter } from '../db/database.adapter';
 import type { AdminRepository } from '../repositories/admin.repo';
 import type { CatalogRepository } from '../repositories/catalog.repo';
 import type { LogRepository } from '../repositories/log.repo';
 import type { UserRepository } from '../repositories/user.repo';
+import type { CollectionImportResultPayload } from './collection-import.service';
 import type { CoverService } from './cover.service';
 import type { CronScheduler } from '../workers/cron-scheduler';
 
@@ -259,5 +276,216 @@ export class AdminService {
     }
     // sister_editions : rapport synthétique d'état des éditions sœurs
     return { editionsIndexed: this.adminRepo.countEditions() };
+  }
+
+  /**
+   * Calcule automatiquement les anomalies probables entre l'entrée CSV de test et l'état résolu (live ou snapshot).
+   */
+  private computeBenchmarkWarnings(
+    item: CollectionImportComparisonItem,
+    effective: CollectionImportComparisonSnapshot | null
+  ): BenchmarkWarningCode[] {
+    if (item.status === 'unmatched' || !effective) return [];
+
+    const warnings: BenchmarkWarningCode[] = [];
+    const { input } = item;
+
+    if (!effective.coverUrl) {
+      warnings.push('missing_cover');
+    }
+
+    if (input.volumeNumber) {
+      const normalizedExpected = normalizeSeriesNumber(input.volumeNumber);
+      const parsedExpected = /^\d+$/.test(normalizedExpected) ? parseInt(normalizedExpected, 10) : null;
+      if (parsedExpected !== null) {
+        const coveredByIntegral =
+          effective.isIntegral && effective.includedVolumes.includes(String(parsedExpected));
+        if (!coveredByIntegral && (effective.volumeNumber === null || effective.volumeNumber !== parsedExpected)) {
+          warnings.push('volume_mismatch');
+        }
+      }
+    }
+
+    if (input.series) {
+      if (!effective.seriesName || !isCompatibleSeriesName(effective.seriesName, input.series)) {
+        warnings.push('series_mismatch');
+      }
+    }
+
+    if (input.title) {
+      const refSeries = input.series || effective.seriesName || '';
+      const inputIsGenericOrSeriesOnly =
+        isGenericVolumeTitle(input.title, refSeries) ||
+        (Boolean(effective.seriesName) && isCompatibleSeriesName(input.title, effective.seriesName!));
+
+      if (!inputIsGenericOrSeriesOnly) {
+        const fullOut = [effective.seriesName, effective.title].filter(Boolean).join(' ');
+        const normIn = normalizeTextKey(input.title);
+        const normOut = normalizeTextKey(effective.title);
+        const directSubstr =
+          normIn.length >= 4 &&
+          normOut.length >= 4 &&
+          (normOut.includes(normIn) || normIn.includes(normOut));
+        const overlap = Math.max(
+          tokenOverlapRatio(input.title, effective.title),
+          tokenOverlapRatio(effective.title, input.title),
+          tokenOverlapRatio(input.title, fullOut)
+        );
+        if (!directSubstr && overlap < 0.45) {
+          warnings.push('title_mismatch');
+        }
+      }
+    }
+
+    if (input.author) {
+      const hasMatch = effective.authors.some((a) => matchesAuthorName(a, input.author!));
+      if (!hasMatch) {
+        warnings.push('author_mismatch');
+      }
+    }
+
+    if (input.isIntegral !== null && input.isIntegral !== effective.isIntegral) {
+      warnings.push('integral_mismatch');
+    }
+
+    return warnings;
+  }
+
+  /**
+   * Retourne l'historique des imports CSV/JSON/XLSX enrichis en direct avec l'état courant du Catalogue Central
+   * (couvertures WebP arrivées en différé, déploiement de séries, éditions) + détection automatique d'anomalies.
+   */
+  listImportBenchmarks(limit = 15): { activeCatalogJobsCount: number; jobs: AdminBenchmarkJobView[] } {
+    const safeLimit = Math.min(30, Math.max(1, limit));
+    const jobRows = this.adminRepo.listCollectionImportJobs(safeLimit);
+    const activeCatalogJobsCount = this.adminRepo.countActiveSeriesBackgroundJobs();
+
+    const jobs: AdminBenchmarkJobView[] = jobRows.map((row) => {
+      let parsedResult: CollectionImportResultPayload | null = null;
+      let parsedPayload: { filename?: string; rows?: unknown[] } | null = null;
+      try {
+        if (row.result_json) parsedResult = JSON.parse(row.result_json) as CollectionImportResultPayload;
+      } catch {
+        parsedResult = null;
+      }
+      try {
+        if (row.payload_json) parsedPayload = JSON.parse(row.payload_json) as { filename?: string; rows?: unknown[] };
+      } catch {
+        parsedPayload = null;
+      }
+
+      const rawItems: CollectionImportComparisonItem[] = Array.isArray(parsedResult?.items)
+        ? parsedResult.items
+        : [];
+
+      let okCount = 0;
+      let warningCount = 0;
+      let unmatchedCount = 0;
+      let missingCoverCount = 0;
+      let totalDurationMs = 0;
+
+      const enrichedItems: AdminBenchmarkLiveItem[] = rawItems.map((item) => {
+        totalDurationMs += Number(item.durationMs ?? 0);
+        let live: AdminBenchmarkLiveBookState | null = null;
+
+        if (item.resolvedBookId) {
+          const bookRow = this.catalogRepo.findBookById(item.resolvedBookId);
+          if (bookRow) {
+            const seriesRow = bookRow.series_id ? this.catalogRepo.findSeriesById(bookRow.series_id) : null;
+            const editions = this.catalogRepo.listEditionsByBookId(bookRow.id);
+            live = {
+              title: bookRow.title,
+              seriesId: bookRow.series_id,
+              seriesName: seriesRow?.canonical_name ?? null,
+              seriesTotalVolumes: seriesRow?.known_volumes_count ?? 0,
+              seriesExpanded: seriesRow?.is_complete_expanded === 1,
+              volumeNumber: bookRow.volume_number,
+              isIntegral: bookRow.is_integral === 1,
+              includedVolumes: parseJsonArray(bookRow.included_volumes_json),
+              authors: parseJsonArray(bookRow.authors_json),
+              publisher: bookRow.publisher,
+              mainCategory: bookRow.main_category,
+              coverUrl: bookRow.cover_key ? `/api/covers/${bookRow.cover_key}` : null,
+              editionsCount: editions.length
+            };
+          }
+        }
+
+        const effective: CollectionImportComparisonSnapshot | null = live ?? item.snapshot;
+        const warnings = this.computeBenchmarkWarnings(item, effective);
+        const verdict: BenchmarkVerdict =
+          item.status === 'unmatched' ? 'failed' : warnings.length > 0 ? 'warning' : 'ok';
+
+        if (verdict === 'failed') unmatchedCount++;
+        else if (verdict === 'warning') warningCount++;
+        else okCount++;
+
+        if (item.status === 'matched' && warnings.includes('missing_cover')) {
+          missingCoverCount++;
+        }
+
+        return {
+          ...item,
+          live,
+          warnings,
+          verdict
+        };
+      });
+
+      const totalRows =
+        parsedResult?.totalRows ??
+        row.progress_total ??
+        (Array.isArray(parsedPayload?.rows) ? parsedPayload.rows.length : 0);
+      const matchedCount = okCount + warningCount;
+      const processedRows = enrichedItems.length > 0 ? enrichedItems.length : row.progress_done;
+
+      return {
+        id: row.id,
+        filename: parsedResult?.filename || parsedPayload?.filename || 'import',
+        status: row.status,
+        progressDone: row.progress_done,
+        progressTotal: row.progress_total || totalRows,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        summary: {
+          totalRows,
+          processedRows,
+          matchedCount: enrichedItems.length > 0 ? matchedCount : (parsedResult?.importedCount ?? 0),
+          okCount,
+          warningCount,
+          unmatchedCount: enrichedItems.length > 0 ? unmatchedCount : (parsedResult?.unmatchedCount ?? 0),
+          missingCoverCount,
+          resolvedByIsbnCount: parsedResult?.resolvedByIsbnCount ?? 0,
+          resolvedBySearchCount: parsedResult?.resolvedBySearchCount ?? 0,
+          avgDurationMs: enrichedItems.length > 0 ? Math.round(totalDurationMs / enrichedItems.length) : 0
+        },
+        items: enrichedItems
+      };
+    });
+
+    return { activeCatalogJobsCount, jobs };
+  }
+
+  /**
+   * Réinitialise proprement toute la base livres/séries/couvertures entre deux vagues de tests CSV
+   * en préservant intégralement les comptes utilisateurs, sessions, foyers et préférences.
+   */
+  async resetBookCatalogForTests(): Promise<{
+    deletedBooks: number;
+    deletedSeries: number;
+    deletedCoverFiles: number;
+    resetAt: string;
+  }> {
+    const resetAt = new Date().toISOString();
+    const { deletedBooks, deletedSeries } = this.db.transaction(() =>
+      this.adminRepo.clearBookCatalogKeepingAccounts(resetAt)
+    );
+    const deletedCoverFiles = await this.coverService.deleteAllStoredCoverFiles();
+    return {
+      deletedBooks,
+      deletedSeries,
+      deletedCoverFiles,
+      resetAt
+    };
   }
 }

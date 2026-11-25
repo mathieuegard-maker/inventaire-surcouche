@@ -3,6 +3,7 @@
 
 import type { BookMainCategory } from '../../shared/types/domain.types';
 import type { DatabaseAdapter } from '../db/database.adapter';
+import type { BackgroundJobRow } from './job.repo';
 
 export interface AdminOverviewRow {
   usersCount: number;
@@ -244,5 +245,62 @@ export class AdminRepository {
       `SELECT * FROM pipeline_logs ${whereSql} ORDER BY id DESC LIMIT ?`,
       [...params, input.limit]
     );
+  }
+
+  listCollectionImportJobs(limit = 20): BackgroundJobRow[] {
+    return this.db.all<BackgroundJobRow>(
+      `SELECT * FROM background_jobs
+       WHERE type = 'collection_import'
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [limit]
+    );
+  }
+
+  countActiveSeriesBackgroundJobs(): number {
+    const row = this.db.get<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM background_jobs
+       WHERE type IN ('series_expand', 'series_enrich_volumes', 'book_enrich')
+         AND status IN ('pending', 'running')`
+    );
+    return Number(row?.cnt ?? 0);
+  }
+
+  /**
+   * Vide intégralement les tables livres / séries / couvertures / jobs / cache externe / logs
+   * tout en préservant les comptes utilisateurs, sessions, foyers, amis et préférences.
+   * Horodate `catalog_reset` dans `cron_runs` pour purger automatiquement les caches IndexedDB clients.
+   */
+  clearBookCatalogKeepingAccounts(nowIso: string): { deletedBooks: number; deletedSeries: number } {
+    this.db.run('DELETE FROM wishlist_reservations');
+    this.db.run('DELETE FROM series_release_alerts');
+    this.db.run('DELETE FROM loans');
+    this.db.run('DELETE FROM user_reading_states');
+    this.db.run('DELETE FROM library_books');
+    this.db.run('DELETE FROM book_editions');
+    const deletedBooks = this.db.run('DELETE FROM books').changes;
+    const deletedSeries = this.db.run('DELETE FROM series').changes;
+    this.db.run('DELETE FROM franchises');
+    this.db.run('DELETE FROM covers');
+    this.db.run('DELETE FROM background_jobs');
+    this.db.run('DELETE FROM external_cache');
+    this.db.run('DELETE FROM pipeline_logs');
+
+    this.db.run(
+      `INSERT INTO cron_runs (job_name, last_run_key, last_run_at, status, summary_json)
+       VALUES ('catalog_reset', ?, ?, 'ok', ?)
+       ON CONFLICT(job_name) DO UPDATE SET
+         last_run_key = excluded.last_run_key,
+         last_run_at = excluded.last_run_at,
+         status = excluded.status,
+         summary_json = excluded.summary_json`,
+      [
+        `reset_${nowIso}`,
+        nowIso,
+        JSON.stringify({ reason: 'admin_benchmark_reset', deletedBooks, deletedSeries })
+      ]
+    );
+
+    return { deletedBooks, deletedSeries };
   }
 }

@@ -23,3 +23,7 @@ export const adminMaintenanceTaskSchema = z.enum([
   'purge_orphan_covers',
   'purge_logs'
 ]);
+
+export const adminResetCatalogSchema = z.object({
+  confirmation: z.literal('VIDER')
+});

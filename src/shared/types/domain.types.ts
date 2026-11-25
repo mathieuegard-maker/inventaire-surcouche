@@ -170,3 +170,104 @@ export interface BackgroundJobView {
   createdAt: string;
   updatedAt: string;
 }
+
+export type ImportInputProfileCode =
+  | 'isbn_only'
+  | 'isbn_title'
+  | 'isbn_series_vol'
+  | 'isbn_meta'
+  | 'series_vol_title'
+  | 'series_vol'
+  | 'series_author'
+  | 'series_only'
+  | 'title_vol_author'
+  | 'title_vol'
+  | 'title_author'
+  | 'title_only'
+  | 'other';
+
+export type CollectionImportResolutionChannel = 'isbn_direct' | 'search_to_isbn' | 'cache' | 'unmatched';
+
+export type BenchmarkWarningCode =
+  | 'missing_cover'
+  | 'title_mismatch'
+  | 'volume_mismatch'
+  | 'series_mismatch'
+  | 'author_mismatch'
+  | 'integral_mismatch';
+
+export type BenchmarkVerdict = 'ok' | 'warning' | 'failed';
+
+export interface CollectionImportComparisonSnapshot {
+  title: string;
+  seriesId: string | null;
+  seriesName: string | null;
+  volumeNumber: number | null;
+  isIntegral: boolean;
+  includedVolumes: string[];
+  authors: string[];
+  publisher: string | null;
+  mainCategory: BookMainCategory;
+  coverUrl: string | null;
+}
+
+export interface CollectionImportComparisonItem {
+  rowNumber: number;
+  input: {
+    isbn: string | null;
+    title: string | null;
+    series: string | null;
+    volumeNumber: string | null;
+    author: string | null;
+    publisher: string | null;
+    isIntegral: boolean | null;
+    includedVolumes: string[];
+    testCategory: string | null;
+    notes: string | null;
+    inputProfile: ImportInputProfileCode;
+  };
+  status: 'matched' | 'unmatched';
+  resolutionChannel: CollectionImportResolutionChannel;
+  unmatchedReason: 'isbn_not_found' | 'catalog_not_found' | null;
+  durationMs: number;
+  resolvedBookId: string | null;
+  resolvedIsbn13: string | null;
+  snapshot: CollectionImportComparisonSnapshot | null;
+}
+
+export interface AdminBenchmarkLiveBookState extends CollectionImportComparisonSnapshot {
+  seriesTotalVolumes: number;
+  seriesExpanded: boolean;
+  editionsCount: number;
+}
+
+export interface AdminBenchmarkLiveItem extends CollectionImportComparisonItem {
+  live: AdminBenchmarkLiveBookState | null;
+  warnings: BenchmarkWarningCode[];
+  verdict: BenchmarkVerdict;
+}
+
+export interface AdminBenchmarkJobSummary {
+  totalRows: number;
+  processedRows: number;
+  matchedCount: number;
+  okCount: number;
+  warningCount: number;
+  unmatchedCount: number;
+  missingCoverCount: number;
+  resolvedByIsbnCount: number;
+  resolvedBySearchCount: number;
+  avgDurationMs: number;
+}
+
+export interface AdminBenchmarkJobView {
+  id: string;
+  filename: string;
+  status: BackgroundJobStatus;
+  progressDone: number;
+  progressTotal: number;
+  createdAt: string;
+  updatedAt: string;
+  summary: AdminBenchmarkJobSummary;
+  items: AdminBenchmarkLiveItem[];
+}

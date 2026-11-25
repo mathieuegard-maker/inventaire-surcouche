@@ -3,12 +3,13 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import BaseModal from '../components/base/BaseModal.vue';
 import PaginationBar from '../components/base/PaginationBar.vue';
+import AdminBenchmarkTab from '../components/admin/AdminBenchmarkTab.vue';
 import { apiRequest, ApiClientError } from '../api/client';
 import { useUiStore } from '../stores/ui.store';
 import { t } from '../../shared/locales';
 import type { BookMainCategory } from '../../shared/types/domain.types';
 
-type AdminTab = 'stats' | 'catalog' | 'users' | 'logs';
+type AdminTab = 'stats' | 'catalog' | 'users' | 'logs' | 'benchmark';
 
 interface AdminOverview {
   usersCount: number;
@@ -373,6 +374,14 @@ onMounted(() => {
       >
         {{ t('admin.tabLogs') }}
       </button>
+      <button
+        type="button"
+        class="ds-tab"
+        :class="{ 'ds-tab--active': activeTab === 'benchmark' }"
+        @click="activeTab = 'benchmark'"
+      >
+        {{ t('admin.tabBenchmark') }}
+      </button>
     </div>
 
     <!-- Onglet 1 : Statistiques & CRON -->
@@ -576,7 +585,7 @@ onMounted(() => {
     </div>
 
     <!-- Onglet 4 : Logs Pipeline -->
-    <div v-else class="ds-stack">
+    <div v-else-if="activeTab === 'logs'" class="ds-stack">
       <form class="ds-card ds-row admin-filter-bar" @submit.prevent="loadLogs">
         <input
           v-model="logStage"
@@ -620,6 +629,9 @@ onMounted(() => {
         </details>
       </div>
     </div>
+
+    <!-- Onglet 5 : Labo Tests CSV (outil temporaire de recette admin) -->
+    <AdminBenchmarkTab v-else-if="activeTab === 'benchmark'" />
 
     <!-- Modale Édition Catalogue Maître (Couche 2 locked_fields) -->
     <BaseModal

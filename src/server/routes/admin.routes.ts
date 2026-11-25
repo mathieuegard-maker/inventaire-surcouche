@@ -3,7 +3,11 @@
 
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
-import { adminCatalogPatchSchema, adminMaintenanceTaskSchema } from '../../shared/schemas';
+import {
+  adminCatalogPatchSchema,
+  adminMaintenanceTaskSchema,
+  adminResetCatalogSchema
+} from '../../shared/schemas';
 import type { AppVariables } from '../middleware/auth.middleware';
 import type { AdminService } from '../services/admin.service';
 import { AppError } from '../middleware/error.middleware';
@@ -72,6 +76,17 @@ export function createAdminRoutes(deps: {
     }
     const result = await deps.adminService.runMaintenanceTask(parsed.data);
     return c.json({ ok: true, task: parsed.data, result });
+  });
+
+  router.get('/import-benchmarks', (c) => {
+    const limit = Number(c.req.query('limit') || 15) || 15;
+    const data = deps.adminService.listImportBenchmarks(limit);
+    return c.json({ ok: true, ...data });
+  });
+
+  router.post('/reset-book-catalog', zValidator('json', adminResetCatalogSchema), async (c) => {
+    const result = await deps.adminService.resetBookCatalogForTests();
+    return c.json({ ok: true, ...result });
   });
 
   return router;
