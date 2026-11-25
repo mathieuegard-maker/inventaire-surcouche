@@ -332,14 +332,19 @@ export class ComparisonTableService {
     const inventaireWorkUri = pickBestString(columns, (c) => c.inventaireWorkUri);
 
     // 7. Classification Dewey / RAMEAU / Sujets + signal ISO/RDA 051 (`contentKind`)
+    // Concatène les collections de toutes les colonnes (ex. BnF 410$t "Shonen manga" / "Collection Manga")
+    // pour ne jamais perdre le signal Manga/Comics si une autre source propose un nom de collection générique.
     const deweyCode = pickBestString(columns, (c) => c.deweyCode) ?? undefined;
     const rawSubjects = mergeUniqueStrings(orderedCols.map((c) => c.rawSubjects));
     const contentKind = orderedCols.find((c) => c.contentKind)?.contentKind;
+    const allCollectionSignals = Array.from(
+      new Set([collectionName, ...orderedCols.map((c) => c.collectionName)].filter((x): x is string => Boolean(x?.trim())))
+    ).join(' | ');
     const classification = classifyBookMetadata({
       title,
       series: seriesName ?? undefined,
       publisher: publisher ?? undefined,
-      collection: collectionName ?? undefined,
+      collection: allCollectionSignals || undefined,
       deweyCode,
       rawSubjects,
       description: description ?? undefined,

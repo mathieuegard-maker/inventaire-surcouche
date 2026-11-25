@@ -105,7 +105,12 @@ export function classifyBookMetadata(input: {
 
   let mainCategory: BookMainCategory = 'Autre';
 
-  if (/\b(mangas?|shonen|shojo|seinen|josei|manhwa|manhua)\b/i.test(combinedText)) {
+  if (
+    /\b(mangas?|sh[ôo]nen|sh[ôo]jo|seinen|josei|kodomo|manhwa|manhua|kanzenban|tank[ôo]bon|bandes?\s+dessin[ée]es?\s+japonaises?)\b/i.test(
+      combinedText
+    ) ||
+    /^741\.595\s*2/.test(dewey)
+  ) {
     mainCategory = 'Manga';
   } else if (/\b(super-héros|comics?|comic book|graphic novels?)\b/i.test(combinedText)) {
     mainCategory = 'Comics';

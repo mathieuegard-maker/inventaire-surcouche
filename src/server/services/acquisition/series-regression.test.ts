@@ -1504,4 +1504,587 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(vol8?.title).toBe('Un tout petit monde');
     expect(saved.find((b) => b.volume_number === 7)).toBeUndefined();
   });
+
+  it('Cas 17 (Dragon Ball redécoupages + Manga + coffret 2 vol.) : isole Glénat 42 tomes face à Viz EN, Hachette, Double et Full Color', async () => {
+    const { parseMarcRecord } = await import('../../../shared/bibliographic/intermarc-parser');
+    const now = '2026-11-25T20:00:00.000Z';
+
+    // 1. MARC 280$a "2 vol. (384 p.)" -> isIntegralHint = true ; "1 vol. (362 p.)" -> false
+    const coffretXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-7234-5000-3</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Dragon Ball</mxc:subfield><mxc:subfield code="e">coffret</mxc:subfield><mxc:subfield code="h">10</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="280"><mxc:subfield code="a">2 vol. (384 p.)</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="460"><mxc:subfield code="3">34338439</mxc:subfield><mxc:subfield code="t">Dragon Ball</mxc:subfield><mxc:subfield code="v">10</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    expect(parseMarcRecord(coffretXml)?.isIntegralHint).toBe(true);
+
+    // 2. Classification Manga préservée même si SUDOC a collectionName="Dragon Ball" (BnF 410$t="Collection Manga")
+    const connectors = createMockConnectors({
+      bnfByIsbn: {
+        '9782723418584': {
+          source: 'bnf',
+          isbn13: '9782723418584',
+          title: 'Chi-Chi',
+          seriesName: 'Dragon Ball',
+          seriesLinkKind: 'marc_ensemble_460',
+          volumeNumber: '15',
+          hasStructuredEnsembleVolume: true,
+          bnfEnsembleId: '34338439',
+          collectionName: 'Collection Manga (Grenoble)',
+          authors: ['Akira Toriyama'],
+          scriptwriters: [],
+          illustrators: [],
+          publisher: 'Glénat',
+          pageCount: 184,
+          rawSubjects: [],
+          contentKind: 'illustrated'
+        }
+      },
+      bnfEnsemble: {
+        // Dossier graine : Glénat 42 tomes (~184 p., + T.42 244 p. Glénat à conserver, + coffret 2 vol. en intégrale, + outlier 362 p. à écarter)
+        '34338439': [
+          {
+            title: 'Sangoku',
+            volumeNumber: 1,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723415774'],
+            publisher: 'Glénat',
+            pageCount: 182,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'La menace',
+            volumeNumber: 7,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723418508'],
+            publisher: 'Glénat',
+            pageCount: 180,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Chi-Chi',
+            volumeNumber: 15,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723418584'],
+            publisher: 'Glénat',
+            pageCount: 184,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Les androïdes',
+            volumeNumber: 29,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723423472'],
+            publisher: 'Glénat',
+            pageCount: 191,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Bye bye dragon world',
+            volumeNumber: 42,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723434621'],
+            publisher: 'Glénat',
+            pageCount: 244,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Dragon Ball Coffret 10',
+            volumeNumber: 10,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723450003'],
+            publisher: 'Glénat',
+            pageCount: 384,
+            isIntegral: true,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Outlier Double Glénat',
+            volumeNumber: 4,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723499999'],
+            publisher: 'Glénat',
+            pageCount: 362,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ],
+        // Dossier rival #1 : Glénat Double (365 p., titres décalés : "La menace" en T.4 et "Les androïdes" en T.15 !)
+        '38839216': [
+          {
+            title: 'La menace',
+            volumeNumber: 4,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723434041'],
+            publisher: 'Glénat',
+            pageCount: 362,
+            bnfEnsembleId: '38839216',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Les androïdes',
+            volumeNumber: 15,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723434157'],
+            publisher: 'Glénat',
+            pageCount: 373,
+            bnfEnsembleId: '38839216',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ],
+        // Dossier rival #2 : Hachette Collections (240 p., autre éditeur + pagination +30 %)
+        '39250101': [
+          {
+            title: 'Le terrible commando Ginyu',
+            volumeNumber: 19,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782019991191'],
+            publisher: 'Hachette collections',
+            pageCount: 241,
+            bnfEnsembleId: '39250101',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Les cyborgs se réveillent !',
+            volumeNumber: 24,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782019991245'],
+            publisher: 'Hachette collections',
+            pageCount: 247,
+            bnfEnsembleId: '39250101',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ],
+        // Dossier rival #3 : Full Color (245 p., tag d'édition distinct)
+        '45623035': [
+          {
+            title: 'Dragon Ball - full color',
+            volumeNumber: 3,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782344012031'],
+            publisher: 'Glénat',
+            pageCount: 245,
+            bnfEnsembleId: '45623035',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ]
+      },
+      // Graphe Wikidata/Inventaire anglais Viz Media -> doit être rejeté !
+      wikidataSeries: {
+        Q15051307: [
+          { title: 'The Red Ribbon Army', volumeNumber: 5, authors: ['Akira Toriyama'], isbn13s: [], source: 'wikidata' },
+          { title: 'Bulma Returns!', volumeNumber: 6, authors: ['Akira Toriyama'], isbn13s: [], source: 'wikidata' },
+          { title: 'General Blue and the Pirate Treasure', volumeNumber: 7, authors: ['Akira Toriyama'], isbn13s: [], source: 'wikidata' },
+          { title: 'Dragon Ball Z, Vol. 10', volumeNumber: 10, authors: ['Akira Toriyama'], isbn13s: [], source: 'wikidata' },
+          { title: 'The Demon King Piccolo', volumeNumber: 12, authors: ['Akira Toriyama'], isbn13s: [], source: 'wikidata' }
+        ]
+      }
+    });
+
+    connectors.sudoc.lookupByIsbn = async (isbn13: string) => {
+      if (isbn13 !== '9782723418584') return null;
+      return {
+        source: 'sudoc',
+        isbn13,
+        title: 'Chi-Chi',
+        seriesName: 'Dragon Ball',
+        seriesLinkKind: 'marc_ensemble_460',
+        collectionName: 'Dragon Ball',
+        volumeNumber: '15',
+        hasStructuredEnsembleVolume: true,
+        authors: ['Akira Toriyama'],
+        scriptwriters: [],
+        illustrators: [],
+        publisher: 'Glénat',
+        pageCount: 184,
+        rawSubjects: []
+      };
+    };
+
+    connectors.bnf.searchBySeriesName = async () => ({
+      discoveredEnsembleIds: ['38839216', '39250101', '45623035'],
+      works: [
+        {
+          title: 'La menace',
+          volumeNumber: 4,
+          authors: ['Akira Toriyama'],
+          isbn13s: ['9782723434041'],
+          publisher: 'Glénat',
+          pageCount: 362,
+          bnfEnsembleId: '38839216',
+          contentKind: 'illustrated',
+          source: 'bnf'
+        },
+        {
+          title: 'Le terrible commando Ginyu',
+          volumeNumber: 19,
+          authors: ['Akira Toriyama'],
+          isbn13s: ['9782019991191'],
+          publisher: 'Hachette collections',
+          pageCount: 241,
+          bnfEnsembleId: '39250101',
+          contentKind: 'illustrated',
+          source: 'bnf'
+        },
+        {
+          title: 'Dragon Ball - full color',
+          volumeNumber: 3,
+          authors: ['Akira Toriyama'],
+          isbn13s: ['9782344012031'],
+          publisher: 'Glénat',
+          pageCount: 245,
+          bnfEnsembleId: '45623035',
+          contentKind: 'illustrated',
+          source: 'bnf'
+        }
+      ]
+    });
+
+    connectors.bnf.searchSeriesVolume = async (_s: string, vol: number) => {
+      if (vol === 8) {
+        return [
+          {
+            title: 'Le terrible commando Ginyu',
+            volumeNumber: 8,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782019991191'],
+            publisher: 'Hachette collections',
+            pageCount: 241,
+            bnfEnsembleId: '39250101',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Le grand combat',
+            volumeNumber: 8,
+            authors: ['Akira Toriyama'],
+            isbn13s: ['9782723418515'],
+            publisher: 'Glénat',
+            pageCount: 180,
+            bnfEnsembleId: '34338439',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ];
+      }
+      return [];
+    };
+
+    const comparison = new ComparisonTableService({ connectors });
+    const draft = await comparison.collectAndArbitrate('9782723418584');
+    expect(draft?.mainCategory).toBe('Manga');
+
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const { series } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Dragon Ball',
+      wikidataSeriesQid: 'Q15051307',
+      bnfEnsembleId: '34338439',
+      bookTitle: 'Chi-Chi',
+      volumeNumber: 15,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 184,
+      publisher: 'Glénat',
+      mainCategory: 'Manga',
+      authors: ['Akira Toriyama'],
+      now
+    });
+
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_db_seed_15',
+      workCanonicalId: 'isbn:9782723418584',
+      seriesId: series.id,
+      title: 'Chi-Chi',
+      normalizedTitle: 'chi chi',
+      volumeNumber: 15,
+      volumeLabel: '15',
+      sortOrder: 15,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Akira Toriyama'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Glénat',
+      collectionName: 'Collection Manga',
+      publishYear: '1996',
+      pageCount: 184,
+      description: null,
+      language: 'fr',
+      mainCategory: 'Manga',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+    catalogRepo.upsertBookEdition({
+      isbn13: '9782723418584',
+      bookId: 'bk_db_seed_15',
+      publisher: 'Glénat',
+      collectionName: 'Collection Manga',
+      publishYear: '1996',
+      pageCount: 184,
+      coverKey: null,
+      source: 'bnf',
+      now
+    });
+
+    await seriesGraph.expandSeriesByGraph(series.id);
+
+    const saved = catalogRepo.listBooksBySeriesId(series.id);
+    const unitary = saved.filter((b) => b.is_integral === 0);
+    const integrals = saved.filter((b) => b.is_integral === 1);
+
+    // Tous les tomes unitaires doivent être 100 % Glénat 42 tomes en français !
+    expect(unitary.map((b) => `${b.volume_number}:${b.title}`).sort()).toEqual([
+      '15:Chi-Chi',
+      '1:Sangoku',
+      '29:Les androïdes',
+      '42:Bye bye dragon world',
+      '7:La menace',
+      '8:Le grand combat'
+    ]);
+    // Zéro anglais Viz Media, zéro Hachette, zéro Full Color, zéro Double 362 p.
+    expect(unitary.some((b) => /Red Ribbon|Bulma|Ginyu|full color|Outlier/i.test(b.title))).toBe(false);
+    // Le coffret 2 vol. a bien été isolé en intégrale !
+    expect(integrals).toHaveLength(1);
+    expect(integrals[0].title).toContain('Coffret 10');
+    // Les dossiers rivaux n'ont PAS pollué series.bnf_ensemble_ids_json
+    const updatedSeries = catalogRepo.findSeriesById(series.id)!;
+    const savedEns = JSON.parse(updatedSeries.bnf_ensemble_ids_json) as string[];
+    expect(savedEns).toEqual(['34338439']);
+  });
+
+  it('Cas 18 (Zéro régression Romans grand format <-> poche, BD multi-éditeurs & Intégrale en 1er livre)', async () => {
+    const now = '2026-11-25T20:05:00.000Z';
+
+    // 1. Roman Dune : Grand format Robert Laffont (540 p.) + Poche Pocket (760 p., ratio 1.41, éditeur différent) -> 1 SEULE série !
+    const connectorsRoman = createMockConnectors();
+    const seriesGraphRoman = new SeriesGraphService({ catalogRepo, connectors: connectorsRoman });
+    const { series: duneCut1 } = seriesGraphRoman.resolveOrCreateSeriesCut({
+      seriesName: 'Dune',
+      bookTitle: 'Dune',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 540,
+      publisher: 'Robert Laffont',
+      collectionName: 'Ailleurs et demain',
+      mainCategory: 'Roman',
+      authors: ['Frank Herbert'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_dune_1',
+      workCanonicalId: 'isbn:9782221000001',
+      seriesId: duneCut1.id,
+      title: 'Dune',
+      normalizedTitle: 'dune',
+      volumeNumber: 1,
+      volumeLabel: '1',
+      sortOrder: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Frank Herbert'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Robert Laffont',
+      collectionName: 'Ailleurs et demain',
+      publishYear: '1970',
+      pageCount: 540,
+      description: null,
+      language: 'fr',
+      mainCategory: 'Roman',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    const { series: duneCut2 } = seriesGraphRoman.resolveOrCreateSeriesCut({
+      seriesName: 'Dune',
+      bookTitle: 'Le Messie de Dune',
+      volumeNumber: 2,
+      isHorsSerie: false,
+      isIntegral: false,
+      pageCount: 760,
+      publisher: 'Pocket',
+      collectionName: 'Science-fiction',
+      mainCategory: 'Roman',
+      authors: ['Frank Herbert'],
+      now
+    });
+    expect(duneCut2.id).toBe(duneCut1.id);
+
+    // 2. BD Franco-belge démarrée par une INTÉGRALE seule (160 p.) + 2 dossiers BnF Dupuis & Dargaud aux mêmes titres -> tout déploie et fusionne !
+    const connectorsBd = createMockConnectors({
+      bnfEnsemble: {
+        '40000001': [
+          {
+            title: 'La Mine d’or de Dick Digger',
+            volumeNumber: 1,
+            authors: ['Morris'],
+            isbn13s: ['9782800100012'],
+            publisher: 'Dupuis',
+            pageCount: 48,
+            bnfEnsembleId: '40000001',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Rodéo',
+            volumeNumber: 2,
+            authors: ['Morris'],
+            isbn13s: ['9782800100029'],
+            publisher: 'Dupuis',
+            pageCount: 48,
+            bnfEnsembleId: '40000001',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ],
+        '40000002': [
+          {
+            title: 'La Mine d’or de Dick Digger',
+            volumeNumber: 1,
+            authors: ['Morris'],
+            isbn13s: ['9782205000016'],
+            publisher: 'Dargaud',
+            pageCount: 48,
+            bnfEnsembleId: '40000002',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'Rodéo',
+            volumeNumber: 2,
+            authors: ['Morris'],
+            isbn13s: ['9782205000023'],
+            publisher: 'Dargaud',
+            pageCount: 48,
+            bnfEnsembleId: '40000002',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          },
+          {
+            title: 'La Diligence',
+            volumeNumber: 32,
+            authors: ['Morris', 'René Goscinny'],
+            isbn13s: ['9782205000320'],
+            publisher: 'Dargaud',
+            pageCount: 48,
+            bnfEnsembleId: '40000002',
+            contentKind: 'illustrated',
+            source: 'bnf'
+          }
+        ]
+      }
+    });
+    connectorsBd.bnf.searchBySeriesName = async () => ({
+      discoveredEnsembleIds: ['40000001', '40000002'],
+      works: [
+        {
+          title: 'La Mine d’or de Dick Digger',
+          volumeNumber: 1,
+          authors: ['Morris'],
+          isbn13s: ['9782800100012'],
+          publisher: 'Dupuis',
+          pageCount: 48,
+          bnfEnsembleId: '40000001',
+          contentKind: 'illustrated',
+          source: 'bnf'
+        },
+        {
+          title: 'La Diligence',
+          volumeNumber: 32,
+          authors: ['Morris', 'René Goscinny'],
+          isbn13s: ['9782205000320'],
+          publisher: 'Dargaud',
+          pageCount: 48,
+          bnfEnsembleId: '40000002',
+          contentKind: 'illustrated',
+          source: 'bnf'
+        }
+      ]
+    });
+
+    const seriesGraphBd = new SeriesGraphService({ catalogRepo, connectors: connectorsBd });
+    const { series: llSeries } = seriesGraphBd.resolveOrCreateSeriesCut({
+      seriesName: "Lucky Luke — L'Intégrale",
+      bookTitle: "Lucky Luke Intégrale T.1",
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: true,
+      pageCount: 160,
+      publisher: 'Dupuis',
+      mainCategory: 'BD',
+      authors: ['Morris'],
+      now
+    });
+
+    // Seule l'intégrale 160 p. existe en base avant l'expansion
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_ll_int_1',
+      workCanonicalId: 'isbn:9782800160009',
+      seriesId: llSeries.id,
+      title: 'Lucky Luke Intégrale T.1',
+      normalizedTitle: 'lucky luke integrale t 1',
+      volumeNumber: 1,
+      volumeLabel: 'Int. 1',
+      sortOrder: 10001,
+      isHorsSerie: false,
+      isIntegral: true,
+      includedVolumes: ['1', '2'],
+      authors: ['Morris'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Dupuis',
+      collectionName: null,
+      publishYear: '2016',
+      pageCount: 160,
+      description: null,
+      language: 'fr',
+      mainCategory: 'BD',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    await seriesGraphBd.expandSeriesByGraph(llSeries.id);
+    const llBooks = catalogRepo.listBooksBySeriesId(llSeries.id);
+    const llUnitary = llBooks.filter((b) => b.is_integral === 0);
+    const llIntegrals = llBooks.filter((b) => b.is_integral === 1);
+
+    // L'intégrale 160 p. n'a bloqué aucun tome unitaire (48 p.) et Dupuis + Dargaud ont fusionné proprement !
+    expect(llUnitary.map((b) => b.volume_number).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([1, 2, 32]);
+    expect(llIntegrals).toHaveLength(1);
+    expect(llIntegrals[0].id).toBe('bk_ll_int_1');
+  });
 });

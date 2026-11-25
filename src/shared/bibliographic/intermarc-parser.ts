@@ -303,8 +303,9 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     : undefined;
 
   const fullTitleText = `${title} ${subtitle || ''}`.trim();
+  const isMultiVolumeBoxSet = /\b(?:[2-9]|\d{2})\s*vol\.?\b/i.test(rawFormat ?? '');
   const isIntegralHint =
-    INTEGRAL_TITLE_RE.test(fullTitleText) && !/\btexte\s+int[ée]gral\b/i.test(fullTitleText);
+    (INTEGRAL_TITLE_RE.test(fullTitleText) || isMultiVolumeBoxSet) && !/\btexte\s+int[ée]gral\b/i.test(fullTitleText);
 
   const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
   const hasProseDewey = Boolean(deweyCode && /^8\d\d/.test(deweyCode));
