@@ -142,7 +142,8 @@ export function createApp(options: CreateAppOptions) {
     coverService,
     bookIdentifier,
     connectors,
-    onJobEnqueued: () => worker.nudge()
+    onJobEnqueued: () => worker.nudge(),
+    onJobChanged: (row) => worker.notifyJobRow(row)
   });
 
   const loanService = new LoanService({ loanRepo, libraryRepo });
@@ -204,7 +205,8 @@ export function createApp(options: CreateAppOptions) {
     seriesGraphService,
     connectors,
     jobRepo,
-    onJobEnqueued: () => worker.nudge()
+    onJobEnqueued: () => worker.nudge(),
+    onJobChanged: (row) => worker.notifyJobRow(row)
   });
 
   const seriesCoverEditionService = new SeriesCoverEditionService({
@@ -216,7 +218,8 @@ export function createApp(options: CreateAppOptions) {
     ingestionService,
     bookIdentifier,
     connectors,
-    onJobEnqueued: () => worker.nudge()
+    onJobEnqueued: () => worker.nudge(),
+    onJobChanged: (row) => worker.notifyJobRow(row)
   });
 
   const notificationService = new NotificationService({
@@ -272,7 +275,8 @@ export function createApp(options: CreateAppOptions) {
     logRepo,
     coverService,
     cronScheduler,
-    reportsDir: path.resolve(path.dirname(options.config.coversDir), 'benchmark-reports')
+    reportsDir: path.resolve(path.dirname(options.config.coversDir), 'benchmark-reports'),
+    onCatalogReset: () => worker.cancelActiveJobs()
   });
 
   // Enregistrement des handlers du worker continu
@@ -290,19 +294,19 @@ export function createApp(options: CreateAppOptions) {
   });
   // Purge légère au démarrage si external_cache dépasse le plafond
   jobRepo.pruneExternalCache(new Date().toISOString(), 6000);
-  worker.registerHandler('series_expand', async ({ job, payload, reportProgress }) => {
+  worker.registerHandler('series_expand', async ({ job, payload, reportProgress, isCancelled }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {
       return { result: { addedCount: 0, totalVolumes: 0, incompleteVolumeCount: 0 }, total: 1 };
     }
     reportProgress(0, 1);
-    const report = await seriesGraphService.expandSeriesByGraph(seriesId);
+    const report = await seriesGraphService.expandSeriesByGraph(seriesId, { isCancelled });
 
     // Phases 3B + 3C en tâche de fond dédiée dès que la série comporte des tomes sans ISBN ou sans couverture
-    if (report.incompleteVolumeCount > 0) {
+    if (!isCancelled() && report.incompleteVolumeCount > 0) {
       const existingEnrich = jobRepo.findActiveJobByTypeAndPayloadKey('series_enrich_volumes', seriesId);
       if (!existingEnrich) {
-        jobRepo.createJob({
+        const created = jobRepo.createJob({
           id: `job_${crypto.randomBytes(6).toString('hex')}`,
           type: 'series_enrich_volumes',
           userId: job.user_id,
@@ -311,6 +315,7 @@ export function createApp(options: CreateAppOptions) {
           progressTotal: report.incompleteVolumeCount,
           now: new Date().toISOString()
         });
+        worker.notifyJobRow(created);
         worker.nudge();
       }
     }
@@ -318,7 +323,7 @@ export function createApp(options: CreateAppOptions) {
     return { result: report, total: 1 };
   });
 
-  worker.registerHandler('series_enrich_volumes', async ({ job, payload, reportProgress }) => {
+  worker.registerHandler('series_enrich_volumes', async ({ job, payload, reportProgress, isCancelled }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {
       return {
@@ -326,17 +331,21 @@ export function createApp(options: CreateAppOptions) {
         total: 1
       };
     }
-    const report = await ingestionService.enrichIncompleteSeriesVolumes(seriesId, (done, total) => {
-      reportProgress(done, total);
-    });
+    const report = await ingestionService.enrichIncompleteSeriesVolumes(
+      seriesId,
+      (done, total) => {
+        reportProgress(done, total);
+      },
+      isCancelled
+    );
 
     // Zéro couverture oubliée : si iTunes a appliqué un rate-limit temporaire (HTTP 429/403),
     // reprogramme automatiquement une passe différée (+75 s, max 2 relances).
     const retryAttempt = typeof payload.retryAttempt === 'number' ? payload.retryAttempt : 0;
-    if (report.rateLimitedCount > 0 && retryAttempt < 2) {
+    if (!isCancelled() && report.rateLimitedCount > 0 && retryAttempt < 2) {
       const now = new Date();
       const runAfter = new Date(now.getTime() + 75_000).toISOString();
-      jobRepo.createJob({
+      const retryJob = jobRepo.createJob({
         id: `job_${crypto.randomBytes(6).toString('hex')}`,
         type: 'series_enrich_volumes',
         userId: job.user_id,
@@ -349,6 +358,7 @@ export function createApp(options: CreateAppOptions) {
         progressTotal: report.rateLimitedCount,
         now: now.toISOString()
       });
+      worker.notifyJobRow(retryJob);
     }
 
     return { result: report, total: Math.max(1, report.processed) };

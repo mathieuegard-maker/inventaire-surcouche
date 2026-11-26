@@ -9,6 +9,7 @@ export const fr = {
     offlineBanner: 'Mode hors-ligne actif — vos actions seront synchronisées dès le retour du réseau.',
     onlineRestored: 'Connexion rétablie : synchronisation en cours...',
     seriesEnrichBanner: 'Enrichissement des tomes en arrière-plan ({done}/{total})…',
+    seriesEnrichQueuedBanner: 'Enrichissement des tomes en file d’attente ({total} tome(s))…',
     save: 'Enregistrer',
     cancel: 'Annuler',
     confirm: 'Confirmer',
@@ -409,10 +410,16 @@ export const fr = {
     enrichAddedResult: '{added} nouveau(x) tome(s) détecté(s) et ajouté(s) ({total} au total).',
     enrichNoNewResult: 'Vérification terminée : aucun tome supplémentaire détecté ({total} connu(s)).',
     expandingBanner: 'Recherche des tomes de la série en cours… les nouveaux albums apparaîtront automatiquement.',
+    expandingQueuedBanner:
+      'Recherche des tomes programmée en arrière-plan… les nouveaux albums apparaîtront automatiquement.',
     enrichingCoversBanner:
       'Récupération des couvertures et éditions en cours ({done}/{total})… mise à jour automatique.',
+    enrichingCoversQueuedBanner:
+      'Enrichissement de {total} tome(s) programmé en file d’attente… mise à jour automatique dès son tour.',
     applyingEditionCoversBanner:
       'Recherche des couvertures de l’édition choisie ({done}/{total})… mise à jour automatique.',
+    applyingEditionCoversQueuedBanner:
+      'Recherche des couvertures de l’édition choisie programmée ({total} tome(s))… mise à jour automatique.',
     otherEditionsOfFranchise: 'Autres découpages de cette saga',
     mergeSeriesBtn: 'Rattacher / Fusionner',
     mergeWholeSeriesBtn: 'Fusionner cette série…',

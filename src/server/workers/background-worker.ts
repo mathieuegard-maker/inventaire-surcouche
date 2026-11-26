@@ -11,6 +11,8 @@ export interface JobHandlerContext {
   job: BackgroundJobRow;
   payload: Record<string, unknown>;
   reportProgress: (done: number, total: number, partialResult?: unknown) => void;
+  /** Retourne true si le job a été supprimé ou si le catalogue a été purgé entre-temps. */
+  isCancelled: () => boolean;
 }
 
 export type JobHandler = (ctx: JobHandlerContext) => Promise<{ result: unknown; total?: number }>;
@@ -94,12 +96,20 @@ export class BackgroundWorker {
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly activeLanes = new Set<string>();
   private readonly pollIntervalMs: number;
+  private cancelGeneration = 0;
 
   constructor(deps: { jobRepo: JobRepository; logRepo: LogRepository; pollIntervalMs?: number }) {
     this.jobRepo = deps.jobRepo;
     this.logRepo = deps.logRepo;
     this.pollIntervalMs = deps.pollIntervalMs ?? 2000;
     this.emitter.setMaxListeners(200);
+  }
+
+  /**
+   * Signale à tous les jobs en cours d'exécution de s'arrêter coopérativement (ex. lors d'une purge Admin).
+   */
+  cancelActiveJobs(): void {
+    this.cancelGeneration++;
   }
 
   registerHandler(type: BackgroundJobType, handler: JobHandler): void {
@@ -213,18 +223,27 @@ export class BackgroundWorker {
     }
 
     const startedAt = Date.now();
+    const startGeneration = this.cancelGeneration;
+    const isCancelled = (): boolean =>
+      this.cancelGeneration !== startGeneration || !this.jobRepo.findJobById(job.id);
     const lanePriority: RequestPriority = CATALOG_LANE_TYPES.includes(job.type) ? 'low' : 'high';
     try {
       const { result, total } = await runWithRequestPriority(lanePriority, () =>
         handler({
           job,
           payload,
+          isCancelled,
           reportProgress: (done, nextTotal, partialResult) => {
+            if (isCancelled()) return;
             this.jobRepo.updateJobProgress(job.id, done, nextTotal, new Date().toISOString(), partialResult);
             this.emitRow(this.jobRepo.findJobById(job.id));
           }
         })
       );
+
+      if (isCancelled()) {
+        return true;
+      }
 
       const finalTotal = total ?? Math.max(1, job.progress_total);
       const completed = this.jobRepo.completeJob(job.id, result, finalTotal, new Date().toISOString());
@@ -252,6 +271,9 @@ export class BackgroundWorker {
         summary: `Job ${job.type} (${job.id}) terminé.`
       });
     } catch (err) {
+      if (isCancelled()) {
+        return true;
+      }
       const message = err instanceof Error ? err.message : 'Erreur interne worker.';
       const failed = this.jobRepo.failJob(job.id, message, new Date().toISOString());
       this.emitRow(failed);

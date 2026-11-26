@@ -41,16 +41,16 @@ const currentSeriesId = computed(() => (typeof route.params.seriesId === 'string
 const activeSeriesJob = computed(() => {
   const sid = currentSeriesId.value;
   if (!sid) return null;
-  return (
-    jobsStore.jobs.find(
-      (j) =>
-        (j.type === 'series_expand' ||
-          j.type === 'series_enrich_volumes' ||
-          j.type === 'series_apply_edition_covers') &&
-        (j.status === 'pending' || j.status === 'running') &&
-        (!j.targetSeriesId || j.targetSeriesId === sid)
-    ) ?? null
+  const matching = jobsStore.jobs.filter(
+    (j) =>
+      (j.type === 'series_expand' ||
+        j.type === 'series_enrich_volumes' ||
+        j.type === 'series_apply_edition_covers') &&
+      (j.status === 'pending' || j.status === 'running') &&
+      (!j.targetSeriesId || j.targetSeriesId === sid)
   );
+  // Priorise toujours la tâche en cours (`running`) avant une tâche en file d'attente (`pending`)
+  return matching.find((j) => j.status === 'running') ?? matching[0] ?? null;
 });
 
 const latestCompletedSeriesJobSig = computed(() => {
@@ -156,7 +156,11 @@ watch(latestCompletedSeriesJobSig, (nextSig, prevSig) => {
         j.type === 'series_apply_edition_covers') &&
       (!j.targetSeriesId || j.targetSeriesId === sid)
   );
-  const justFinished = matching.some((j) => j.status === 'done' && prevSig && !prevSig.includes(`${j.id}:done:`));
+  const hadActiveBefore = Boolean(prevSig && (prevSig.includes(':running:') || prevSig.includes(':pending:')));
+  const hasActiveNow = matching.some((j) => j.status === 'running' || j.status === 'pending');
+  const justFinished =
+    matching.some((j) => j.status === 'done' && prevSig && !prevSig.includes(`${j.id}:done:`)) ||
+    (hadActiveBefore && !hasActiveNow);
   const runningProgress = matching.find(
     (j) => (j.type === 'series_enrich_volumes' || j.type === 'series_apply_edition_covers') && j.status === 'running'
   );
@@ -387,7 +391,13 @@ async function confirmGenres(genres: string[]): Promise<void> {
         ← {{ t('app.back') }}
       </button>
       <div v-if="series" class="ds-row">
-        <button type="button" class="ds-btn ds-btn--sm" :disabled="expanding" @click="handleExpandNow">
+        <button
+          v-if="!activeSeriesJob"
+          type="button"
+          class="ds-btn ds-btn--sm"
+          :disabled="expanding"
+          @click="handleExpandNow"
+        >
           {{ expanding ? t('app.loading') : series.isCompleteExpanded ? t('series.refreshSeriesBtn') : t('series.enrichNowBtn') }}
         </button>
         <button type="button" class="ds-btn ds-btn--sm" @click="openMergeWholeSeries">
@@ -425,19 +435,29 @@ async function confirmGenres(genres: string[]): Promise<void> {
           <div class="series-progress-bar__fill" :style="{ width: `${progressPercent}%` }" />
         </div>
 
-        <p v-if="activeSeriesJob" class="ds-text-muted" role="status">
+        <p v-if="activeSeriesJob" class="ds-banner ds-banner--warning series-job-banner" role="status">
           {{
             activeSeriesJob.type === 'series_expand'
-              ? t('series.expandingBanner')
+              ? activeSeriesJob.status === 'running'
+                ? t('series.expandingBanner')
+                : t('series.expandingQueuedBanner')
               : activeSeriesJob.type === 'series_apply_edition_covers'
-                ? t('series.applyingEditionCoversBanner', {
-                    done: activeSeriesJob.progressDone,
-                    total: Math.max(1, activeSeriesJob.progressTotal)
-                  })
-                : t('series.enrichingCoversBanner', {
-                    done: activeSeriesJob.progressDone,
-                    total: Math.max(1, activeSeriesJob.progressTotal)
-                  })
+                ? activeSeriesJob.status === 'running'
+                  ? t('series.applyingEditionCoversBanner', {
+                      done: activeSeriesJob.progressDone,
+                      total: Math.max(1, activeSeriesJob.progressTotal)
+                    })
+                  : t('series.applyingEditionCoversQueuedBanner', {
+                      total: Math.max(1, activeSeriesJob.progressTotal)
+                    })
+                : activeSeriesJob.status === 'running'
+                  ? t('series.enrichingCoversBanner', {
+                      done: activeSeriesJob.progressDone,
+                      total: Math.max(1, activeSeriesJob.progressTotal)
+                    })
+                  : t('series.enrichingCoversQueuedBanner', {
+                      total: Math.max(1, activeSeriesJob.progressTotal)
+                    })
           }}
         </p>
       </div>
@@ -643,6 +663,10 @@ async function confirmGenres(genres: string[]): Promise<void> {
 </template>
 
 <style scoped>
+.series-job-banner {
+  margin-bottom: 0;
+}
+
 .series-integrals-toggle {
   display: inline-flex;
   align-items: center;

@@ -24,7 +24,7 @@ import type { BibliographicConnectors } from '../connectors/types';
 import type { DatabaseAdapter } from '../db/database.adapter';
 import { AppError } from '../middleware/error.middleware';
 import type { BookRow, CatalogRepository, SeriesRow } from '../repositories/catalog.repo';
-import type { JobRepository } from '../repositories/job.repo';
+import type { BackgroundJobRow, JobRepository } from '../repositories/job.repo';
 import type { LibraryBookRow, LibraryRepository } from '../repositories/library.repo';
 import type { BookIdentifierService } from './acquisition/book-identifier.service';
 import type { IngestionService } from './acquisition/ingestion.service';
@@ -104,6 +104,7 @@ export class SeriesCoverEditionService {
   private readonly bookIdentifier?: BookIdentifierService;
   private readonly connectors?: BibliographicConnectors;
   private readonly onJobEnqueued?: () => void;
+  private readonly onJobChanged?: (row: BackgroundJobRow | null) => void;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -115,6 +116,7 @@ export class SeriesCoverEditionService {
     bookIdentifier?: BookIdentifierService;
     connectors?: BibliographicConnectors;
     onJobEnqueued?: () => void;
+    onJobChanged?: (row: BackgroundJobRow | null) => void;
   }) {
     this.db = deps.db;
     this.catalogRepo = deps.catalogRepo;
@@ -125,6 +127,7 @@ export class SeriesCoverEditionService {
     this.bookIdentifier = deps.bookIdentifier;
     this.connectors = deps.connectors;
     this.onJobEnqueued = deps.onJobEnqueued;
+    this.onJobChanged = deps.onJobChanged;
   }
 
   /**
@@ -425,6 +428,7 @@ export class SeriesCoverEditionService {
           payload: {
             seriesId: series.id,
             libraryId: input.libraryId,
+            priority: 'high',
             targetBookIds: missingBookIds,
             targetEdition: {
               isbn13: input.targetEdition?.isbn13 ?? null,
@@ -443,6 +447,7 @@ export class SeriesCoverEditionService {
     });
 
     if (backgroundJobId) {
+      this.onJobChanged?.(this.jobRepo.findJobById(backgroundJobId));
       this.onJobEnqueued?.();
     }
 

@@ -444,6 +444,8 @@ export class SeriesGraphService {
   private readonly catalogRepo: CatalogRepository;
   private readonly connectors: BibliographicConnectors;
   private readonly coverService?: CoverService;
+  /** Verrou anti-collision en mémoire : déduplique deux appels simultanés `expandSeriesByGraph(seriesId)`. */
+  private readonly inFlightExpansions = new Map<string, Promise<SeriesExpansionReport>>();
 
   constructor(deps: {
     catalogRepo: CatalogRepository;
@@ -705,7 +707,28 @@ export class SeriesGraphService {
    * 4. Bouche les trous 1..maxVol dans le respect de l'éditeur et de la pagination du découpage actif ;
    * 5. Rattache séparément les Intégrales officielles (`isIntegral: true`).
    */
-  async expandSeriesByGraph(seriesId: string): Promise<SeriesExpansionReport> {
+  async expandSeriesByGraph(
+    seriesId: string,
+    options?: { isCancelled?: () => boolean }
+  ): Promise<SeriesExpansionReport> {
+    const existingInFlight = this.inFlightExpansions.get(seriesId);
+    if (existingInFlight) {
+      return existingInFlight;
+    }
+
+    const promise = this.runExpandSeriesByGraph(seriesId, options).finally(() => {
+      if (this.inFlightExpansions.get(seriesId) === promise) {
+        this.inFlightExpansions.delete(seriesId);
+      }
+    });
+    this.inFlightExpansions.set(seriesId, promise);
+    return promise;
+  }
+
+  private async runExpandSeriesByGraph(
+    seriesId: string,
+    options?: { isCancelled?: () => boolean }
+  ): Promise<SeriesExpansionReport> {
     const series = this.catalogRepo.findSeriesById(seriesId);
     if (!series) {
       return { seriesId, addedCount: 0, updatedCount: 0, totalVolumes: 0, sourcesUsed: [], incompleteVolumeCount: 0 };
@@ -1173,6 +1196,9 @@ export class SeriesGraphService {
     let updatedCount = 0;
 
     for (const work of graphWorks) {
+      if (options?.isCancelled?.() || !this.catalogRepo.findSeriesById(series.id)) {
+        return { seriesId: series.id, addedCount, updatedCount, totalVolumes: 0, sourcesUsed, incompleteVolumeCount: 0 };
+      }
       const cleanT = cleanTitle(work.title);
       if (!cleanT) continue;
       const normT = normalizeTextKey(cleanT);
@@ -1387,6 +1413,10 @@ export class SeriesGraphService {
           now
         });
       }
+    }
+
+    if (options?.isCancelled?.() || !this.catalogRepo.findSeriesById(series.id)) {
+      return { seriesId: series.id, addedCount, updatedCount, totalVolumes: 0, sourcesUsed, incompleteVolumeCount: 0 };
     }
 
     const totalVolumes = this.catalogRepo.recountSeriesVolumes(series.id, now);

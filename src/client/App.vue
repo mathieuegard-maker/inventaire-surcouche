@@ -78,10 +78,14 @@ onBeforeUnmount(() => {
       role="status"
     >
       {{
-        t('app.seriesEnrichBanner', {
-          done: jobsStore.activeSeriesEnrichJob.progressDone,
-          total: jobsStore.activeSeriesEnrichJob.progressTotal
-        })
+        jobsStore.activeSeriesEnrichJob.status === 'running'
+          ? t('app.seriesEnrichBanner', {
+              done: jobsStore.activeSeriesEnrichJob.progressDone,
+              total: jobsStore.activeSeriesEnrichJob.progressTotal
+            })
+          : t('app.seriesEnrichQueuedBanner', {
+              total: jobsStore.activeSeriesEnrichJob.progressTotal
+            })
       }}
     </div>
 

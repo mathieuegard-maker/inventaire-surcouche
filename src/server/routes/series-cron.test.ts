@@ -543,4 +543,121 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
     expect(statsBody.stats.kpis.ownedCount).toBe(1);
     expect(statsBody.stats.kpis.coveredVolumesCount).toBe(3);
   });
+
+  it('v2.4.1 — ne perd jamais les jobs actifs dans listJobsForUser, priorise priority:high, déduplique expandSeriesByGraph et annule proprement après purge', async () => {
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'QueueGuard',
+        email: 'queue@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const regBody = (await reg.json()) as {
+      profile: { user: { id: string }; library: { id: string } };
+    };
+    const userId = regBody.profile.user.id;
+    const libraryId = regBody.profile.library.id;
+    const baseMs = Date.parse('2026-11-26T20:00:00.000Z');
+
+    // 1. Créer 1 job running ancien + 1 job pending + 25 jobs terminés plus récents -> listJobsForUser(limit=10) garde TOUS les actifs en tête (running avant pending)
+    appCtx.repos.jobRepo.createJob({
+      id: 'job_old_running',
+      type: 'series_enrich_volumes',
+      userId,
+      libraryId,
+      payload: { seriesId: 'ser_run' },
+      progressTotal: 10,
+      now: new Date(baseMs).toISOString()
+    });
+    appCtx.repos.jobRepo.claimNextPendingJob(new Date(baseMs + 1000).toISOString(), ['series_enrich_volumes']);
+
+    appCtx.repos.jobRepo.createJob({
+      id: 'job_queued_normal',
+      type: 'series_expand',
+      userId,
+      libraryId,
+      payload: { seriesId: 'ser_norm' },
+      progressTotal: 1,
+      now: new Date(baseMs + 2000).toISOString()
+    });
+    appCtx.repos.jobRepo.createJob({
+      id: 'job_queued_high',
+      type: 'series_enrich_volumes',
+      userId,
+      libraryId,
+      payload: { seriesId: 'ser_high', priority: 'high' },
+      progressTotal: 4,
+      now: new Date(baseMs + 3000).toISOString()
+    });
+
+    for (let i = 0; i < 25; i++) {
+      const id = `job_done_${i}`;
+      const ts = new Date(baseMs + 10_000 + i * 1000).toISOString();
+      appCtx.repos.jobRepo.createJob({
+        id,
+        type: 'series_expand',
+        userId,
+        libraryId,
+        payload: { seriesId: `ser_done_${i}` },
+        progressTotal: 1,
+        now: ts
+      });
+      appCtx.repos.jobRepo.completeJob(id, { ok: true }, 1, ts);
+    }
+
+    const listed = appCtx.repos.jobRepo.listJobsForUser(userId, libraryId, 10);
+    expect(listed[0].id).toBe('job_old_running');
+    expect(listed[0].status).toBe('running');
+    expect(listed.some((j) => j.id === 'job_queued_normal')).toBe(true);
+    expect(listed.some((j) => j.id === 'job_queued_high')).toBe(true);
+
+    // 2. claimNextPendingJob choisit le job priority:high avant le job FIFO normal créé plus tôt
+    const claimed = appCtx.repos.jobRepo.claimNextPendingJob(new Date(baseMs + 50_000).toISOString(), [
+      'series_expand',
+      'series_enrich_volumes'
+    ]);
+    expect(claimed?.id).toBe('job_queued_high');
+
+    // 3. Déduplication en mémoire d'expandSeriesByGraph sur un même seriesId + protection si série supprimée en vol
+    const nowIso = new Date().toISOString();
+    const { series } = appCtx.services.seriesGraphService.resolveOrCreateSeriesCut({
+      seriesName: 'Thorgal',
+      bookTitle: 'La Magicienne trahie',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      authors: ['Rosinski'],
+      now: nowIso
+    });
+    const [r1, r2] = await Promise.all([
+      appCtx.services.seriesGraphService.expandSeriesByGraph(series.id),
+      appCtx.services.seriesGraphService.expandSeriesByGraph(series.id)
+    ]);
+    expect(r1).toEqual(r2);
+
+    // 4. Annulation coopérative via worker.cancelActiveJobs() : aucun crash si un job est annulé pendant son exécution
+    let observedCancelled = false;
+    appCtx.worker.registerHandler('book_enrich', async ({ isCancelled }) => {
+      appCtx.worker.cancelActiveJobs();
+      observedCancelled = isCancelled();
+      return { result: { ok: true }, total: 1 };
+    });
+    appCtx.repos.jobRepo.createJob({
+      id: 'job_cancel_test',
+      type: 'book_enrich',
+      userId,
+      libraryId,
+      payload: {},
+      progressTotal: 1,
+      now: nowIso
+    });
+    const ran = await appCtx.worker.processNextJob(['book_enrich']);
+    expect(ran).toBe(true);
+    expect(observedCancelled).toBe(true);
+    // Un job annulé ne passe jamais en 'done'
+    expect(appCtx.repos.jobRepo.findJobById('job_cancel_test')?.status).not.toBe('done');
+  });
 });

@@ -32,10 +32,16 @@ export const useJobsStore = defineStore('jobs', () => {
     jobs.value.find((j) => j.type === 'collection_import') ?? null
   );
 
-  const activeSeriesEnrichJob = computed(() =>
-    jobs.value.find((j) => j.type === 'series_enrich_volumes' && (j.status === 'pending' || j.status === 'running')) ??
-    null
-  );
+  // Priorise TOUJOURS un job réellement en cours (`running`) avant un job en attente (`pending` à 0/N)
+  const activeSeriesEnrichJob = computed(() => {
+    const running = jobs.value.find(
+      (j) => j.type === 'series_enrich_volumes' && j.status === 'running'
+    );
+    if (running) return running;
+    return (
+      jobs.value.find((j) => j.type === 'series_enrich_volumes' && j.status === 'pending') ?? null
+    );
+  });
 
   function upsertJob(incoming: BackgroundJobView): void {
     const idx = jobs.value.findIndex((j) => j.id === incoming.id);
@@ -90,7 +96,27 @@ export const useJobsStore = defineStore('jobs', () => {
       try {
         const parsed = JSON.parse((event as MessageEvent<string>).data) as { jobs: BackgroundJobView[] };
         if (Array.isArray(parsed.jobs)) {
+          const prevActiveIds = new Set(
+            jobs.value
+              .filter(
+                (j) =>
+                  (j.status === 'pending' || j.status === 'running') &&
+                  (j.type === 'photo_commit' ||
+                    j.type === 'series_expand' ||
+                    j.type === 'series_enrich_volumes' ||
+                    j.type === 'series_apply_edition_covers' ||
+                    j.type === 'collection_import')
+              )
+              .map((j) => j.id)
+          );
           jobs.value = parsed.jobs;
+          const anyCompletedWhileDisconnected = Array.from(prevActiveIds).some((id) => {
+            const after = parsed.jobs.find((j) => j.id === id);
+            return !after || after.status === 'done';
+          });
+          if (anyCompletedWhileDisconnected) {
+            void useLibraryStore().syncNow();
+          }
         }
       } catch {
         // ignore

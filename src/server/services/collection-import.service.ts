@@ -349,6 +349,7 @@ export class CollectionImportService {
     };
 
     for (let i = 0; i < total; i++) {
+      if (ctx.isCancelled?.()) break;
       const row = rows[i];
       const rowStartedAt = Date.now();
       const targetStatus: 'owned' | 'wish' =
@@ -374,6 +375,8 @@ export class CollectionImportService {
           if (isbn13) resolvedViaSearch = true;
         }
 
+        if (ctx.isCancelled?.()) break;
+
         if (!isbn13) {
           recordUnmatched(row, 'isbn_not_found', rowStartedAt);
           reportRowProgress(i + 1);
@@ -387,6 +390,8 @@ export class CollectionImportService {
           userId: payload.userId,
           libraryId: payload.libraryId
         });
+
+        if (ctx.isCancelled?.()) break;
 
         let item = resolved.results[0];
 

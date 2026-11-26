@@ -28,7 +28,7 @@ import type { IngestionService } from './acquisition/ingestion.service';
 import type { SeriesExpansionReport, SeriesGraphService } from './acquisition/series-graph.service';
 import { mapLoanRowToView } from './loan.service';
 import { AppError } from '../middleware/error.middleware';
-import type { JobRepository } from '../repositories/job.repo';
+import type { BackgroundJobRow, JobRepository } from '../repositories/job.repo';
 
 export interface SeriesDetailPayload {
   series: SeriesView;
@@ -96,6 +96,7 @@ export class SeriesManagementService {
   private readonly connectors?: BibliographicConnectors;
   private readonly jobRepo?: JobRepository;
   private readonly onJobEnqueued?: () => void;
+  private readonly onJobChanged?: (row: BackgroundJobRow | null) => void;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -108,6 +109,7 @@ export class SeriesManagementService {
     connectors?: BibliographicConnectors;
     jobRepo?: JobRepository;
     onJobEnqueued?: () => void;
+    onJobChanged?: (row: BackgroundJobRow | null) => void;
   }) {
     this.db = deps.db;
     this.catalogRepo = deps.catalogRepo;
@@ -119,6 +121,7 @@ export class SeriesManagementService {
     this.connectors = deps.connectors;
     this.jobRepo = deps.jobRepo;
     this.onJobEnqueued = deps.onJobEnqueued;
+    this.onJobChanged = deps.onJobChanged;
   }
 
   private buildBookViewsForSeries(libraryId: string, userId: string, seriesId: string): BookView[] {
@@ -251,17 +254,23 @@ export class SeriesManagementService {
     }
     const report = await this.seriesGraphService.expandSeriesByGraph(seriesId);
     if (report.incompleteVolumeCount > 0 && this.jobRepo) {
+      const now = new Date().toISOString();
       const existing = this.jobRepo.findActiveJobByTypeAndPayloadKey('series_enrich_volumes', seriesId);
       if (!existing) {
-        this.jobRepo.createJob({
+        const created = this.jobRepo.createJob({
           id: `job_${crypto.randomBytes(6).toString('hex')}`,
           type: 'series_enrich_volumes',
           userId,
           libraryId,
-          payload: { seriesId },
+          payload: { seriesId, priority: 'high' },
           progressTotal: report.incompleteVolumeCount,
-          now: new Date().toISOString()
+          now
         });
+        this.onJobChanged?.(created);
+        this.onJobEnqueued?.();
+      } else if (existing.status === 'pending') {
+        const promoted = this.jobRepo.promotePendingJobPriority(existing.id, now);
+        this.onJobChanged?.(promoted);
         this.onJobEnqueued?.();
       }
     }

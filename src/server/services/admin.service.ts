@@ -98,6 +98,7 @@ export class AdminService {
   private readonly coverService: CoverService;
   private readonly cronScheduler: CronScheduler;
   private readonly reportsDir: string;
+  private readonly onCatalogReset?: () => void;
 
   constructor(deps: {
     db: DatabaseAdapter;
@@ -110,6 +111,7 @@ export class AdminService {
     coverService: CoverService;
     cronScheduler: CronScheduler;
     reportsDir?: string;
+    onCatalogReset?: () => void;
   }) {
     this.db = deps.db;
     this.adminRepo = deps.adminRepo;
@@ -121,6 +123,7 @@ export class AdminService {
     this.coverService = deps.coverService;
     this.cronScheduler = deps.cronScheduler;
     this.reportsDir = path.resolve(deps.reportsDir ?? path.join(process.cwd(), 'data', 'benchmark-reports'));
+    this.onCatalogReset = deps.onCatalogReset;
   }
 
   getOverview() {
@@ -1134,6 +1137,8 @@ export class AdminService {
     resetAt: string;
   }> {
     const resetAt = new Date().toISOString();
+    // Signale immédiatement aux jobs en cours de s'arrêter avant de vider la base
+    this.onCatalogReset?.();
     const { deletedBooks, deletedSeries } = this.db.transaction(() =>
       this.adminRepo.clearBookCatalogKeepingAccounts(resetAt)
     );

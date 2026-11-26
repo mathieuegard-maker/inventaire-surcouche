@@ -86,13 +86,45 @@ export class JobRepository {
   }
 
   listJobsForUser(userId: string, libraryId: string, limit = 30): BackgroundJobRow[] {
-    return this.db.all<BackgroundJobRow>(
+    // Inclut SYSTÉMATIQUEMENT tous les jobs actifs (running puis pending) pour ne jamais les éjecter
+    // lors d'un import créant de nombreux jobs, puis complète avec les `limit` derniers jobs terminés.
+    const active = this.db.all<BackgroundJobRow>(
       `SELECT * FROM background_jobs
-       WHERE user_id = ? OR library_id = ?
+       WHERE (user_id = ? OR library_id = ?) AND status IN ('running', 'pending')
+       ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END ASC, created_at DESC`,
+      [userId, libraryId]
+    );
+    const activeIds = new Set(active.map((r) => r.id));
+    const recentFinished = this.db.all<BackgroundJobRow>(
+      `SELECT * FROM background_jobs
+       WHERE (user_id = ? OR library_id = ?) AND status NOT IN ('running', 'pending')
        ORDER BY created_at DESC
        LIMIT ?`,
       [userId, libraryId, limit]
     );
+    const merged = [...active];
+    for (const row of recentFinished) {
+      if (!activeIds.has(row.id)) merged.push(row);
+    }
+    return merged;
+  }
+
+  promotePendingJobPriority(id: string, now: string): BackgroundJobRow | null {
+    const row = this.findJobById(id);
+    if (!row || row.status !== 'pending') return row;
+    let payload: Record<string, unknown> = {};
+    try {
+      const parsed = JSON.parse(row.payload_json || '{}');
+      if (parsed && typeof parsed === 'object') payload = parsed as Record<string, unknown>;
+    } catch {
+      payload = {};
+    }
+    payload.priority = 'high';
+    this.db.run(
+      `UPDATE background_jobs SET payload_json = ?, updated_at = ? WHERE id = ? AND status = 'pending'`,
+      [JSON.stringify(payload), now, id]
+    );
+    return this.findJobById(id);
   }
 
   resetInterruptedRunningJobs(now: string): number {
@@ -125,7 +157,7 @@ export class JobRepository {
         );
       }
 
-      const next = candidates.find((row) => {
+      const eligible = candidates.filter((row) => {
         if (!row.payload_json || !row.payload_json.includes('runAfter')) return true;
         try {
           const parsed = JSON.parse(row.payload_json) as { runAfter?: unknown };
@@ -137,6 +169,11 @@ export class JobRepository {
         }
         return true;
       });
+
+      const next =
+        eligible.find((row) => row.payload_json?.includes('"priority":"high"')) ??
+        eligible[0] ??
+        null;
 
       if (!next) return null;
       this.db.run(

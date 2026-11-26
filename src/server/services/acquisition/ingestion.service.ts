@@ -21,7 +21,7 @@ import type { AcquisitionChannel, BookView, LibraryBookOverrides } from '../../.
 import type { BibliographicConnectors } from '../../connectors/types';
 import type { BookRow, CatalogRepository, SeriesRow } from '../../repositories/catalog.repo';
 import type { LibraryBookRow, LibraryRepository } from '../../repositories/library.repo';
-import type { JobRepository } from '../../repositories/job.repo';
+import type { BackgroundJobRow, JobRepository } from '../../repositories/job.repo';
 import type { LogRepository } from '../../repositories/log.repo';
 import type { CoverService } from '../cover.service';
 import type { BookIdentifierService, DiscoveredEditionCandidate } from './book-identifier.service';
@@ -81,6 +81,7 @@ export class IngestionService {
   private readonly bookIdentifier?: BookIdentifierService;
   private readonly connectors?: BibliographicConnectors;
   private readonly onJobEnqueued?: () => void;
+  private readonly onJobChanged?: (row: BackgroundJobRow | null) => void;
 
   constructor(deps: {
     catalogRepo: CatalogRepository;
@@ -93,6 +94,7 @@ export class IngestionService {
     bookIdentifier?: BookIdentifierService;
     connectors?: BibliographicConnectors;
     onJobEnqueued?: () => void;
+    onJobChanged?: (row: BackgroundJobRow | null) => void;
   }) {
     this.catalogRepo = deps.catalogRepo;
     this.libraryRepo = deps.libraryRepo;
@@ -104,6 +106,7 @@ export class IngestionService {
     this.bookIdentifier = deps.bookIdentifier;
     this.connectors = deps.connectors;
     this.onJobEnqueued = deps.onJobEnqueued;
+    this.onJobChanged = deps.onJobChanged;
   }
 
   /**
@@ -358,6 +361,7 @@ export class IngestionService {
                 now
               });
               enqueuedSeriesExpandJobId = job.id;
+              this.onJobChanged?.(job);
               this.onJobEnqueued?.();
             } else {
               enqueuedSeriesExpandJobId = activeJob.id;
@@ -1281,7 +1285,8 @@ export class IngestionService {
    */
   async enrichIncompleteSeriesVolumes(
     seriesId: string,
-    onProgress?: (done: number, total: number) => void
+    onProgress?: (done: number, total: number) => void,
+    isCancelled?: () => boolean
   ): Promise<SeriesVolumeEnrichmentReport> {
     const series = this.catalogRepo.findSeriesById(seriesId);
     if (!series) {
@@ -1351,6 +1356,9 @@ export class IngestionService {
     let rateLimitedCount = 0;
 
     for (const { book, editions } of incomplete) {
+      if (isCancelled?.() || !this.catalogRepo.findSeriesById(series.id)) {
+        break;
+      }
       const authors = parseJsonStringArray(book.authors_json);
 
       try {
@@ -1445,7 +1453,9 @@ export class IngestionService {
     }
 
     // Passe finale d'harmonisation douce : aligne les couvertures par défaut non verrouillées vers l'édition dominante
-    this.harmonizeSeriesDefaultCovers(series.id);
+    if (!isCancelled?.() && this.catalogRepo.findSeriesById(series.id)) {
+      this.harmonizeSeriesDefaultCovers(series.id);
+    }
 
     return { seriesId, processed, enrichedByIsbn, coversAdded, stillMissingIsbn, rateLimitedCount };
   }
