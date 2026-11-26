@@ -19,6 +19,7 @@ import {
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { normalizeTextKey, tokenOverlapRatio } from '../../shared/bibliographic/text-normalize.util';
 import { PriorityRateLimiter } from '../connectors/request-priority';
+import type { CoverCandidateEditionMeta } from '../../shared/types/domain.types';
 import type { CatalogRepository, CoverRow } from '../repositories/catalog.repo';
 import type { LibraryRepository } from '../repositories/library.repo';
 import { AppError } from '../middleware/error.middleware';
@@ -41,6 +42,7 @@ export interface MultiEditionConsensusResult {
   distinctCovers: Array<{
     cover: StoredCoverResult;
     sourceIsbn?: string;
+    sourceIsbns: string[];
     sourceUrl: string;
     clusterSize: number;
   }>;
@@ -51,6 +53,7 @@ export interface ExternalCoverProbeInput {
   label: string;
   minBytes?: number;
   rejectExactBytes?: number;
+  edition?: CoverCandidateEditionMeta | null;
 }
 
 export interface CoverCascadeInput {
@@ -523,7 +526,19 @@ export class CoverService {
       // Ne pas reproposer en "externe" une couverture déjà identique visuellement à une couverture locale
       const alreadyLocal = localHashes.some((h) => hammingDistanceHex(h, rep.hash) <= DEFAULT_DHASH_THRESHOLD);
       if (alreadyLocal) continue;
-      out.push({ ...rep.item, clusterSize: cluster.count });
+      // Préférer les métadonnées d'édition les plus riches (éditeur + collection) au sein du groupe visuel identique
+      const bestEdition =
+        rep.item.edition && rep.item.edition.publisher
+          ? rep.item.edition
+          : cluster.members.find((m) => m.item.edition?.publisher)?.item.edition ??
+            rep.item.edition ??
+            cluster.members.find((m) => m.item.edition)?.item.edition ??
+            null;
+      out.push({
+        ...rep.item,
+        edition: bestEdition,
+        clusterSize: cluster.count
+      });
       if (out.length >= maxResults) break;
     }
 
@@ -538,12 +553,22 @@ export class CoverService {
   async electBestCoverFromMultiEditions(input: {
     isbn13s: string[];
     candidateUrls?: string[];
+    preferredIsbns?: string[];
     maxEditions?: number;
     maxDistinctStored?: number;
   }): Promise<MultiEditionConsensusResult> {
+    const preferredSet = new Set(
+      (input.preferredIsbns ?? [])
+        .map((raw) => isbnUtil.normalizeToIsbn13(raw))
+        .filter((x): x is string => Boolean(x))
+    );
+    const orderedInputIsbns = [
+      ...Array.from(preferredSet),
+      ...input.isbn13s
+    ];
     const cleanIsbns = Array.from(
       new Set(
-        input.isbn13s
+        orderedInputIsbns
           .map((raw) => isbnUtil.normalizeToIsbn13(raw))
           .filter((x): x is string => Boolean(x))
       )
@@ -613,11 +638,19 @@ export class CoverService {
 
     for (const cluster of clusters.slice(0, maxStore)) {
       const rep = cluster.representative;
+      const memberIsbns = Array.from(
+        new Set(
+          cluster.members
+            .map((m) => m.sourceIsbn)
+            .filter((x): x is string => Boolean(x))
+        )
+      );
       try {
         const stored = await this.storeBufferAsWebp(rep.buffer, rep.url);
         distinctCovers.push({
           cover: stored,
           sourceIsbn: rep.sourceIsbn,
+          sourceIsbns: memberIsbns,
           sourceUrl: rep.url,
           clusterSize: cluster.count
         });
@@ -626,8 +659,13 @@ export class CoverService {
       }
     }
 
+    const preferredEntry =
+      preferredSet.size > 0
+        ? distinctCovers.find((entry) => entry.sourceIsbns.some((isbn) => preferredSet.has(isbn)))
+        : undefined;
+
     return {
-      winner: distinctCovers[0]?.cover ?? null,
+      winner: preferredEntry?.cover ?? distinctCovers[0]?.cover ?? null,
       distinctCovers
     };
   }

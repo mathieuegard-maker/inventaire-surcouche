@@ -617,6 +617,19 @@ export class CatalogRepository {
     ]);
   }
 
+  /**
+   * Harmonise la couverture par défaut d'un livre vers celle de l'édition dominante de sa série
+   * uniquement si `coverKey` n'est pas verrouillé en Couche 2 Admin.
+   */
+  updateBookCoverAutomaticIfUnlocked(bookId: string, coverKey: string, now: string): boolean {
+    const existing = this.findBookById(bookId);
+    if (!existing || existing.cover_key === coverKey) return false;
+    const locked = new Set(parseJsonStringArray(existing.locked_fields_json));
+    if (locked.has('coverKey')) return false;
+    this.db.run('UPDATE books SET cover_key = ?, updated_at = ? WHERE id = ?', [coverKey, now, bookId]);
+    return true;
+  }
+
   upsertBookEdition(input: {
     isbn13: string;
     bookId: string;

@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
 import BookLookupModal from '../components/modals/BookLookupModal.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
-import CoverPicker from '../components/books/CoverPicker.vue';
+import CoverPicker, { type CoverPropagationPlan } from '../components/books/CoverPicker.vue';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
@@ -55,6 +55,7 @@ const genres = ref<string[]>([]);
 const customGenreInput = ref('');
 const propagateGenresToSeries = ref(false);
 const coverKey = ref<string | null>(null);
+const coverPropagationPlan = ref<CoverPropagationPlan | null>(null);
 
 function hydrateForm(b: BookView): void {
   title.value = b.title;
@@ -130,7 +131,48 @@ async function handleSave(): Promise<void> {
       propagateGenresToSeries: propagateGenresToSeries.value
     });
 
-    uiStore.pushToast(t('book.overridesSavedToast'), 'success');
+    const plan = coverPropagationPlan.value;
+    if (
+      !oneShotForced.value &&
+      book.value.seriesId &&
+      coverKey.value &&
+      plan &&
+      plan.scope !== 'single' &&
+      plan.targetEdition
+    ) {
+      const propRes = await libraryStore.applySeriesEditionCovers(book.value.seriesId, {
+        sourceBookId: book.value.id,
+        sourceCoverKey: coverKey.value,
+        scope: plan.scope,
+        bookIds: plan.scope === 'selected' ? plan.selectedBookIds : [],
+        targetEdition: {
+          isbn13: plan.targetEdition.isbn13 ?? null,
+          publisher: plan.targetEdition.publisher ?? null,
+          collectionName: plan.targetEdition.collectionName ?? null,
+          isbnPrefix: plan.targetEdition.isbnPrefix ?? null,
+          lineageKey: plan.targetEdition.lineageKey,
+          label: plan.targetEdition.lineageLabel
+        },
+        searchMissingInBackground: plan.searchMissingInBackground
+      });
+
+      if (propRes.backgroundJobId && propRes.missingBookIds.length > 0) {
+        uiStore.pushToast(
+          t('book.coverAppliedWithJobToast', {
+            count: propRes.appliedCount,
+            missing: propRes.missingBookIds.length
+          }),
+          'success'
+        );
+      } else if (propRes.appliedCount > 1) {
+        uiStore.pushToast(t('book.coverAppliedMultiToast', { count: propRes.appliedCount }), 'success');
+      } else {
+        uiStore.pushToast(t('book.overridesSavedToast'), 'success');
+      }
+    } else {
+      uiStore.pushToast(t('book.overridesSavedToast'), 'success');
+    }
+
     await router.push(`/book/${encodeURIComponent(book.value.id)}`);
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
@@ -213,7 +255,12 @@ onMounted(() => {
     <div v-else-if="!book" class="ds-card ds-text-muted">{{ t('book.notFound') }}</div>
 
     <form v-else class="ds-card ds-stack" @submit.prevent="handleSave">
-      <CoverPicker v-model="coverKey" :book-id="book.id" />
+      <CoverPicker
+        v-model="coverKey"
+        :book-id="book.id"
+        :series-id="oneShotForced ? null : book.seriesId"
+        @update:propagation-plan="coverPropagationPlan = $event"
+      />
 
       <div class="ds-field">
         <label class="ds-label" for="edit-title">{{ t('scan.fieldTitle') }}</label>

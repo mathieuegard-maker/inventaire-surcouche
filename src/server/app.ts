@@ -38,6 +38,7 @@ import { ReadingService } from './services/reading.service';
 import { PhotoAiService } from './services/photo-ai.service';
 import { SearchService } from './services/search.service';
 import { SeriesManagementService } from './services/series-management.service';
+import { SeriesCoverEditionService } from './services/series-cover-edition.service';
 import { NotificationService } from './services/notification.service';
 import { SocialService } from './services/social.service';
 import { StatsExportService } from './services/stats-export.service';
@@ -205,6 +206,18 @@ export function createApp(options: CreateAppOptions) {
     onJobEnqueued: () => worker.nudge()
   });
 
+  const seriesCoverEditionService = new SeriesCoverEditionService({
+    db: options.db,
+    catalogRepo,
+    libraryRepo,
+    jobRepo,
+    coverService,
+    ingestionService,
+    bookIdentifier,
+    connectors,
+    onJobEnqueued: () => worker.nudge()
+  });
+
   const notificationService = new NotificationService({
     config: options.config,
     notifRepo,
@@ -340,6 +353,39 @@ export function createApp(options: CreateAppOptions) {
     return { result: report, total: Math.max(1, report.processed) };
   });
 
+  worker.registerHandler('series_apply_edition_covers', async ({ job, payload, reportProgress }) => {
+    const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
+    const libraryId = typeof payload.libraryId === 'string' ? payload.libraryId : (job.library_id ?? '');
+    const targetBookIds = Array.isArray(payload.targetBookIds)
+      ? payload.targetBookIds.filter((x): x is string => typeof x === 'string')
+      : [];
+    const targetEdition =
+      payload.targetEdition && typeof payload.targetEdition === 'object'
+        ? (payload.targetEdition as {
+            isbn13?: string | null;
+            publisher?: string | null;
+            collectionName?: string | null;
+            isbnPrefix?: string | null;
+            lineageKey?: string | null;
+            label?: string | null;
+          })
+        : {};
+    if (!seriesId || !libraryId || targetBookIds.length === 0) {
+      return {
+        result: { seriesId, editionLabel: '', processed: 0, updatedCount: 0, stillMissingCount: 0 },
+        total: 1
+      };
+    }
+    const report = await seriesCoverEditionService.executeApplyEditionCoversJob({
+      seriesId,
+      libraryId,
+      targetBookIds,
+      targetEdition,
+      onProgress: (done, total) => reportProgress(done, total)
+    });
+    return { result: report, total: Math.max(1, report.processed) };
+  });
+
   worker.registerHandler('book_enrich', async ({ payload }) => {
     const isbn13 = typeof payload.isbn13 === 'string' ? payload.isbn13 : '';
     const userId = typeof payload.userId === 'string' ? payload.userId : '';
@@ -370,6 +416,7 @@ export function createApp(options: CreateAppOptions) {
     photoAiService,
     searchService,
     seriesManagementService,
+    seriesCoverEditionService,
     notificationService,
     socialService,
     statsExportService,
@@ -409,6 +456,7 @@ export function createApp(options: CreateAppOptions) {
       photoAiService,
       searchService,
       seriesManagementService,
+      seriesCoverEditionService,
       notificationService,
       socialService,
       statsExportService,

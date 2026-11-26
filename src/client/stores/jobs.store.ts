@@ -50,16 +50,17 @@ export const useJobsStore = defineStore('jobs', () => {
       (incoming.type === 'photo_commit' ||
         incoming.type === 'series_expand' ||
         incoming.type === 'series_enrich_volumes' ||
+        incoming.type === 'series_apply_edition_covers' ||
         incoming.type === 'collection_import') &&
       incoming.status === 'done' &&
       prevStatus !== 'done'
     ) {
       void useLibraryStore().syncNow();
     } else if (
-      incoming.type === 'series_enrich_volumes' &&
+      (incoming.type === 'series_enrich_volumes' || incoming.type === 'series_apply_edition_covers') &&
       incoming.status === 'running' &&
       incoming.progressDone > prevDone &&
-      incoming.progressDone % 8 === 0
+      incoming.progressDone % (incoming.type === 'series_apply_edition_covers' ? 4 : 8) === 0
     ) {
       void useLibraryStore().syncNow();
     }

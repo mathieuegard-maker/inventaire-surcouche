@@ -2,6 +2,7 @@
 // Service métier Foyer : vues fusionnées (Couche 3 > Couche 2 > Couche 1), actions par lot (avec choix livres prêtés) et genres en lot.
 
 import crypto from 'node:crypto';
+import { buildEditionLineage } from '../../shared/bibliographic/edition-lineage.util';
 import { annotateIntegralCoverage, parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { classifyBookMetadata } from '../../shared/bibliographic/category-classifier';
@@ -14,6 +15,8 @@ import type {
   ActiveLoanView,
   BookMainCategory,
   BookView,
+  CoverCandidateEditionMeta,
+  CoverCandidateItem,
   LibraryBookOverrides,
   OwnershipStatus,
   SeriesView,
@@ -47,13 +50,7 @@ export interface BookDetailPayload {
   seriesContext: BookSeriesContext | null;
 }
 
-export interface CoverCandidateItem {
-  id: string;
-  kind: 'local' | 'external';
-  coverKey?: string;
-  url: string;
-  label: string;
-}
+export type { CoverCandidateItem };
 
 export interface SyncPullPayload {
   serverTime: string;
@@ -204,9 +201,24 @@ export class LibraryService {
       activeBookRows.push(bookRow);
     }
 
+    const coherentBySeriesCache = new Map<string, Map<string, string>>();
+    const getCoherentCoverKey = (seriesId: string | null, bookId: string): string | null => {
+      if (!seriesId) return null;
+      let map = coherentBySeriesCache.get(seriesId);
+      if (!map) {
+        map = this.ingestionService.computeSeriesCoherentCoverMap(seriesId, libraryId);
+        coherentBySeriesCache.set(seriesId, map);
+      }
+      return map.get(bookId) ?? null;
+    };
+
     const rawActiveViews: BookView[] = activeBookRows.map((bookRow) => {
       const libRow = libRowByBookId.get(bookRow.id) ?? null;
-      const merged = this.ingestionService.buildMergedBookView(bookRow, libRow);
+      const ov = parseOverrides(libRow?.overrides_json);
+      const effectiveSid = ov.oneShotForced ? null : (ov.seriesId !== undefined ? ov.seriesId : bookRow.series_id);
+      const merged = this.ingestionService.buildMergedBookView(bookRow, libRow, {
+        coherentCoverKey: getCoherentCoverKey(effectiveSid, bookRow.id)
+      });
       merged.activeLoan = loanByBookId.get(bookRow.id) ?? null;
       merged.readingState = readingByBookId.get(bookRow.id) ?? null;
       merged.wishedByName = libRow?.wished_by_user_id ? (usernameMap.get(libRow.wished_by_user_id) ?? null) : null;
@@ -401,7 +413,12 @@ export class LibraryService {
 
   private enrichSingleBookView(libraryId: string, userId: string, bookRow: BookRow): BookView {
     const libRow = this.libraryRepo.findLibraryBook(libraryId, bookRow.id);
-    const merged = this.ingestionService.buildMergedBookView(bookRow, libRow);
+    const ov = parseOverrides(libRow?.overrides_json);
+    const effectiveSid = ov.oneShotForced ? null : (ov.seriesId !== undefined ? ov.seriesId : bookRow.series_id);
+    const coherentCoverKey = effectiveSid
+      ? (this.ingestionService.computeSeriesCoherentCoverMap(effectiveSid, libraryId).get(bookRow.id) ?? null)
+      : null;
+    const merged = this.ingestionService.buildMergedBookView(bookRow, libRow, { coherentCoverKey });
     const activeLoan = this.loanRepo.findActiveLoanByBook(libraryId, bookRow.id);
     merged.activeLoan = activeLoan ? mapLoanRowToView(activeLoan) : null;
 
@@ -580,7 +597,8 @@ export class LibraryService {
   }
 
   /**
-   * Galerie dédupliquée des couvertures disponibles pour un livre (Couche 3 + Catalogue + Éditions sœurs + Sources externes).
+   * Galerie dédupliquée des couvertures disponibles pour un livre (Couche 3 + Catalogue + Éditions sœurs + Sources externes)
+   * enrichie de la signature éditoriale (`edition`) lorsque la couverture provient d'une édition identifiable.
    */
   async listBookCoverCandidates(
     libraryId: string,
@@ -592,29 +610,103 @@ export class LibraryService {
       throw new AppError(404, 'BOOK_NOT_FOUND', 'Ouvrage introuvable.');
     }
 
+    const toEditionMeta = (input: {
+      isbn13?: string | null;
+      publisher?: string | null;
+      collectionName?: string | null;
+      publishYear?: string | null;
+    }): CoverCandidateEditionMeta | null => {
+      const lineage = buildEditionLineage(input);
+      if (!lineage) return null;
+      return {
+        isbn13: input.isbn13 ?? null,
+        publisher: lineage.publisher,
+        collectionName: lineage.collectionName,
+        publishYear: input.publishYear ?? null,
+        lineageKey: lineage.key,
+        lineageLabel: lineage.label,
+        isbnPrefix: lineage.isbnPrefix
+      };
+    };
+
     const candidates: CoverCandidateItem[] = [];
     const seenUrls = new Set<string>();
     const seenExternalUrls = new Set<string>();
 
-    const pushLocal = (coverKey: string | null | undefined, label: string) => {
+    const pushLocal = (
+      coverKey: string | null | undefined,
+      label: string,
+      edition: CoverCandidateEditionMeta | null = null
+    ) => {
       if (!coverKey) return;
       const url = `/api/covers/${coverKey}`;
-      if (seenUrls.has(url)) return;
+      const existing = candidates.find((c) => c.url === url);
+      if (existing) {
+        // Enrichit un candidat déjà présent s'il n'avait pas encore de métadonnée d'édition précise
+        if (edition && (!existing.edition || (!existing.edition.publisher && edition.publisher))) {
+          existing.edition = edition;
+        }
+        return;
+      }
       seenUrls.add(url);
       const covRow = this.catalogRepo.findCoverByKey(coverKey);
       if (covRow?.source_url) seenExternalUrls.add(covRow.source_url);
-      candidates.push({ id: coverKey, kind: 'local', coverKey, url, label });
+      candidates.push({ id: coverKey, kind: 'local', coverKey, url, label, edition });
     };
 
     const libRow = this.libraryRepo.findLibraryBook(libraryId, bookId);
     const overrides = parseOverrides(libRow?.overrides_json);
-
-    pushLocal(overrides.coverKey, 'Couverture personnalisée (Foyer)');
-    pushLocal(bookRow.cover_key, 'Couverture principale (Catalogue)');
-
     const editions = this.catalogRepo.listEditionsByBookId(bookId);
+
+    const editionMetaByCoverKey = new Map<string, CoverCandidateEditionMeta>();
+    const editionMetaByIsbn = new Map<string, CoverCandidateEditionMeta>();
     for (const ed of editions) {
-      pushLocal(ed.cover_key, `Édition ${ed.publisher || ed.isbn13}`);
+      const edPub = ed.publisher ?? (ed.cover_key && ed.cover_key === bookRow.cover_key ? bookRow.publisher : null);
+      const edCol =
+        ed.collection_name ??
+        (!ed.publisher && ed.cover_key && ed.cover_key === bookRow.cover_key ? bookRow.collection_name : null);
+      const meta = toEditionMeta({
+        isbn13: ed.isbn13,
+        publisher: edPub,
+        collectionName: edCol,
+        publishYear: ed.publish_year
+      });
+      if (meta) {
+        editionMetaByIsbn.set(ed.isbn13, meta);
+        if (ed.cover_key && !editionMetaByCoverKey.has(ed.cover_key)) {
+          editionMetaByCoverKey.set(ed.cover_key, meta);
+        }
+      }
+    }
+
+    // Couverture personnalisée Foyer : ne porte une édition que si elle correspond à une édition connue du livre
+    const overrideEdition = overrides.coverKey ? (editionMetaByCoverKey.get(overrides.coverKey) ?? null) : null;
+    pushLocal(
+      overrides.coverKey,
+      overrideEdition ? `${overrideEdition.lineageLabel} (Foyer)` : 'Couverture personnalisée (Foyer)',
+      overrideEdition
+    );
+
+    // Couverture principale Catalogue
+    const primaryEdition =
+      (bookRow.cover_key ? editionMetaByCoverKey.get(bookRow.cover_key) : null) ??
+      toEditionMeta({
+        isbn13: editions[0]?.isbn13 ?? null,
+        publisher: bookRow.publisher,
+        collectionName: bookRow.collection_name,
+        publishYear: bookRow.publish_year
+      });
+    pushLocal(
+      bookRow.cover_key,
+      primaryEdition ? `${primaryEdition.lineageLabel}${primaryEdition.publishYear ? ` (${primaryEdition.publishYear})` : ''}` : 'Couverture principale (Catalogue)',
+      primaryEdition
+    );
+
+    for (const ed of editions) {
+      const meta = editionMetaByIsbn.get(ed.isbn13) ?? null;
+      const yearPart = ed.publish_year ? ` (${ed.publish_year})` : '';
+      const label = meta ? `${meta.lineageLabel}${yearPart}` : `Édition ${ed.publisher || ed.isbn13}`;
+      pushLocal(ed.cover_key, label, meta);
     }
 
     if (includeExternal) {
@@ -633,17 +725,25 @@ export class LibraryService {
         label: string;
         minBytes?: number;
         rejectExactBytes?: number;
+        edition?: CoverCandidateEditionMeta | null;
       }> = [];
-      const enqueueExt = (url: string | null | undefined, label: string, minBytes?: number, rejectExactBytes?: number) => {
+      const enqueueExt = (
+        url: string | null | undefined,
+        label: string,
+        minBytes?: number,
+        rejectExactBytes?: number,
+        edition?: CoverCandidateEditionMeta | null
+      ) => {
         const clean = (url || '').trim();
         if (!clean || (!clean.startsWith('http://') && !clean.startsWith('https://'))) return;
         if (/\.svg(?:[?#]|$)/i.test(clean) || /(?:wikimedia|wikipedia)\.org/i.test(clean)) return;
         if (seenExternalUrls.has(clean)) return;
         seenExternalUrls.add(clean);
-        rawExternalQueue.push({ url: clean, label, minBytes, rejectExactBytes });
+        rawExternalQueue.push({ url: clean, label, minBytes, rejectExactBytes, edition: edition ?? null });
       };
 
       const isbnsToProbe = new Set<string>(editions.map((e) => e.isbn13).filter(Boolean));
+      const externalMetaByIsbn = new Map<string, CoverCandidateEditionMeta>(editionMetaByIsbn);
       const workUri = bookRow.inventaire_uri || (bookRow.wikidata_qid ? `wd:${bookRow.wikidata_qid}` : null);
 
       const titleIsGeneric = effectiveSeriesName
@@ -661,7 +761,7 @@ export class LibraryService {
           ? this.connectors.inventaire.fetchWorkEditions(workUri)
           : Promise.resolve({ isbn13s: [], coverUrls: [] }),
         this.connectors?.bnf && bnfTitleQuery
-          ? this.connectors.bnf.searchByTitleAndAuthor(bnfTitleQuery, firstAuthor, 6)
+          ? this.connectors.bnf.searchByTitleAndAuthor(bnfTitleQuery, firstAuthor, 10)
           : Promise.resolve([]),
         this.connectors?.googleBooks.searchByTitleAndAuthor && fullSearchTitle
           ? this.connectors.googleBooks.searchByTitleAndAuthor(fullSearchTitle, firstAuthor, 5)
@@ -674,15 +774,29 @@ export class LibraryService {
       // 1. Couvertures directes Inventaire éditions sœurs P629 (prioritaires sur BD franco-belges)
       if (invEdRes.status === 'fulfilled') {
         for (const u of invEdRes.value.coverUrls) enqueueExt(u, 'Inventaire (édition sœur)');
-        for (const isbn of invEdRes.value.isbn13s.slice(0, 3)) isbnsToProbe.add(isbn);
+        for (const isbn of invEdRes.value.isbn13s.slice(0, 4)) {
+          isbnsToProbe.add(isbn);
+          if (!externalMetaByIsbn.has(isbn)) {
+            const meta = toEditionMeta({ isbn13: isbn });
+            if (meta) externalMetaByIsbn.set(isbn, meta);
+          }
+        }
       }
 
       // 2. Couvertures directes Tableau Comparatif (BnF / Inventaire / Google Books / Open Library)
       if (draftRes.status === 'fulfilled' && draftRes.value) {
-        for (const u of draftRes.value.coverCandidates) enqueueExt(u, 'Catalogue externe');
+        const draftMeta = toEditionMeta({
+          isbn13: draftRes.value.isbn13,
+          publisher: draftRes.value.publisher,
+          collectionName: draftRes.value.collectionName,
+          publishYear: draftRes.value.publishYear
+        });
+        for (const u of draftRes.value.coverCandidates) {
+          enqueueExt(u, draftMeta ? `${draftMeta.lineageLabel} (catalogue)` : 'Catalogue externe', undefined, undefined, draftMeta);
+        }
       }
 
-      // 3. Résultats BnF par Titre + Auteur (filtrés par proximité titre)
+      // 3. Résultats BnF par Titre + Auteur (filtrés par proximité titre — enrichis avec éditeur & collection)
       if (bnfRes.status === 'fulfilled') {
         for (const hit of bnfRes.value) {
           const hitText = `${hit.seriesName ?? ''} ${hit.title ?? ''}`.trim();
@@ -691,26 +805,64 @@ export class LibraryService {
             tokenOverlapRatio(fullSearchTitle, hitText)
           );
           if (overlap < 0.45 && !titleIsGeneric) continue;
-          if (hit.coverUrl) enqueueExt(hit.coverUrl, `BnF (${hit.publisher || hit.isbn13 || 'catalogue'})`);
-          if (hit.isbn13 && isbnsToProbe.size < 4) isbnsToProbe.add(hit.isbn13);
+          const hitMeta = toEditionMeta({
+            isbn13: hit.isbn13,
+            publisher: hit.publisher,
+            collectionName: hit.collectionName,
+            publishYear: hit.publishYear
+          });
+          if (hit.isbn13 && hitMeta) {
+            const prev = externalMetaByIsbn.get(hit.isbn13);
+            if (!prev || (!prev.publisher && hitMeta.publisher)) {
+              externalMetaByIsbn.set(hit.isbn13, hitMeta);
+            }
+          }
+          if (hit.coverUrl) {
+            const yr = hit.publishYear ? ` (${hit.publishYear})` : '';
+            enqueueExt(
+              hit.coverUrl,
+              hitMeta ? `${hitMeta.lineageLabel}${yr}` : `BnF (${hit.publisher || hit.isbn13 || 'catalogue'})`,
+              undefined,
+              undefined,
+              hitMeta
+            );
+          }
+          if (hit.isbn13 && isbnsToProbe.size < 6) isbnsToProbe.add(hit.isbn13);
         }
       }
 
       // 4. CDN Librairies (Amazon EU, Amazon Media, Eyrolles/Dilicom H1400, Open Library) sur tous les ISBNs connus/découverts
-      for (const isbn of Array.from(isbnsToProbe).slice(0, 4)) {
+      for (const isbn of Array.from(isbnsToProbe).slice(0, 6)) {
+        const isbnMeta = externalMetaByIsbn.get(isbn) ?? toEditionMeta({ isbn13: isbn });
         for (const cdn of this.coverService.buildIsbnCdnCandidates(isbn)) {
-          enqueueExt(cdn.url, cdn.label, cdn.minBytes, cdn.rejectExactBytes);
+          const label = isbnMeta?.publisher
+            ? `${isbnMeta.lineageLabel}${isbnMeta.publishYear ? ` (${isbnMeta.publishYear})` : ''}`
+            : cdn.label;
+          enqueueExt(cdn.url, label, cdn.minBytes, cdn.rejectExactBytes, isbnMeta);
         }
       }
 
-      // 5. Google Books (si non rate-limité) & Apple Books / iTunes FR (indispensable sans ISBN)
+      // 5. Google Books (si non rate-limité) & Apple Books / iTunes FR (sans métadonnée d'édition fiable -> edition: null)
       if (gbRes.status === 'fulfilled') {
         for (const hit of gbRes.value) {
-          if (hit.coverUrl) enqueueExt(hit.coverUrl, `Google Books (${hit.publisher || 'édition'})`);
+          if (hit.coverUrl) {
+            const gbMeta = toEditionMeta({
+              isbn13: hit.isbn13,
+              publisher: hit.publisher,
+              publishYear: hit.publishYear
+            });
+            enqueueExt(
+              hit.coverUrl,
+              gbMeta ? `${gbMeta.lineageLabel} (Google Books)` : `Google Books (${hit.publisher || 'édition'})`,
+              undefined,
+              undefined,
+              gbMeta
+            );
+          }
         }
       }
       if (itunesRes.status === 'fulfilled') {
-        for (const u of itunesRes.value) enqueueExt(u, 'Apple Books');
+        for (const u of itunesRes.value) enqueueExt(u, 'Apple Books', undefined, undefined, null);
       }
 
       // Vérification réelle + déduplication visuelle par empreinte perceptuelle dHash (consensus + meilleure résolution)
@@ -718,7 +870,7 @@ export class LibraryService {
         .filter((c) => c.kind === 'local' && Boolean(c.coverKey))
         .map((c) => c.coverKey!);
       const verified = await this.coverService.deduplicateExternalCandidatesVisually(
-        rawExternalQueue.slice(0, 18),
+        rawExternalQueue.slice(0, 22),
         localCoverKeys,
         12
       );
@@ -728,7 +880,8 @@ export class LibraryService {
           id: `ext_${crypto.createHash('md5').update(item.url).digest('hex').slice(0, 10)}`,
           kind: 'external',
           url: item.url,
-          label: item.label
+          label: item.label,
+          edition: item.edition ?? null
         });
       }
     }

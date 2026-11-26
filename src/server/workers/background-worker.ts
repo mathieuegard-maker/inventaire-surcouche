@@ -33,7 +33,12 @@ export function mapJobRowToView(row: BackgroundJobRow): BackgroundJobView {
     }
   }
   let targetSeriesId: string | null = null;
-  if (row.payload_json && (row.type === 'series_expand' || row.type === 'series_enrich_volumes')) {
+  if (
+    row.payload_json &&
+    (row.type === 'series_expand' ||
+      row.type === 'series_enrich_volumes' ||
+      row.type === 'series_apply_edition_covers')
+  ) {
     try {
       const payload = JSON.parse(row.payload_json) as { seriesId?: unknown };
       if (typeof payload?.seriesId === 'string' && payload.seriesId.trim()) {
@@ -73,6 +78,7 @@ export const INTERACTIVE_LANE_TYPES: BackgroundJobType[] = [
 export const CATALOG_LANE_TYPES: BackgroundJobType[] = [
   'series_expand',
   'series_enrich_volumes',
+  'series_apply_edition_covers',
   'book_enrich'
 ];
 

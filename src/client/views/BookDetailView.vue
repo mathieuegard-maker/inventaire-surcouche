@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
 import BookActions from '../components/books/BookActions.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
+import CoverChangeModal from '../components/modals/CoverChangeModal.vue';
 import SeriesAttachModal from '../components/modals/SeriesAttachModal.vue';
 import { useLibraryStore, type BookSeriesContext } from '../stores/library.store';
 import { useUiStore } from '../stores/ui.store';
@@ -35,9 +36,10 @@ const draftIncludedVolumes = ref<string[]>([]);
 const integralModalMode = ref<'create_separate' | 'convert_self'>('create_separate');
 const savingOverrides = ref(false);
 
-// Modale confirmation Réinitialiser Couche 3 & Rattachement série
+// Modale confirmation Réinitialiser Couche 3, Rattachement série & Changement rapide de couverture
 const resetModalOpen = ref(false);
 const attachModalOpen = ref(false);
+const coverModalOpen = ref(false);
 
 const readingOptions = computed<Array<{ value: ReadingStatus; label: string }>>(() => [
   { value: 'none', label: t('book.readingNone') },
@@ -292,6 +294,9 @@ async function confirmResetOverrides(): Promise<void> {
             <router-link :to="`/book/${encodeURIComponent(book.id)}/edit`" class="ds-btn ds-btn--sm">
               {{ t('book.editBtn') }}
             </router-link>
+            <button type="button" class="ds-btn ds-btn--sm" @click="coverModalOpen = true">
+              {{ t('book.changeCoverBtn') }}
+            </button>
             <button type="button" class="ds-btn ds-btn--sm" @click="attachModalOpen = true">
               {{ t('book.attachSeriesBtn') }}
             </button>
@@ -447,6 +452,12 @@ async function confirmResetOverrides(): Promise<void> {
         :source-series-id="book.seriesId"
         @close="attachModalOpen = false"
         @attached="loadBook"
+      />
+      <CoverChangeModal
+        :open="coverModalOpen"
+        :book="book"
+        @close="coverModalOpen = false"
+        @saved="loadBook"
       />
     </template>
   </section>

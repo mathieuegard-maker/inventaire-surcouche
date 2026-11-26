@@ -49,6 +49,20 @@ export interface SourceCandidateRecord {
 }
 
 /**
+ * Métadonnées propres à une édition (ISBN-13) d'une œuvre d'une série (évite d'écraser l'éditeur/collection/année
+ * des rééditions lors de la fusion dans `mergeGraphWorks`).
+ */
+export interface GraphWorkEditionRecord {
+  isbn13: string;
+  publisher?: string | null;
+  collectionName?: string | null;
+  publishYear?: string | null;
+  pageCount?: number | null;
+  coverUrl?: string | null;
+  source: SourceName;
+}
+
+/**
  * Œuvre officielle d'une série retournée par le Graphe (Wikidata P179/P1545 ou Inventaire)
  * ou par le filet de sécurité BnF 460$3 / titre.
  */
@@ -65,6 +79,7 @@ export interface GraphSeriesWork {
   scriptwriters?: string[];
   illustrators?: string[];
   isbn13s: string[];
+  editionRecords?: GraphWorkEditionRecord[];
   publisher?: string | null;
   collectionName?: string | null;
   publishYear?: string | null;

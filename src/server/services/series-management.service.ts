@@ -150,6 +150,8 @@ export class SeriesManagementService {
       ])
     );
 
+    const coherentCoverByBookId = this.ingestionService.computeSeriesCoherentCoverMap(seriesId, libraryId);
+
     const views: BookView[] = [];
     for (const bookRow of catalogBooks) {
       const libRow = this.libraryRepo.findLibraryBook(libraryId, bookRow.id);
@@ -160,7 +162,9 @@ export class SeriesManagementService {
       if (ov.seriesId && ov.seriesId !== seriesId) continue;
       if ((ov.hiddenSeriesIds ?? []).includes(seriesId)) continue;
 
-      const merged = this.ingestionService.buildMergedBookView(bookRow, libRow);
+      const merged = this.ingestionService.buildMergedBookView(bookRow, libRow, {
+        coherentCoverKey: coherentCoverByBookId.get(bookRow.id) ?? null
+      });
       merged.activeLoan = loanByBookId.get(bookRow.id) ?? null;
       merged.readingState = readingByBookId.get(bookRow.id) ?? null;
       views.push(merged);

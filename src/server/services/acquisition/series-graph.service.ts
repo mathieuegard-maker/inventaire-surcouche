@@ -1271,6 +1271,7 @@ export class SeriesGraphService {
 
       // Téléchargement optionnel de couverture WebP via cascade rapide (URL directe + jusqu'à 2 ISBNs) si pas encore de couverture
       let coverKey: string | null = existingBook?.cover_key ?? null;
+      let coverSourceIsbn: string | null = null;
       if (!coverKey && this.coverService && (work.coverUrl || work.isbn13s.length > 0)) {
         const candidateUrls = work.coverUrl && !/\.svg(?:[?#]|$)/i.test(work.coverUrl) ? [work.coverUrl] : [];
         const isbnAttempts = work.isbn13s.length > 0 ? work.isbn13s.slice(0, 2) : [null];
@@ -1280,7 +1281,10 @@ export class SeriesGraphService {
             candidateUrls: idx === 0 ? candidateUrls : [],
             skipTitleFallback: true
           });
-          if (stored) coverKey = stored.coverKey;
+          if (stored) {
+            coverKey = stored.coverKey;
+            coverSourceIsbn = isbnAttempts[idx];
+          }
         }
       }
 
@@ -1356,16 +1360,30 @@ export class SeriesGraphService {
         addedCount++;
       }
 
-      for (const isbn13 of work.isbn13s) {
+      const editionMetaByIsbn = new Map(
+        (work.editionRecords ?? []).map((er) => [er.isbn13, er])
+      );
+      for (let i = 0; i < work.isbn13s.length; i++) {
+        const isbn13 = work.isbn13s[i];
+        const edMeta = editionMetaByIsbn.get(isbn13);
+        // N'attribuer `coverKey` qu'à l'ISBN ayant effectivement produit cette couverture (ou au seul ISBN connu)
+        const edCoverKey =
+          coverSourceIsbn
+            ? isbn13 === coverSourceIsbn
+              ? coverKey
+              : null
+            : work.isbn13s.length === 1
+              ? coverKey
+              : null;
         this.catalogRepo.upsertBookEdition({
           isbn13,
           bookId: saved.id,
-          publisher: work.publisher ?? null,
-          collectionName: work.collectionName ?? null,
-          publishYear: work.publishYear ?? null,
-          pageCount: work.pageCount ?? null,
-          coverKey,
-          source: work.source,
+          publisher: edMeta ? (edMeta.publisher ?? null) : (i === 0 ? (work.publisher ?? null) : null),
+          collectionName: edMeta ? (edMeta.collectionName ?? null) : (i === 0 ? (work.collectionName ?? null) : null),
+          publishYear: edMeta ? (edMeta.publishYear ?? null) : (i === 0 ? (work.publishYear ?? null) : null),
+          pageCount: edMeta ? (edMeta.pageCount ?? null) : (i === 0 ? (work.pageCount ?? null) : null),
+          coverKey: edCoverKey,
+          source: edMeta?.source ?? work.source,
           now
         });
       }
@@ -1473,10 +1491,50 @@ export class SeriesGraphService {
             continue;
           }
         }
-        target.push({ ...item, isbn13s: [...item.isbn13s], authors: [...item.authors] });
+        target.push({
+          ...item,
+          isbn13s: [...item.isbn13s],
+          editionRecords: item.editionRecords ? item.editionRecords.map((er) => ({ ...er })) : undefined,
+          authors: [...item.authors]
+        });
       } else {
         for (const isbn of item.isbn13s) {
           if (!match.isbn13s.includes(isbn)) match.isbn13s.push(isbn);
+        }
+        const incomingEdRecords =
+          item.editionRecords && item.editionRecords.length > 0
+            ? item.editionRecords
+            : item.isbn13s.map((isbn13) => ({
+                isbn13,
+                publisher: item.publisher ?? null,
+                collectionName: item.collectionName ?? null,
+                publishYear: item.publishYear ?? null,
+                pageCount: item.pageCount ?? null,
+                coverUrl: item.coverUrl ?? null,
+                source: item.source
+              }));
+        if (incomingEdRecords.length > 0) {
+          match.editionRecords ??= match.isbn13s.map((isbn13) => ({
+            isbn13,
+            publisher: match.publisher ?? null,
+            collectionName: match.collectionName ?? null,
+            publishYear: match.publishYear ?? null,
+            pageCount: match.pageCount ?? null,
+            coverUrl: match.coverUrl ?? null,
+            source: match.source
+          }));
+          for (const rec of incomingEdRecords) {
+            const existingRec = match.editionRecords.find((er) => er.isbn13 === rec.isbn13);
+            if (!existingRec) {
+              match.editionRecords.push({ ...rec });
+            } else {
+              if (!existingRec.publisher && rec.publisher) existingRec.publisher = rec.publisher;
+              if (!existingRec.collectionName && rec.collectionName) existingRec.collectionName = rec.collectionName;
+              if (!existingRec.publishYear && rec.publishYear) existingRec.publishYear = rec.publishYear;
+              if (!existingRec.pageCount && rec.pageCount) existingRec.pageCount = rec.pageCount;
+              if (!existingRec.coverUrl && rec.coverUrl) existingRec.coverUrl = rec.coverUrl;
+            }
+          }
         }
         for (const a of item.authors) {
           if (!match.authors.some((ex) => normalizeTextKey(ex) === normalizeTextKey(a))) {

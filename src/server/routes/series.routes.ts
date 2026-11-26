@@ -4,15 +4,19 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import {
+  applySeriesEditionCoversSchema,
   attachSeriesSchema,
   createSeriesIntegralSchema,
-  excludeFromSeriesSchema
+  excludeFromSeriesSchema,
+  previewSeriesEditionCoversSchema
 } from '../../shared/schemas';
 import type { AppVariables } from '../middleware/auth.middleware';
+import type { SeriesCoverEditionService } from '../services/series-cover-edition.service';
 import type { SeriesManagementService } from '../services/series-management.service';
 
 export function createSeriesRoutes(deps: {
   seriesManagementService: SeriesManagementService;
+  seriesCoverEditionService: SeriesCoverEditionService;
   requireAuth: MiddlewareHandler<{ Variables: AppVariables }>;
 }) {
   const router = new Hono<{ Variables: AppVariables }>();
@@ -63,6 +67,45 @@ export function createSeriesRoutes(deps: {
     });
     return c.json({ ok: true, ...result }, 201);
   });
+
+  router.post(
+    '/:seriesId/covers/preview-edition',
+    zValidator('json', previewSeriesEditionCoversSchema),
+    (c) => {
+      const auth = c.get('auth')!;
+      const seriesId = c.req.param('seriesId');
+      const body = c.req.valid('json');
+      const preview = deps.seriesCoverEditionService.previewSeriesEditionCovers({
+        libraryId: auth.libraryId,
+        seriesId,
+        sourceBookId: body.sourceBookId,
+        targetEdition: body.targetEdition
+      });
+      return c.json({ ok: true, ...preview });
+    }
+  );
+
+  router.post(
+    '/:seriesId/covers/apply-edition',
+    zValidator('json', applySeriesEditionCoversSchema),
+    (c) => {
+      const auth = c.get('auth')!;
+      const seriesId = c.req.param('seriesId');
+      const body = c.req.valid('json');
+      const outcome = deps.seriesCoverEditionService.applySeriesEditionCovers({
+        libraryId: auth.libraryId,
+        userId: auth.userId,
+        seriesId,
+        sourceBookId: body.sourceBookId,
+        sourceCoverKey: body.sourceCoverKey,
+        scope: body.scope,
+        bookIds: body.bookIds,
+        targetEdition: body.targetEdition ?? null,
+        searchMissingInBackground: body.searchMissingInBackground
+      });
+      return c.json({ ok: true, ...outcome });
+    }
+  );
 
   return router;
 }

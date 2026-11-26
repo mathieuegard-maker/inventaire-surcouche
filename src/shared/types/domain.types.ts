@@ -27,6 +27,7 @@ export type BackgroundJobType =
   | 'photo_commit'
   | 'series_expand'
   | 'series_enrich_volumes'
+  | 'series_apply_edition_covers'
   | 'book_enrich'
   | 'collection_import';
 export type BackgroundJobStatus = 'pending' | 'running' | 'done' | 'error';
@@ -77,6 +78,77 @@ export interface BookEditionSummary {
   coverKey?: string | null;
   coverUrl?: string | null;
   source?: string | null;
+}
+
+export interface CoverCandidateEditionMeta {
+  isbn13?: string | null;
+  publisher?: string | null;
+  collectionName?: string | null;
+  publishYear?: string | null;
+  lineageKey: string;
+  lineageLabel: string;
+  isbnPrefix?: string | null;
+}
+
+export interface CoverCandidateItem {
+  id: string;
+  kind: 'local' | 'external';
+  coverKey?: string;
+  url: string;
+  label: string;
+  /** Présent uniquement pour une couverture issue d'une édition identifiable (jamais photo perso / URL libre) */
+  edition?: CoverCandidateEditionMeta | null;
+}
+
+export type SeriesCoverPropagationScope = 'single' | 'all' | 'selected';
+
+export interface SeriesEditionTargetInput {
+  isbn13?: string | null;
+  publisher?: string | null;
+  collectionName?: string | null;
+  isbnPrefix?: string | null;
+  lineageKey?: string | null;
+  label?: string | null;
+}
+
+export interface SeriesEditionCoverPreviewItem {
+  bookId: string;
+  title: string;
+  volumeNumber: number | null;
+  volumeLabel: string | null;
+  isIntegral: boolean;
+  ownershipStatus: OwnershipStatus;
+  hasUserCoverOverride: boolean;
+  currentCoverUrl: string | null;
+  matchedCoverKey: string | null;
+  matchedCoverUrl: string | null;
+  matchedIsbn13: string | null;
+  matchedPublisher: string | null;
+  matchedCollectionName: string | null;
+  matchStatus: 'ready' | 'same' | 'missing';
+}
+
+export interface SeriesEditionCoverPreviewResponse {
+  seriesId: string;
+  seriesName: string;
+  sourceBookId: string;
+  editionLabel: string;
+  lineageKey: string;
+  publisher: string | null;
+  collectionName: string | null;
+  isbnPrefix: string | null;
+  totalCount: number;
+  readyCount: number;
+  sameCount: number;
+  missingCount: number;
+  items: SeriesEditionCoverPreviewItem[];
+}
+
+export interface ApplySeriesEditionCoversResponse {
+  appliedBookIds: string[];
+  appliedCount: number;
+  missingBookIds: string[];
+  backgroundJobId: string | null;
 }
 
 export interface ActiveLoanView {

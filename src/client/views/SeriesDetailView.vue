@@ -44,7 +44,9 @@ const activeSeriesJob = computed(() => {
   return (
     jobsStore.jobs.find(
       (j) =>
-        (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+        (j.type === 'series_expand' ||
+          j.type === 'series_enrich_volumes' ||
+          j.type === 'series_apply_edition_covers') &&
         (j.status === 'pending' || j.status === 'running') &&
         (!j.targetSeriesId || j.targetSeriesId === sid)
     ) ?? null
@@ -56,7 +58,9 @@ const latestCompletedSeriesJobSig = computed(() => {
   if (!sid) return '';
   const matching = jobsStore.jobs.filter(
     (j) =>
-      (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+      (j.type === 'series_expand' ||
+        j.type === 'series_enrich_volumes' ||
+        j.type === 'series_apply_edition_covers') &&
       (!j.targetSeriesId || j.targetSeriesId === sid)
   );
   return matching.map((j) => `${j.id}:${j.status}:${j.progressDone}`).join('|');
@@ -141,22 +145,32 @@ watch(() => route.params.seriesId, () => {
   void loadSeries();
 }, { immediate: true });
 
-// Rafraîchissement silencieux en direct au fil de l'eau et à la fin de l'enrichissement de la série
+// Rafraîchissement silencieux en direct au fil de l'eau et à la fin de l'enrichissement / édition de la série
 watch(latestCompletedSeriesJobSig, (nextSig, prevSig) => {
   if (!nextSig || nextSig === prevSig || !series.value) return;
   const sid = currentSeriesId.value;
   const matching = jobsStore.jobs.filter(
     (j) =>
-      (j.type === 'series_expand' || j.type === 'series_enrich_volumes') &&
+      (j.type === 'series_expand' ||
+        j.type === 'series_enrich_volumes' ||
+        j.type === 'series_apply_edition_covers') &&
       (!j.targetSeriesId || j.targetSeriesId === sid)
   );
   const justFinished = matching.some((j) => j.status === 'done' && prevSig && !prevSig.includes(`${j.id}:done:`));
-  const runningEnrich = matching.find((j) => j.type === 'series_enrich_volumes' && j.status === 'running');
+  const runningProgress = matching.find(
+    (j) => (j.type === 'series_enrich_volumes' || j.type === 'series_apply_edition_covers') && j.status === 'running'
+  );
+  const step = runningProgress?.type === 'series_apply_edition_covers' ? 2 : 4;
   if (justFinished) {
     lastJobReloadDone = -1;
     void loadSeries({ silent: true });
-  } else if (runningEnrich && runningEnrich.progressDone > 0 && runningEnrich.progressDone !== lastJobReloadDone && runningEnrich.progressDone % 4 === 0) {
-    lastJobReloadDone = runningEnrich.progressDone;
+  } else if (
+    runningProgress &&
+    runningProgress.progressDone > 0 &&
+    runningProgress.progressDone !== lastJobReloadDone &&
+    runningProgress.progressDone % step === 0
+  ) {
+    lastJobReloadDone = runningProgress.progressDone;
     void loadSeries({ silent: true });
   }
 });
@@ -415,10 +429,15 @@ async function confirmGenres(genres: string[]): Promise<void> {
           {{
             activeSeriesJob.type === 'series_expand'
               ? t('series.expandingBanner')
-              : t('series.enrichingCoversBanner', {
-                  done: activeSeriesJob.progressDone,
-                  total: Math.max(1, activeSeriesJob.progressTotal)
-                })
+              : activeSeriesJob.type === 'series_apply_edition_covers'
+                ? t('series.applyingEditionCoversBanner', {
+                    done: activeSeriesJob.progressDone,
+                    total: Math.max(1, activeSeriesJob.progressTotal)
+                  })
+                : t('series.enrichingCoversBanner', {
+                    done: activeSeriesJob.progressDone,
+                    total: Math.max(1, activeSeriesJob.progressTotal)
+                  })
           }}
         </p>
       </div>

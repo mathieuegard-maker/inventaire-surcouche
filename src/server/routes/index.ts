@@ -15,6 +15,7 @@ import type { ReadingService } from '../services/reading.service';
 import type { PhotoAiService } from '../services/photo-ai.service';
 import type { SearchService } from '../services/search.service';
 import type { SeriesManagementService } from '../services/series-management.service';
+import type { SeriesCoverEditionService } from '../services/series-cover-edition.service';
 import type { NotificationService } from '../services/notification.service';
 import type { SocialService } from '../services/social.service';
 import type { StatsExportService } from '../services/stats-export.service';
@@ -54,6 +55,7 @@ export interface ApiRouterDeps {
   photoAiService: PhotoAiService;
   searchService: SearchService;
   seriesManagementService: SeriesManagementService;
+  seriesCoverEditionService: SeriesCoverEditionService;
   notificationService: NotificationService;
   socialService: SocialService;
   statsExportService: StatsExportService;
@@ -96,7 +98,14 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.route('/library', createLibraryRoutes({ libraryService: deps.libraryService, requireAuth }));
   api.route('/loans', createLoansRoutes({ loanService: deps.loanService, requireAuth }));
   api.route('/reading', createReadingRoutes({ readingService: deps.readingService, requireAuth }));
-  api.route('/series', createSeriesRoutes({ seriesManagementService: deps.seriesManagementService, requireAuth }));
+  api.route(
+    '/series',
+    createSeriesRoutes({
+      seriesManagementService: deps.seriesManagementService,
+      seriesCoverEditionService: deps.seriesCoverEditionService,
+      requireAuth
+    })
+  );
   api.route('/authors', createAuthorsRoutes({ seriesManagementService: deps.seriesManagementService, requireAuth }));
   api.route('/releases', createReleasesRoutes({ notificationService: deps.notificationService, requireAuth }));
   api.route('/notifications', createNotificationsRoutes({ notificationService: deps.notificationService, requireAuth }));

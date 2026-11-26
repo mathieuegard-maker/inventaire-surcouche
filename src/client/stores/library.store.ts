@@ -9,11 +9,16 @@ import { enqueueOutboxOp, runSyncCycle } from '../cache/sync-engine';
 import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
 import type {
   ActiveLoanView,
+  ApplySeriesEditionCoversResponse,
   BookMainCategory,
   BookView,
+  CoverCandidateItem,
   LibraryBookOverrides,
   OwnershipStatus,
   ReadingStatus,
+  SeriesCoverPropagationScope,
+  SeriesEditionCoverPreviewResponse,
+  SeriesEditionTargetInput,
   SeriesView,
   UserReadingStateView
 } from '../../shared/types/domain.types';
@@ -33,13 +38,7 @@ export interface BookDetailResponse {
   seriesContext: BookSeriesContext | null;
 }
 
-export interface CoverCandidateItem {
-  id: string;
-  kind: 'local' | 'external';
-  coverKey?: string;
-  url: string;
-  label: string;
-}
+export type { CoverCandidateItem };
 
 export interface CollectionViewMemory {
   tab: 'books' | 'series' | 'oneshots';
@@ -449,6 +448,55 @@ export const useLibraryStore = defineStore('library', () => {
     return { coverKey: res.coverKey, coverUrl: res.coverUrl };
   }
 
+  async function previewSeriesEditionCovers(
+    seriesId: string,
+    sourceBookId: string,
+    targetEdition: SeriesEditionTargetInput
+  ): Promise<SeriesEditionCoverPreviewResponse> {
+    const res = await apiRequest<{ ok: true } & SeriesEditionCoverPreviewResponse>(
+      `/api/series/${encodeURIComponent(seriesId)}/covers/preview-edition`,
+      {
+        method: 'POST',
+        body: { sourceBookId, targetEdition }
+      }
+    );
+    return res;
+  }
+
+  async function applySeriesEditionCovers(
+    seriesId: string,
+    payload: {
+      sourceBookId: string;
+      sourceCoverKey: string;
+      scope: SeriesCoverPropagationScope;
+      bookIds?: string[];
+      targetEdition?: SeriesEditionTargetInput | null;
+      searchMissingInBackground?: boolean;
+    }
+  ): Promise<ApplySeriesEditionCoversResponse> {
+    const res = await apiRequest<{ ok: true } & ApplySeriesEditionCoversResponse>(
+      `/api/series/${encodeURIComponent(seriesId)}/covers/apply-edition`,
+      {
+        method: 'POST',
+        body: {
+          sourceBookId: payload.sourceBookId,
+          sourceCoverKey: payload.sourceCoverKey,
+          scope: payload.scope,
+          bookIds: payload.bookIds ?? [],
+          targetEdition: payload.targetEdition ?? null,
+          searchMissingInBackground: Boolean(payload.searchMissingInBackground)
+        }
+      }
+    );
+    await syncNow();
+    return {
+      appliedBookIds: res.appliedBookIds,
+      appliedCount: res.appliedCount,
+      missingBookIds: res.missingBookIds,
+      backgroundJobId: res.backgroundJobId
+    };
+  }
+
   async function resolveIsbnPreview(isbn: string): Promise<BookView | null> {
     const res = await apiRequest<{
       ok: true;
@@ -528,6 +576,8 @@ export const useLibraryStore = defineStore('library', () => {
     fetchCoverCandidates,
     uploadCoverDataUrl,
     importCoverUrl,
+    previewSeriesEditionCovers,
+    applySeriesEditionCovers,
     resolveIsbnPreview,
     createManualBook
   };

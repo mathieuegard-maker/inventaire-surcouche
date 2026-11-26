@@ -93,6 +93,19 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
     scriptwriters: rec.scriptwriters,
     illustrators: rec.illustrators,
     isbn13s: rec.isbn13 ? [rec.isbn13] : [],
+    editionRecords: rec.isbn13
+      ? [
+          {
+            isbn13: rec.isbn13,
+            publisher: rec.publisher ?? null,
+            collectionName: rec.collectionName ?? null,
+            publishYear: rec.publishYear ?? null,
+            pageCount: rec.pageCount ?? null,
+            coverUrl: rec.bnfCoverUrl ?? null,
+            source: 'bnf'
+          }
+        ]
+      : [],
     publisher: rec.publisher ?? null,
     collectionName: rec.collectionName ?? null,
     publishYear: rec.publishYear ?? null,
@@ -319,6 +332,19 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
             scriptwriters: rec.scriptwriters,
             illustrators: rec.illustrators,
             isbn13s: rec.isbn13 ? [rec.isbn13] : [],
+            editionRecords: rec.isbn13
+              ? [
+                  {
+                    isbn13: rec.isbn13,
+                    publisher: rec.publisher ?? null,
+                    collectionName: rec.collectionName ?? null,
+                    publishYear: rec.publishYear ?? null,
+                    pageCount: rec.pageCount ?? null,
+                    coverUrl: rec.bnfCoverUrl ?? null,
+                    source: 'bnf'
+                  }
+                ]
+              : [],
             publisher: rec.publisher ?? null,
             collectionName: rec.collectionName ?? null,
             publishYear: rec.publishYear ?? null,
@@ -336,6 +362,20 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
           });
         } else {
           if (rec.isbn13 && !existing.isbn13s.includes(rec.isbn13)) existing.isbn13s.push(rec.isbn13);
+          if (rec.isbn13) {
+            existing.editionRecords ??= [];
+            if (!existing.editionRecords.some((er) => er.isbn13 === rec.isbn13)) {
+              existing.editionRecords.push({
+                isbn13: rec.isbn13,
+                publisher: rec.publisher ?? null,
+                collectionName: rec.collectionName ?? null,
+                publishYear: rec.publishYear ?? null,
+                pageCount: rec.pageCount ?? null,
+                coverUrl: rec.bnfCoverUrl ?? null,
+                source: 'bnf'
+              });
+            }
+          }
           if (!existing.coverUrl && rec.bnfCoverUrl) existing.coverUrl = rec.bnfCoverUrl;
           if ((!existing.includedVolumes || existing.includedVolumes.length === 0) && parsedVols.length >= 2) {
             existing.includedVolumes = parsedVols;
