@@ -35,6 +35,13 @@ export interface CronRunRow {
   summary_json: string;
 }
 
+export interface ClaimJobOptions {
+  /** Rang de dernier passage par utilisateur (`user_id` ou `'__system__'`) pour un tour de rôle équitable N-utilisateurs. */
+  userServeSeq?: ReadonlyMap<string, number>;
+  /** Utilisateurs ayant déjà atteint leur quota de concurrence active sur cette voie (ex. max 1 import simultané par utilisateur). */
+  excludeUserIds?: readonly string[];
+}
+
 export class JobRepository {
   private readonly db: DatabaseAdapter;
 
@@ -136,28 +143,68 @@ export class JobRepository {
     return res.changes;
   }
 
-  claimNextPendingJob(now: string, allowedTypes?: BackgroundJobType[]): BackgroundJobRow | null {
+  claimNextPendingJob(
+    now: string,
+    allowedTypes?: BackgroundJobType[],
+    options?: ClaimJobOptions
+  ): BackgroundJobRow | null {
     return this.db.transaction(() => {
-      let candidates: BackgroundJobRow[];
-      if (allowedTypes && allowedTypes.length > 0) {
-        const placeholders = allowedTypes.map(() => '?').join(', ');
-        candidates = this.db.all<BackgroundJobRow>(
-          `SELECT * FROM background_jobs
-           WHERE status = 'pending' AND type IN (${placeholders})
-           ORDER BY created_at ASC
-           LIMIT 25`,
-          allowedTypes
-        );
-      } else {
-        candidates = this.db.all<BackgroundJobRow>(
-          `SELECT * FROM background_jobs
-           WHERE status = 'pending'
-           ORDER BY created_at ASC
-           LIMIT 25`
-        );
-      }
+      const hasTypes = Boolean(allowedTypes && allowedTypes.length > 0);
+      const typeClause = hasTypes
+        ? `AND type IN (${allowedTypes!.map(() => '?').join(', ')})`
+        : '';
+      const typeParams = hasTypes ? [...allowedTypes!] : [];
 
-      const eligible = candidates.filter((row) => {
+      const candidatesMap = new Map<string, BackgroundJobRow>();
+
+      // 1. Plus anciens jobs en attente
+      const baseRows = this.db.all<BackgroundJobRow>(
+        `SELECT * FROM background_jobs
+         WHERE status = 'pending' ${typeClause}
+         ORDER BY created_at ASC
+         LIMIT 100`,
+        typeParams
+      );
+      for (const r of baseRows) candidatesMap.set(r.id, r);
+
+      // 2. Jobs prioritaires manuels (`priority: "high"`), même derrière une longue file automatique
+      const highRows = this.db.all<BackgroundJobRow>(
+        `SELECT * FROM background_jobs
+         WHERE status = 'pending' ${typeClause} AND payload_json LIKE '%"priority":"high"%'
+         ORDER BY created_at ASC
+         LIMIT 25`,
+        typeParams
+      );
+      for (const r of highRows) candidatesMap.set(r.id, r);
+
+      // 3. Garantit l'équité N-utilisateurs même si un utilisateur a > 100 jobs devant les autres :
+      //    récupère le plus ancien job immédiatement exécutable de CHAQUE utilisateur distinct présent en file.
+      const perUserEarliest = this.db.all<BackgroundJobRow>(
+        `SELECT bj.* FROM background_jobs bj
+         INNER JOIN (
+           SELECT COALESCE(user_id, '__system__') AS ukey, MIN(created_at) AS min_created
+           FROM background_jobs
+           WHERE status = 'pending' ${typeClause} AND payload_json NOT LIKE '%"runAfter"%'
+           GROUP BY COALESCE(user_id, '__system__')
+         ) grouped
+           ON COALESCE(bj.user_id, '__system__') = grouped.ukey
+          AND bj.created_at = grouped.min_created
+         WHERE bj.status = 'pending' ${typeClause} AND bj.payload_json NOT LIKE '%"runAfter"%'
+         ORDER BY bj.created_at ASC
+         LIMIT 100`,
+        [...typeParams, ...typeParams]
+      );
+      for (const r of perUserEarliest) candidatesMap.set(r.id, r);
+
+      const excludedSet =
+        options?.excludeUserIds && options.excludeUserIds.length > 0
+          ? new Set(options.excludeUserIds)
+          : null;
+
+      const eligible = Array.from(candidatesMap.values()).filter((row) => {
+        if (excludedSet && row.user_id && excludedSet.has(row.user_id)) {
+          return false;
+        }
         if (!row.payload_json || !row.payload_json.includes('runAfter')) return true;
         try {
           const parsed = JSON.parse(row.payload_json) as { runAfter?: unknown };
@@ -170,11 +217,25 @@ export class JobRepository {
         return true;
       });
 
-      const next =
-        eligible.find((row) => row.payload_json?.includes('"priority":"high"')) ??
-        eligible[0] ??
-        null;
+      if (eligible.length === 0) return null;
 
+      const highPool = eligible.filter((row) => row.payload_json?.includes('"priority":"high"'));
+      const pool = highPool.length > 0 ? highPool : eligible;
+
+      // Intercalage équitable (round-robin N-utilisateurs) : l'utilisateur le moins récemment servi passe en premier,
+      // départage déterministe par `created_at ASC` puis `id ASC`.
+      const serveSeq = options?.userServeSeq;
+      pool.sort((a, b) => {
+        if (serveSeq) {
+          const seqA = serveSeq.get(a.user_id ?? '__system__') ?? 0;
+          const seqB = serveSeq.get(b.user_id ?? '__system__') ?? 0;
+          if (seqA !== seqB) return seqA - seqB;
+        }
+        if (a.created_at !== b.created_at) return a.created_at.localeCompare(b.created_at);
+        return a.id.localeCompare(b.id);
+      });
+
+      const next = pool[0] ?? null;
       if (!next) return null;
       this.db.run(
         `UPDATE background_jobs

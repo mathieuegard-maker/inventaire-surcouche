@@ -87,6 +87,42 @@ export const CATALOG_LANE_TYPES: BackgroundJobType[] = [
   'book_enrich'
 ];
 
+export interface WorkerLaneConfig {
+  name: 'interactive' | 'import' | 'catalog';
+  types: BackgroundJobType[];
+  maxConcurrency: number;
+  /** Si true, au plus 1 job actif à la fois par `user_id` sur cette voie (évite qu'un seul utilisateur monopolise tous les slots). */
+  maxOnePerUser: boolean;
+}
+
+export const WORKER_LANES: readonly WorkerLaneConfig[] = [
+  {
+    name: 'interactive',
+    types: INTERACTIVE_LANE_TYPES,
+    maxConcurrency: 3,
+    maxOnePerUser: false
+  },
+  {
+    name: 'import',
+    types: IMPORT_LANE_TYPES,
+    maxConcurrency: 2,
+    maxOnePerUser: true
+  },
+  {
+    name: 'catalog',
+    types: CATALOG_LANE_TYPES,
+    maxConcurrency: 1,
+    maxOnePerUser: false
+  }
+] as const;
+
+interface LaneRuntimeState {
+  runningCount: number;
+  activeUserIds: Map<string, number>;
+  userServeSeq: Map<string, number>;
+  serveSeqCounter: number;
+}
+
 export class BackgroundWorker {
   private readonly jobRepo: JobRepository;
   private readonly logRepo: LogRepository;
@@ -97,7 +133,7 @@ export class BackgroundWorker {
   >();
   private readonly emitter = new EventEmitter();
   private timer: ReturnType<typeof setInterval> | null = null;
-  private readonly activeLanes = new Set<string>();
+  private readonly laneStates = new Map<string, LaneRuntimeState>();
   private readonly pollIntervalMs: number;
   private cancelGeneration = 0;
 
@@ -106,6 +142,20 @@ export class BackgroundWorker {
     this.logRepo = deps.logRepo;
     this.pollIntervalMs = deps.pollIntervalMs ?? 2000;
     this.emitter.setMaxListeners(200);
+  }
+
+  private getLaneState(laneName: string): LaneRuntimeState {
+    let state = this.laneStates.get(laneName);
+    if (!state) {
+      state = {
+        runningCount: 0,
+        activeUserIds: new Map(),
+        userServeSeq: new Map(),
+        serveSeqCounter: 0
+      };
+      this.laneStates.set(laneName, state);
+    }
+    return state;
   }
 
   /**
@@ -184,20 +234,55 @@ export class BackgroundWorker {
   }
 
   private drainTick(): void {
-    void this.drainLane('interactive', INTERACTIVE_LANE_TYPES);
-    void this.drainLane('import', IMPORT_LANE_TYPES);
-    void this.drainLane('catalog', CATALOG_LANE_TYPES);
+    for (const lane of WORKER_LANES) {
+      this.fillLane(lane);
+    }
   }
 
-  private async drainLane(laneName: string, allowedTypes: BackgroundJobType[]): Promise<void> {
-    if (this.activeLanes.has(laneName)) return;
-    this.activeLanes.add(laneName);
-    try {
-      while (await this.processNextJob(allowedTypes)) {
-        // dépile en continu sur cette voie sans bloquer l'autre voie
+  /**
+   * Remplit les slots disponibles d'une voie en appliquant le parallélisme configuré (`maxConcurrency`),
+   * le plafond par utilisateur (`maxOnePerUser`) et le tour de rôle équitable (`userServeSeq`).
+   */
+  private fillLane(lane: WorkerLaneConfig): void {
+    const state = this.getLaneState(lane.name);
+    while (state.runningCount < lane.maxConcurrency) {
+      const excludeUserIds = lane.maxOnePerUser
+        ? Array.from(state.activeUserIds.entries())
+            .filter(([, count]) => count > 0)
+            .map(([uid]) => uid)
+        : undefined;
+
+      const now = new Date().toISOString();
+      const job = this.jobRepo.claimNextPendingJob(now, lane.types, {
+        userServeSeq: state.userServeSeq,
+        excludeUserIds
+      });
+      if (!job) break;
+
+      const userKey = job.user_id ?? '__system__';
+      state.serveSeqCounter++;
+      state.userServeSeq.set(userKey, state.serveSeqCounter);
+      if (state.userServeSeq.size > 500) {
+        const oldestKey = state.userServeSeq.keys().next().value;
+        if (oldestKey !== undefined) state.userServeSeq.delete(oldestKey);
       }
-    } finally {
-      this.activeLanes.delete(laneName);
+
+      state.runningCount++;
+      if (job.user_id) {
+        state.activeUserIds.set(job.user_id, (state.activeUserIds.get(job.user_id) ?? 0) + 1);
+      }
+
+      void this.executeClaimedJob(job).finally(() => {
+        state.runningCount = Math.max(0, state.runningCount - 1);
+        if (job.user_id) {
+          const remaining = (state.activeUserIds.get(job.user_id) ?? 1) - 1;
+          if (remaining <= 0) state.activeUserIds.delete(job.user_id);
+          else state.activeUserIds.set(job.user_id, remaining);
+        }
+        if (this.timer) {
+          this.fillLane(lane);
+        }
+      });
     }
   }
 
@@ -205,17 +290,37 @@ export class BackgroundWorker {
    * Dépile et exécute exactement un job `pending` (100 % testable de façon synchrone/déterministe).
    */
   async processNextJob(allowedTypes?: BackgroundJobType[]): Promise<boolean> {
+    const matchedLane =
+      allowedTypes && allowedTypes.length > 0
+        ? WORKER_LANES.find((l) => allowedTypes.every((t) => l.types.includes(t)))
+        : undefined;
+    const state = matchedLane ? this.getLaneState(matchedLane.name) : null;
+
     const now = new Date().toISOString();
-    const job = this.jobRepo.claimNextPendingJob(now, allowedTypes);
+    const job = this.jobRepo.claimNextPendingJob(
+      now,
+      allowedTypes,
+      state ? { userServeSeq: state.userServeSeq } : undefined
+    );
     if (!job) return false;
 
+    if (state) {
+      state.serveSeqCounter++;
+      state.userServeSeq.set(job.user_id ?? '__system__', state.serveSeqCounter);
+    }
+
+    await this.executeClaimedJob(job);
+    return true;
+  }
+
+  private async executeClaimedJob(job: BackgroundJobRow): Promise<void> {
     this.emitRow(job);
 
     const handler = this.handlers.get(job.type);
     if (!handler) {
       const failed = this.jobRepo.failJob(job.id, `Aucun handler enregistré pour le type "${job.type}".`, new Date().toISOString());
       this.emitRow(failed);
-      return true;
+      return;
     }
 
     let payload: Record<string, unknown> = {};
@@ -246,7 +351,7 @@ export class BackgroundWorker {
       );
 
       if (isCancelled()) {
-        return true;
+        return;
       }
 
       const finalTotal = total ?? Math.max(1, job.progress_total);
@@ -276,7 +381,7 @@ export class BackgroundWorker {
       });
     } catch (err) {
       if (isCancelled()) {
-        return true;
+        return;
       }
       const message = err instanceof Error ? err.message : 'Erreur interne worker.';
       const failed = this.jobRepo.failJob(job.id, message, new Date().toISOString());
@@ -293,7 +398,5 @@ export class BackgroundWorker {
         summary: `Échec job ${job.type} (${job.id}) : ${message}`
       });
     }
-
-    return true;
   }
 }

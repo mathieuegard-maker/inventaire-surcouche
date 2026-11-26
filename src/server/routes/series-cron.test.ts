@@ -734,4 +734,153 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
       appCtx.worker.stop();
     }
   });
+
+  it('v2.5.0 — intercale équitablement les utilisateurs en tour de rôle (Alice/Bob/Charlie), exécute 2 imports de 2 utilisateurs en parallèle (max 1/user) et 3 Photos IA en parallèle', async () => {
+    const regUser = async (username: string, email: string) => {
+      const res = await appCtx.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ username, email, password: 'Password123', gdprAccepted: true })
+      });
+      const body = (await res.json()) as { profile: { user: { id: string }; library: { id: string } } };
+      return { userId: body.profile.user.id, libraryId: body.profile.library.id };
+    };
+
+    const alice = await regUser('AliceFair', 'alice@fair.test');
+    const bob = await regUser('BobFair', 'bob@fair.test');
+    const charlie = await regUser('CharlieFair', 'charlie@fair.test');
+    const baseMs = Date.parse('2026-11-26T22:00:00.000Z');
+
+    // 1. Tour de rôle équitable N-utilisateurs sur la voie `catalog` :
+    //    Alice empile 4 séries avant Bob (2) et Charlie (1) -> l'ordre doit alterner Alice -> Bob -> Charlie -> Alice -> Bob -> Alice -> Alice !
+    const catalogOrder: string[] = [];
+    appCtx.worker.registerHandler('series_expand', async ({ job }) => {
+      catalogOrder.push(
+        job.user_id === alice.userId ? 'Alice' : job.user_id === bob.userId ? 'Bob' : 'Charlie'
+      );
+      return { result: { ok: true }, total: 1 };
+    });
+
+    const queueCatalog = (id: string, u: { userId: string; libraryId: string }, offsetSec: number) =>
+      appCtx.repos.jobRepo.createJob({
+        id,
+        type: 'series_expand',
+        userId: u.userId,
+        libraryId: u.libraryId,
+        payload: { seriesId: `ser_${id}` },
+        progressTotal: 1,
+        now: new Date(baseMs + offsetSec * 1000).toISOString()
+      });
+
+    queueCatalog('a1', alice, 1);
+    queueCatalog('a2', alice, 2);
+    queueCatalog('a3', alice, 3);
+    queueCatalog('a4', alice, 4);
+    queueCatalog('b1', bob, 5);
+    queueCatalog('b2', bob, 6);
+    queueCatalog('c1', charlie, 7);
+
+    while (await appCtx.worker.processNextJob(['series_expand', 'series_enrich_volumes', 'series_apply_edition_covers', 'book_enrich'])) {
+      // dépile toute la voie catalog
+    }
+    expect(catalogOrder).toEqual(['Alice', 'Bob', 'Charlie', 'Alice', 'Bob', 'Alice', 'Alice']);
+
+    // 2. Voie `import` : 2 slots en parallèle MAIS max 1 import actif par utilisateur
+    //    Alice a 2 imports + Bob a 1 import -> Alice #1 et Bob #1 tournent EN PARALLÈLE, Alice #2 attend Alice #1 !
+    const runningImports = new Set<string>();
+    const resolvers = new Map<string, () => void>();
+    appCtx.worker.registerHandler('collection_import', async ({ job }) => {
+      runningImports.add(job.id);
+      await new Promise<void>((resolve) => {
+        resolvers.set(job.id, resolve);
+      });
+      runningImports.delete(job.id);
+      return { result: { ok: true }, total: 1 };
+    });
+
+    appCtx.repos.jobRepo.createJob({
+      id: 'imp_alice_1',
+      type: 'collection_import',
+      userId: alice.userId,
+      libraryId: alice.libraryId,
+      payload: {},
+      progressTotal: 10,
+      now: new Date(baseMs + 10_000).toISOString()
+    });
+    appCtx.repos.jobRepo.createJob({
+      id: 'imp_alice_2',
+      type: 'collection_import',
+      userId: alice.userId,
+      libraryId: alice.libraryId,
+      payload: {},
+      progressTotal: 10,
+      now: new Date(baseMs + 11_000).toISOString()
+    });
+    appCtx.repos.jobRepo.createJob({
+      id: 'imp_bob_1',
+      type: 'collection_import',
+      userId: bob.userId,
+      libraryId: bob.libraryId,
+      payload: {},
+      progressTotal: 5,
+      now: new Date(baseMs + 12_000).toISOString()
+    });
+
+    // 3. Voie `interactive` : 3 Photos IA en parallèle simultanément !
+    const runningPhotos = new Set<string>();
+    const photoResolvers = new Map<string, () => void>();
+    appCtx.worker.registerHandler('photo_ocr', async ({ job }) => {
+      runningPhotos.add(job.id);
+      await new Promise<void>((resolve) => {
+        photoResolvers.set(job.id, resolve);
+      });
+      runningPhotos.delete(job.id);
+      return { result: { items: [] }, total: 1 };
+    });
+
+    for (const [id, u, off] of [
+      ['p_alice', alice, 20],
+      ['p_bob', bob, 21],
+      ['p_charlie', charlie, 22]
+    ] as const) {
+      appCtx.repos.jobRepo.createJob({
+        id,
+        type: 'photo_ocr',
+        userId: u.userId,
+        libraryId: u.libraryId,
+        payload: {},
+        progressTotal: 1,
+        now: new Date(baseMs + off * 1000).toISOString()
+      });
+    }
+
+    appCtx.worker.start();
+    try {
+      // Attendre que les slots soient remplis
+      for (let i = 0; i < 40; i++) {
+        if (runningImports.size === 2 && runningPhotos.size === 3) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+
+      // Import : Alice #1 + Bob #1 en parallèle, jamais Alice #2 en même temps qu'Alice #1
+      expect(runningImports.has('imp_alice_1')).toBe(true);
+      expect(runningImports.has('imp_bob_1')).toBe(true);
+      expect(runningImports.has('imp_alice_2')).toBe(false);
+
+      // Photo IA : les 3 photos tournent simultanément !
+      expect(runningPhotos.size).toBe(3);
+
+      // Libère Alice #1 -> Alice #2 doit alors démarrer automatiquement !
+      resolvers.get('imp_alice_1')?.();
+      for (let i = 0; i < 40; i++) {
+        if (runningImports.has('imp_alice_2')) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      expect(runningImports.has('imp_alice_2')).toBe(true);
+    } finally {
+      for (const r of resolvers.values()) r();
+      for (const r of photoResolvers.values()) r();
+      appCtx.worker.stop();
+    }
+  });
 });
