@@ -1146,4 +1146,199 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('filet post-OCR voisinage (v2.3.0) : sauve une tranche penchée contaminée par la série, le tome ou l éditeur du voisin sans appel IA supplémentaire', async () => {
+    const dbTilt = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(dbTilt, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-tilt-guard-'));
+    let geminiCalls = 0;
+
+    try {
+      const mockGeminiTilt: GeminiConnector = {
+        isConfigured: () => true,
+        async extractBooksFromImage() {
+          geminiCalls++;
+          return [
+            // Tranche 1 (penchée) : haut = "La Marque du diable" (Le Scorpion T.1), mais contaminée par le pied du voisin (series: Thorgal, volumeNumber: 14, publisher: Le Lombard)
+            {
+              spineIndex: 1,
+              tilt: 'lean_right',
+              spineColor: 'noir',
+              topX: 250,
+              bottomX: 180,
+              title: 'La Marque du diable',
+              series: 'Thorgal',
+              volumeNumber: '14',
+              publisher: 'Le Lombard',
+              confidence: 'medium'
+            },
+            // Tranche 2 (voisin penché parallèle) : vrai Thorgal T.14 chez Le Lombard
+            {
+              spineIndex: 2,
+              tilt: 'lean_right',
+              spineColor: 'blanc',
+              topX: 340,
+              bottomX: 270,
+              title: 'Aaricia',
+              series: 'Thorgal',
+              volumeNumber: '14',
+              publisher: 'Le Lombard',
+              confidence: 'high'
+            },
+            // Tranche 3 (penchée) : bon titre/série "Le Scorpion / La Marque du diable", mais tome 14 contaminé par le voisin -> BnF renvoie T.14 + T.1
+            {
+              spineIndex: 3,
+              tilt: 'lean_right',
+              spineColor: 'rouge',
+              topX: 430,
+              bottomX: 360,
+              title: 'La Marque du diable',
+              series: 'Le Scorpion',
+              volumeNumber: '14',
+              publisher: 'Le Lombard',
+              confidence: 'high'
+            }
+          ];
+        }
+      };
+
+      const mockConnTilt: BibliographicConnectors = {
+        bnf: {
+          async lookupByIsbn() { return null; },
+          async searchByEnsembleId() { return []; },
+          async sampleByCollectionName() { return []; },
+          async searchByTitleAndAuthor(title) {
+            const lower = title.toLowerCase();
+            // Cas contaminé "Thorgal La Marque du diable" -> 0 résultat BnF
+            if (lower.includes('thorgal') && lower.includes('marque du diable')) {
+              return [];
+            }
+            if (lower.includes('thorgal') && (lower.includes('aaricia') || lower.includes('14'))) {
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782803607457',
+                  title: 'Aaricia',
+                  seriesName: 'Thorgal',
+                  seriesLinkKind: 'marc_ensemble_460',
+                  volumeNumber: '14',
+                  authors: ['Jean Van Hamme', 'Grzegorz Rosinski'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Le Lombard',
+                  rawSubjects: ['Bandes dessinées']
+                }
+              ];
+            }
+            if (lower.includes('scorpion') && lower.includes('14')) {
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782505115342',
+                  title: 'La Tombe d un dieu',
+                  seriesName: 'Le Scorpion',
+                  seriesLinkKind: 'marc_ensemble_460',
+                  volumeNumber: '14',
+                  authors: ['Stephen Desberg', 'Luigi Critone'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Dargaud',
+                  rawSubjects: ['Bandes dessinées']
+                }
+              ];
+            }
+            if (lower.includes('marque du diable')) {
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782871293019',
+                  title: 'La Marque du diable',
+                  seriesName: 'Le Scorpion',
+                  seriesLinkKind: 'marc_ensemble_460',
+                  volumeNumber: '1',
+                  authors: ['Stephen Desberg', 'Enrico Marini'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Dargaud',
+                  rawSubjects: ['Bandes dessinées']
+                }
+              ];
+            }
+            return [];
+          }
+        },
+        sudoc: { async lookupByIsbn() { return null; } },
+        inventaire: { async lookupByIsbn() { return null; }, async fetchSeriesWorks() { return []; } },
+        wikidata: { async lookupWorkByQid() { return null; }, async fetchSeriesWorksByQid() { return []; } },
+        googleBooks: { async lookupByIsbn() { return null; } },
+        openLibrary: { async lookupByIsbn() { return null; } }
+      };
+
+      const ctxTilt = createApp({
+        db: dbTilt,
+        config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpDir, MONTHLY_AI_QUOTA: '5' }),
+        connectors: mockConnTilt,
+        geminiConnector: mockGeminiTilt,
+        coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
+      });
+
+      const reg = await ctxTilt.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'TiltUser',
+          email: 'tilt@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+      const dataUrl = await makeShelfPhotoDataUrl();
+
+      const createRes = await ctxTilt.app.request('/api/jobs/photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ mode: 'shelf', imageDataUrl: dataUrl, mimeType: 'image/png' })
+      });
+      expect(createRes.status).toBe(201);
+      const jobId = ((await createRes.json()) as { job: { id: string } }).job.id;
+
+      await ctxTilt.worker.processNextJob();
+      expect(geminiCalls).toBe(1);
+
+      const jobsRes = await ctxTilt.app.request('/api/jobs', { headers: { cookie } });
+      const job = ((await jobsRes.json()) as {
+        jobs: Array<{
+          id: string;
+          result: {
+            items: Array<{
+              status: string;
+              selectedOptionIsbn13: string | null;
+              options: Array<{ isbn13: string; title: string }>;
+            }>;
+          };
+        }>;
+      }).jobs.find((j) => j.id === jobId)!;
+
+      expect(job.result.items).toHaveLength(3);
+      // Tranche 1 : sauvée depuis 0 résultat en neutralisant série/tome/éditeur contaminés par le voisin -> statut 'doubt' avec le bon album !
+      expect(job.result.items[0].status).toBe('doubt');
+      expect(job.result.items[0].selectedOptionIsbn13).toBe('9782871293019');
+      expect(job.result.items[0].options[0].title).toBe('La Marque du diable');
+
+      // Tranche 2 : intacte, identifiée en haute confiance
+      expect(job.result.items[1].status).toBe('identified');
+      expect(job.result.items[1].selectedOptionIsbn13).toBe('9782803607457');
+
+      // Tranche 3 : sauvée malgré le tome 14 contaminé qui faisait remonter "La Tombe d'un dieu" en #1 -> rétablie sur "La Marque du diable" !
+      expect(job.result.items[2].status).toBe('doubt');
+      expect(job.result.items[2].selectedOptionIsbn13).toBe('9782871293019');
+      expect(job.result.items[2].options[0].title).toBe('La Marque du diable');
+
+      ctxTilt.worker.stop();
+    } finally {
+      dbTilt.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

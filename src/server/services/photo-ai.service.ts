@@ -120,6 +120,15 @@ const DERIVATIVE_GUIDE_RE =
 const CLUB_OR_ABRIDGED_PUBLISHER_RE =
   /\b(france\s+loisirs|le\s+grand\s+livre\s+du\s+mois|s[ée]lection\s+du\s+reader|lire\s+c['’]est\s+partir|books\s+on\s+demand|bod\b|[ée]dilivre|edilivre|createspace|independently\s+published|hachette\s+bnf)\b/i;
 
+function isTiltedSpineHint(hint: GeminiExtractedBookHint | undefined): boolean {
+  if (!hint) return false;
+  if (hint.tilt === 'lean_left' || hint.tilt === 'lean_right') return true;
+  if (typeof hint.topX === 'number' && typeof hint.bottomX === 'number') {
+    return Math.abs(hint.topX - hint.bottomX) >= 35;
+  }
+  return false;
+}
+
 function getOptionMediaBucket(cat?: BookMainCategory): RequestedMediaHint | null {
   if (!cat || cat === 'Autre') return null;
   if (cat === 'BD' || cat === 'Manga' || cat === 'Comics') return cat;
@@ -1369,6 +1378,162 @@ export class PhotoAiService {
   }
 
   /**
+   * Filet de sécurité post-OCR sur étagères penchées (0 appel IA supplémentaire) :
+   * lorsque deux tranches voisines penchées se contaminent (ex. pied de tranche `volumeNumber`/`publisher`,
+   * `series` ou `author` emprunté au voisin immédiat), relance une résolution ciblée en neutralisant le champ suspect
+   * si la passe normale échoue ou renvoie un candidat hors-sujet.
+   */
+  private async resolveShelfHintWithNeighborGuard(
+    hints: GeminiExtractedBookHint[],
+    index: number
+  ): Promise<{ options: PhotoCandidateOption[]; rescuedByNeighborGuard: boolean }> {
+    const hint = hints[index];
+    const initialOptions = await this.resolveHintOptions(hint);
+
+    const neighbors = [hints[index - 1], hints[index + 1]].filter((n): n is GeminiExtractedBookHint => Boolean(n));
+    if (neighbors.length === 0) {
+      return { options: initialOptions, rescuedByNeighborGuard: false };
+    }
+
+    const nearTilt = isTiltedSpineHint(hint) || neighbors.some((n) => isTiltedSpineHint(n));
+    const normTitle = normalizeTextKey(hint.title ?? '');
+    const normSeries = normalizeTextKey(hint.series ?? '');
+    const normPub = normalizeTextKey(hint.publisher ?? '');
+    const normVol = normalizeSeriesNumber(hint.volumeNumber);
+    const normAuthor = normalizeTextKey(hint.author ?? '');
+
+    const isDifferentBookNeighbor = (n: GeminiExtractedBookHint): boolean => {
+      const nTitle = normalizeTextKey(n.title ?? '');
+      const nSeries = normalizeTextKey(n.series ?? '');
+      if (normSeries && nSeries && normSeries === nSeries) return false;
+      if (normTitle && nTitle && normTitle === nTitle) return false;
+      return Boolean(nTitle || nSeries);
+    };
+
+    const sharedPubWithDiffNeighbor =
+      Boolean(normPub) &&
+      neighbors.some((n) => normalizeTextKey(n.publisher ?? '') === normPub && isDifferentBookNeighbor(n));
+    const sharedVolWithDiffNeighbor =
+      Boolean(normVol) &&
+      neighbors.some((n) => normalizeSeriesNumber(n.volumeNumber) === normVol && isDifferentBookNeighbor(n));
+    const sharedSeriesWithNeighbor =
+      Boolean(normSeries) &&
+      neighbors.some((n) => normalizeTextKey(n.series ?? '') === normSeries);
+    const sharedAuthorWithDiffNeighbor =
+      Boolean(normAuthor) &&
+      neighbors.some((n) => normalizeTextKey(n.author ?? '') === normAuthor && isDifferentBookNeighbor(n));
+
+    // Cas A : 0 résultat -> relances progressives ciblées sur champs potentiellement contaminés (zéro risque de régression)
+    if (initialOptions.length === 0) {
+      // Passe N1 : neutraliser volumeNumber et/ou publisher potentiellement empruntés au pied de tranche du voisin
+      const dropVolN1 = Boolean(hint.volumeNumber) && (nearTilt || sharedVolWithDiffNeighbor);
+      const dropPubN1 = Boolean(hint.publisher) && (nearTilt || sharedPubWithDiffNeighbor);
+      if (dropVolN1 || dropPubN1) {
+        const sanitizedN1: GeminiExtractedBookHint = {
+          ...hint,
+          ...(dropVolN1 ? { volumeNumber: undefined } : {}),
+          ...(dropPubN1 ? { publisher: undefined } : {})
+        };
+        const rescuedN1 = await this.resolveHintOptions(sanitizedN1);
+        if (rescuedN1.length > 0) {
+          return { options: rescuedN1, rescuedByNeighborGuard: true };
+        }
+      }
+
+      // Passe N2 : neutraliser `series` empruntée au voisin si le `title` de cette tranche est distinctif
+      const sigTitle = stripGenericRelevanceWords(hint.title ?? '');
+      if (
+        hint.series &&
+        (nearTilt || sharedSeriesWithNeighbor) &&
+        sigTitle.length >= 4 &&
+        normTitle !== normSeries
+      ) {
+        const sanitizedN2: GeminiExtractedBookHint = {
+          ...hint,
+          series: undefined,
+          volumeNumber: nearTilt || sharedVolWithDiffNeighbor ? undefined : hint.volumeNumber,
+          publisher: nearTilt || sharedPubWithDiffNeighbor ? undefined : hint.publisher
+        };
+        const rescuedN2 = await this.resolveHintOptions(sanitizedN2);
+        if (rescuedN2.length > 0) {
+          return { options: rescuedN2, rescuedByNeighborGuard: true };
+        }
+      }
+
+      // Passe N3 : neutraliser `author` emprunté à un voisin d'un autre livre
+      const sigPrimary = stripGenericRelevanceWords(hint.title || hint.series || '');
+      if (hint.author && (nearTilt || sharedAuthorWithDiffNeighbor) && sigPrimary.length >= 4) {
+        const sanitizedN3: GeminiExtractedBookHint = {
+          ...hint,
+          author: undefined,
+          publisher: undefined,
+          volumeNumber: nearTilt || sharedVolWithDiffNeighbor ? undefined : hint.volumeNumber
+        };
+        const rescuedN3 = await this.resolveHintOptions(sanitizedN3);
+        if (rescuedN3.length > 0) {
+          return { options: rescuedN3, rescuedByNeighborGuard: true };
+        }
+      }
+
+      return { options: [], rescuedByNeighborGuard: false };
+    }
+
+    // Cas B : tranche penchée dont le top candidat ne correspond pas au titre lu alors qu'un champ (série/tome/éditeur) est partagé avec un voisin
+    const sigTitle = stripGenericRelevanceWords(hint.title ?? '');
+    const hasDistinctiveTitle = sigTitle.length >= 4 && normTitle !== normSeries;
+    const topOpt = initialOptions[0];
+    const topVol = normalizeSeriesNumber(topOpt.volumeNumber);
+    const topCandText = `${topOpt.seriesName ?? ''} ${topOpt.title}`.trim();
+    const targetText = hasDistinctiveTitle ? sigTitle : stripGenericRelevanceWords(hint.title || hint.series || '');
+    const initialOverlap = targetText ? tokenOverlapRatio(targetText, topCandText) : 0;
+
+    // B1 : série contaminée par un voisin penché (ex. Passe B a résolu le tome du voisin "Thorgal T.14" au lieu du titre distinctif "La Marque du diable")
+    if (nearTilt && sharedSeriesWithNeighbor && hasDistinctiveTitle && initialOverlap < 0.25) {
+      const sanitizedSeriesBleed: GeminiExtractedBookHint = {
+        ...hint,
+        series: undefined,
+        volumeNumber: undefined,
+        publisher: undefined,
+        ...(sharedAuthorWithDiffNeighbor ? { author: undefined } : {})
+      };
+      const retrySeriesBleed = await this.resolveHintOptions(sanitizedSeriesBleed);
+      if (retrySeriesBleed.length > 0) {
+        const retryCandText = `${retrySeriesBleed[0].seriesName ?? ''} ${retrySeriesBleed[0].title}`.trim();
+        const retryOverlap = tokenOverlapRatio(sigTitle, retryCandText);
+        if (retryOverlap >= 0.45 && retryOverlap > initialOverlap + 0.25) {
+          return { options: retrySeriesBleed, rescuedByNeighborGuard: true };
+        }
+      }
+    }
+
+    // B2 : tome ou éditeur contaminé par un voisin d'un autre livre sur tranche penchée
+    if (nearTilt && (sharedVolWithDiffNeighbor || sharedPubWithDiffNeighbor)) {
+      const volMismatch = Boolean(sharedVolWithDiffNeighbor && normVol && topVol && topVol !== normVol);
+      const severeTitleMismatch = targetText.length >= 5 && initialOverlap < 0.25;
+      const shouldRetryB =
+        severeTitleMismatch || (hint.confidence !== 'high' && (volMismatch || initialOverlap < 0.45));
+
+      if (shouldRetryB) {
+        const sanitizedB: GeminiExtractedBookHint = {
+          ...hint,
+          ...(sharedVolWithDiffNeighbor ? { volumeNumber: undefined } : {}),
+          ...(sharedPubWithDiffNeighbor ? { publisher: undefined } : {})
+        };
+        const retryB = await this.resolveHintOptions(sanitizedB);
+        if (retryB.length > 0) {
+          const retryCandText = `${retryB[0].seriesName ?? ''} ${retryB[0].title}`.trim();
+          const retryOverlap = targetText ? tokenOverlapRatio(targetText, retryCandText) : 0;
+          if (retryOverlap > initialOverlap + 0.1 || (volMismatch && retryOverlap >= initialOverlap)) {
+            return { options: retryB, rescuedByNeighborGuard: true };
+          }
+        }
+      }
+    }
+
+    return { options: initialOptions, rescuedByNeighborGuard: false };
+  }
+
+  /**
    * Crée un job Photo IA sur le serveur (vérifie et décrémente le quota mensuel).
    */
   async createPhotoJob(input: {
@@ -1394,7 +1559,7 @@ export class PhotoAiService {
 
     const now = new Date().toISOString();
 
-    // Compresse la photo d'étagère en WebP haute définition (1800 px) sur disque (/data/covers/) — zéro image base64 dans SQLite
+    // Compresse la photo d'étagère en WebP haute définition (2048 px) sur disque (/data/covers/) — zéro image base64 dans SQLite
     const storedPreview = await this.coverService.storePreviewDataUrlAsWebp(input.imageDataUrl);
     const previewCoverKey = storedPreview.coverKey;
 
@@ -1479,16 +1644,19 @@ export class PhotoAiService {
 
     for (let i = 0; i < hints.length; i++) {
       const hint = hints[i];
-      const options = await this.resolveHintOptions(hint);
+      const { options, rescuedByNeighborGuard } =
+        mode === 'shelf'
+          ? await this.resolveShelfHintWithNeighborGuard(hints, i)
+          : { options: await this.resolveHintOptions(hint), rescuedByNeighborGuard: false };
       const bestOpt = options[0] ?? null;
       const bestIsbn = bestOpt?.isbn13 ?? null;
       const alreadyStatus = bestIsbn && libraryId ? this.lookupFoyerOwnershipForOption(libraryId, bestOpt, bestIsbn) : 'none';
 
       let status: PhotoJobItem['status'] = 'unresolved';
-      if (options.length === 1 && hint.confidence === 'high') {
+      if (options.length === 1 && hint.confidence === 'high' && !rescuedByNeighborGuard) {
         status = 'identified';
       } else if (options.length >= 1) {
-        status = hint.confidence === 'high' ? 'identified' : 'doubt';
+        status = hint.confidence === 'high' && !rescuedByNeighborGuard ? 'identified' : 'doubt';
       }
 
       // Pour les éléments non identifiés (0 option ISBN), tenter une couverture indicative par titre + auteur
@@ -1837,17 +2005,22 @@ export class PhotoAiService {
     const row = this.assertOwnedJob(input.jobId, input.userId, input.libraryId);
     const result = this.parseResult(row);
 
-    for (const item of result.items) {
+    const allHints = result.items.map((it) => it.hint);
+    for (let idx = 0; idx < result.items.length; idx++) {
+      const item = result.items[idx];
       if (item.status !== 'unresolved' || item.ignored) continue;
-      const options = await this.resolveHintOptions(item.hint);
+      const { options, rescuedByNeighborGuard } =
+        result.mode === 'shelf'
+          ? await this.resolveShelfHintWithNeighborGuard(allHints, idx)
+          : { options: await this.resolveHintOptions(item.hint), rescuedByNeighborGuard: false };
       if (options.length > 0) {
         item.options = options;
         item.selectedOptionIsbn13 = options[0].isbn13;
         item.selectedCoverKey = null;
         item.selectedCoverUrl = null;
-        item.status = options.length === 1 ? 'identified' : 'doubt';
+        item.status = options.length === 1 && !rescuedByNeighborGuard ? 'identified' : 'doubt';
         item.alreadyStatus = this.lookupFoyerOwnershipForOption(input.libraryId, options[0], options[0].isbn13);
-        item.selected = item.alreadyStatus === 'none';
+        item.selected = item.alreadyStatus === 'none' && !rescuedByNeighborGuard;
         item.isIntegral = Boolean(options[0].isIntegral);
         item.includedVolumes = options[0].isIntegral ? [...(options[0].includedVolumes ?? [])] : [];
       }

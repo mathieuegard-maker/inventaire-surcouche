@@ -874,4 +874,154 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     const wdOnlyNonLatin = await wd.lookupWorkByQid('Q8337');
     expect(wdOnlyNonLatin).toBeNull();
   });
+
+  it('envoie Vision HD + thinking Gemini 3 + schéma géométrique ordonné en mode étagère, ignore les thoughts et trie les tranches penchées par bottomX', async () => {
+    const capturedBodies: Array<{ model: string; body: Record<string, unknown> }> = [];
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      const match = url.match(/models\/([^:]+):generateContent/);
+      const model = match ? decodeURIComponent(match[1]) : '';
+      capturedBodies.push({ model, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> });
+
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { thought: true, text: 'Analyse des deux tranches penchées parallèles vers la droite...' },
+                  {
+                    text: JSON.stringify([
+                      {
+                        spineIndex: 1,
+                        tilt: 'vertical',
+                        spineColor: 'jaune',
+                        topX: 460,
+                        bottomX: 390,
+                        rawText: 'Thorgal 14',
+                        title: 'Aaricia',
+                        series: 'Thorgal',
+                        volumeNumber: '14',
+                        confidence: 'high'
+                      },
+                      {
+                        spineIndex: 2,
+                        tilt: 'lean_right',
+                        spineColor: 'bleu marine',
+                        topX: 280,
+                        bottomX: 210,
+                        rawText: 'Le Scorpion 1',
+                        title: 'La Marque du diable',
+                        series: 'Le Scorpion',
+                        volumeNumber: '1',
+                        confidence: 'high'
+                      }
+                    ])
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      );
+    });
+
+    const gemini = createGeminiConnector('fake-key', mockFetch as typeof fetch);
+    const hints = await gemini.extractBooksFromImage({
+      imageDataUrl: 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=',
+      mimeType: 'image/webp',
+      mode: 'shelf'
+    });
+
+    expect(capturedBodies).toHaveLength(1);
+    expect(capturedBodies[0].model).toBe('gemini-3-flash-preview');
+    const reqBody = capturedBodies[0].body as {
+      contents: Array<{ parts: Array<{ inline_data?: unknown; text?: string }> }>;
+      generationConfig: {
+        mediaResolution?: string;
+        thinkingConfig?: { thinkingLevel?: string };
+        responseSchema?: { items?: { propertyOrdering?: string[] } };
+      };
+    };
+    // Image envoyée en premier pour l'ancrage visuel
+    expect(reqBody.contents[0].parts[0].inline_data).toBeDefined();
+    expect(reqBody.contents[0].parts[1].text).toContain('topX');
+    // Paramètres Vision HD + Thinking léger + propertyOrdering imposant les ancres avant le texte
+    expect(reqBody.generationConfig.mediaResolution).toBe('MEDIA_RESOLUTION_HIGH');
+    expect(reqBody.generationConfig.thinkingConfig).toEqual({ thinkingLevel: 'low' });
+    const ordering = reqBody.generationConfig.responseSchema?.items?.propertyOrdering ?? [];
+    expect(ordering.indexOf('tilt')).toBeGreaterThan(-1);
+    expect(ordering.indexOf('bottomX')).toBeLessThan(ordering.indexOf('rawText'));
+    expect(ordering.indexOf('spineColor')).toBeLessThan(ordering.indexOf('title'));
+
+    // Tri spatial gauche -> droite selon bottomX (210 avant 390) + inférence automatique de lean_right sur |460-390| >= 35
+    expect(hints).toHaveLength(2);
+    expect(hints[0].title).toBe('La Marque du diable');
+    expect(hints[0].spineIndex).toBe(1);
+    expect(hints[0].tilt).toBe('lean_right');
+    expect(hints[0].spineColor).toBe('bleu marine');
+    expect(hints[0].topX).toBe(280);
+    expect(hints[0].bottomX).toBe(210);
+
+    expect(hints[1].title).toBe('Aaricia');
+    expect(hints[1].spineIndex).toBe(2);
+    expect(hints[1].tilt).toBe('lean_right');
+  });
+
+  it('bascule automatiquement sur la config minimale en cas de HTTP 400 et préserve l ordre spineIndex sur une pile horizontale', async () => {
+    const attempts: Array<{ model: string; hasMediaRes: boolean; hasThinking: boolean }> = [];
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      const url = String(input);
+      const match = url.match(/models\/([^:]+):generateContent/);
+      const model = match ? decodeURIComponent(match[1]) : '';
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as {
+        generationConfig?: { mediaResolution?: string; thinkingConfig?: unknown };
+      };
+      attempts.push({
+        model,
+        hasMediaRes: Boolean(parsed.generationConfig?.mediaResolution),
+        hasThinking: Boolean(parsed.generationConfig?.thinkingConfig)
+      });
+
+      // Simule un HTTP 400 sur l'appel enrichi -> doit immédiatement retenter le même modèle en mode basique
+      if (attempts.length === 1) {
+        return new Response('Invalid argument: thinkingConfig', { status: 400 });
+      }
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify([
+                      { spineIndex: 2, tilt: 'horizontal', topX: 500, bottomX: 500, title: 'Livre du bas', confidence: 'high' },
+                      { spineIndex: 1, tilt: 'horizontal', topX: 510, bottomX: 510, title: 'Livre du haut', confidence: 'high' }
+                    ])
+                  }
+                ]
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      );
+    });
+
+    const gemini = createGeminiConnector('fake-key', mockFetch as typeof fetch);
+    const hints = await gemini.extractBooksFromImage({
+      imageDataUrl: 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=',
+      mimeType: 'image/webp',
+      mode: 'shelf'
+    });
+
+    expect(attempts).toEqual([
+      { model: 'gemini-3-flash-preview', hasMediaRes: true, hasThinking: true },
+      { model: 'gemini-3-flash-preview', hasMediaRes: false, hasThinking: false }
+    ]);
+    // Pile horizontale : ordre conservé selon spineIndex (haut -> bas)
+    expect(hints.map((h) => h.title)).toEqual(['Livre du haut', 'Livre du bas']);
+    expect(hints.map((h) => h.spineIndex)).toEqual([1, 2]);
+  });
 });

@@ -43,6 +43,10 @@ export interface PhotoJobItem {
   totalSpines?: number;
   hint: {
     spineIndex?: number;
+    tilt?: 'vertical' | 'lean_left' | 'lean_right' | 'horizontal';
+    spineColor?: string;
+    topX?: number;
+    bottomX?: number;
     rawText?: string;
     title: string;
     series?: string;

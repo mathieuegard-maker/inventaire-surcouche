@@ -257,8 +257,8 @@ export class CoverService {
   }
 
   /**
-   * Stocke une photo d'étagère / couverture Photo IA en haute définition (jusqu'à 1800 px, qualité 86)
-   * pour qu'elle reste parfaitement lisible au zoom tactile à 2 doigts.
+   * Stocke une photo d'étagère / couverture Photo IA en haute définition (jusqu'à 2048 px, qualité 88)
+   * pour préserver les fins liserés d'ombre entre tranches penchées et rester nette au zoom tactile à 2 doigts.
    */
   async storePreviewDataUrlAsWebp(dataUrl: string): Promise<StoredCoverResult> {
     const match = dataUrl.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,([A-Za-z0-9+/=\s]+)$/);
@@ -266,7 +266,7 @@ export class CoverService {
       throw new AppError(400, 'INVALID_DATA_URL', 'Format data URL image invalide.');
     }
     const rawBuffer = Buffer.from(match[1], 'base64');
-    return this.storeBufferAsWebp(rawBuffer, null, { maxWidth: 1800, maxHeight: 1800, quality: 86 });
+    return this.storeBufferAsWebp(rawBuffer, null, { maxWidth: 2048, maxHeight: 2048, quality: 88 });
   }
 
   /**

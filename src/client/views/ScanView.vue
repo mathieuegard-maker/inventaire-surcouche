@@ -165,7 +165,7 @@ async function compressPhotoForUpload(file: File): Promise<string> {
       const dataUrl = String(reader.result || '');
       const img = new Image();
       img.onload = () => {
-        const maxDim = photoMode.value === 'shelf' ? 1800 : 1400;
+        const maxDim = photoMode.value === 'shelf' ? 2048 : 1400;
         const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -176,7 +176,7 @@ async function compressPhotoForUpload(file: File): Promise<string> {
           return;
         }
         ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/webp', 0.86));
+        resolve(canvas.toDataURL('image/webp', 0.88));
       };
       img.onerror = () => resolve(dataUrl);
       img.src = dataUrl;
