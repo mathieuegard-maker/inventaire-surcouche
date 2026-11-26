@@ -257,6 +257,15 @@ export class AdminRepository {
     );
   }
 
+  findCollectionImportJobById(jobId: string): BackgroundJobRow | null {
+    return this.db.get<BackgroundJobRow>(
+      `SELECT * FROM background_jobs
+       WHERE id = ? AND type = 'collection_import'
+       LIMIT 1`,
+      [jobId]
+    );
+  }
+
   countActiveSeriesBackgroundJobs(): number {
     const row = this.db.get<{ cnt: number }>(
       `SELECT COUNT(*) AS cnt FROM background_jobs

@@ -173,13 +173,16 @@ function buildMinimalXlsxBuffer(rows: Array<Array<string | number>>): Buffer {
 
 describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISBN-13 strict', () => {
   let db: SqliteDatabaseAdapter;
+  let tmpRootDir: string;
   let tmpCoversDir: string;
   let appCtx: ReturnType<typeof createApp>;
 
   beforeEach(() => {
     db = new SqliteDatabaseAdapter(':memory:');
     applySqlMigrations(db, path.resolve(process.cwd(), 'migrations'));
-    tmpCoversDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-imp-covers-'));
+    tmpRootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-imp-'));
+    tmpCoversDir = path.join(tmpRootDir, 'covers');
+    fs.mkdirSync(tmpCoversDir, { recursive: true });
 
     const mockConnectors: BibliographicConnectors = {
       bnf: {
@@ -258,7 +261,7 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
   afterEach(() => {
     appCtx.worker.stop();
     db.close();
-    fs.rmSync(tmpCoversDir, { recursive: true, force: true });
+    fs.rmSync(tmpRootDir, { recursive: true, force: true });
   });
 
   async function registerUser(username: string, email: string): Promise<string> {
@@ -562,5 +565,94 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     expect(overview.seriesCount).toBe(0);
     expect(overview.jobsCount).toBe(0);
     expect(overview.cronRuns.some((r) => r.job_name === 'catalog_reset')).toBe(true);
+  });
+
+  it('note automatiquement un import via un CSV de correction, génère le rapport Markdown sur disque + pipeline_logs et le sert sur /report.md', async () => {
+    const adminCookie = await registerUser('AdminGrader', 'admin@biblio.test');
+
+    const inputCsv =
+      'ISBN;Titre;Serie;Tome;Auteur;Editeur;Statut;Integrale;Tomes inclus;Lecture;Note;Notes\r\n' +
+      '9782871293019;La Marque du diable;Le Scorpion;1;Marini;Dargaud;Possédé;;;Lu;5;Super tome\r\n' +
+      ';Blacksad;;;Guarnido;;Wishlist;;;;;\r\n' +
+      ';Introuvable Total;;;Inconnu;;Possédé;;;;;\r\n';
+
+    const importRes = await appCtx.app.request('/api/me/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        filename: 'test_01.csv',
+        contentBase64: Buffer.from(inputCsv, 'utf8').toString('base64'),
+        defaultStatus: 'owned'
+      })
+    });
+    expect(importRes.status).toBe(202);
+    const { job } = (await importRes.json()) as { job: { id: string } };
+    while (await appCtx.worker.processNextJob()) {
+      // exécution
+    }
+
+    const groundTruthCsv =
+      'Ligne;Fichier_origine;Ligne_fichier;Categorie;Profil_entree;Media;ISBN_Verifie;Titre_Attendu;Serie_Attendue;Tome_Attendu;Auteur_Attendu;Editeur_Attendu;Collection_Editoriale;Integrale_Attendue;Tomes_inclus_Attendus;Statut;Lecture;Note;Notes;Regle_Verification\r\n' +
+      '1;test_01.csv;1;cat1;isbn_seul;BD;9782871293019;La Marque du diable;Le Scorpion;1;Stephen Desberg, Enrico Marini;Dargaud;;Non;;Possédé;Lu;5;Super tome;BD classique T1\r\n' +
+      '2;test_01.csv;2;cat5;titre_auteur;Roman;;Blacksad : Quelque part entre les ombres;Blacksad;1;Juanjo Guarnido;Dargaud;;Non;;Wishlist;;;;Piège média volontaire (attendu Roman vs BD trouvée)\r\n' +
+      '3;test_01.csv;3;cat8;titre_seul;Roman;;Introuvable Total;;;Inconnu;;;Non;;Possédé;;;;Cas introuvable\r\n';
+
+    const gradeRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/grade`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        filename: 'reponses_complet_1080.csv',
+        contentBase64: Buffer.from(groundTruthCsv, 'utf8').toString('base64')
+      })
+    });
+    expect(gradeRes.status).toBe(200);
+    const graded = (await gradeRes.json()) as {
+      ok: true;
+      reportFilename: string;
+      archiveFilename: string;
+      markdown: string;
+      report: {
+        alignmentMode: string;
+        totals: { evaluatedRows: number; resolvedRows: number; failedRows: number };
+        items: Array<{ dataLineNumber: number; verdict: string; failedFields: string[] }>;
+      };
+    };
+
+    expect(graded.report.alignmentMode).toBe('fichier_origine');
+    expect(graded.report.totals.evaluatedRows).toBe(3);
+    expect(graded.report.totals.resolvedRows).toBe(2);
+    expect(graded.report.totals.failedRows).toBe(1);
+    expect(graded.report.items[1].failedFields).toContain('media');
+    expect(graded.report.items[2].verdict).toBe('failed');
+    expect(graded.markdown).toContain('# Rapport de Benchmark Automatique — `test_01.csv`');
+    expect(graded.markdown).toContain('Piège média volontaire');
+
+    // Vérifie la persistance du rapport Markdown sur disque
+    const reportsDir = path.join(tmpRootDir, 'benchmark-reports');
+    expect(fs.existsSync(path.join(reportsDir, graded.reportFilename))).toBe(true);
+    expect(fs.existsSync(path.join(reportsDir, graded.archiveFilename))).toBe(true);
+
+    // Vérifie l'enregistrement dans pipeline_logs (stage = benchmark_report)
+    const logsRes = await appCtx.app.request('/api/admin/logs?stage=benchmark_report', {
+      headers: { cookie: adminCookie }
+    });
+    expect(logsRes.status).toBe(200);
+    const logsBody = (await logsRes.json()) as { logs: Array<{ stage: string; summary: string }> };
+    expect(logsBody.logs.length).toBeGreaterThanOrEqual(1);
+    expect(logsBody.logs[0].summary).toContain('test_01.csv');
+
+    // Vérifie le téléchargement brut .md et le recalcul /regrade
+    const mdRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/report.md`, {
+      headers: { cookie: adminCookie }
+    });
+    expect(mdRes.status).toBe(200);
+    expect(mdRes.headers.get('content-type')).toContain('text/markdown');
+    expect(await mdRes.text()).toContain('## 1. Synthèse globale');
+
+    const regradeRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/regrade`, {
+      method: 'POST',
+      headers: { cookie: adminCookie }
+    });
+    expect(regradeRes.status).toBe(200);
   });
 });

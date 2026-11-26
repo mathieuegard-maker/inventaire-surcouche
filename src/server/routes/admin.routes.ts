@@ -4,6 +4,7 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import {
+  adminBenchmarkGradeSchema,
   adminCatalogPatchSchema,
   adminMaintenanceTaskSchema,
   adminResetCatalogSchema
@@ -82,6 +83,45 @@ export function createAdminRoutes(deps: {
     const limit = Number(c.req.query('limit') || 15) || 15;
     const data = deps.adminService.listImportBenchmarks(limit);
     return c.json({ ok: true, ...data });
+  });
+
+  router.get('/import-benchmarks/:jobId/grade', async (c) => {
+    const jobId = c.req.param('jobId');
+    const res = await deps.adminService.getImportBenchmarkGrade(jobId);
+    return c.json({ ok: true, ...res });
+  });
+
+  router.post(
+    '/import-benchmarks/:jobId/grade',
+    zValidator('json', adminBenchmarkGradeSchema),
+    async (c) => {
+      const jobId = c.req.param('jobId');
+      const body = c.req.valid('json');
+      const res = await deps.adminService.gradeImportBenchmark(jobId, body);
+      return c.json({ ok: true, ...res });
+    }
+  );
+
+  router.post('/import-benchmarks/:jobId/regrade', async (c) => {
+    const jobId = c.req.param('jobId');
+    const res = await deps.adminService.regradeImportBenchmark(jobId);
+    return c.json({ ok: true, ...res });
+  });
+
+  router.get('/import-benchmarks/:jobId/report.md', async (c) => {
+    const jobId = c.req.param('jobId');
+    const found = await deps.adminService.getBenchmarkMarkdownReport(jobId);
+    if (!found) {
+      throw new AppError(404, 'BENCHMARK_REPORT_NOT_FOUND', 'Aucun rapport Markdown généré pour ce lot.');
+    }
+    return new Response(found.markdown, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${found.filename}"`,
+        'Cache-Control': 'no-store'
+      }
+    });
   });
 
   router.post('/reset-book-catalog', zValidator('json', adminResetCatalogSchema), async (c) => {

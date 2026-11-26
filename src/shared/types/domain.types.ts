@@ -270,4 +270,139 @@ export interface AdminBenchmarkJobView {
   updatedAt: string;
   summary: AdminBenchmarkJobSummary;
   items: AdminBenchmarkLiveItem[];
+  hasGroundTruth?: boolean;
+  groundTruthFilename?: string | null;
+  latestReportFilename?: string | null;
+}
+
+export type BenchmarkCheckField =
+  | 'resolved'
+  | 'isbn'
+  | 'title'
+  | 'series'
+  | 'collection_trap'
+  | 'volume'
+  | 'media'
+  | 'author'
+  | 'publisher'
+  | 'integral'
+  | 'cover'
+  | 'user_data';
+
+export interface GroundTruthRow {
+  ligne: number;
+  fichierOrigine: string | null;
+  ligneFichier: number | null;
+  categorie: string | null;
+  profilEntree: string | null;
+  media: string | null;
+  isbnVerifie: string | null;
+  titreAttendu: string | null;
+  serieAttendue: string | null;
+  tomeAttendu: string | null;
+  auteurAttendu: string | null;
+  editeurAttendu: string | null;
+  collectionEditoriale: string | null;
+  integraleAttendue: boolean | null;
+  tomesInclusAttendus: string[];
+  statutAttendu: OwnershipStatus | null;
+  lectureAttendue: ReadingStatus | null;
+  noteAttendue: number | null;
+  notesAttendues: string | null;
+  regleVerification: string | null;
+}
+
+export interface BenchmarkFieldCheck {
+  field: BenchmarkCheckField;
+  status: 'pass' | 'fail' | 'na';
+  expected: string;
+  actual: string;
+  detail?: string;
+}
+
+export interface BenchmarkGradedActualState {
+  resolved: boolean;
+  bookId: string | null;
+  primaryIsbn13: string | null;
+  knownIsbns: string[];
+  title: string | null;
+  seriesId: string | null;
+  seriesName: string | null;
+  seriesTotalVolumes: number;
+  seriesExpanded: boolean;
+  volumeNumber: number | null;
+  authors: string[];
+  publisher: string | null;
+  allPublishers: string[];
+  collectionName: string | null;
+  mainCategory: BookMainCategory | null;
+  catalogIsIntegral: boolean;
+  effectiveIsIntegral: boolean;
+  effectiveIncludedVolumes: string[];
+  coverUrl: string | null;
+  ownershipStatus: OwnershipStatus | null;
+  readingStatus: ReadingStatus | null;
+  rating: number | null;
+  notes: string | null;
+  resolutionChannel: CollectionImportResolutionChannel;
+  unmatchedReason: 'isbn_not_found' | 'catalog_not_found' | null;
+  durationMs: number;
+}
+
+export interface BenchmarkGradedItem {
+  rowNumber: number;
+  dataLineNumber: number;
+  input: CollectionImportComparisonItem['input'];
+  expected: GroundTruthRow;
+  actual: BenchmarkGradedActualState;
+  checks: BenchmarkFieldCheck[];
+  failedFields: BenchmarkCheckField[];
+  verdict: 'perfect' | 'partial' | 'failed';
+  passedChecksCount: number;
+  evaluatedChecksCount: number;
+}
+
+export interface BenchmarkRateBucket {
+  key: string;
+  label: string;
+  total: number;
+  resolved: number;
+  perfect: number;
+  partial: number;
+  failed: number;
+  resolvedRatePct: number;
+  perfectRatePct: number;
+}
+
+export interface BenchmarkFieldStat {
+  field: BenchmarkCheckField;
+  passed: number;
+  evaluated: number;
+  failed: number;
+  passRatePct: number;
+}
+
+export interface AdminBenchmarkGradedReport {
+  jobId: string;
+  inputFilename: string;
+  groundTruthFilename: string;
+  alignmentMode: 'fichier_origine' | 'ligne';
+  generatedAt: string;
+  activeCatalogJobsCount: number;
+  totals: {
+    evaluatedRows: number;
+    unalignedRows: number;
+    resolvedRows: number;
+    perfectRows: number;
+    partialRows: number;
+    failedRows: number;
+    resolvedRatePct: number;
+    perfectRatePct: number;
+    fieldAccuracyPct: number;
+    avgDurationMs: number;
+  };
+  fieldStats: BenchmarkFieldStat[];
+  byCategory: BenchmarkRateBucket[];
+  byProfile: BenchmarkRateBucket[];
+  items: BenchmarkGradedItem[];
 }

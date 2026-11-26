@@ -26,7 +26,7 @@ import type { PhotoAiService } from './photo-ai.service';
 import type { ReadingService } from './reading.service';
 
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_IMPORT_ROWS = 1000;
+const MAX_IMPORT_ROWS = 2500;
 
 export interface CollectionImportUnmatchedItem {
   rowNumber: number;
@@ -268,6 +268,11 @@ export class CollectionImportService {
       });
     };
 
+    const reportRowProgress = (done: number) => {
+      const shouldPersistFullResult = total <= 50 || done % 5 === 0 || done === total;
+      ctx.reportProgress(done, total, shouldPersistFullResult ? { ...result } : undefined);
+    };
+
     for (let i = 0; i < total; i++) {
       const row = rows[i];
       const rowStartedAt = Date.now();
@@ -295,7 +300,7 @@ export class CollectionImportService {
 
         if (!isbn13) {
           recordUnmatched(row, 'isbn_not_found', rowStartedAt);
-          ctx.reportProgress(i + 1, total, { ...result });
+          reportRowProgress(i + 1);
           continue;
         }
 
@@ -336,7 +341,7 @@ export class CollectionImportService {
 
         if (!item?.found || !item.book) {
           recordUnmatched(row, 'catalog_not_found', rowStartedAt);
-          ctx.reportProgress(i + 1, total, { ...result });
+          reportRowProgress(i + 1);
           continue;
         }
 
@@ -400,7 +405,7 @@ export class CollectionImportService {
         recordUnmatched(row, 'catalog_not_found', rowStartedAt);
       }
 
-      ctx.reportProgress(i + 1, total, { ...result });
+      reportRowProgress(i + 1);
     }
 
     return { result, total };

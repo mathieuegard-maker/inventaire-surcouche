@@ -2,6 +2,7 @@
 // Fabrique d'application Hono injectable et 100 % testable sur SQLite :memory:.
 
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { Hono } from 'hono';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
@@ -251,10 +252,13 @@ export function createApp(options: CreateAppOptions) {
     db: options.db,
     adminRepo,
     catalogRepo,
+    libraryRepo,
+    readingRepo,
     userRepo,
     logRepo,
     coverService,
-    cronScheduler
+    cronScheduler,
+    reportsDir: path.resolve(path.dirname(options.config.coversDir), 'benchmark-reports')
   });
 
   // Enregistrement des handlers du worker continu

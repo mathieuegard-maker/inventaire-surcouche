@@ -27,3 +27,8 @@ export const adminMaintenanceTaskSchema = z.enum([
 export const adminResetCatalogSchema = z.object({
   confirmation: z.literal('VIDER')
 });
+
+export const adminBenchmarkGradeSchema = z.object({
+  filename: z.string().trim().min(1).max(200),
+  contentBase64: z.string().min(1)
+});

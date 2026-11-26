@@ -3,6 +3,16 @@
 // Zéro SQL brut : délègue 100 % des requêtes à AdminRepository / CatalogRepository / UserRepository / LogRepository.
 
 import crypto from 'node:crypto';
+import fsSync from 'node:fs';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {
+  alignGroundTruthToItems,
+  buildBenchmarkGradedReport,
+  evaluateBenchmarkItemAgainstGroundTruth,
+  generateBenchmarkMarkdownReport,
+  parseGroundTruthCsv
+} from '../../shared/bibliographic/benchmark-grading.util';
 import {
   isCompatibleSeriesName,
   isGenericVolumeTitle,
@@ -12,23 +22,39 @@ import {
   tokenOverlapRatio
 } from '../../shared/bibliographic/text-normalize.util';
 import type {
+  AdminBenchmarkGradedReport,
   AdminBenchmarkJobView,
   AdminBenchmarkLiveBookState,
   AdminBenchmarkLiveItem,
+  BenchmarkGradedActualState,
   BenchmarkVerdict,
   BenchmarkWarningCode,
   BookMainCategory,
   CollectionImportComparisonItem,
-  CollectionImportComparisonSnapshot
+  CollectionImportComparisonSnapshot,
+  GroundTruthRow,
+  LibraryBookOverrides
 } from '../../shared/types/domain.types';
 import type { DatabaseAdapter } from '../db/database.adapter';
+import { AppError } from '../middleware/error.middleware';
 import type { AdminRepository } from '../repositories/admin.repo';
 import type { CatalogRepository } from '../repositories/catalog.repo';
+import type { LibraryRepository } from '../repositories/library.repo';
 import type { LogRepository } from '../repositories/log.repo';
+import type { ReadingRepository } from '../repositories/reading.repo';
 import type { UserRepository } from '../repositories/user.repo';
 import type { CollectionImportResultPayload } from './collection-import.service';
 import type { CoverService } from './cover.service';
 import type { CronScheduler } from '../workers/cron-scheduler';
+
+const SAFE_JOB_ID_RE = /^[a-zA-Z0-9_-]{4,64}$/;
+const MAX_GROUND_TRUTH_BYTES = 10 * 1024 * 1024;
+
+interface StoredGroundTruthFile {
+  filename: string;
+  uploadedAt: string;
+  rows: GroundTruthRow[];
+}
 
 export interface AdminCatalogBookItem {
   id: string;
@@ -62,27 +88,36 @@ export class AdminService {
   private readonly db: DatabaseAdapter;
   private readonly adminRepo: AdminRepository;
   private readonly catalogRepo: CatalogRepository;
+  private readonly libraryRepo?: LibraryRepository;
+  private readonly readingRepo?: ReadingRepository;
   private readonly userRepo: UserRepository;
   private readonly logRepo: LogRepository;
   private readonly coverService: CoverService;
   private readonly cronScheduler: CronScheduler;
+  private readonly reportsDir: string;
 
   constructor(deps: {
     db: DatabaseAdapter;
     adminRepo: AdminRepository;
     catalogRepo: CatalogRepository;
+    libraryRepo?: LibraryRepository;
+    readingRepo?: ReadingRepository;
     userRepo: UserRepository;
     logRepo: LogRepository;
     coverService: CoverService;
     cronScheduler: CronScheduler;
+    reportsDir?: string;
   }) {
     this.db = deps.db;
     this.adminRepo = deps.adminRepo;
     this.catalogRepo = deps.catalogRepo;
+    this.libraryRepo = deps.libraryRepo;
+    this.readingRepo = deps.readingRepo;
     this.userRepo = deps.userRepo;
     this.logRepo = deps.logRepo;
     this.coverService = deps.coverService;
     this.cronScheduler = deps.cronScheduler;
+    this.reportsDir = path.resolve(deps.reportsDir ?? path.join(process.cwd(), 'data', 'benchmark-reports'));
   }
 
   getOverview() {
@@ -438,6 +473,7 @@ export class AdminService {
         (Array.isArray(parsedPayload?.rows) ? parsedPayload.rows.length : 0);
       const matchedCount = okCount + warningCount;
       const processedRows = enrichedItems.length > 0 ? enrichedItems.length : row.progress_done;
+      const gtMeta = this.readGroundTruthMetaSync(row.id);
 
       return {
         id: row.id,
@@ -459,11 +495,417 @@ export class AdminService {
           resolvedBySearchCount: parsedResult?.resolvedBySearchCount ?? 0,
           avgDurationMs: enrichedItems.length > 0 ? Math.round(totalDurationMs / enrichedItems.length) : 0
         },
-        items: enrichedItems
+        items: enrichedItems,
+        hasGroundTruth: gtMeta.hasGroundTruth,
+        groundTruthFilename: gtMeta.groundTruthFilename,
+        latestReportFilename: gtMeta.latestReportFilename
       };
     });
 
     return { activeCatalogJobsCount, jobs };
+  }
+
+  private assertSafeJobId(jobId: string): string {
+    if (!SAFE_JOB_ID_RE.test(jobId)) {
+      throw new AppError(400, 'INVALID_JOB_ID', 'Identifiant de lot invalide.');
+    }
+    return jobId;
+  }
+
+  private getGroundTruthPath(jobId: string): string {
+    return path.join(this.reportsDir, `ground-truth-${this.assertSafeJobId(jobId)}.json`);
+  }
+
+  private getLatestReportPath(jobId: string): string {
+    return path.join(this.reportsDir, `report-${this.assertSafeJobId(jobId)}.md`);
+  }
+
+  private readGroundTruthMetaSync(jobId: string): {
+    hasGroundTruth: boolean;
+    groundTruthFilename: string | null;
+    latestReportFilename: string | null;
+  } {
+    if (!SAFE_JOB_ID_RE.test(jobId)) {
+      return { hasGroundTruth: false, groundTruthFilename: null, latestReportFilename: null };
+    }
+    const gtPath = path.join(this.reportsDir, `ground-truth-${jobId}.json`);
+    const repFilename = `report-${jobId}.md`;
+    const repPath = path.join(this.reportsDir, repFilename);
+    let groundTruthFilename: string | null = null;
+    let hasGroundTruth = false;
+    try {
+      if (fsSync.existsSync(gtPath)) {
+        const parsed = JSON.parse(fsSync.readFileSync(gtPath, 'utf8')) as Partial<StoredGroundTruthFile>;
+        if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
+          hasGroundTruth = true;
+          groundTruthFilename = typeof parsed.filename === 'string' ? parsed.filename : null;
+        }
+      }
+    } catch {
+      hasGroundTruth = false;
+    }
+    const latestReportFilename = fsSync.existsSync(repPath) ? repFilename : null;
+    return { hasGroundTruth, groundTruthFilename, latestReportFilename };
+  }
+
+  private buildActualStateForItem(
+    item: CollectionImportComparisonItem,
+    userId: string | null,
+    libraryId: string | null
+  ): BenchmarkGradedActualState {
+    if (item.status === 'unmatched' || !item.resolvedBookId) {
+      return {
+        resolved: false,
+        bookId: null,
+        primaryIsbn13: null,
+        knownIsbns: [],
+        title: null,
+        seriesId: null,
+        seriesName: null,
+        seriesTotalVolumes: 0,
+        seriesExpanded: false,
+        volumeNumber: null,
+        authors: [],
+        publisher: null,
+        allPublishers: [],
+        collectionName: null,
+        mainCategory: null,
+        catalogIsIntegral: false,
+        effectiveIsIntegral: false,
+        effectiveIncludedVolumes: [],
+        coverUrl: null,
+        ownershipStatus: null,
+        readingStatus: null,
+        rating: null,
+        notes: null,
+        resolutionChannel: item.resolutionChannel,
+        unmatchedReason: item.unmatchedReason,
+        durationMs: item.durationMs
+      };
+    }
+
+    const bookRow = this.catalogRepo.findBookById(item.resolvedBookId);
+    const seriesRow = bookRow?.series_id ? this.catalogRepo.findSeriesById(bookRow.series_id) : null;
+    const editions = bookRow ? this.catalogRepo.listEditionsByBookId(bookRow.id) : [];
+    const libRow = bookRow && libraryId && this.libraryRepo ? this.libraryRepo.findLibraryBook(libraryId, bookRow.id) : null;
+    const readRow = bookRow && userId && this.readingRepo ? this.readingRepo.findByUserAndBook(userId, bookRow.id) : null;
+
+    let overrides: LibraryBookOverrides = {};
+    if (libRow?.overrides_json) {
+      try {
+        const parsed = JSON.parse(libRow.overrides_json);
+        if (parsed && typeof parsed === 'object') overrides = parsed as LibraryBookOverrides;
+      } catch {
+        overrides = {};
+      }
+    }
+
+    const catalogAuthors = bookRow
+      ? Array.from(
+          new Set([
+            ...parseJsonArray(bookRow.authors_json),
+            ...parseJsonArray(bookRow.scriptwriters_json),
+            ...parseJsonArray(bookRow.illustrators_json)
+          ])
+        )
+      : item.snapshot?.authors ?? [];
+
+    const catalogIsIntegral = bookRow ? bookRow.is_integral === 1 : Boolean(item.snapshot?.isIntegral);
+    const effectiveIsIntegral =
+      typeof overrides.isIntegral === 'boolean' ? overrides.isIntegral : catalogIsIntegral;
+
+    const catalogIncluded = bookRow
+      ? parseJsonArray(bookRow.included_volumes_json)
+      : item.snapshot?.includedVolumes ?? [];
+    const effectiveIncludedVolumes =
+      Array.isArray(overrides.includedVolumes) && overrides.includedVolumes.length > 0
+        ? overrides.includedVolumes
+        : catalogIncluded;
+
+    const knownIsbns = Array.from(
+      new Set([
+        ...(item.resolvedIsbn13 ? [item.resolvedIsbn13] : []),
+        ...editions.map((e) => e.isbn13)
+      ])
+    );
+    const allPublishers = Array.from(
+      new Set(
+        [
+          bookRow?.publisher ?? item.snapshot?.publisher ?? null,
+          ...editions.map((e) => e.publisher)
+        ].filter((p): p is string => Boolean(p && p.trim()))
+      )
+    );
+
+    const coverKey = overrides.coverKey !== undefined ? overrides.coverKey : bookRow?.cover_key ?? null;
+    const coverUrl = coverKey ? `/api/covers/${coverKey}` : item.snapshot?.coverUrl ?? null;
+
+    return {
+      resolved: true,
+      bookId: bookRow?.id ?? item.resolvedBookId,
+      primaryIsbn13: editions[0]?.isbn13 ?? item.resolvedIsbn13,
+      knownIsbns,
+      title: bookRow?.title ?? item.snapshot?.title ?? null,
+      seriesId: bookRow?.series_id ?? item.snapshot?.seriesId ?? null,
+      seriesName: seriesRow?.canonical_name ?? item.snapshot?.seriesName ?? null,
+      seriesTotalVolumes: seriesRow?.known_volumes_count ?? 0,
+      seriesExpanded: seriesRow?.is_complete_expanded === 1,
+      volumeNumber: bookRow ? bookRow.volume_number : (item.snapshot?.volumeNumber ?? null),
+      authors: catalogAuthors,
+      publisher: bookRow?.publisher ?? item.snapshot?.publisher ?? null,
+      allPublishers,
+      collectionName: bookRow?.collection_name ?? null,
+      mainCategory: bookRow?.main_category ?? item.snapshot?.mainCategory ?? null,
+      catalogIsIntegral,
+      effectiveIsIntegral,
+      effectiveIncludedVolumes,
+      coverUrl,
+      ownershipStatus: libRow ? libRow.status : null,
+      readingStatus: readRow ? readRow.status : 'none',
+      rating: readRow ? readRow.rating : 0,
+      notes: readRow ? readRow.notes : '',
+      resolutionChannel: item.resolutionChannel,
+      unmatchedReason: item.unmatchedReason,
+      durationMs: item.durationMs
+    };
+  }
+
+  private computeLiveGradedReport(
+    jobId: string,
+    storedGt: StoredGroundTruthFile
+  ): { report: AdminBenchmarkGradedReport; markdown: string } {
+    const jobRow = this.adminRepo.findCollectionImportJobById(jobId);
+    if (!jobRow) {
+      throw new AppError(404, 'BENCHMARK_JOB_NOT_FOUND', 'Lot d’import introuvable.');
+    }
+
+    let parsedResult: CollectionImportResultPayload | null = null;
+    let parsedPayload: { filename?: string; userId?: string; libraryId?: string } | null = null;
+    try {
+      if (jobRow.result_json) parsedResult = JSON.parse(jobRow.result_json) as CollectionImportResultPayload;
+    } catch {
+      parsedResult = null;
+    }
+    try {
+      if (jobRow.payload_json) {
+        parsedPayload = JSON.parse(jobRow.payload_json) as { filename?: string; userId?: string; libraryId?: string };
+      }
+    } catch {
+      parsedPayload = null;
+    }
+
+    const rawItems: CollectionImportComparisonItem[] = Array.isArray(parsedResult?.items)
+      ? parsedResult.items
+      : [];
+    if (rawItems.length === 0) {
+      throw new AppError(
+        400,
+        'BENCHMARK_NO_ITEMS',
+        'Ce lot d’import ne contient pas encore de lignes traitées à comparer.'
+      );
+    }
+
+    const inputFilename = parsedResult?.filename || parsedPayload?.filename || 'import.csv';
+    const userId = jobRow.user_id ?? parsedPayload?.userId ?? null;
+    const libraryId = jobRow.library_id ?? parsedPayload?.libraryId ?? null;
+    const activeCatalogJobsCount = this.adminRepo.countActiveSeriesBackgroundJobs();
+
+    const { alignmentMode, pairs, unalignedCount } = alignGroundTruthToItems(
+      inputFilename,
+      rawItems,
+      storedGt.rows
+    );
+    if (pairs.length === 0) {
+      throw new AppError(
+        400,
+        'BENCHMARK_ALIGNMENT_EMPTY',
+        'Aucune ligne du CSV de correction n’a pu être alignée avec ce lot d’import.'
+      );
+    }
+
+    const gradedItems = pairs.map(({ item, dataLineNumber, expected }) =>
+      evaluateBenchmarkItemAgainstGroundTruth({
+        item,
+        dataLineNumber,
+        expected,
+        actual: this.buildActualStateForItem(item, userId, libraryId)
+      })
+    );
+
+    const report = buildBenchmarkGradedReport({
+      jobId,
+      inputFilename,
+      groundTruthFilename: storedGt.filename,
+      alignmentMode,
+      activeCatalogJobsCount,
+      unalignedRows: unalignedCount,
+      items: gradedItems
+    });
+    const markdown = generateBenchmarkMarkdownReport(report);
+    return { report, markdown };
+  }
+
+  private async persistReportAndLog(
+    jobId: string,
+    report: AdminBenchmarkGradedReport,
+    markdown: string
+  ): Promise<{ reportFilename: string; archiveFilename: string }> {
+    await fs.mkdir(this.reportsDir, { recursive: true });
+    const safeId = this.assertSafeJobId(jobId);
+    const stamp = report.generatedAt.replace(/[:.]/g, '-').slice(0, 19);
+    const reportFilename = `report-${safeId}.md`;
+    const archiveFilename = `report-${safeId}-${stamp}.md`;
+
+    await fs.writeFile(path.join(this.reportsDir, reportFilename), markdown, 'utf8');
+    await fs.writeFile(path.join(this.reportsDir, archiveFilename), markdown, 'utf8');
+
+    const { totals } = report;
+    const summaryLine =
+      `Benchmark ${report.inputFilename} vs ${report.groundTruthFilename} : ` +
+      `${totals.resolvedRows}/${totals.evaluatedRows} trouvés (${totals.resolvedRatePct}%), ` +
+      `${totals.perfectRows} parfaits (${totals.perfectRatePct}%), ` +
+      `précision champs ${totals.fieldAccuracyPct}% → ${archiveFilename}`;
+
+    this.logRepo.append({
+      traceId: jobId,
+      channel: 'admin',
+      stage: 'benchmark_report',
+      step: 'grade_ground_truth',
+      status: totals.failedRows === 0 && totals.partialRows === 0 ? 'ok' : 'warn',
+      durationMs: totals.avgDurationMs,
+      summary: summaryLine,
+      payload: {
+        reportFilename,
+        archiveFilename,
+        alignmentMode: report.alignmentMode,
+        totals,
+        fieldStats: report.fieldStats,
+        byCategory: report.byCategory,
+        byProfile: report.byProfile
+      }
+    });
+
+    console.info(`[benchmark_report] ${summaryLine}`);
+    return { reportFilename, archiveFilename };
+  }
+
+  /**
+   * Charge un CSV de correction (`reponses_complet_1080.csv` ou unitaire), l'associe au lot d'import,
+   * exécute la comparaison automatique champ par champ et génère le rapport Markdown en log.
+   */
+  async gradeImportBenchmark(
+    jobId: string,
+    input: { filename: string; contentBase64: string }
+  ): Promise<{
+    report: AdminBenchmarkGradedReport;
+    markdown: string;
+    reportFilename: string;
+    archiveFilename: string;
+  }> {
+    this.assertSafeJobId(jobId);
+    const cleanBase64 =
+      input.contentBase64.startsWith('data:') && input.contentBase64.includes(',')
+        ? input.contentBase64.slice(input.contentBase64.indexOf(',') + 1)
+        : input.contentBase64;
+    const buf = Buffer.from(cleanBase64, 'base64');
+    if (buf.byteLength === 0) {
+      throw new AppError(400, 'GROUND_TRUTH_EMPTY', 'Le fichier de correction est vide.');
+    }
+    if (buf.byteLength > MAX_GROUND_TRUTH_BYTES) {
+      throw new AppError(400, 'GROUND_TRUTH_TOO_LARGE', 'Fichier de correction trop volumineux (max 10 Mo).');
+    }
+
+    const rows = parseGroundTruthCsv(buf.toString('utf8'));
+    if (rows.length === 0) {
+      throw new AppError(
+        400,
+        'GROUND_TRUTH_INVALID',
+        'Aucune ligne exploitable détectée dans le CSV de correction (colonnes attendues : Ligne, Titre_Attendu, Serie_Attendue...).'
+      );
+    }
+
+    const storedGt: StoredGroundTruthFile = {
+      filename: input.filename.trim() || 'correction.csv',
+      uploadedAt: new Date().toISOString(),
+      rows
+    };
+
+    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
+    await fs.mkdir(this.reportsDir, { recursive: true });
+    await fs.writeFile(this.getGroundTruthPath(jobId), JSON.stringify(storedGt), 'utf8');
+    const { reportFilename, archiveFilename } = await this.persistReportAndLog(jobId, report, markdown);
+
+    return { report, markdown, reportFilename, archiveFilename };
+  }
+
+  /**
+   * Relance la notation automatique LIVE à partir du CSV de correction déjà rattaché à ce lot
+   * (utile une fois que les déploiements de séries et couvertures différées sont terminés).
+   */
+  async regradeImportBenchmark(jobId: string): Promise<{
+    report: AdminBenchmarkGradedReport;
+    markdown: string;
+    reportFilename: string;
+    archiveFilename: string;
+  }> {
+    const gtPath = this.getGroundTruthPath(jobId);
+    let storedGt: StoredGroundTruthFile;
+    try {
+      storedGt = JSON.parse(await fs.readFile(gtPath, 'utf8')) as StoredGroundTruthFile;
+    } catch {
+      throw new AppError(
+        404,
+        'GROUND_TRUTH_NOT_FOUND',
+        'Aucun fichier CSV de correction n’est associé à ce lot.'
+      );
+    }
+
+    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
+    const { reportFilename, archiveFilename } = await this.persistReportAndLog(jobId, report, markdown);
+    return { report, markdown, reportFilename, archiveFilename };
+  }
+
+  /**
+   * Lecture seule de la notation live si un CSV de correction est déjà rattaché (sans dupliquer de log).
+   */
+  async getImportBenchmarkGrade(jobId: string): Promise<{
+    hasGroundTruth: boolean;
+    report?: AdminBenchmarkGradedReport;
+    markdown?: string;
+    reportFilename?: string;
+  }> {
+    const gtPath = this.getGroundTruthPath(jobId);
+    let storedGt: StoredGroundTruthFile;
+    try {
+      storedGt = JSON.parse(await fs.readFile(gtPath, 'utf8')) as StoredGroundTruthFile;
+    } catch {
+      return { hasGroundTruth: false };
+    }
+    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
+    return {
+      hasGroundTruth: true,
+      report,
+      markdown,
+      reportFilename: `report-${this.assertSafeJobId(jobId)}.md`
+    };
+  }
+
+  /**
+   * Lit le dernier rapport Markdown généré sur disque (ou le régénère à la volée si le corrigé existe).
+   */
+  async getBenchmarkMarkdownReport(jobId: string): Promise<{ filename: string; markdown: string } | null> {
+    const safeId = this.assertSafeJobId(jobId);
+    const repPath = this.getLatestReportPath(safeId);
+    try {
+      const markdown = await fs.readFile(repPath, 'utf8');
+      return { filename: `rapport-benchmark-${safeId}.md`, markdown };
+    } catch {
+      const live = await this.getImportBenchmarkGrade(safeId);
+      if (live.hasGroundTruth && live.markdown) {
+        return { filename: `rapport-benchmark-${safeId}.md`, markdown: live.markdown };
+      }
+      return null;
+    }
   }
 
   /**
@@ -481,6 +923,17 @@ export class AdminService {
       this.adminRepo.clearBookCatalogKeepingAccounts(resetAt)
     );
     const deletedCoverFiles = await this.coverService.deleteAllStoredCoverFiles();
+    // Nettoie les fichiers temporaires ground-truth-*.json liés aux anciens jobs tout en préservant les archives report-*.md
+    try {
+      const entries = await fs.readdir(this.reportsDir);
+      for (const name of entries) {
+        if (name.startsWith('ground-truth-') && name.endsWith('.json')) {
+          await fs.unlink(path.join(this.reportsDir, path.basename(name))).catch(() => undefined);
+        }
+      }
+    } catch {
+      // dossier inexistant
+    }
     return {
       deletedBooks,
       deletedSeries,

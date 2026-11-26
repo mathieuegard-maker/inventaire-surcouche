@@ -19,7 +19,15 @@ export function mapJobRowToView(row: BackgroundJobRow): BackgroundJobView {
   let result: unknown = null;
   if (row.result_json) {
     try {
-      result = JSON.parse(row.result_json);
+      const parsed = JSON.parse(row.result_json);
+      // Allège le flux SSE / GET /api/jobs sur les gros imports (ex. 1 080 lignes) :
+      // la trace détaillée `items` est servie à la demande par `/api/admin/import-benchmarks`.
+      if (row.type === 'collection_import' && parsed && typeof parsed === 'object' && 'items' in parsed) {
+        const { items: _omitItems, ...summary } = parsed as Record<string, unknown>;
+        result = summary;
+      } else {
+        result = parsed;
+      }
     } catch {
       result = null;
     }
