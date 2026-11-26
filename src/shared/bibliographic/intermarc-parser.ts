@@ -50,6 +50,8 @@ export interface ParsedMarcRecord {
   bnfCoverUrl?: string;
   isNonBook: boolean;
   isIntegralHint: boolean;
+  /** Notes bibliographiques MARC (250/205 édition, 300/311/327 contenu/dépouillement) utiles à la détection des intégrales. */
+  integralNotes?: string;
   rawFormat?: string;
   /** Signal structurel ISO/RDA 051 / illustrateurs : distingue BD/albums illustrés vs romans purement textuels. */
   contentKind?: 'illustrated' | 'text_only';
@@ -62,7 +64,13 @@ const NON_BOOK_MARC_TYPE_RE =
 const NON_BOOK_RDA_CODES = new Set(['tdi', 'tdm', 'prm', 'spw', 'snd', 'cod', 'cop', 'tdf']);
 
 const INTEGRAL_TITLE_RE =
-  /\b(int[ée]grale|coffret|omnibus|compendium|l['’]int[ée]grale)\b|\btomes?\s*\d+\s*(?:-|–|à)\s*\d+\b/i;
+  /\b(l['’]int[ée]grale|coffret\s+int[ée]gral|monovolume\s+int[ée]grale?|int[ée]grale|coffret|omnibus|compendium)\b|\btomes?\s*\d{1,2}\s*(?:-|–|à)\s*\d{1,2}\b/i;
+
+const UNABRIDGED_PROSE_MENTION_RE =
+  /(?:^|[^a-zA-ZÀ-ÿ])(?:texte|version|[ée]dition|ed\.?|œuvre)\s+int[ée]grale?(?![a-zA-ZÀ-ÿ])/i;
+
+const COMPILATION_NOTE_RE =
+  /\b(?:r[ée]unit\s+(?:les\s+)?(?:tomes?|vol\.?|volumes?|albums?|livres?|[0-9]+\s+tomes?|(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|douze)\s+(?:premiers?\s+)?(?:tomes?|albums?|volumes?))|r[ée]unit\s*:|contient\s+(?:les\s+)?(?:tomes?|vol\.?|volumes?|albums?)|int[ée]grale\s+(?:des\s+tomes?|du\s+cycle|tomes?)|coffret\s+int[ée]gral|monovolume\s+int[ée]grale?)\b/i;
 
 function decodeXmlEntities(raw: string): string {
   return raw
@@ -152,6 +160,8 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const scriptwriters: string[] = [];
   const illustrators: string[] = [];
   const rawSubjects: string[] = [];
+  const editionStatements: string[] = [];
+  const noteClauses: string[] = [];
 
   // Langue depuis 008 (InterMarc), 041$a/$h (InterMarc) ou 101$a/$c (UNIMARC)
   const cf008 = extractControlField(recordXml, '008');
@@ -272,6 +282,22 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       }
     }
 
+    // Mention d'édition : 250 (InterMarc) / 205 (UNIMARC) — ex. "Éd. intégrale", "Coffret intégral"
+    if (f.tag === '250' || f.tag === '205') {
+      const edStmt = sf('a');
+      if (edStmt) editionStatements.push(edStmt);
+    }
+
+    // Notes générales & dépouillement : 300, 311, 327 (ex. "Réunit les tomes 1 à 4", "Réunit : 1, ... ; 2, ...")
+    if (f.tag === '300' || f.tag === '311' || f.tag === '327') {
+      const noteText = f.subfields
+        .filter((s) => s.code === 'a' || s.code === 'e' || s.code === 't')
+        .map((s) => s.value.trim())
+        .filter(Boolean)
+        .join(' ');
+      if (noteText) noteClauses.push(noteText);
+    }
+
     // Éditeur & Date : 260 (InterMarc), 214/210 (UNIMARC)
     if (f.tag === '260' || f.tag === '214' || f.tag === '210') {
       const pub = cleanPublisher(sf('c') || sf('b'));
@@ -328,11 +354,6 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     ? `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`
     : undefined;
 
-  const fullTitleText = `${title} ${subtitle || ''}`.trim();
-  const isMultiVolumeBoxSet = /\b(?:[2-9]|\d{2})\s*vol\.?\b/i.test(rawFormat ?? '');
-  const isIntegralHint =
-    (INTEGRAL_TITLE_RE.test(fullTitleText) || isMultiVolumeBoxSet) && !/\btexte\s+int[ée]gral\b/i.test(fullTitleText);
-
   const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
   const hasProseDewey = Boolean(deweyCode && /^8\d\d/.test(deweyCode));
   const isExplicitGraphic =
@@ -346,6 +367,45 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     : hasRdaText
       ? 'text_only'
       : undefined;
+
+  const fullTitleText = `${title} ${subtitle || ''}`.trim();
+  const editionStmtText = editionStatements.join(' ').trim();
+  const notesText = noteClauses.join(' ; ').trim();
+  const integralNotes = [editionStmtText, notesText].filter(Boolean).join(' ; ') || undefined;
+
+  // Distinguer strictement "texte intégral / version intégrale / édition intégrale" sur un roman isolé
+  // d'une vraie intégrale multi-tomes (BD/Manga/Comics ou compilation explicite "Réunit les tomes...").
+  const isUnabridgedProse =
+    !isExplicitGraphic &&
+    (UNABRIDGED_PROSE_MENTION_RE.test(fullTitleText) || UNABRIDGED_PROSE_MENTION_RE.test(editionStmtText));
+  const isMultiVolumeBoxSet =
+    /\b(?:[2-9]|\d{2})\s*vol\.?\b/i.test(rawFormat ?? '') &&
+    (isExplicitGraphic || Boolean(ensembleSeriesName)) &&
+    !isUnabridgedProse;
+
+  const seriesOrColIntegralHint =
+    (isExplicitGraphic || Boolean(ensembleSeriesName)) &&
+    INTEGRAL_TITLE_RE.test(`${ensembleSeriesName ?? ''} ${collectionName ?? ''}`);
+
+  const editionIntegralHint =
+    isExplicitGraphic &&
+    /\b(?:int[ée]grale?|coffret|omnibus|compendium)\b/i.test(editionStmtText) &&
+    !/\btexte\s+int[ée]gral\b/i.test(editionStmtText);
+
+  const noteOrDescCompilationHint =
+    COMPILATION_NOTE_RE.test(notesText) || COMPILATION_NOTE_RE.test(description ?? '');
+
+  const titleHasIntegralSignal =
+    INTEGRAL_TITLE_RE.test(fullTitleText) && !UNABRIDGED_PROSE_MENTION_RE.test(fullTitleText);
+
+  const isIntegralHint = Boolean(
+    !isUnabridgedProse &&
+      (titleHasIntegralSignal ||
+        isMultiVolumeBoxSet ||
+        seriesOrColIntegralHint ||
+        editionIntegralHint ||
+        noteOrDescCompilationHint)
+  );
 
   return {
     isbn13,
@@ -371,6 +431,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     bnfCoverUrl,
     isNonBook,
     isIntegralHint,
+    integralNotes,
     rawFormat,
     contentKind
   };

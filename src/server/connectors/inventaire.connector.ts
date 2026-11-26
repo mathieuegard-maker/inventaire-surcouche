@@ -2,7 +2,14 @@
 // Connecteur Inventaire.io : graphe Édition (isbn: -> inv:...) -> Œuvre (P629) -> Série (P179), couvertures (invp:P2) & recherche textuelle.
 
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
-import { cleanPublishDate, cleanSeriesName, cleanTitle, normalizeSeriesNumber, normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  cleanPublishDate,
+  cleanSeriesName,
+  cleanTitle,
+  isLatinScriptLabel,
+  normalizeSeriesNumber,
+  normalizeTextKey
+} from '../../shared/bibliographic/text-normalize.util';
 import type { HttpClient } from './http-client';
 import type { GraphSeriesWork, InventaireConnector, SourceCandidateRecord } from './types';
 
@@ -36,9 +43,35 @@ interface InvSearchResponse {
   }>;
 }
 
+const LATIN_LANG_PRIORITY = [
+  'fr',
+  'en',
+  'it',
+  'de',
+  'es',
+  'pt',
+  'nl',
+  'ca',
+  'ro',
+  'pl',
+  'sv',
+  'da',
+  'no',
+  'fi',
+  'fromclaims'
+];
+
 function pickLabel(labels?: Record<string, string>): string {
   if (!labels) return '';
-  return labels.fr || labels.en || labels.fromclaims || Object.values(labels)[0] || '';
+  for (const lang of LATIN_LANG_PRIORITY) {
+    const val = labels[lang]?.trim();
+    if (val && isLatinScriptLabel(val)) return val;
+  }
+  for (const val of Object.values(labels)) {
+    const trimmed = val?.trim();
+    if (trimmed && isLatinScriptLabel(trimmed)) return trimmed;
+  }
+  return '';
 }
 
 function firstClaimString(entity: InvEntity | undefined, prop: string): string | undefined {

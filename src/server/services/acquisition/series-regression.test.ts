@@ -2446,4 +2446,193 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     const chansonOpts = await photoAi.searchBookCandidates({ title: 'Chanson douce', author: 'Leïla Slimani' });
     expect(chansonOpts[0]?.isbn13).toBe('9782070196678');
   });
+
+  it('Cas 21 (Vague 2 — Collection Blanche / Bibliothèque Charpentier, anti-fragmentation La Comédie humaine & Beastars, intégrales 300$a)', async () => {
+    const { CollectionGuardService } = await import('./collection-guard.service');
+    const { ComparisonTableService } = await import('./comparison-table.service');
+    const now = new Date().toISOString();
+
+    // 1. CollectionGuard : "Collection Blanche" (P179) et "Bibliothèque Charpentier" (460) sont testés par hétérogénéité d'auteurs et rejetés,
+    //    tandis qu'une vraie série mono-auteur "La Bibliothèque invisible" est acceptée !
+    const guard = new CollectionGuardService();
+    const blancheVerdict = await guard.evaluateCandidate({
+      candidateName: 'Collection Blanche',
+      linkKind: 'graph_p179',
+      allColumns: [
+        {
+          source: 'wikidata',
+          isbn13: '9782070196678',
+          title: 'Chanson douce',
+          seriesName: 'Collection Blanche',
+          seriesLinkKind: 'graph_p179',
+          authors: ['Leïla Slimani'],
+          scriptwriters: [],
+          illustrators: [],
+          rawSubjects: []
+        }
+      ],
+      preloadedSample: [
+        { title: 'Chanson douce', authors: ['Leïla Slimani'] },
+        { title: 'La Plus Secrète Mémoire des hommes', authors: ['Mohamed Mbougar Sarr'] },
+        { title: 'Le Lambeau', authors: ['Philippe Lançon'] },
+        { title: 'Sérotonine', authors: ['Michel Houellebecq'] }
+      ]
+    });
+    expect(blancheVerdict.verdict).toBe('collection');
+
+    const invisibleLibVerdict = await guard.evaluateCandidate({
+      candidateName: 'La Bibliothèque invisible',
+      linkKind: 'graph_p179',
+      volumeNumber: '1',
+      allColumns: [],
+      preloadedSample: [
+        { title: 'The Invisible Library', authors: ['Genevieve Cogman'], volumeNumber: '1' },
+        { title: 'The Masked City', authors: ['Genevieve Cogman'], volumeNumber: '2' },
+        { title: 'The Burning Page', authors: ['Genevieve Cogman'], volumeNumber: '3' }
+      ]
+    });
+    expect(invisibleLibVerdict.verdict).toBe('series');
+
+    // 2. Anti-fragmentation cycle prose : "La Comédie humaine" (Folio + Le Livre de poche. Classique) -> 1 seule série !
+    const connectors = createMockConnectors({});
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const cut1 = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'La Comédie humaine',
+      bookTitle: 'Le Père Goriot',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      publisher: 'Gallimard',
+      collectionName: 'Collection Folio',
+      pageCount: 380,
+      mainCategory: 'Roman',
+      authors: ['Honoré de Balzac'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_balzac_1',
+      workCanonicalId: 'isbn:9782070360017',
+      seriesId: cut1.series.id,
+      title: 'Le Père Goriot',
+      normalizedTitle: 'le pere goriot',
+      volumeNumber: 1,
+      volumeLabel: '1',
+      sortOrder: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Honoré de Balzac'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Gallimard',
+      collectionName: 'Collection Folio',
+      publishYear: '1995',
+      pageCount: 380,
+      description: null,
+      language: 'fr',
+      mainCategory: 'Roman',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+    const cut2 = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'La Comédie humaine',
+      bookTitle: 'Illusions perdues',
+      volumeNumber: 1, // Numérotation divergente d'une autre collection poche !
+      isHorsSerie: false,
+      isIntegral: false,
+      publisher: 'Le Livre de poche',
+      collectionName: 'Le Livre de poche. Classique',
+      pageCount: 780,
+      mainCategory: 'Roman',
+      authors: ['Honoré de Balzac'],
+      now
+    });
+    expect(cut2.series.id).toBe(cut1.series.id);
+
+    // 3. Anti-duplication manga même éditeur & pagination identique : Beastars (squelette Wikidata sans collection + BnF Ki-oon seinen 192p) -> 1 seule série !
+    const beast1 = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Beastars',
+      bookTitle: 'Beastars, vol. 1',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      publisher: 'Ki-oon',
+      collectionName: null,
+      pageCount: 192,
+      mainCategory: 'Manga',
+      authors: ['Paru Itagaki'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_beast_1',
+      workCanonicalId: 'wd:Q555001',
+      seriesId: beast1.series.id,
+      title: 'Beastars, vol. 1',
+      normalizedTitle: 'beastars vol 1',
+      volumeNumber: 1,
+      volumeLabel: '1',
+      sortOrder: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Paru Itagaki'],
+      scriptwriters: [],
+      illustrators: ['Paru Itagaki'],
+      publisher: 'Ki-oon',
+      collectionName: null,
+      publishYear: '2019',
+      pageCount: 192,
+      description: null,
+      language: 'fr',
+      mainCategory: 'Manga',
+      subgenres: [],
+      coverKey: null,
+      wikidataQid: 'Q555001',
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+    const beast2 = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Beastars',
+      bookTitle: 'Legoshi le loup',
+      volumeNumber: 1,
+      isHorsSerie: false,
+      isIntegral: false,
+      publisher: 'Ki-oon',
+      collectionName: 'Ki-oon seinen',
+      pageCount: 196,
+      mainCategory: 'Manga',
+      authors: ['Paru Itagaki'],
+      now
+    });
+    expect(beast2.series.id).toBe(beast1.series.id);
+
+    // 4. ComparisonTableService : extrait includedVolumes ['1'..'9'] depuis integralNotes MARC 300$a pour Les Passagers du vent
+    const tableSvc = new ComparisonTableService({ connectors, collectionGuard: guard });
+    const draft = await tableSvc.arbitrateColumns('9782413081692', [
+      {
+        source: 'bnf',
+        isbn13: '9782413081692',
+        title: 'Les Passagers du vent',
+        seriesName: "Les Passagers du vent : l'intégrale",
+        seriesLinkKind: 'marc_ensemble_460',
+        authors: ['François Bourgeon'],
+        scriptwriters: ['François Bourgeon'],
+        illustrators: ['François Bourgeon'],
+        publisher: 'Delcourt',
+        pageCount: 612,
+        deweyCode: '741.5',
+        rawSubjects: ['Bandes dessinées'],
+        isIntegralHint: true,
+        integralNotes: 'Éd. intégrale ; Réunit les tomes 1 à 9.',
+        contentKind: 'illustrated'
+      }
+    ]);
+    expect(draft?.isIntegral).toBe(true);
+    expect(draft?.includedVolumes).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
+  });
 });

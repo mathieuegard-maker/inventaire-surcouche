@@ -105,7 +105,7 @@ const TRAILING_VOLUME_RE =
   /(?:\s*[-–:,]\s*|\s+)(?:(?:tome|t\.|vol\.?|volume|n°|#|livre|[ée]pisode)\s*(\d{1,3}|[ivx]{1,5})|\bt(\d{1,3}))\s*$/i;
 
 const EDITION_FORMAT_QUALIFIERS_RE =
-  /\b(?:[ée]ditions?|ed\.?|deluxe|perfect|black\s+edition|edition\s+black|black|ultimate|collector|kanzenban|full\s+color|grand\s+format|poche|coffret|cult|signatures?)\b/gi;
+  /(?:^|(?<=[^a-zA-ZÀ-ÿ]))(?:[ée]ditions?|ed\.?|deluxe|perfect|black\s+edition|edition\s+black|black|ultimate|collector|kanzenban|full\s+color|grand\s+format|poche|coffret|cult|signatures?)(?![a-zA-ZÀ-ÿ])/gi;
 
 const TRAILING_PUBLISHER_HINT_RE =
   /\b(?:gl[ée]nat|glenat|kana|pika|panini|tonkam|kurokawa|urban|vertigo|delcourt|dupuis|dargaud|casterman|ki-?oon|soleil|akata)\b/gi;

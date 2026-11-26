@@ -54,14 +54,41 @@ describe('parseMarcRecord (InterMarc BnF + UNIMARC SUDOC)', () => {
     expect(parsed?.collectionNumber).toBe('24');
   });
 
-  it('ne classe pas "texte intégral" comme une intégrale multi-tomes', () => {
-    const xml = `
+  it('ne classe pas "texte intégral", "version intégrale" ou un roman isolé en 2 vol. comme intégrale multi-tomes', () => {
+    const xml1 = `
       <record>
         <datafield tag="020"><subfield code="a">9782070413119</subfield></datafield>
+        <datafield tag="051"><subfield code="a">txt</subfield></datafield>
         <datafield tag="245"><subfield code="a">Les Misérables</subfield><subfield code="e">texte intégral</subfield></datafield>
+        <datafield tag="280"><subfield code="a">2 vol.</subfield></datafield>
       </record>
     `;
-    const parsed = parseMarcRecord(xml);
-    expect(parsed?.isIntegralHint).toBe(false);
+    expect(parseMarcRecord(xml1)?.isIntegralHint).toBe(false);
+
+    const xml2 = `
+      <record>
+        <datafield tag="020"><subfield code="a">9782070409228</subfield></datafield>
+        <datafield tag="051"><subfield code="a">txt</subfield></datafield>
+        <datafield tag="245"><subfield code="a">Critique de la raison pure</subfield><subfield code="e">édition intégrale</subfield></datafield>
+        <datafield tag="280"><subfield code="a">2 vol. (800 p.)</subfield></datafield>
+      </record>
+    `;
+    expect(parseMarcRecord(xml2)?.isIntegralHint).toBe(false);
+  });
+
+  it('détecte les vraies intégrales BD via 460$t, 250$a ou notes MARC 300/327', () => {
+    const passagersXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782413081692</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Les passagers du vent</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="250"><mxc:subfield code="a">Éd. intégrale</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="300"><mxc:subfield code="a">Réunit les tomes 1 à 9.</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="460"><mxc:subfield code="t">Les passagers du vent : l'intégrale</mxc:subfield></mxc:datafield>
+      </mxc:record>
+    `;
+    const parsed = parseMarcRecord(passagersXml);
+    expect(parsed?.isIntegralHint).toBe(true);
+    expect(parsed?.integralNotes).toContain('Réunit les tomes 1 à 9');
   });
 });

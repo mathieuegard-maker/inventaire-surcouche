@@ -768,6 +768,11 @@ export const fr = {
     benchmarkDiffExpectedShort: 'Att.',
     benchmarkDiffActualShort: 'Trouvé',
     benchmarkGradeCsvOnlyError: 'Le fichier de correction doit être au format .csv, .tsv ou .txt.',
+    benchmarkGroundTruthQueuedToast:
+      'Fichier corrigé « {filename} » préchargé : la notation démarrera automatiquement à la fin de l’import.',
+    benchmarkGroundTruthQueuedBanner:
+      'Corrigé préchargé : {filename} (notation automatique dès la fin de l’import).',
+    benchmarkGroundTruthClearBtn: 'Retirer le corrigé préchargé',
     benchmarkGradeHintNoFile:
       'Chargez un CSV de correction (ex. reponses_complet_1080.csv) pour noter automatiquement chaque champ et générer le rapport Markdown en log.',
     benchmarkCopySeriesReportBtn: 'Copier séries (.md)',

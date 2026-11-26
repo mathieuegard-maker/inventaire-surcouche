@@ -798,4 +798,80 @@ describe('Connecteurs V2 — Corrections terrain (Inventaire, Gemini)', () => {
     const invFound = await inv.searchSeriesUri!('Spirou et Fantasio');
     expect(invFound?.wikidataQid).toBe('Q102237771');
   });
+
+  it('rejette les libellés non-latins (ex. amharique ሃሪ ፖተር) sur Inventaire et Wikidata au profit des labels latins', async () => {
+    const mockFetch = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = decodeURIComponent(String(input));
+      if (url.includes('inventaire.io/api/entities') && url.includes('isbn:9782070584628')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'isbn:9782070584628': {
+                uri: 'isbn:9782070584628',
+                labels: { fr: "Harry Potter à l'école des sorciers" },
+                claims: { 'wdt:P629': ['wd:Q43361'] }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('inventaire.io/api/entities') && url.includes('wd:Q43361')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'wd:Q43361': {
+                uri: 'wd:Q43361',
+                labels: { am: 'ሃሪ ፖተር', de: 'Harry Potter und der Stein der Weisen' },
+                claims: { 'wdt:P179': ['wd:Q8337'] }
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('inventaire.io/api/entities') && url.includes('wd:Q8337')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              'wd:Q8337': {
+                uri: 'wd:Q8337',
+                // Simule le cas prod où seul l'amharique est en tête (avec un label latin 'de' ou aucun)
+                labels: { am: 'ሃሪ ፖተር', de: 'Harry Potter' },
+                claims: {}
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      if (url.includes('wikidata.org/w/api.php') && url.includes('Q8337')) {
+        return new Response(
+          JSON.stringify({
+            entities: {
+              Q8337: {
+                id: 'Q8337',
+                labels: { am: { value: 'ሃሪ ፖተር' } },
+                claims: {}
+              }
+            }
+          }),
+          { status: 200 }
+        );
+      }
+      return new Response('{}', { status: 200 });
+    });
+
+    const http = new HttpClient({ fetchImpl: mockFetch as typeof fetch });
+    const inv = createInventaireConnector(http);
+    const wd = createWikidataConnector(http);
+
+    const rec = await inv.lookupByIsbn('9782070584628');
+    expect(rec?.seriesName).toBe('Harry Potter');
+    expect(rec?.seriesName).not.toContain('ሃሪ');
+
+    // Wikidata dont l'unique label serait non-latin -> ignoré proprement (null, jamais de chaîne amharique)
+    const wdOnlyNonLatin = await wd.lookupWorkByQid('Q8337');
+    expect(wdOnlyNonLatin).toBeNull();
+  });
 });

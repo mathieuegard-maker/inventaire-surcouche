@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   annotateIntegralCoverage,
+  extractIncludedVolumesFromEditorialText,
   formatIncludedVolumeNumbers,
   formatIntegralRangeLabel,
   parseIncludedVolumeNumbers,
@@ -9,12 +10,42 @@ import {
 } from './integral.util';
 
 describe('integral.util', () => {
-  it('parse et formate les plages de tomes inclus', () => {
+  it('parse et formate les plages de tomes inclus en ignorant les années (ex. 1946-1948)', () => {
     expect(parseIncludedVolumeNumbers('1 à 3')).toEqual(['1', '2', '3']);
     expect(parseIncludedVolumeNumbers('T.1-3, 5')).toEqual(['1', '2', '3', '5']);
+    expect(parseIncludedVolumeNumbers("Buck Danny, l'intégrale 1 (1946-1948)")).toEqual(['1']);
     expect(formatIncludedVolumeNumbers(['1', '2', '3'])).toBe('1-3');
     expect(formatIncludedVolumeNumbers(['1', '3', '5'])).toBe('1, 3, 5');
     expect(formatIntegralRangeLabel(['1', '2', '3'])).toBe('Int. T.1-3');
+  });
+
+  it('extrait les tomes inclus depuis les notes MARC 300/327 sans capturer les nombres narratifs d’un résumé', () => {
+    expect(extractIncludedVolumesFromEditorialText('Réunit les tomes 1 à 9 de la série.')).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+      '7',
+      '8',
+      '9'
+    ]);
+    expect(
+      extractIncludedVolumesFromEditorialText(
+        'Réunit : 1, Le combat ordinaire ; 2, Les quantités négligeables ; 3, Ce qui est précieux ; 4, Planter des clous'
+      )
+    ).toEqual(['1', '2', '3', '4']);
+    expect(extractIncludedVolumesFromEditorialText('Coffret réunissant les quatre tomes du cycle.')).toEqual([
+      '1',
+      '2',
+      '3',
+      '4'
+    ]);
+    // Zéro faux positif sur un résumé narratif contenant des chiffres
+    expect(
+      extractIncludedVolumesFromEditorialText('En 14 jours, 3 amis traversent 7 mers entre 1940 et 1945.')
+    ).toEqual([]);
   });
 
   it('annote correctement un tome couvert par une intégrale possédée de la même série', () => {

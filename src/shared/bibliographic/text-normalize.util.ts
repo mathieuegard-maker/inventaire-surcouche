@@ -31,6 +31,20 @@ export function stripLeadingArticles(value: string): string {
   return (value || '').trim().replace(LEADING_ARTICLES_RE, '').trim();
 }
 
+/**
+ * Vérifie qu'un libellé bibliographique est majoritairement en alphabet latin
+ * afin d'empêcher les libellés non latins (ex. amharique `ሃሪ ፖተር`, arabe, cyrillique, CJK) de polluer séries et titres.
+ */
+export function isLatinScriptLabel(raw?: string | null): boolean {
+  if (!raw) return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  const letters = trimmed.match(/\p{L}/gu);
+  if (!letters || letters.length === 0) return /\d/.test(trimmed);
+  const latinLetters = trimmed.match(/\p{Script=Latin}/gu)?.length ?? 0;
+  return latinLetters / letters.length >= 0.5;
+}
+
 export function normalizeSeriesNumber(raw?: string | number | null): string {
   if (raw === undefined || raw === null) return '';
   const cleaned = String(raw)

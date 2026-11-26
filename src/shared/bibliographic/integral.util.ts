@@ -18,10 +18,21 @@ export function parseIncludedVolumeNumbers(raw?: string | string[] | null): stri
   while ((match = rangeRegex.exec(cleaned)) !== null) {
     const start = parseInt(match[1], 10);
     const end = parseInt(match[2], 10);
-    if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end >= start && end - start <= 40) {
+    // Rejette les plages d'années de publication (ex. "1946-1948" sur Buck Danny Intégrale 1) et numéros aberrants
+    if (
+      Number.isFinite(start) &&
+      Number.isFinite(end) &&
+      start > 0 &&
+      end >= start &&
+      end <= 300 &&
+      end - start <= 40
+    ) {
       for (let n = start; n <= end; n++) {
         result.add(String(n));
       }
+      remaining = remaining.replace(match[0], ' ');
+    } else if (start >= 1800 && end >= 1800) {
+      // Efface aussi la plage d'années pour éviter qu'elle ne soit re-parsée token par token
       remaining = remaining.replace(match[0], ' ');
     }
   }
@@ -29,11 +40,81 @@ export function parseIncludedVolumeNumbers(raw?: string | string[] | null): stri
   for (const token of remaining.split(/[,;/\s]+/)) {
     const norm = normalizeSeriesNumber(token);
     if (norm && /^\d+(?:\.\d+)?$/.test(norm)) {
-      result.add(norm);
+      const val = parseFloat(norm);
+      if (val > 0 && val <= 300) {
+        result.add(norm);
+      }
     }
   }
 
   return Array.from(result).sort((a, b) => parseFloat(a) - parseFloat(b));
+}
+
+const EDITORIAL_VOLUME_CLAUSE_RE =
+  /(?:r[ée]unit|contient|regroupe|rassemble|int[ée]grale\s+des?|coffret\s+(?:regroupant|contenant|des?))\s+[^.\n]{0,160}|\b(?:tomes?|t\.|vol\.?|volumes?|albums?|livres?)\s*\d{1,2}(?:\s*(?:[-–—à,&]|\bet\b)\s*(?:t\.?\s*|tome\s*)?\d{1,2})+/gi;
+
+const WORD_COUNT_INTEGRAL_RE =
+  /\b(?:r[ée]uni(?:t|ssant)|contient|contenant|regroup(?:e|ant)|rassembl(?:e|ant))\s+(?:les\s+)?(deux|trois|quatre|cinq|six|sept|huit|neuf|dix|douze|\d{1,2})\s+(?:premiers?\s+)?(?:tomes?|albums?|volumes?)\b/i;
+
+const FRENCH_SMALL_NUMBERS: Record<string, number> = {
+  deux: 2,
+  trois: 3,
+  quatre: 4,
+  cinq: 5,
+  six: 6,
+  sept: 7,
+  huit: 8,
+  neuf: 9,
+  dix: 10,
+  douze: 12
+};
+
+/**
+ * Extrait prudemment les numéros de tomes inclus depuis une note MARC (300$a / 327$a) ou un résumé éditorial
+ * sans jamais capturer les nombres narratifs d'un synopsis.
+ */
+export function extractIncludedVolumesFromEditorialText(rawText?: string | null): string[] {
+  if (!rawText) return [];
+  const text = rawText.trim();
+  if (!text) return [];
+
+  const collected = new Set<string>();
+  const clauses = text.match(EDITORIAL_VOLUME_CLAUSE_RE) ?? [];
+  for (const clause of clauses) {
+    // Exclure les mentions de cycle seul ("du cycle 1") sans plage ni liste
+    const cleanedClause = clause.replace(/\bcycle\s+\d+\b/gi, ' ');
+    for (const v of parseIncludedVolumeNumbers(cleanedClause)) {
+      collected.add(v);
+    }
+  }
+
+  // Note de dépouillement structurée (MARC 327$a / 300$a : "Réunit : 1, Titre A ; 2, Titre B ; 3, Titre C")
+  if (collected.size < 2 && /\b(?:r[ée]unit|contient)\s*:/i.test(text)) {
+    const afterColon = text.split(/:\s*/).slice(1).join(': ');
+    const itemMatches = afterColon.match(/(?:^|[;•\n])\s*(?:t\.?\s*|tome\s*)?(\d{1,2})\s*[,.:–-]/gi) ?? [];
+    for (const m of itemMatches) {
+      const numMatch = m.match(/(\d{1,2})/);
+      if (numMatch) {
+        const n = parseInt(numMatch[1], 10);
+        if (n > 0 && n <= 150) collected.add(String(n));
+      }
+    }
+  }
+
+  // Mention textuelle explicite "Réunit les quatre tomes" / "Contient les 6 albums"
+  if (collected.size < 2) {
+    const wordMatch = WORD_COUNT_INTEGRAL_RE.exec(text);
+    if (wordMatch) {
+      const token = wordMatch[1].toLowerCase();
+      const count = /^\d+$/.test(token) ? parseInt(token, 10) : (FRENCH_SMALL_NUMBERS[token] ?? 0);
+      if (count >= 2 && count <= 20) {
+        for (let n = 1; n <= count; n++) collected.add(String(n));
+      }
+    }
+  }
+
+  const sorted = Array.from(collected).sort((a, b) => parseFloat(a) - parseFloat(b));
+  return sorted.length >= 2 ? sorted : [];
 }
 
 export function formatIncludedVolumeNumbers(vols?: string[] | null): string {

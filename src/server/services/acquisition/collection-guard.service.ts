@@ -84,6 +84,9 @@ export function evaluateAuthorHeterogeneity(sample: CollectionSampleItem[]): {
   };
 }
 
+const EXPLICIT_EDITORIAL_COLLECTION_PREFIX_RE =
+  /^(?:(?:la\s+)?collection\s+|(?:la\s+|petite\s+|grande\s+)?biblioth[eè]que\s+)/i;
+
 export class CollectionGuardService {
   private readonly bnf?: BnfConnector;
 
@@ -94,6 +97,9 @@ export class CollectionGuardService {
   /**
    * Applique les 3 tests algorithmiques combinés (zéro mot-clé ou liste éditoriale en dur) :
    * 1. Ancrage Graphe (Wikidata/Inventaire P179) -> Série confirmée (protège Spirou, Astérix, Les Reines de sang).
+   *    Exception algorithmique : si l'intitulé porte un préfixe générique de collection éditoriale
+   *    ("Collection ...", "Bibliothèque ..."), il est soumis au test mathématique d'hétérogénéité des auteurs
+   *    avant toute validation (bloque "Collection Blanche", "Bibliothèque Charpentier" tout en protégeant une série mono-auteur).
    * 2. Confrontation Œuvre vs Édition -> Si l'Œuvre sur le graphe n'a aucune série (ou a une autre série),
    *    un candidat issu uniquement de 225/410 est démasqué comme collection éditoriale (protège contre "Tout Simenon").
    * 3. Distinction MARC (460 ensemble vs 225/410 collection) + Test d'hétérogénéité des auteurs sur échantillon.
@@ -104,14 +110,17 @@ export class CollectionGuardService {
       return { verdict: 'collection', reason: 'empty_candidate' };
     }
 
+    const hasEditorialPrefix = EXPLICIT_EDITORIAL_COLLECTION_PREFIX_RE.test(input.candidateName.trim());
+
     // Test 1 : Ancrage Graphe (P179 Wikidata ou Inventaire) sur ce candidat -> Vraie série garantie
+    // (sauf préfixe explicite "Collection ..." / "Bibliothèque ..." qui passe par le test d'hétérogénéité des auteurs)
     const graphConfirmed = input.allColumns.some(
       (col) =>
         col.seriesLinkKind === 'graph_p179' &&
         col.seriesName &&
         normalizeTextKey(col.seriesName) === normCandidate
     );
-    if (input.linkKind === 'graph_p179' || graphConfirmed) {
+    if ((input.linkKind === 'graph_p179' || graphConfirmed) && !hasEditorialPrefix) {
       return { verdict: 'series', reason: 'confirmed_by_graph_p179' };
     }
 
@@ -151,7 +160,7 @@ export class CollectionGuardService {
           normalizeTextKey(col.seriesName) === normCandidate
       );
 
-    if (ensembleConfirmed) {
+    if (ensembleConfirmed && !hasEditorialPrefix) {
       const vol = parsePositiveInt(input.volumeNumber);
       // Même en 460, un n° de collection manifestement > 500 sans ancrage graphe mérite vérification
       if (vol === null || vol <= 500) {

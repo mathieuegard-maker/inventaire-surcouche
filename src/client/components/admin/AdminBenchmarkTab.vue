@@ -51,6 +51,7 @@ const uploading = ref(false);
 // Upload CSV de correction (vérité terrain) & rapport Markdown généré
 const gtFileInputRef = ref<HTMLInputElement | null>(null);
 const gradingBusy = ref(false);
+const pendingGroundTruth = ref<{ filename: string; contentBase64: string } | null>(null);
 const gradedReport = ref<AdminBenchmarkGradedReport | null>(null);
 const gradedMarkdown = ref<string>('');
 const gradedSeriesMarkdown = ref<string>('');
@@ -509,22 +510,9 @@ async function handleFileSelected(event: Event): Promise<void> {
   }
 }
 
-async function handleGroundTruthSelected(event: Event): Promise<void> {
-  const inputEl = event.target as HTMLInputElement;
-  const file = inputEl.files?.[0] ?? null;
-  inputEl.value = '';
-  const job = selectedJob.value;
-  if (!file || !job) return;
-
-  const lower = file.name.toLowerCase();
-  if (!lower.endsWith('.csv') && !lower.endsWith('.tsv') && !lower.endsWith('.txt')) {
-    uiStore.pushToast(t('admin.benchmarkGradeCsvOnlyError'), 'danger');
-    return;
-  }
-
+async function gradeJobWithPayload(jobId: string, filename: string, contentBase64: string): Promise<void> {
   gradingBusy.value = true;
   try {
-    const contentBase64 = await readFileAsBase64(file);
     const res = await apiRequest<{
       ok: true;
       report: AdminBenchmarkGradedReport;
@@ -532,10 +520,10 @@ async function handleGroundTruthSelected(event: Event): Promise<void> {
       seriesMarkdown: string;
       reportFilename: string;
       archiveFilename: string;
-    }>(`/api/admin/import-benchmarks/${encodeURIComponent(job.id)}/grade`, {
+    }>(`/api/admin/import-benchmarks/${encodeURIComponent(jobId)}/grade`, {
       method: 'POST',
       body: {
-        filename: file.name,
+        filename,
         contentBase64
       },
       timeoutMs: 60000
@@ -558,6 +546,42 @@ async function handleGroundTruthSelected(event: Event): Promise<void> {
   } finally {
     gradingBusy.value = false;
   }
+}
+
+function clearPendingGroundTruth(): void {
+  pendingGroundTruth.value = null;
+}
+
+async function handleGroundTruthSelected(event: Event): Promise<void> {
+  const inputEl = event.target as HTMLInputElement;
+  const file = inputEl.files?.[0] ?? null;
+  inputEl.value = '';
+  if (!file) return;
+
+  const lower = file.name.toLowerCase();
+  if (!lower.endsWith('.csv') && !lower.endsWith('.tsv') && !lower.endsWith('.txt')) {
+    uiStore.pushToast(t('admin.benchmarkGradeCsvOnlyError'), 'danger');
+    return;
+  }
+
+  let contentBase64: string;
+  try {
+    contentBase64 = await readFileAsBase64(file);
+  } catch {
+    uiStore.pushToast(t('app.retry'), 'danger');
+    return;
+  }
+
+  const job = selectedJob.value;
+  // Si aucun lot terminé n'est encore disponible (DB vide ou import en cours), précharger pour notation auto dès la fin de l'import
+  if (!job || job.items.length === 0 || job.status !== 'done' || isLiveImportRunning.value) {
+    pendingGroundTruth.value = { filename: file.name, contentBase64 };
+    uiStore.pushToast(t('admin.benchmarkGroundTruthQueuedToast', { filename: file.name }), 'info');
+    return;
+  }
+
+  pendingGroundTruth.value = null;
+  await gradeJobWithPayload(job.id, file.name, contentBase64);
 }
 
 async function handleRegrade(): Promise<void> {
@@ -840,7 +864,13 @@ watch(
     const prevStatus = prev?.[1];
     const prevDone = prev?.[2] ?? 0;
     if (status === 'done' && prevStatus !== 'done') {
-      void loadBenchmarks(id);
+      void loadBenchmarks(id).then(() => {
+        const queued = pendingGroundTruth.value;
+        if (queued) {
+          pendingGroundTruth.value = null;
+          void gradeJobWithPayload(id, queued.filename, queued.contentBase64);
+        }
+      });
     } else if (status === 'running' && typeof done === 'number' && done > prevDone && done % 10 === 0) {
       void loadBenchmarks(selectedJobId.value || id);
     }
@@ -889,7 +919,6 @@ onMounted(() => {
             {{ uploading ? t('admin.benchmarkUploadingBtn') : t('admin.benchmarkUploadBtn') }}
           </button>
           <button
-            v-if="selectedJob && selectedJob.items.length > 0"
             type="button"
             class="ds-btn ds-btn--sm"
             :disabled="gradingBusy"
@@ -929,6 +958,14 @@ onMounted(() => {
             {{ t('admin.benchmarkResetDbBtn') }}
           </button>
         </div>
+      </div>
+
+      <!-- Bandeau fichier corrigé préchargé (lancement auto dès la fin de l'import) -->
+      <div v-if="pendingGroundTruth" class="ds-banner ds-banner--info ds-row ds-row--between">
+        <span>{{ t('admin.benchmarkGroundTruthQueuedBanner', { filename: pendingGroundTruth.filename }) }}</span>
+        <button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" @click="clearPendingGroundTruth">
+          {{ t('admin.benchmarkGroundTruthClearBtn') }}
+        </button>
       </div>
 
       <!-- Sélecteur de lot -->

@@ -2,7 +2,10 @@
 // Connecteur BnF SRU en HTTPS (`https://catalogue.bnf.fr/api/SRU`) via node:https IPv4 forcé + User-Agent navigateur.
 
 import { parseMarcRecord, type ParsedMarcRecord } from '../../shared/bibliographic/intermarc-parser';
-import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
+import {
+  extractIncludedVolumesFromEditorialText,
+  parseIncludedVolumeNumbers
+} from '../../shared/bibliographic/integral.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import {
   extractAuthorLastNameForQuery,
@@ -67,6 +70,7 @@ function toCandidate(parsed: ParsedMarcRecord, fallbackIsbn13: string): SourceCa
     coverUrl: parsed.bnfCoverUrl,
     isNonBook: parsed.isNonBook,
     isIntegralHint: parsed.isIntegralHint,
+    integralNotes: parsed.integralNotes,
     contentKind: parsed.contentKind
   };
 }
@@ -277,9 +281,11 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
         }
         if (!belongsToSeries) continue;
 
-        const parsedVols = parseIncludedVolumeNumbers(
-          [rec.title, rec.subtitle ?? '', rec.description ?? ''].join(' ')
+        const titleVols = parseIncludedVolumeNumbers([rec.title, rec.subtitle ?? ''].join(' '));
+        const notesVols = extractIncludedVolumesFromEditorialText(
+          [rec.integralNotes ?? '', rec.description ?? ''].filter(Boolean).join(' ; ')
         );
+        const parsedVols = notesVols.length > titleVols.length ? notesVols : titleVols;
         // Numéro d'intégrale (ex. "Intégrale 1", "Tome 2")
         const rawVol = rec.ensembleVolumeNumber;
         const volFromTitle = fullText.match(/\bint[ée]grale\s*(?:t\.?|tome|vol\.?|volume|n°|#)?\s*(\d{1,2})\b/i)?.[1];

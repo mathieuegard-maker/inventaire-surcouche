@@ -44,6 +44,7 @@ export interface SourceCandidateRecord {
   coverUrl?: string;
   isNonBook?: boolean;
   isIntegralHint?: boolean;
+  integralNotes?: string;
   contentKind?: 'illustrated' | 'text_only';
 }
 

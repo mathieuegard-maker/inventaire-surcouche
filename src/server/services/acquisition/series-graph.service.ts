@@ -66,11 +66,18 @@ export function compareSameVolumeContent(
     incoming.collectionName && !isCompatibleSeriesName(incoming.collectionName, incoming.seriesName)
       ? normalizeTextKey(incoming.collectionName)
       : '';
-  const hasDistinctCollection = Boolean(incomingCol && existingCol !== incomingCol);
   const hasDistinctPublisher = Boolean(
     incoming.publisher &&
       existing.publisher &&
       normalizeTextKey(existing.publisher) !== normalizeTextKey(incoming.publisher)
+  );
+  // Une collection générique d'éditeur absente sur le squelette Wikidata (ex. `existingCol === ''` vs `Ki-oon seinen`)
+  // sans tag explicite de redécoupage (Deluxe/Perfect/Nomad/Full Color) et à pagination compatible ne prouve PAS un découpage différent.
+  const incomingHasExplicitRecutTag = Boolean(incomingCol && DISTINCT_EDITION_TAG_RE.test(incomingCol));
+  const hasDistinctCollection = Boolean(
+    incomingCol &&
+      existingCol !== incomingCol &&
+      (Boolean(existingCol) || incomingHasExplicitRecutTag || hasDistinctPublisher || pageRatio >= 1.3)
   );
 
   // 2. Titres génériques ("Tome 1") : ne pas séparer sur le titre, arbitrer uniquement si pagination fortement différente + édition distincte
@@ -514,13 +521,28 @@ export class SeriesGraphService {
 
     for (const cut of orderedCuts) {
       const cutBooks = this.catalogRepo.listBooksBySeriesId(cut.id);
+      const cutMedia = this.getSeriesMediaFamily(cutBooks);
 
       // Séparation média structurelle (ex. Nestor Burma BD vs Nestor Burma Romans dans la même Franchise)
       if (incomingMedia !== 'neutral') {
-        const cutMedia = this.getSeriesMediaFamily(cutBooks);
         if (cutMedia !== 'neutral' && cutMedia !== incomingMedia) {
           continue;
         }
+      }
+
+      // Cycles littéraires en prose (ex. La Comédie humaine, Voyages extraordinaires) :
+      // les éditions poche/classique (Folio, Livre de poche, GF...) ne créent JAMAIS de découpages séparés —
+      // tout roman du cycle se rattache à la série canonique prose de la franchise.
+      if (incomingMedia === 'prose' && cutMedia !== 'graphic' && cut.edition_signature === '') {
+        const merged = this.catalogRepo.mergeSeriesMetadataAutomatic(cut.id, {
+          franchiseId: franchise.id,
+          alias: input.seriesName !== cut.canonical_name ? input.seriesName : undefined,
+          authors: input.authors,
+          wikidataQid: input.wikidataSeriesQid ?? null,
+          bnfEnsembleId: input.bnfEnsembleId ?? null,
+          now
+        })!;
+        return { franchise, series: merged };
       }
 
       // Même œuvre déjà présente dans ce découpage (Q-ID ou titre distinctif exact / sans préfixe "Les Aventures de...") -> rattacher ici

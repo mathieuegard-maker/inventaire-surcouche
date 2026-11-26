@@ -2,7 +2,10 @@
 // Étage 2 : Collecte parallèle multi-sources -> Tableau Comparatif normalisé -> Arbitre déterministe champ par champ.
 
 import { classifyBookMetadata } from '../../../shared/bibliographic/category-classifier';
-import { parseIncludedVolumeNumbers } from '../../../shared/bibliographic/integral.util';
+import {
+  extractIncludedVolumesFromEditorialText,
+  parseIncludedVolumeNumbers
+} from '../../../shared/bibliographic/integral.util';
 import {
   cleanSeriesName,
   cleanTitle,
@@ -292,14 +295,31 @@ export class ComparisonTableService {
       ...columns.map((c) => c.subtitle ?? ''),
       volumeLabel ?? ''
     ].join(' ');
+    const editorialNotesAndDesc = [
+      ...columns.map((c) => c.integralNotes ?? ''),
+      ...columns.map((c) => c.description ?? '')
+    ]
+      .filter(Boolean)
+      .join(' ; ');
 
-    const parsedIntegralRange = parseIncludedVolumeNumbers(fullTextForFlags);
+    const parsedTitleIntegralRange = parseIncludedVolumeNumbers(fullTextForFlags);
+    const parsedNotesIntegralRange = extractIncludedVolumesFromEditorialText(editorialNotesAndDesc);
     const hasIntegralSignal =
       columns.some((c) => c.isIntegralHint) ||
-      (parsedIntegralRange.length >= 2 && /\b(int[ée]grale|coffret|omnibus|compendium|tomes?)\b/i.test(fullTextForFlags));
+      (parsedTitleIntegralRange.length >= 2 &&
+        /\b(int[ée]grale|coffret|omnibus|compendium|tomes?)\b/i.test(fullTextForFlags));
 
     const isIntegral = Boolean(hasIntegralSignal);
-    const includedVolumes = isIntegral ? parsedIntegralRange : [];
+    // Privilégier la liste la plus riche entre le titre et les notes MARC (300/327) / résumé
+    const includedVolumes = isIntegral
+      ? parsedNotesIntegralRange.length > parsedTitleIntegralRange.length
+        ? parsedNotesIntegralRange
+        : parsedTitleIntegralRange.length >= 2
+          ? parsedTitleIntegralRange
+          : parsedNotesIntegralRange.length > 0
+            ? parsedNotesIntegralRange
+            : parsedTitleIntegralRange
+      : [];
 
     // Hors-série évalué après agrégation (un tome numéroté entier standard n'est pas HS sauf mention explicite HS)
     const isHorsSerie =

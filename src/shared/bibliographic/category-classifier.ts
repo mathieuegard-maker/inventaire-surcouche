@@ -96,7 +96,7 @@ const NOVEL_STRUCTURAL_RE =
   /\b(romans?|fiction|nouvelles|thrillers?|polars?|policiers?|fantasy|science[- ]fiction|contes)\b/i;
 
 const ESSAI_STRUCTURAL_RE =
-  /\b(essais?|histoire|philosophie|sociologie|sciences?|biographies?|autobiographies?|politique|[ée]conomie|psychologie|psychanalyse|documentaires?|astrophysique|physique|biologie|[ée]cologie|g[ée]opolitique)\b/i;
+  /(?:^|[^a-zA-ZÀ-ÿ])(essais?|histoire|philosophie|sociologie|sciences?|biographies?|autobiographies?|politique|[ée]conomie|psychologie|psychanalyse|documentaires?|astrophysique|physique|biologie|[ée]cologie|g[ée]opolitique)(?![a-zA-ZÀ-ÿ])/i;
 
 export function classifyBookMetadata(input: {
   title?: string;

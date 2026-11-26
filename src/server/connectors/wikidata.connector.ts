@@ -6,6 +6,7 @@ import {
   cleanSeriesName,
   cleanTitle,
   extractAuthorLastNameForQuery,
+  isLatinScriptLabel,
   normalizeSeriesNumber,
   normalizeTextKey
 } from '../../shared/bibliographic/text-normalize.util';
@@ -66,9 +67,11 @@ function stripWikipediaDisambiguator(rawTitle: string): string {
 
 function getWdLabel(entity: WdEntity | undefined): string {
   if (!entity) return '';
-  const frLabel = entity.labels?.fr?.value?.trim() || '';
+  const frLabelRaw = entity.labels?.fr?.value?.trim() || '';
+  const frLabel = isLatinScriptLabel(frLabelRaw) ? frLabelRaw : '';
   const frWikiRaw = entity.sitelinks?.frwiki?.title?.trim() || '';
-  const frWiki = frWikiRaw ? stripWikipediaDisambiguator(frWikiRaw) : '';
+  const frWikiCandidate = frWikiRaw ? stripWikipediaDisambiguator(frWikiRaw) : '';
+  const frWiki = isLatinScriptLabel(frWikiCandidate) ? frWikiCandidate : '';
 
   if (frWiki) {
     if (!frLabel) return frWiki;
@@ -80,8 +83,17 @@ function getWdLabel(entity: WdEntity | undefined): string {
     }
   }
 
+  if (frLabel) return frLabel;
   if (!entity.labels) return frWiki;
-  return frLabel || entity.labels.en?.value || Object.values(entity.labels)[0]?.value || '';
+  for (const lang of ['en', 'it', 'de', 'es', 'pt', 'nl']) {
+    const val = entity.labels[lang]?.value?.trim();
+    if (val && isLatinScriptLabel(val)) return val;
+  }
+  for (const entry of Object.values(entity.labels)) {
+    const val = entry?.value?.trim();
+    if (val && isLatinScriptLabel(val)) return val;
+  }
+  return '';
 }
 
 function getWdClaimQids(entity: WdEntity | undefined, prop: string): string[] {
@@ -388,7 +400,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
             : rawLabel;
 
         const title = cleanTitle(preferredLabel);
-        if (!title || /^Q\d+$/i.test(title)) continue;
+        if (!title || /^Q\d+$/i.test(title) || !isLatinScriptLabel(title)) continue;
 
         const volStr = normalizeSeriesNumber(row.ordinal?.value);
         const volNum = /^\d+$/.test(volStr) ? parseInt(volStr, 10) : null;

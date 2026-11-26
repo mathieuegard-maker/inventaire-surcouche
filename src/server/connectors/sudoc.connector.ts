@@ -80,6 +80,7 @@ export function createSudocConnector(http: HttpClient): SudocConnector {
         sudocPpn: ppn,
         isNonBook: parsed.isNonBook,
         isIntegralHint: parsed.isIntegralHint,
+        integralNotes: parsed.integralNotes,
         contentKind: parsed.contentKind
       };
     }
