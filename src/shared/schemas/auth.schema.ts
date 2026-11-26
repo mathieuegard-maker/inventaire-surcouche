@@ -49,8 +49,34 @@ export const updateDefaultGenresSchema = z.object({
   genre: z.string().trim().min(1).max(60).optional()
 });
 
+export const importFieldKeySchema = z.enum([
+  'isbn',
+  'title',
+  'series',
+  'volumeNumber',
+  'author',
+  'publisher',
+  'ownershipStatus',
+  'isIntegral',
+  'includedVolumes',
+  'readingStatus',
+  'rating',
+  'notes',
+  'testCategory'
+]);
+
+export const importColumnMappingSchema = z.record(z.string().min(1).max(120), importFieldKeySchema.nullable());
+
+export const collectionImportPreviewRequestSchema = z.object({
+  filename: z.string().trim().min(1).max(200),
+  contentBase64: z.string().min(1).max(8 * 1024 * 1024),
+  hasHeaderRow: z.boolean().optional()
+});
+
 export const collectionImportRequestSchema = z.object({
   filename: z.string().trim().min(1).max(200),
   contentBase64: z.string().min(1).max(8 * 1024 * 1024),
-  defaultStatus: z.enum(['owned', 'wish']).default('owned')
+  defaultStatus: z.enum(['owned', 'wish']).default('owned'),
+  hasHeaderRow: z.boolean().optional(),
+  columnMapping: importColumnMappingSchema.optional()
 });

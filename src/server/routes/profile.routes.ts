@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import {
+  collectionImportPreviewRequestSchema,
   collectionImportRequestSchema,
   deleteAccountSchema,
   updateDefaultGenresSchema,
@@ -70,6 +71,19 @@ export function createProfileRoutes(
     });
   });
 
+  router.post('/import/preview', zValidator('json', collectionImportPreviewRequestSchema), async (c) => {
+    if (!collectionImportService) {
+      return c.json({ error: { code: 'IMPORT_UNAVAILABLE', message: 'Service import non disponible.' } }, 503);
+    }
+    const body = c.req.valid('json');
+    const preview = await collectionImportService.previewUploadedFile({
+      filename: body.filename,
+      contentBase64: body.contentBase64,
+      hasHeaderRow: body.hasHeaderRow
+    });
+    return c.json({ ok: true, preview });
+  });
+
   router.post('/import', zValidator('json', collectionImportRequestSchema), async (c) => {
     const auth = c.get('auth')!;
     if (!collectionImportService) {
@@ -81,7 +95,9 @@ export function createProfileRoutes(
       libraryId: auth.libraryId,
       filename: body.filename,
       contentBase64: body.contentBase64,
-      defaultStatus: body.defaultStatus
+      defaultStatus: body.defaultStatus,
+      hasHeaderRow: body.hasHeaderRow,
+      columnMapping: body.columnMapping
     });
     return c.json({ ok: true, ...enqueued }, 202);
   });

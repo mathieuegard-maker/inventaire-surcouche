@@ -3,11 +3,13 @@
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import BaseModal from '../components/base/BaseModal.vue';
+import ImportMappingModal from '../components/modals/ImportMappingModal.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useJobsStore } from '../stores/jobs.store';
 import { useUiStore } from '../stores/ui.store';
 import { apiRequest, ApiClientError } from '../api/client';
 import { t } from '../../shared/locales';
+import type { ImportColumnMapping, ImportFilePreview } from '../../shared/bibliographic/collection-import.util';
 import type {
   BackgroundJobView,
   NotificationChannel,
@@ -267,8 +269,12 @@ interface CollectionImportResultView {
 
 const importFileInput = ref<HTMLInputElement | null>(null);
 const importSelectedFile = ref<File | null>(null);
+const importSelectedBase64 = ref<string>('');
 const importDefaultStatus = ref<'owned' | 'wish'>('owned');
 const importUploading = ref(false);
+const importPreviewLoading = ref(false);
+const importMappingModalOpen = ref(false);
+const importPreviewData = ref<ImportFilePreview | null>(null);
 const importError = ref('');
 
 const latestImportJob = computed(() => jobsStore.latestCollectionImportJob);
@@ -280,8 +286,34 @@ const importResult = computed<CollectionImportResultView | null>(() => {
   return res && typeof res === 'object' ? (res as CollectionImportResultView) : null;
 });
 
-function handleImportFileChange(event: Event): void {
+async function fetchImportPreview(hasHeaderRow?: boolean): Promise<void> {
+  if (!importSelectedFile.value || !importSelectedBase64.value) return;
   importError.value = '';
+  importPreviewLoading.value = true;
+  try {
+    const res = await apiRequest<{ ok: true; preview: ImportFilePreview }>('/api/me/import/preview', {
+      method: 'POST',
+      body: {
+        filename: importSelectedFile.value.name,
+        contentBase64: importSelectedBase64.value,
+        ...(hasHeaderRow !== undefined ? { hasHeaderRow } : {})
+      }
+    });
+    importPreviewData.value = res.preview;
+    importMappingModalOpen.value = true;
+  } catch (err) {
+    importMappingModalOpen.value = false;
+    importPreviewData.value = null;
+    importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
+  } finally {
+    importPreviewLoading.value = false;
+  }
+}
+
+async function handleImportFileChange(event: Event): Promise<void> {
+  importError.value = '';
+  importPreviewData.value = null;
+  importSelectedBase64.value = '';
   const target = event.target as HTMLInputElement;
   const file = target.files?.[0] ?? null;
   if (!file) {
@@ -300,6 +332,13 @@ function handleImportFileChange(event: Event): void {
     return;
   }
   importSelectedFile.value = file;
+  try {
+    importSelectedBase64.value = await readFileAsBase64(file);
+    // Ouverture systématique de la modale de vérification des colonnes (CSV, JSON et Excel)
+    await fetchImportPreview();
+  } catch {
+    importError.value = t('app.retry');
+  }
 }
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -315,25 +354,54 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-async function handleSubmitImport(): Promise<void> {
-  if (!importSelectedFile.value || importUploading.value || importIsRunning.value) return;
+async function handleOpenImportMapping(): Promise<void> {
+  if (!importSelectedFile.value || importUploading.value || importIsRunning.value || importPreviewLoading.value) return;
+  if (!importSelectedBase64.value) {
+    try {
+      importSelectedBase64.value = await readFileAsBase64(importSelectedFile.value);
+    } catch {
+      importError.value = t('app.retry');
+      return;
+    }
+  }
+  if (importPreviewData.value) {
+    importMappingModalOpen.value = true;
+    return;
+  }
+  await fetchImportPreview();
+}
+
+async function handleToggleImportHeader(hasHeaderRow: boolean): Promise<void> {
+  await fetchImportPreview(hasHeaderRow);
+}
+
+async function handleConfirmMappedImport(payload: {
+  hasHeaderRow: boolean;
+  columnMapping: ImportColumnMapping;
+}): Promise<void> {
+  if (!importSelectedFile.value || !importSelectedBase64.value || importUploading.value || importIsRunning.value) return;
   importError.value = '';
   importUploading.value = true;
   try {
-    const contentBase64 = await readFileAsBase64(importSelectedFile.value);
     const res = await apiRequest<{ ok: true; job: BackgroundJobView; totalRows: number }>('/api/me/import', {
       method: 'POST',
       body: {
         filename: importSelectedFile.value.name,
-        contentBase64,
-        defaultStatus: importDefaultStatus.value
+        contentBase64: importSelectedBase64.value,
+        defaultStatus: importDefaultStatus.value,
+        hasHeaderRow: payload.hasHeaderRow,
+        columnMapping: payload.columnMapping
       }
     });
     jobsStore.upsertJob(res.job);
     uiStore.pushToast(t('profile.importStartedToast', { count: res.totalRows }), 'info');
+    importMappingModalOpen.value = false;
+    importPreviewData.value = null;
     importSelectedFile.value = null;
+    importSelectedBase64.value = '';
     if (importFileInput.value) importFileInput.value.value = '';
   } catch (err) {
+    importMappingModalOpen.value = false;
     importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
   } finally {
     importUploading.value = false;
@@ -670,7 +738,7 @@ async function disableWebPush(): Promise<void> {
           {{ importError }}
         </div>
 
-        <form class="ds-stack" @submit.prevent="handleSubmitImport">
+        <form class="ds-stack" @submit.prevent="handleOpenImportMapping">
           <div class="ds-grid-2">
             <div class="ds-field">
               <label class="ds-label" for="prof-import-file">{{ t('profile.importFileLabel') }}</label>
@@ -680,7 +748,7 @@ async function disableWebPush(): Promise<void> {
                 type="file"
                 class="ds-input"
                 accept=".csv,.json,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                :disabled="importUploading || importIsRunning"
+                :disabled="importUploading || importIsRunning || importPreviewLoading"
                 @change="handleImportFileChange"
               />
             </div>
@@ -691,7 +759,7 @@ async function disableWebPush(): Promise<void> {
                 id="prof-import-status"
                 v-model="importDefaultStatus"
                 class="ds-input"
-                :disabled="importUploading || importIsRunning"
+                :disabled="importUploading || importIsRunning || importPreviewLoading"
               >
                 <option value="owned">{{ t('profile.importStatusOwned') }}</option>
                 <option value="wish">{{ t('profile.importStatusWish') }}</option>
@@ -703,9 +771,15 @@ async function disableWebPush(): Promise<void> {
             <button
               type="submit"
               class="ds-btn ds-btn--primary"
-              :disabled="!importSelectedFile || importUploading || importIsRunning"
+              :disabled="!importSelectedFile || importUploading || importIsRunning || importPreviewLoading"
             >
-              {{ importUploading ? t('app.loading') : t('profile.importBtn') }}
+              {{
+                importPreviewLoading
+                  ? t('profile.importAnalyzing')
+                  : importUploading
+                    ? t('app.loading')
+                    : t('profile.importBtn')
+              }}
             </button>
           </div>
         </form>
@@ -1087,6 +1161,20 @@ async function disableWebPush(): Promise<void> {
         </button>
       </template>
     </BaseModal>
+
+    <!-- Modale systématique de vérification & correspondance des colonnes d'import (CSV / JSON / Excel) -->
+    <ImportMappingModal
+      :open="importMappingModalOpen"
+      :filename="importSelectedFile?.name ?? ''"
+      :preview="importPreviewData"
+      :default-status="importDefaultStatus"
+      :loading-preview="importPreviewLoading"
+      :submitting="importUploading"
+      @close="importMappingModalOpen = false"
+      @toggle-header="handleToggleImportHeader"
+      @update:default-status="importDefaultStatus = $event"
+      @confirm="handleConfirmMappedImport"
+    />
   </section>
 </template>
 

@@ -753,4 +753,91 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     const purged = appCtx.repos.jobRepo.pruneExternalCache(new Date().toISOString(), 2);
     expect(purged).toBe(4); // 2 expirés + 2 excédentaires au-dessus du plafond maxRows=2
   });
+
+  it('prévisualise systématiquement les colonnes CSV / JSON / Excel via POST /api/me/import/preview et applique la bijection validée sur POST /api/me/import', async () => {
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'MappingTester',
+        email: 'mapping@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const cookie = extractCookie(reg);
+
+    // 1. Prévisualisation CSV sans ligne d'en-tête -> détecte hasHeaderRow=false et infère les colonnes
+    const headerlessCsv = 'Le Scorpion;Enrico Marini;9782871293019\n';
+    const csvB64 = Buffer.from(headerlessCsv, 'utf8').toString('base64');
+    const prevCsvRes = await appCtx.app.request('/api/me/import/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ filename: 'ma_liste.csv', contentBase64: csvB64 })
+    });
+    expect(prevCsvRes.status).toBe(200);
+    const prevCsvBody = (await prevCsvRes.json()) as {
+      ok: true;
+      preview: {
+        format: string;
+        hasHeaderRow: boolean;
+        canToggleHeaderRow: boolean;
+        totalDataRows: number;
+        columns: Array<{ columnKey: string; suggestedField: string | null; sampleValues: string[] }>;
+      };
+    };
+    expect(prevCsvBody.preview.format).toBe('csv');
+    expect(prevCsvBody.preview.hasHeaderRow).toBe(false);
+    expect(prevCsvBody.preview.canToggleHeaderRow).toBe(true);
+    expect(prevCsvBody.preview.totalDataRows).toBe(1);
+    expect(prevCsvBody.preview.columns.map((c) => c.suggestedField)).toEqual(['title', 'author', 'isbn']);
+
+    // 2. Prévisualisation JSON avec clés libres -> canToggleHeaderRow=false + inférence ISBN par contenu
+    const exoticJson = JSON.stringify([
+      { libelle_perso: 'La Marque du diable', auteur_bd: 'Marini', ref_barre: '9782871293019' }
+    ]);
+    const jsonB64 = Buffer.from(exoticJson, 'utf8').toString('base64');
+    const prevJsonRes = await appCtx.app.request('/api/me/import/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ filename: 'export_perso.json', contentBase64: jsonB64 })
+    });
+    expect(prevJsonRes.status).toBe(200);
+    const prevJsonBody = (await prevJsonRes.json()) as {
+      preview: {
+        format: string;
+        canToggleHeaderRow: boolean;
+        columns: Array<{ columnKey: string; suggestedField: string | null }>;
+      };
+    };
+    expect(prevJsonBody.preview.format).toBe('json');
+    expect(prevJsonBody.preview.canToggleHeaderRow).toBe(false);
+    expect(prevJsonBody.preview.columns.find((c) => c.columnKey === 'ref_barre')?.suggestedField).toBe('isbn');
+
+    // 3. Import effectif avec la bijection personnalisée validée par l'utilisateur
+    const impRes = await appCtx.app.request('/api/me/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        filename: 'export_perso.json',
+        contentBase64: jsonB64,
+        defaultStatus: 'owned',
+        columnMapping: {
+          libelle_perso: 'title',
+          auteur_bd: 'author',
+          ref_barre: 'isbn'
+        }
+      })
+    });
+    expect(impRes.status).toBe(202);
+    const impBody = (await impRes.json()) as { job: { id: string }; totalRows: number };
+    expect(impBody.totalRows).toBe(1);
+
+    await appCtx.worker.processNextJob();
+    const jobRow = appCtx.repos.jobRepo.findJobById(impBody.job.id)!;
+    expect(jobRow.status).toBe('done');
+    const result = JSON.parse(jobRow.result_json!) as CollectionImportResultPayload;
+    expect(result.importedCount).toBe(1);
+    expect(result.resolvedByIsbnCount).toBe(1);
+  });
 });

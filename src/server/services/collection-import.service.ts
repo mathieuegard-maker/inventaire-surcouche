@@ -6,9 +6,13 @@ import crypto from 'node:crypto';
 import { readSheet } from 'read-excel-file/node';
 import {
   describeImportInputProfile,
+  inspectJsonForImport,
+  inspectMatrixForImport,
   parseCsvToMatrix,
   parseImportJson,
   parseImportRowsFromMatrix,
+  type ImportColumnMapping,
+  type ImportFilePreview,
   type ImportedBookRow
 } from '../../shared/bibliographic/collection-import.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
@@ -97,7 +101,13 @@ export class CollectionImportService {
     this.onJobChanged = deps.onJobChanged;
   }
 
-  async parseUploadedFile(filename: string, contentBase64: string): Promise<ImportedBookRow[]> {
+  private async decodeUploadedSource(
+    filename: string,
+    contentBase64: string
+  ): Promise<
+    | { format: 'json'; rawText: string }
+    | { format: 'csv' | 'xlsx'; matrix: string[][] }
+  > {
     const cleanBase64 =
       contentBase64.startsWith('data:') && contentBase64.includes(',')
         ? contentBase64.slice(contentBase64.indexOf(',') + 1)
@@ -112,22 +122,17 @@ export class CollectionImportService {
     }
 
     const lower = filename.trim().toLowerCase();
-    let rows: ImportedBookRow[] = [];
 
     if (lower.endsWith('.json')) {
-      try {
-        rows = parseImportJson(buffer.toString('utf8'));
-      } catch {
-        throw new AppError(400, 'IMPORT_INVALID_FILE', 'Fichier JSON invalide.');
-      }
-    } else if (lower.endsWith('.csv') || lower.endsWith('.tsv') || lower.endsWith('.txt')) {
-      const matrix = parseCsvToMatrix(buffer.toString('utf8'));
-      rows = parseImportRowsFromMatrix(matrix);
-    } else if (lower.endsWith('.xlsx')) {
+      return { format: 'json', rawText: buffer.toString('utf8') };
+    }
+    if (lower.endsWith('.csv') || lower.endsWith('.tsv') || lower.endsWith('.txt')) {
+      return { format: 'csv', matrix: parseCsvToMatrix(buffer.toString('utf8')) };
+    }
+    if (lower.endsWith('.xlsx')) {
       try {
         const sheetRows = await readSheet(buffer);
-        const matrix = sheetRows.map((r) => r.map(excelCellToString));
-        rows = parseImportRowsFromMatrix(matrix);
+        return { format: 'xlsx', matrix: sheetRows.map((r) => r.map(excelCellToString)) };
       } catch {
         throw new AppError(
           400,
@@ -135,12 +140,77 @@ export class CollectionImportService {
           'Impossible de lire ce fichier Excel (.xlsx). Vérifiez qu’il est au format .xlsx valide.'
         );
       }
+    }
+
+    throw new AppError(
+      400,
+      'IMPORT_UNSUPPORTED_FORMAT',
+      'Format non supporté. Utilisez un fichier CSV, JSON ou Excel (.xlsx).'
+    );
+  }
+
+  /**
+   * Analyse un fichier CSV, JSON ou Excel (.xlsx) avant import afin de présenter à l'utilisateur
+   * les colonnes détectées, un aperçu des 3 premières valeurs et la bijection pré-proposée.
+   */
+  async previewUploadedFile(input: {
+    filename: string;
+    contentBase64: string;
+    hasHeaderRow?: boolean;
+  }): Promise<ImportFilePreview> {
+    const decoded = await this.decodeUploadedSource(input.filename, input.contentBase64);
+    let preview: ImportFilePreview;
+
+    if (decoded.format === 'json') {
+      try {
+        preview = inspectJsonForImport(decoded.rawText);
+      } catch {
+        throw new AppError(400, 'IMPORT_INVALID_FILE', 'Fichier JSON invalide.');
+      }
     } else {
+      preview = inspectMatrixForImport(decoded.matrix, {
+        format: decoded.format,
+        hasHeaderRow: input.hasHeaderRow
+      });
+    }
+
+    if (preview.totalDataRows === 0 || preview.columns.length === 0) {
       throw new AppError(
         400,
-        'IMPORT_UNSUPPORTED_FORMAT',
-        'Format non supporté. Utilisez un fichier CSV, JSON ou Excel (.xlsx).'
+        'IMPORT_EMPTY',
+        'Aucune ligne exploitable détectée dans ce fichier.'
       );
+    }
+    if (preview.totalDataRows > MAX_IMPORT_ROWS) {
+      throw new AppError(
+        400,
+        'IMPORT_TOO_MANY_ROWS',
+        `Trop de lignes dans le fichier (${preview.totalDataRows} — maximum ${MAX_IMPORT_ROWS} par import).`
+      );
+    }
+
+    return preview;
+  }
+
+  async parseUploadedFile(
+    filename: string,
+    contentBase64: string,
+    options?: { hasHeaderRow?: boolean; columnMapping?: ImportColumnMapping }
+  ): Promise<ImportedBookRow[]> {
+    const decoded = await this.decodeUploadedSource(filename, contentBase64);
+    let rows: ImportedBookRow[] = [];
+
+    if (decoded.format === 'json') {
+      try {
+        rows = parseImportJson(decoded.rawText, { columnMapping: options?.columnMapping });
+      } catch {
+        throw new AppError(400, 'IMPORT_INVALID_FILE', 'Fichier JSON invalide.');
+      }
+    } else {
+      rows = parseImportRowsFromMatrix(decoded.matrix, {
+        hasHeaderRow: options?.hasHeaderRow,
+        columnMapping: options?.columnMapping
+      });
     }
 
     if (rows.length === 0) {
@@ -167,8 +237,13 @@ export class CollectionImportService {
     filename: string;
     contentBase64: string;
     defaultStatus: 'owned' | 'wish';
+    hasHeaderRow?: boolean;
+    columnMapping?: ImportColumnMapping;
   }): Promise<{ job: BackgroundJobView; totalRows: number; skippedCount: number }> {
-    const parsedRows = await this.parseUploadedFile(input.filename, input.contentBase64);
+    const parsedRows = await this.parseUploadedFile(input.filename, input.contentBase64, {
+      hasHeaderRow: input.hasHeaderRow,
+      columnMapping: input.columnMapping
+    });
     const importableRows = parsedRows.filter((r) => r.ownershipStatus !== 'none');
     const skippedNoneCount = parsedRows.length - importableRows.length;
 
