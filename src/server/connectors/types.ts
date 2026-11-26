@@ -103,6 +103,7 @@ export interface BnfConnector {
   searchSeriesIntegrals?(seriesName: string, maxRecords?: number): Promise<GraphSeriesWork[]>;
   sampleByCollectionName(collectionName: string, maxRecords?: number): Promise<CollectionSampleItem[]>;
   searchByTitleAndAuthor(title: string, author?: string, maxRecords?: number): Promise<SourceCandidateRecord[]>;
+  searchAnywhere?(query: string, maxRecords?: number): Promise<SourceCandidateRecord[]>;
 }
 
 export interface SudocConnector {
@@ -128,10 +129,12 @@ export interface WikidataConnector {
 export interface GoogleBooksConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
   searchByTitleAndAuthor?(title: string, author?: string, maxResults?: number): Promise<SourceCandidateRecord[]>;
+  searchByText?(query: string, maxResults?: number): Promise<SourceCandidateRecord[]>;
 }
 
 export interface OpenLibraryConnector {
   lookupByIsbn(isbn13: string): Promise<SourceCandidateRecord | null>;
+  searchByText?(query: string, maxResults?: number): Promise<SourceCandidateRecord[]>;
 }
 
 export interface BibliographicConnectors {

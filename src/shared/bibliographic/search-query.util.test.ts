@@ -1,6 +1,10 @@
 // src/shared/bibliographic/search-query.util.test.ts
 import { describe, expect, it } from 'vitest';
-import { parseSearchIntent } from './search-query.util';
+import {
+  buildOmniboxSplitCandidates,
+  parseSearchIntent,
+  stripGenericRelevanceWords
+} from './search-query.util';
 
 describe('search-query.util (parseSearchIntent)', () => {
   it('extrait le média entre parenthèses et le numéro de tome collé dans le titre', () => {
@@ -98,5 +102,46 @@ describe('search-query.util (parseSearchIntent)', () => {
     expect(mill.cleanSeries).toBe('Millénium Saga');
     expect(mill.cleanTitle).toBe('Millénium Saga');
     expect(mill.volumeNumber).toBe('3');
+  });
+
+  it('gère les tomes décimaux (1.5), les saisies omnibox avec tome au milieu et les découpages Titre/Auteur', () => {
+    const gits = parseSearchIntent({
+      title: 'The Ghost in the Shell : Human-Error Processor',
+      volumeNumber: '1.5'
+    });
+    expect(gits.volumeNumber).toBe('1.5');
+
+    const arslan = parseSearchIntent({ title: "Les Chroniques d'Arslan T5 Arakawa" });
+    expect(arslan.cleanTitle).toBe("Les Chroniques d'Arslan");
+    expect(arslan.volumeNumber).toBe('5');
+    expect(arslan.cleanAuthor).toBe('Arakawa');
+    expect(arslan.authorInferredFromTitle).toBe(true);
+
+    const enola = parseSearchIntent({ title: "les enquetes d'enola holmes tome 1 serena blasco" });
+    expect(enola.cleanTitle).toBe("les enquetes d'enola holmes");
+    expect(enola.volumeNumber).toBe('1');
+    expect(enola.cleanAuthor).toBe('serena blasco');
+
+    const rezero = parseSearchIntent({ title: 're zero revivre dans un autre monde t1 light novel ofelbe' });
+    expect(rezero.cleanTitle).toBe('re zero revivre dans un autre monde');
+    expect(rezero.volumeNumber).toBe('1');
+    expect(rezero.requestedMedia).toBe('Roman');
+
+    expect(stripGenericRelevanceWords('Intégrale Cycle zéro')).toBe('');
+    expect(stripGenericRelevanceWords('Les Innommables - Intégrale Tome 1')).toBe('les innommables');
+
+    const camusSplits = buildOmniboxSplitCandidates('mythe de sisyphe camus');
+    expect(camusSplits[0]).toMatchObject({ titlePart: 'mythe de sisyphe', authorPart: 'camus' });
+
+    const mannSplits = buildOmniboxSplitCandidates('la mort a venise thomas mann livre de poche');
+    expect(mannSplits.some((s) => s.titlePart === 'la mort a venise' && s.authorPart === 'thomas mann')).toBe(true);
+
+    const gripariSplits = buildOmniboxSplitCandidates('Les Contes de la rue Broca Pierre Gripari');
+    expect(
+      gripariSplits.some((s) => s.titlePart === 'Les Contes de la rue Broca' && s.authorPart === 'Pierre Gripari')
+    ).toBe(true);
+
+    const yamimushiSplits = buildOmniboxSplitCandidates('tokyo yamimushi 2 honda');
+    expect(yamimushiSplits[0]).toMatchObject({ titlePart: 'tokyo yamimushi', authorPart: 'honda', volumeNumber: '2' });
   });
 });

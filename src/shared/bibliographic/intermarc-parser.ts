@@ -162,6 +162,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const rawSubjects: string[] = [];
   const editionStatements: string[] = [];
   const noteClauses: string[] = [];
+  const responsibilityMentions: string[] = [];
 
   // Langue depuis 008 (InterMarc), 041$a/$h (InterMarc) ou 101$a/$c (UNIMARC)
   const cf008 = extractControlField(recordXml, '008');
@@ -239,6 +240,8 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       }
       if (e && !subtitle) subtitle = e;
       if (u && !subtitle) subtitle = u;
+      const resp = sf('f') || sf('g');
+      if (resp) responsibilityMentions.push(resp);
     }
 
     // Ensemble bibliographique / Série : 460 / 461 (InterMarc & UNIMARC)
@@ -372,6 +375,20 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const editionStmtText = editionStatements.join(' ').trim();
   const notesText = noteClauses.join(' ; ').trim();
   const integralNotes = [editionStmtText, notesText].filter(Boolean).join(' ; ') || undefined;
+
+  // Secours norme ISBD (`245$f`/`200$g`/`300$a`) si 041$h / 101$c absent : "traduit du japonais / coréen / anglais / chinois"
+  if (!originalLanguage) {
+    const isbdTranslationText = [responsibilityMentions.join(' '), notesText].join(' ');
+    if (/\btrad(?:uit|uction|\.)?\s+du\s+japonais\b/i.test(isbdTranslationText)) {
+      originalLanguage = 'jpn';
+    } else if (/\btrad(?:uit|uction|\.)?\s+du\s+cor[ée]en\b/i.test(isbdTranslationText)) {
+      originalLanguage = 'kor';
+    } else if (/\btrad(?:uit|uction|\.)?\s+de\s+l['’](?:anglais|am[ée]ricain)\b/i.test(isbdTranslationText)) {
+      originalLanguage = 'eng';
+    } else if (/\btrad(?:uit|uction|\.)?\s+du\s+chinois\b/i.test(isbdTranslationText)) {
+      originalLanguage = 'chi';
+    }
+  }
 
   // Distinguer strictement "texte intégral / version intégrale / édition intégrale" sur un roman isolé
   // d'une vraie intégrale multi-tomes (BD/Manga/Comics ou compilation explicite "Réunit les tomes...").

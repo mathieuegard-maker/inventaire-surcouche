@@ -51,7 +51,7 @@ const uploading = ref(false);
 // Upload CSV de correction (vérité terrain) & rapport Markdown généré
 const gtFileInputRef = ref<HTMLInputElement | null>(null);
 const gradingBusy = ref(false);
-const pendingGroundTruth = ref<{ filename: string; contentBase64: string } | null>(null);
+const pendingGroundTruth = ref<{ filename: string; rowCount?: number } | null>(null);
 const gradedReport = ref<AdminBenchmarkGradedReport | null>(null);
 const gradedMarkdown = ref<string>('');
 const gradedSeriesMarkdown = ref<string>('');
@@ -407,9 +407,11 @@ async function loadBenchmarks(preferJobId?: string): Promise<void> {
       ok: true;
       activeCatalogJobsCount: number;
       jobs: AdminBenchmarkJobView[];
+      pendingGroundTruth?: { filename: string; rowCount: number; uploadedAt: string } | null;
     }>('/api/admin/import-benchmarks?limit=15');
     activeCatalogJobsCount.value = res.activeCatalogJobsCount;
     benchmarkJobs.value = res.jobs;
+    pendingGroundTruth.value = res.pendingGroundTruth ?? null;
 
     if (preferJobId && res.jobs.some((j) => j.id === preferJobId)) {
       selectedJobId.value = preferJobId;
@@ -548,7 +550,12 @@ async function gradeJobWithPayload(jobId: string, filename: string, contentBase6
   }
 }
 
-function clearPendingGroundTruth(): void {
+async function clearPendingGroundTruth(): Promise<void> {
+  try {
+    await apiRequest('/api/admin/import-benchmarks/pending-ground-truth', { method: 'DELETE' });
+  } catch {
+    // ignore
+  }
   pendingGroundTruth.value = null;
 }
 
@@ -573,10 +580,26 @@ async function handleGroundTruthSelected(event: Event): Promise<void> {
   }
 
   const job = selectedJob.value;
-  // Si aucun lot terminé n'est encore disponible (DB vide ou import en cours), précharger pour notation auto dès la fin de l'import
+  // Si aucun lot terminé n'est encore disponible (DB vide ou import en cours), persister le corrigé sur le SERVEUR
+  // afin que la notation automatique se déclenche à la fin du job même si le navigateur est fermé ou en veille.
   if (!job || job.items.length === 0 || job.status !== 'done' || isLiveImportRunning.value) {
-    pendingGroundTruth.value = { filename: file.name, contentBase64 };
-    uiStore.pushToast(t('admin.benchmarkGroundTruthQueuedToast', { filename: file.name }), 'info');
+    gradingBusy.value = true;
+    try {
+      const res = await apiRequest<{
+        ok: true;
+        pendingGroundTruth: { filename: string; rowCount: number; uploadedAt: string };
+      }>('/api/admin/import-benchmarks/pending-ground-truth', {
+        method: 'POST',
+        body: { filename: file.name, contentBase64 },
+        timeoutMs: 30000
+      });
+      pendingGroundTruth.value = res.pendingGroundTruth;
+      uiStore.pushToast(t('admin.benchmarkGroundTruthQueuedToast', { filename: res.pendingGroundTruth.filename }), 'info');
+    } catch (err) {
+      uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+    } finally {
+      gradingBusy.value = false;
+    }
     return;
   }
 
@@ -864,11 +887,11 @@ watch(
     const prevStatus = prev?.[1];
     const prevDone = prev?.[2] ?? 0;
     if (status === 'done' && prevStatus !== 'done') {
+      // Le serveur exécute désormais l'auto-notation dès la fin du job si un corrigé était préchargé :
+      // recharger le lot (et re-tenter 1,5 s plus tard si le rapport vient d'être écrit).
       void loadBenchmarks(id).then(() => {
-        const queued = pendingGroundTruth.value;
-        if (queued) {
-          pendingGroundTruth.value = null;
-          void gradeJobWithPayload(id, queued.filename, queued.contentBase64);
+        if (!gradedReport.value) {
+          setTimeout(() => void loadBenchmarks(id), 1500);
         }
       });
     } else if (status === 'running' && typeof done === 'number' && done > prevDone && done % 10 === 0) {

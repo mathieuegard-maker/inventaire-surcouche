@@ -271,6 +271,11 @@ export function createApp(options: CreateAppOptions) {
   worker.registerHandler('collection_import', async (ctx) => {
     return collectionImportService.executeCollectionImportJob(ctx);
   });
+  worker.registerAfterComplete('collection_import', async (completedJob) => {
+    await adminService.autoGradeWithPendingGroundTruth(completedJob.id);
+  });
+  // Purge légère au démarrage si external_cache dépasse le plafond
+  jobRepo.pruneExternalCache(new Date().toISOString(), 6000);
   worker.registerHandler('series_expand', async ({ job, payload, reportProgress }) => {
     const seriesId = typeof payload.seriesId === 'string' ? payload.seriesId : '';
     if (!seriesId) {

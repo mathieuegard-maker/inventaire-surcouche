@@ -6,12 +6,18 @@ import { classifyBookMetadata } from '../../shared/bibliographic/category-classi
 import { hammingDistanceHex } from '../../shared/bibliographic/cover-dhash.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
-import { parseSearchIntent, type RequestedMediaHint } from '../../shared/bibliographic/search-query.util';
+import {
+  buildOmniboxSplitCandidates,
+  parseSearchIntent,
+  stripGenericRelevanceWords,
+  type RequestedMediaHint
+} from '../../shared/bibliographic/search-query.util';
 import {
   cleanTitle,
   extractFranchiseBaseName,
   getLevenshteinDistance,
   isGenericVolumeTitle,
+  isLatinScriptLabel,
   matchesAuthorName,
   normalizeSeriesNumber,
   normalizeTextKey,
@@ -56,6 +62,7 @@ export interface PhotoCandidateOption {
   isIntegral?: boolean;
   includedVolumes?: string[];
   mainCategory?: BookMainCategory;
+  language?: string | null;
   source: string;
 }
 
@@ -125,8 +132,25 @@ function matchesRequestedMediaExact(cat: BookMainCategory | undefined, requested
   return bucket === requested;
 }
 
+function isFrenchCandidate(opt: Pick<PhotoCandidateOption, 'language' | 'isbn13'>): boolean {
+  const lang = (opt.language ?? '').trim().toLowerCase();
+  if (lang === 'fr' || lang === 'fre' || lang === 'fra') return true;
+  if (!lang && (opt.isbn13.startsWith('9782') || opt.isbn13.startsWith('97910'))) return true;
+  return false;
+}
+
+function isExplicitNonFrenchCandidate(opt: Pick<PhotoCandidateOption, 'language' | 'isbn13'>): boolean {
+  const lang = (opt.language ?? '').trim().toLowerCase();
+  if (!lang) return false;
+  if (lang === 'fr' || lang === 'fre' || lang === 'fra') return false;
+  if (opt.isbn13.startsWith('9782') || opt.isbn13.startsWith('97910')) return false;
+  return true;
+}
+
 function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
   if (!rec.isbn13 || !rec.title) return null;
+  if (!isbnUtil.isValidBookBarcode(rec.isbn13)) return null;
+  if (!isLatinScriptLabel(rec.title)) return null;
   const incVols = rec.isIntegralHint
     ? parseIncludedVolumeNumbers(`${rec.title} ${rec.subtitle ?? ''}`)
     : [];
@@ -169,6 +193,7 @@ function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
     isIntegral: Boolean(rec.isIntegralHint),
     includedVolumes: incVols,
     mainCategory: classified.mainCategory,
+    language: rec.language ?? null,
     source: rec.source
   };
 }
@@ -369,6 +394,7 @@ export class PhotoAiService {
       isIntegral: b.is_integral === 1,
       includedVolumes: parseJsonStringArray(b.included_volumes_json),
       mainCategory: b.main_category,
+      language: b.language ?? 'fr',
       source: 'local'
     };
   }
@@ -444,6 +470,7 @@ export class PhotoAiService {
     if (!existing.publisher && incoming.publisher) existing.publisher = incoming.publisher;
     if (!existing.collectionName && incoming.collectionName) existing.collectionName = incoming.collectionName;
     if (!existing.publishYear && incoming.publishYear) existing.publishYear = incoming.publishYear;
+    if (!existing.language && incoming.language) existing.language = incoming.language;
     if ((!existing.mainCategory || existing.mainCategory === 'Autre') && incoming.mainCategory && incoming.mainCategory !== 'Autre') {
       existing.mainCategory = incoming.mainCategory;
     }
@@ -824,6 +851,18 @@ export class PhotoAiService {
         : relaxedTitle || relaxedSeries;
 
     // Passe A : requête stricte nettoyée (inclut n° de tome si pertinent)
+    const hasHighConfidenceMatch = () =>
+      options.some((o) => {
+        if (!isFrenchCandidate(o)) return false;
+        if (requestedMedia && !matchesRequestedMediaExact(o.mainCategory, requestedMedia)) return false;
+        if (wantsIntegral && !o.isIntegral) return false;
+        if (volNumStr && !wantsIntegral && normalizeSeriesNumber(o.volumeNumber) !== volNumStr) return false;
+        if (intent.allAuthorParts.length > 0 && o.authors.length > 0 && !matchesAuthorParts(o)) return false;
+        const candText = `${o.seriesName ?? ''} ${o.title}`;
+        const sigTarget = stripGenericRelevanceWords(relaxedTitle || cleanTitle || relaxedSeries || cleanSeries);
+        return sigTarget.length >= 3 && tokenOverlapRatio(sigTarget, candText) >= 0.65;
+      });
+
     if (combinedTitle) {
       await runExternalPass(combinedTitle, cleanAuthor, requestedMedia ? 15 : 12);
     }
@@ -842,32 +881,40 @@ export class PhotoAiService {
       }
     }
 
-    // Passe B : recherche ciblée du tome N de la série (inclut les titres avec "Tome N" extrait !)
-    if (volNum !== null && !wantsIntegral && !hasTargetVolumeMatch()) {
-      const volBase = relaxedSeries || cleanSeries || relaxedTitle || cleanTitle;
-      if (volBase) {
-        await runExternalPass(`${volBase} ${volNum}`, cleanAuthor, 15);
-      }
-      if (!hasTargetVolumeMatch() && cleanSeries) {
+    // Passe B : recherche ciblée du tome N de la série (coupée court si Passe A a déjà un match de haute confiance)
+    if (!hasHighConfidenceMatch()) {
+      if (volNumStr && !wantsIntegral && !hasTargetVolumeMatch()) {
+        const volBase = relaxedSeries || cleanSeries || relaxedTitle || cleanTitle;
+        if (volBase) {
+          await runExternalPass(`${volBase} ${volNumStr}`, cleanAuthor, 15);
+        }
+        if (!hasTargetVolumeMatch() && cleanSeries) {
+          await runExternalPass(cleanSeries, cleanAuthor, 25);
+        }
+      } else if (options.length < 2 && cleanSeries) {
         await runExternalPass(cleanSeries, cleanAuthor, 25);
       }
-    } else if (options.length < 2 && cleanSeries) {
-      await runExternalPass(cleanSeries, cleanAuthor, 25);
     }
 
-    // Passe C1 : titre seul si distinct de combinedTitle
-    if (options.length === 0 && cleanTitle && cleanTitle !== combinedTitle) {
+    // Passe C1 : titre seul si distinct de combinedTitle (et que cleanTitle porte des mots distinctifs hors "Intégrale/Cycle")
+    if (
+      options.length === 0 &&
+      cleanTitle &&
+      cleanTitle !== combinedTitle &&
+      stripGenericRelevanceWords(cleanTitle).length >= 4
+    ) {
       await runExternalPass(cleanTitle, cleanAuthor, 12);
     }
 
     // Passe C2 (secours relâché sans qualificatifs d'édition/éditeur type "deluxe", "perfect", "black edition", "glénat", "kana"...)
     if (
-      (options.length === 0 || (volNum !== null && !wantsIntegral && !hasTargetVolumeMatch())) &&
+      !hasHighConfidenceMatch() &&
+      (options.length === 0 || (volNumStr && !wantsIntegral && !hasTargetVolumeMatch())) &&
       relaxedCombined &&
       normalizeTextKey(relaxedCombined) !== normalizeTextKey(combinedTitle)
     ) {
       await runExternalPass(
-        volNum !== null && !wantsIntegral ? `${relaxedCombined} ${volNum}` : relaxedCombined,
+        volNumStr && !wantsIntegral ? `${relaxedCombined} ${volNumStr}` : relaxedCombined,
         cleanAuthor,
         15
       );
@@ -890,60 +937,204 @@ export class PhotoAiService {
       options.length === 0 &&
       cleanAuthor &&
       titleFallbackQuery &&
-      normalizeTextKey(titleFallbackQuery).length >= 6 &&
+      stripGenericRelevanceWords(titleFallbackQuery).length >= 5 &&
       !isGenericVolumeTitle(titleFallbackQuery, cleanSeries)
     ) {
       await runExternalPass(
-        volNum !== null && !wantsIntegral ? `${titleFallbackQuery} ${volNum}` : titleFallbackQuery,
+        volNumStr && !wantsIntegral ? `${titleFallbackQuery} ${volNumStr}` : titleFallbackQuery,
         undefined,
         10
       );
-      if (options.length === 0 && volNum !== null && !wantsIntegral) {
+      if (options.length === 0 && volNumStr && !wantsIntegral) {
         await runExternalPass(titleFallbackQuery, undefined, 10);
       }
     }
 
-    // Garde-fou anti-hors-sujet : rejette les candidats dont le titre/série n'a quasiment aucun recouvrement avec la requête
-    // (ex. "Blast" -> "Persepolis", "Natacha" -> "Calvin et Hobbes", "La Peste blanche" -> "Vaincre la tuberculose")
+    // Garde-fou anti-hors-sujet : rejette les candidats dont le titre/série n'a aucun recouvrement SIGNIFICATIF
+    // (les mots génériques "Intégrale", "Cycle", "Tome", "Volume" sont exclus pour empêcher
+    // "Les Innommables - Intégrale Cycle zéro" de matcher "Fondation Intégrale Tome 1").
     const primaryQueryText = relaxedCombined || combinedTitle;
-    const normPrimaryQuery = normalizeTextKey(primaryQueryText);
-    const computeRelevanceOverlap = (opt: PhotoCandidateOption): number => {
+    const sigPrimaryQuery = stripGenericRelevanceWords(primaryQueryText) || normalizeTextKey(primaryQueryText);
+    const sigSeriesQuery = stripGenericRelevanceWords(relaxedSeries || cleanSeries);
+    const sigTitleQuery = stripGenericRelevanceWords(relaxedTitle || cleanTitle);
+
+    const computeRelevanceOverlap = (opt: PhotoCandidateOption, queryOverride?: string): number => {
       const candText = `${opt.seriesName ?? ''} ${opt.title}`.trim();
-      const scores = [tokenOverlapRatio(primaryQueryText, candText)];
-      if (cleanTitle) scores.push(tokenOverlapRatio(cleanTitle, candText));
-      if (relaxedTitle) scores.push(tokenOverlapRatio(relaxedTitle, candText));
-      if (relaxedSeries) scores.push(tokenOverlapRatio(relaxedSeries, candText));
+      const target = queryOverride ? stripGenericRelevanceWords(queryOverride) || normalizeTextKey(queryOverride) : sigPrimaryQuery;
+      const scores = [target ? tokenOverlapRatio(target, candText) : 0];
+      if (!queryOverride) {
+        if (sigTitleQuery) scores.push(tokenOverlapRatio(sigTitleQuery, candText));
+        if (sigSeriesQuery) scores.push(tokenOverlapRatio(sigSeriesQuery, candText));
+      }
       // Tolérance faute de frappe sur titre court en 1 mot (Levenshtein <= 2)
       const normCandTitle = normalizeTextKey(opt.title);
       const normCandSeries = normalizeTextKey(opt.seriesName ?? '');
       if (
-        normPrimaryQuery.length >= 4 &&
-        !normPrimaryQuery.includes(' ') &&
-        ((normCandTitle && getLevenshteinDistance(normPrimaryQuery, normCandTitle) <= 2) ||
-          (normCandSeries && getLevenshteinDistance(normPrimaryQuery, normCandSeries) <= 2))
+        target.length >= 4 &&
+        !target.includes(' ') &&
+        ((normCandTitle && getLevenshteinDistance(target, normCandTitle) <= 2) ||
+          (normCandSeries && getLevenshteinDistance(target, normCandSeries) <= 2))
       ) {
         scores.push(0.8);
       }
       return Math.max(...scores);
     };
 
-    const relevantOptions =
-      normPrimaryQuery.length >= 2
-        ? options.filter((opt) => {
-            const overlap = computeRelevanceOverlap(opt);
-            if (overlap >= 0.25) return true;
-            // Exception : tome canonique d'une série exacte dont le titre d'album diffère du nom de série
-            if (cleanSeries && opt.seriesName) {
-              const sKey = extractFranchiseBaseName(relaxedSeries || cleanSeries).normalizedKey;
-              const oKey = extractFranchiseBaseName(opt.seriesName).normalizedKey;
-              if (sKey && oKey && sKey === oKey) return true;
-            }
+    const filterRelevant = (list: PhotoCandidateOption[]): PhotoCandidateOption[] => {
+      if (sigPrimaryQuery.length < 2) return list;
+      return list.filter((opt) => {
+        // Si une série explicite est demandée (ex. "Les Innommables", "B.P.R.D."), le candidat doit être compatible avec cette série
+        if (sigSeriesQuery.length >= 2) {
+          const candText = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+          const sKey = extractFranchiseBaseName(relaxedSeries || cleanSeries).normalizedKey;
+          const oKey = opt.seriesName ? extractFranchiseBaseName(opt.seriesName).normalizedKey : '';
+          const sameFranchise = Boolean(sKey && oKey && sKey === oKey);
+          const seriesOverlap = tokenOverlapRatio(sigSeriesQuery, candText);
+          const normCandSeries = normalizeTextKey(opt.seriesName ?? '');
+          const closeSeries = Boolean(
+            !sigSeriesQuery.includes(' ') &&
+              sigSeriesQuery.length >= 4 &&
+              normCandSeries &&
+              getLevenshteinDistance(sigSeriesQuery, normCandSeries) <= 2
+          );
+          if (!sameFranchise && seriesOverlap < 0.35 && !closeSeries) {
             return false;
-          })
-        : options;
+          }
+        }
+
+        const overlap = computeRelevanceOverlap(opt);
+        if (overlap >= 0.25) return true;
+        if (cleanSeries && opt.seriesName) {
+          const sKey = extractFranchiseBaseName(relaxedSeries || cleanSeries).normalizedKey;
+          const oKey = extractFranchiseBaseName(opt.seriesName).normalizedKey;
+          if (sKey && oKey && sKey === oKey) return true;
+        }
+        return false;
+      });
+    };
+
+    let relevantOptions = filterRelevant(options);
+
+    // =========================================================================
+    // ENTONNOIR DE SECOURS STRICT (déclenché UNIQUEMENT si 0 résultat pertinent !)
+    // Risque de régression = 0 sur les livres déjà trouvés par les passes normales.
+    // =========================================================================
+    const omniboxRawSource = [hint.series, hint.title].filter(Boolean).join(' ').trim();
+    if (relevantOptions.length === 0 && omniboxRawSource.length >= 4) {
+      const omniboxCandidates: PhotoCandidateOption[] = [];
+      const pushFallback = (opt: PhotoCandidateOption | null) =>
+        this.mergeOptionIntoAbstractList(omniboxCandidates, opt, mergePref);
+
+      // Secours F1 : BnF recherche globale `bib.anywhere` (1 seul appel : titre + auteur + éditeur tous champs confondus)
+      const anywhereQuery = [relaxedCombined || combinedTitle, cleanAuthor].filter(Boolean).join(' ').trim();
+      if (anywhereQuery && this.connectors.bnf.searchAnywhere) {
+        const anyHits = await this.connectors.bnf.searchAnywhere(anywhereQuery, 12).catch(() => []);
+        for (const hit of anyHits) {
+          const opt = toOption(hit);
+          if (!opt) continue;
+          const fullCand = `${opt.seriesName ?? ''} ${opt.title} ${opt.authors.join(' ')}`.trim();
+          const titleCand = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+          // Exiger un recouvrement global solide ET au moins un mot significatif dans le titre/série
+          const fullOverlap = tokenOverlapRatio(sigPrimaryQuery, fullCand);
+          const titleOverlap = tokenOverlapRatio(sigPrimaryQuery, titleCand);
+          if (fullOverlap >= 0.45 && titleOverlap >= 0.25) {
+            pushFallback(opt);
+          }
+        }
+      }
+
+      // Secours F2 : découpage intelligent ciblé Titre / Auteur (max 2-3 coupes, uniquement si F1 est vide !)
+      if (omniboxCandidates.length === 0 && !hint.author?.trim()) {
+        const splits = buildOmniboxSplitCandidates(omniboxRawSource);
+        for (const split of splits) {
+          const splitQuery = split.volumeNumber ? `${split.titlePart} ${split.volumeNumber}` : split.titlePart;
+          const splitHits = await this.connectors.bnf
+            .searchByTitleAndAuthor(splitQuery, split.authorPart, 8)
+            .catch(() => []);
+          const fallbackHits =
+            splitHits.length === 0 && split.volumeNumber
+              ? await this.connectors.bnf.searchByTitleAndAuthor(split.titlePart, split.authorPart, 8).catch(() => [])
+              : splitHits;
+
+          const sigSplitTitle = stripGenericRelevanceWords(split.titlePart) || normalizeTextKey(split.titlePart);
+          for (const hit of fallbackHits) {
+            const opt = toOption(hit);
+            if (!opt) continue;
+            const titleCand = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+            // Double verrou strict : le titre ET l'auteur supposé doivent tous deux correspondre !
+            const titleMatches =
+              tokenOverlapRatio(sigSplitTitle, titleCand) >= 0.4 ||
+              (sigSplitTitle.length >= 4 &&
+                !sigSplitTitle.includes(' ') &&
+                getLevenshteinDistance(sigSplitTitle, normalizeTextKey(opt.title)) <= 2);
+            const authorMatches = opt.authors.some((a) => matchesAuthorName(a, split.authorPart));
+            if (titleMatches && authorMatches) {
+              pushFallback(opt);
+            }
+          }
+          if (omniboxCandidates.length > 0) break;
+        }
+      }
+
+      // Secours F3 : Ultime recours API officielles (Google Books texte + Open Library texte — 100 % légal, zéro scraping)
+      if (omniboxCandidates.length === 0) {
+        const officialQuery = [relaxedCombined || combinedTitle, cleanAuthor, volNumStr && !wantsIntegral ? volNumStr : '']
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+        const tryOfficialHits = (hits: SourceCandidateRecord[]) => {
+          for (const hit of hits) {
+            const opt = toOption(hit);
+            if (!opt) continue;
+            const titleCand = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+            const fullCand = `${titleCand} ${opt.authors.join(' ')}`.trim();
+            const titleOverlap = tokenOverlapRatio(sigPrimaryQuery, titleCand);
+            const fullOverlap = tokenOverlapRatio(sigPrimaryQuery, fullCand);
+            const authorOk =
+              intent.allAuthorParts.length === 0 ||
+              opt.authors.length === 0 ||
+              matchesAuthorParts(opt);
+            if (authorOk && (titleOverlap >= 0.4 || (fullOverlap >= 0.5 && titleOverlap >= 0.25))) {
+              pushFallback(opt);
+            }
+          }
+        };
+
+        if (officialQuery && this.connectors.googleBooks.searchByText) {
+          const gbHits = await this.connectors.googleBooks.searchByText(officialQuery, 6).catch(() => []);
+          tryOfficialHits(gbHits);
+        } else if (this.connectors.googleBooks.searchByTitleAndAuthor && (relaxedCombined || combinedTitle)) {
+          const gbHits = await this.connectors.googleBooks
+            .searchByTitleAndAuthor(relaxedCombined || combinedTitle, cleanAuthor, 6)
+            .catch(() => []);
+          tryOfficialHits(gbHits);
+        }
+
+        if (omniboxCandidates.length === 0 && officialQuery && this.connectors.openLibrary.searchByText) {
+          const olHits = await this.connectors.openLibrary.searchByText(officialQuery, 6).catch(() => []);
+          tryOfficialHits(olHits);
+        }
+      }
+
+      if (omniboxCandidates.length > 0) {
+        relevantOptions = omniboxCandidates;
+      }
+    }
 
     const rawQueryCombined = `${hint.series ?? ''} ${hint.title ?? ''}`.trim();
     const queryAsksForGuide = DERIVATIVE_GUIDE_RE.test(rawQueryCombined);
+
+    // Détecter si les résultats contiennent à la fois le roman original et une adaptation BD/Manga/Comics du même titre
+    const hasNovelAndGraphicMix =
+      !requestedMedia &&
+      !wantsIntegral &&
+      intent.editionHintTokens.length === 0 &&
+      intent.allAuthorParts.length === 1 &&
+      relevantOptions.some((o) => getOptionMediaBucket(o.mainCategory) === 'Roman') &&
+      relevantOptions.some((o) => {
+        const b = getOptionMediaBucket(o.mainCategory);
+        return b === 'BD' || b === 'Manga' || b === 'Comics';
+      });
 
     // Scoring déterministe pour placer la meilleure Œuvre abstraite en #1
     const scoreOption = (opt: PhotoCandidateOption): number => {
@@ -967,7 +1158,7 @@ export class PhotoAiService {
         if (!opt.isIntegral && optVol && optVol === volNumStr) score += 65;
         else if (opt.isIntegral && (opt.includedVolumes ?? []).includes(volNumStr)) score += 15;
         else if (optVol && optVol !== volNumStr) score -= 35;
-        else if (new RegExp(`\\b${volNumStr}\\b`).test(opt.title)) score += 20;
+        else if (new RegExp(`\\b${volNumStr.replace('.', '\\.')}\\b`).test(opt.title)) score += 20;
       } else if (opt.isIntegral) {
         score -= 10;
       }
@@ -983,6 +1174,12 @@ export class PhotoAiService {
         }
       }
 
+      // Bonus titre exact (ex. "La Chatte" de Colette devant "La Chatte sur un toit brûlant")
+      const normOptTitle = normalizeTextKey(opt.title);
+      if (normTitle && normOptTitle === normTitle) {
+        score += 18;
+      }
+
       if (relaxedTitle || cleanTitle) {
         const tOverlap = Math.max(
           cleanTitle ? tokenOverlapRatio(cleanTitle, candText) : 0,
@@ -996,6 +1193,16 @@ export class PhotoAiService {
           relaxedSeries ? tokenOverlapRatio(relaxedSeries, candText) : 0
         );
         score += Math.round(sOverlap * 20);
+      }
+
+      // Préférence langue française vs notices étrangères (ex. manuel anglais "Core concepts in criminal law")
+      if (isFrenchCandidate(opt)) score += 12;
+      else if (isExplicitNonFrenchCandidate(opt)) score -= 22;
+
+      // Quand l'utilisateur saisit un titre + un auteur unique de roman SANS demander "(BD)"
+      // et que la recherche ramène à la fois le roman original et son adaptation BD co-écrite, favoriser le roman original.
+      if (hasNovelAndGraphicMix && getOptionMediaBucket(opt.mainCategory) === 'Roman' && opt.authors.length <= 2) {
+        score += 14;
       }
 
       // Bonus qualificatifs d'édition / éditeur extraits (ex. "deluxe", "black", "perfect", "glénat", "kurokawa")

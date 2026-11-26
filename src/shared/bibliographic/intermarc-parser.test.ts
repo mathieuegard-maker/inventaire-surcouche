@@ -91,4 +91,19 @@ describe('parseMarcRecord (InterMarc BnF + UNIMARC SUDOC)', () => {
     expect(parsed?.isIntegralHint).toBe(true);
     expect(parsed?.integralNotes).toContain('Réunit les tomes 1 à 9');
   });
+
+  it('déduit la langue originale depuis la mention ISBD 245$f ("traduit du japonais") si 041$h est absent', () => {
+    const mangaIsbdXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782723442282</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245">
+          <mxc:subfield code="a">Sawako</mxc:subfield>
+          <mxc:subfield code="f">Karuho Shiina ; traduit du japonais par Yuko Kurahashi</mxc:subfield>
+        </mxc:datafield>
+      </mxc:record>
+    `;
+    const parsed = parseMarcRecord(mangaIsbdXml);
+    expect(parsed?.originalLanguage).toBe('jpn');
+  });
 });

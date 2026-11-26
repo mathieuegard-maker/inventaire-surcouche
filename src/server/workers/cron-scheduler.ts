@@ -142,6 +142,7 @@ export class CronScheduler {
 
     const logsCutoff = new Date(nowDate.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const logsPurged = this.logRepo.purgeOlderThan(logsCutoff);
+    this.jobRepo.pruneExternalCache(nowIso, 6000);
     const coverPurge = await this.coverService.purgeOrphanCovers(30, nowDate.getTime());
 
     // Filet de sécurité nocturne : reprogramme jusqu'à 3 séries ayant encore des tomes sans couverture

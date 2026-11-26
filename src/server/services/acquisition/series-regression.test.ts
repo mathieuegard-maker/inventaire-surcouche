@@ -2635,4 +2635,260 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(draft?.isIntegral).toBe(true);
     expect(draft?.includedVolumes).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9']);
   });
+
+  it('Cas 22 (Vague 3 — Catégories BD/895.1/séries, Œuvres complètes, entonnoir omnibox + Google Books / Open Library)', async () => {
+    const { classifyBookMetadata } = await import('../../../shared/bibliographic/category-classifier');
+    const { CollectionGuardService } = await import('./collection-guard.service');
+    const { PhotoAiService } = await import('../photo-ai.service');
+
+    // 1. Open Library "Comic books, strips, etc." sur BD franco-belge reste BD (pas Comics !)
+    expect(
+      classifyBookMetadata({
+        title: "Un océan d'amour",
+        publisher: 'Delcourt',
+        rawSubjects: ['Romans graphiques', 'Comic books, strips, etc.', 'Graphic novels'],
+        contentKind: 'illustrated'
+      }).mainCategory
+    ).toBe('BD');
+
+    // 2. Dewey 895.13 (littérature chinoise : Liu Cixin) -> Roman (pas Poésie / Théâtre !), tandis que 841.91 -> Poésie / Théâtre
+    expect(
+      classifyBookMetadata({
+        title: 'Le Problème à trois corps',
+        deweyCode: '895.13',
+        contentKind: 'text_only'
+      }).mainCategory
+    ).toBe('Roman');
+    expect(
+      classifyBookMetadata({
+        title: 'Alcools',
+        deweyCode: '841.91',
+        contentKind: 'text_only'
+      }).mainCategory
+    ).toBe('Poésie / Théâtre');
+
+    // 3. Un titre d'album contenant "histoire" / "philosophie" dans une série BD/Manga ne bascule pas en Essai
+    expect(
+      classifyBookMetadata({
+        title: "L'histoire de Nathan",
+        series: 'Louca',
+        publisher: 'Dupuis',
+        contentKind: 'illustrated'
+      }).mainCategory
+    ).toBe('BD');
+    expect(
+      classifyBookMetadata({
+        title: 'La philosophie des hommes',
+        series: 'Rookies',
+        originalLanguage: 'jpn',
+        contentKind: 'illustrated'
+      }).mainCategory
+    ).toBe('Manga');
+
+    // 4. CollectionGuard rejette "Œuvres complètes / Roberto Bolaño" et "Collection RPG" sans échantillon homogène
+    const guard = new CollectionGuardService();
+    const oeuvresVerdict = await guard.evaluateCandidate({
+      candidateName: 'Œuvres complètes / Roberto Bolaño',
+      linkKind: 'marc_ensemble_460',
+      allColumns: []
+    });
+    expect(oeuvresVerdict.verdict).toBe('collection');
+
+    const colRpgVerdict = await guard.evaluateCandidate({
+      candidateName: 'Collection RPG',
+      linkKind: 'marc_ensemble_460',
+      allColumns: []
+    });
+    expect(colRpgVerdict.verdict).toBe('collection');
+
+    // 5. PhotoAiService entonnoir Vague 3 : anti-hors-sujet mots génériques, rejet EAN presse 378 & japonais plein cadre,
+    //    fallback bib.anywhere, découpage Titre/Auteur, ultime recours Google Books / Open Library, et roman original vs BD
+    const mockConnectors = createMockConnectors({});
+    mockConnectors.bnf.searchByTitleAndAuthor = async (title: string, author?: string) => {
+      const q = title.toLowerCase();
+      const a = (author ?? '').toLowerCase();
+      // Cas "Les Innommables - Intégrale Cycle zéro" : BnF renvoie un faux hit "Fondation Intégrale Tome 1"
+      if (q.includes('innommables') || q.includes('cycle')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782070463626',
+            title: 'Le cycle de Fondation Intégrale Tome 1',
+            seriesName: 'Cycle de Fondation',
+            authors: ['Isaac Asimov'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Gallimard',
+            rawSubjects: ['Roman'],
+            isIntegralHint: true,
+            language: 'fre',
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      // Cas rejet EAN presse 378... et titre japonais non-latin
+      if (q.includes('bois maury')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '3780551512999',
+            title: 'Les Tours de Bois-Maury',
+            authors: ['Hermann'],
+            scriptwriters: [],
+            illustrators: [],
+            rawSubjects: ['Bandes dessinées']
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782723407748',
+            title: 'ＭＦゴースト（５）',
+            authors: ['Hermann'],
+            scriptwriters: [],
+            illustrators: [],
+            rawSubjects: ['Mangas']
+          }
+        ];
+      }
+      // Cas découpage Titre/Auteur (Secours F2) : "Les Contes de la rue Broca" + "Pierre Gripari"
+      if (q.includes('contes de la rue broca') && a.includes('gripari')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782710300250',
+            title: 'Les Contes de la rue Broca',
+            authors: ['Pierre Gripari'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'La Table ronde',
+            language: 'fre',
+            rawSubjects: ['Jeunesse'],
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      // Cas roman original vs adaptation BD ("L'île du docteur Moreau" + "H.G. Wells")
+      if (q.includes('docteur moreau')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782344042007',
+            title: "L'Île du docteur Moreau",
+            authors: ['Stéphane Betbeder', 'Fabrizio Fiorentino', 'Herbert George Wells'],
+            scriptwriters: ['Stéphane Betbeder'],
+            illustrators: ['Fabrizio Fiorentino'],
+            publisher: 'Glénat',
+            language: 'fre',
+            deweyCode: '741.5',
+            rawSubjects: ['Bandes dessinées'],
+            contentKind: 'illustrated'
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782070401789',
+            title: "L'Île du docteur Moreau",
+            authors: ['Herbert George Wells'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Gallimard',
+            language: 'fre',
+            deweyCode: '823',
+            rawSubjects: ['Roman'],
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      return [];
+    };
+
+    mockConnectors.bnf.searchAnywhere = async (query: string) => {
+      if (query.toLowerCase().includes('sisyphe') && query.toLowerCase().includes('camus')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782070322886',
+            title: 'Le Mythe de Sisyphe',
+            authors: ['Albert Camus'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Gallimard',
+            language: 'fre',
+            deweyCode: '194',
+            rawSubjects: ['Philosophie'],
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      return [];
+    };
+
+    mockConnectors.googleBooks.searchByText = async (query: string) => {
+      if (query.toLowerCase().includes('spqr') || query.toLowerCase().includes('s p q r')) {
+        return [
+          {
+            source: 'google_books',
+            isbn13: '9782262048716',
+            title: "SPQR : Histoire de l'ancienne Rome",
+            authors: ['Mary Beard'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Perrin',
+            language: 'fr',
+            rawSubjects: ['History']
+          }
+        ];
+      }
+      return [];
+    };
+
+    const photoAi = new PhotoAiService({
+      config: { monthlyAiQuota: 30 } as never,
+      gemini: { isConfigured: () => false } as never,
+      connectors: mockConnectors,
+      userRepo: {} as never,
+      catalogRepo,
+      libraryRepo: {} as never,
+      jobRepo: {} as never,
+      coverService: {
+        ingestFromExternalUrl: async () => null,
+        resolveBestCoverFromCascade: async () => null,
+        readCoverBinary: async () => null
+      } as never,
+      ingestionService: {} as never,
+      libraryService: {} as never
+    });
+
+    // 5a. Mots génériques ("Intégrale Cycle zéro") ne matchent PLUS Fondation si la série est "Les Innommables"
+    const innomOpts = await photoAi.searchBookCandidates({
+      title: 'Intégrale Cycle zéro',
+      series: 'Les Innommables',
+      isIntegral: true
+    });
+    expect(innomOpts).toHaveLength(0);
+
+    // 5b. EAN presse 378... et titre japonais plein cadre sont bloqués par toOption
+    const boisOpts = await photoAi.searchBookCandidates({ title: 'Les Tours de Bois-Maury', author: 'Hermann' });
+    expect(boisOpts).toHaveLength(0);
+
+    // 5c. Secours F1 bib.anywhere : "mythe de sisyphe camus" trouve Le Mythe de Sisyphe d'Albert Camus
+    const camusOpts = await photoAi.searchBookCandidates({ title: 'mythe de sisyphe camus' });
+    expect(camusOpts[0]?.isbn13).toBe('9782070322886');
+
+    // 5d. Secours F2 découpage Titre/Auteur : "Les Contes de la rue Broca Pierre Gripari"
+    const gripariOpts = await photoAi.searchBookCandidates({ title: 'Les Contes de la rue Broca Pierre Gripari' });
+    expect(gripariOpts[0]?.isbn13).toBe('9782710300250');
+
+    // 5e. Secours F3 Google Books officiel quand la BnF renvoie 0
+    const spqrOpts = await photoAi.searchBookCandidates({
+      title: "S.P.Q.R. : Histoire de l'ancienne Rome",
+      author: 'Mary Beard'
+    });
+    expect(spqrOpts[0]?.isbn13).toBe('9782262048716');
+
+    // 5f. Roman original préféré devant son adaptation BD quand l'utilisateur n'a pas demandé "(BD)"
+    const moreauOpts = await photoAi.searchBookCandidates({
+      title: "L'île du docteur Moreau",
+      author: 'Herbert George Wells'
+    });
+    expect(moreauOpts[0]?.isbn13).toBe('9782070401789');
+  });
 });

@@ -80,6 +80,10 @@ export class BackgroundWorker {
   private readonly jobRepo: JobRepository;
   private readonly logRepo: LogRepository;
   private readonly handlers = new Map<BackgroundJobType, JobHandler>();
+  private readonly afterCompleteListeners = new Map<
+    BackgroundJobType,
+    Array<(job: BackgroundJobRow) => Promise<void> | void>
+  >();
   private readonly emitter = new EventEmitter();
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly activeLanes = new Set<string>();
@@ -94,6 +98,12 @@ export class BackgroundWorker {
 
   registerHandler(type: BackgroundJobType, handler: JobHandler): void {
     this.handlers.set(type, handler);
+  }
+
+  registerAfterComplete(type: BackgroundJobType, listener: (job: BackgroundJobRow) => Promise<void> | void): void {
+    const list = this.afterCompleteListeners.get(type) ?? [];
+    list.push(listener);
+    this.afterCompleteListeners.set(type, list);
   }
 
   subscribe(listener: (event: JobUpdatedEvent) => void): () => void {
@@ -213,6 +223,17 @@ export class BackgroundWorker {
       const finalTotal = total ?? Math.max(1, job.progress_total);
       const completed = this.jobRepo.completeJob(job.id, result, finalTotal, new Date().toISOString());
       this.emitRow(completed);
+
+      if (completed) {
+        const hooks = this.afterCompleteListeners.get(job.type) ?? [];
+        for (const hook of hooks) {
+          try {
+            await hook(completed);
+          } catch (hookErr) {
+            console.warn(`[BackgroundWorker] afterComplete hook error for ${job.type}/${job.id}:`, hookErr);
+          }
+        }
+      }
 
       this.logRepo.append({
         traceId: job.id,

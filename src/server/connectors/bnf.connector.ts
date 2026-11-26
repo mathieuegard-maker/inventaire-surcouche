@@ -261,10 +261,18 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
         if (!hasIntegralWord) continue;
 
         const ensBase = rec.ensembleSeriesName ? extractFranchiseBaseName(rec.ensembleSeriesName).normalizedKey : '';
+        const isUltraShortSeries = baseKey.length <= 2;
         const isShortSingleWordSeries = baseKey.split(' ').length === 1 && baseKey.length <= 5;
         let belongsToSeries: boolean;
         if (Boolean(ensBase) && ensBase === baseKey) {
           belongsToSeries = true;
+        } else if (isUltraShortSeries) {
+          // Séries à 1-2 lettres (ex. "X" de CLAMP) : exiger égalité stricte du nom de série ou du titre
+          // afin d'éviter toute contamination par des préfixes à tiret ("X-O Manowar", "X-Factor").
+          const normTitle = normalizeTextKey(rec.title);
+          const normSeries = normalizeTextKey(rec.ensembleSeriesName ?? '');
+          const rawTitleHyphenPrefix = new RegExp(`^${baseKey}[-‐–—]`, 'i').test(rec.title.trim());
+          belongsToSeries = !rawTitleHyphenPrefix && (normSeries === baseKey || normTitle === baseKey);
         } else if (isShortSingleWordSeries) {
           // Pour les séries d'un seul mot court (ex. "Polo"), exiger que la série ou le titre DÉMARRE par ce mot
           // afin d'éviter les faux positifs partiels ("Marco Polo il Milione").
@@ -316,6 +324,9 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
             publishYear: rec.publishYear ?? null,
             pageCount: rec.pageCount ?? null,
             language: rec.language ?? null,
+            originalLanguage: rec.originalLanguage ?? null,
+            deweyCode: rec.deweyCode ?? null,
+            rawSubjects: rec.rawSubjects,
             coverUrl: rec.bnfCoverUrl ?? null,
             isHorsSerie: false,
             isIntegral: true,
@@ -364,7 +375,15 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
         cql = `bib.author all "${lastName}" and bib.doctype any "a"`;
       }
       const records = await querySru(cql, maxRecords, `bnf:search:${cql.toLowerCase()}:${maxRecords}`);
-      return records.map((r) => toCandidate(r, r.isbn13));
+      return records.filter((r) => !isPressOrKioskOnlyRecord(r)).map((r) => toCandidate(r, r.isbn13));
+    },
+
+    async searchAnywhere(query: string, maxRecords = 12): Promise<SourceCandidateRecord[]> {
+      const safeQuery = query.replace(/"/g, ' ').trim();
+      if (!safeQuery) return [];
+      const cql = `bib.anywhere all "${safeQuery}" and bib.doctype any "a"`;
+      const records = await querySru(cql, maxRecords, `bnf:anywhere:${safeQuery.toLowerCase()}:${maxRecords}`);
+      return records.filter((r) => !isPressOrKioskOnlyRecord(r)).map((r) => toCandidate(r, r.isbn13));
     }
   };
 }

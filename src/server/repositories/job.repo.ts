@@ -231,6 +231,28 @@ export class JobRepository {
     return this.db.run('DELETE FROM external_cache WHERE expires_at <= ?', [nowIso]).changes;
   }
 
+  /**
+   * Purge les entrées expirées de `external_cache` puis borne la table aux `maxRows` entrées les plus récentes
+   * afin de garantir une taille maîtrisée de `biblio.sqlite` sur la durée.
+   */
+  pruneExternalCache(nowIso: string, maxRows = 6000): number {
+    let deleted = this.purgeExpiredExternalCache(nowIso);
+    const total = this.db.get<{ c: number }>('SELECT COUNT(*) AS c FROM external_cache')?.c ?? 0;
+    if (total > maxRows) {
+      const overflow = total - maxRows;
+      deleted += this.db.run(
+        `DELETE FROM external_cache
+         WHERE cache_key IN (
+           SELECT cache_key FROM external_cache
+           ORDER BY expires_at ASC
+           LIMIT ?
+         )`,
+        [overflow]
+      ).changes;
+    }
+    return deleted;
+  }
+
   // ==================== CRON RUNS ====================
 
   getCronRun(jobName: string): CronRunRow | null {

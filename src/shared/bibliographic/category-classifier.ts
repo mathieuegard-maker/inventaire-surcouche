@@ -76,7 +76,10 @@ const MANGA_SIGNAL_RE =
   /\b(mangas?|sh[ôo]nen|sh[ôo]jo|seinen|josei|kodomo|manhwa|manhua|kanzenban|tank[ôo]bon|bandes?\s+dessin[ée]es?\s+japonaises?|webtoons?)\b/i;
 
 const COMICS_STRONG_RE =
-  /\b(super[- ]h[ée]ros|comic\s*books?|bandes?\s+dessin[ée]es?\s+am[ée]ricaines?)\b/i;
+  /\b(super[- ]h[ée]ros|superheroes|bandes?\s+dessin[ée]es?\s+am[ée]ricaines?)\b/i;
+
+const GENERIC_EN_GRAPHIC_SUBJECT_RE =
+  /\b(?:comics?\s*&\s*graphic\s+novels?|comic\s+books?,?\s*strips(?:,?\s*etc\.?)?|graphic\s+novels?)\b/gi;
 
 const BD_SIGNAL_RE =
   /\b(bandes?\s+dessin[ée]es?|b\.?d\.?|album\s+bd|franco[- ]belge|romans?\s+graphiques?)\b/i;
@@ -131,6 +134,13 @@ export function classifyBookMetadata(input: {
     subjectsText
   ].join(' | ');
 
+  // Quand le livre appartient déjà à une série, ne pas laisser un mot narratif du titre d'album
+  // (ex. "L'histoire de Nathan", "La philosophie des hommes", "Sciences naturelles", "Petites nouvelles")
+  // déclencher Essai/Roman/Poésie-Théâtre en Palier 1.
+  const subjectsAndSeriesScope = input.series
+    ? [input.series || '', input.collection || '', subjectsText].join(' | ')
+    : subjectsAndTitle;
+
   const structuralText = [titleSeriesPubCol, dewey, subjectsText].join(' | ');
 
   // Retire les mentions d'adaptation de la description ("adapté en bande dessinée / manga / film")
@@ -155,24 +165,29 @@ export function classifyBookMetadata(input: {
     dewey && !dewey.startsWith('741.5') && /^[0-9]/.test(dewey)
   );
 
+  const hasGenericEnGraphicSubject = GENERIC_EN_GRAPHIC_SUBJECT_RE.test(subjectsText);
+  GENERIC_EN_GRAPHIC_SUBJECT_RE.lastIndex = 0;
+  const cleanedSubjectsForComics = subjectsText.replace(GENERIC_EN_GRAPHIC_SUBJECT_RE, '');
+
   const isGraphicSignal =
     dewey.startsWith('741.5') ||
     MANGA_SIGNAL_RE.test(structuralText) ||
     COMICS_STRONG_RE.test(structuralText) ||
     BD_SIGNAL_RE.test(structuralText) ||
     /\bcomics?\b/i.test(titleSeriesPubCol) ||
-    /\bcomics?\s*&\s*graphic\s+novels?\b/i.test(subjectsText) ||
+    (hasGenericEnGraphicSubject && input.contentKind !== 'text_only' && !hasExplicitNonGraphicDewey) ||
     (input.contentKind === 'illustrated' && !hasExplicitNonGraphicDewey && !isYouthStructural);
 
-  const hasNonBisacComicsSubject =
-    /\bcomics?\b/i.test(subjectsText) &&
-    !/\bcomics?\s*&\s*graphic\s+novels?\b/i.test(subjectsText) &&
-    !isFrenchOriginal;
+  const hasSpecificComicsSubject =
+    /\bcomics?\b/i.test(cleanedSubjectsForComics) &&
+    !isFrenchOriginal &&
+    input.contentKind !== 'text_only' &&
+    !hasExplicitNonGraphicDewey;
 
   let mainCategory: BookMainCategory = 'Autre';
   let confidence: 'explicit' | 'fallback' = 'explicit';
 
-  // === TIER 1 : Signaux structurels fiables (Dewey, RAMEAU, langue originale MARC 041$h/101$c, titre/collection) ===
+  // === TIER 1 : Signaux structurels fiables (Dewey, RAMEAU, langue originale MARC 041$h/101$c/ISBD, titre/collection) ===
   if (
     MANGA_SIGNAL_RE.test(structuralText) ||
     /^741\.595\s*[12]/.test(dewey) ||
@@ -184,33 +199,35 @@ export function classifyBookMetadata(input: {
     /\bcomics?\b/i.test(titleSeriesPubCol) ||
     /^741\.597\s*3/.test(dewey) ||
     (isGraphicSignal && isEnglishOriginal && !isYouthStructural) ||
-    hasNonBisacComicsSubject
+    hasSpecificComicsSubject
   ) {
     mainCategory = 'Comics';
   } else if (
     dewey.startsWith('741.5') ||
     BD_SIGNAL_RE.test(structuralText) ||
-    (/\bcomics?\s*&\s*graphic\s+novels?\b/i.test(subjectsText) && !isEnglishOriginal)
+    (hasGenericEnGraphicSubject && !isEnglishOriginal && input.contentKind !== 'text_only' && !hasExplicitNonGraphicDewey)
   ) {
     mainCategory = 'BD';
   } else if (
-    /^8\d\d\.[12]/.test(dewey) ||
-    (POETRY_THEATRE_RE.test(subjectsAndTitle) && !POETRY_FALSE_POSITIVE_RE.test(subjectsAndTitle))
+    // En Dewey, le 3e chiffre code le genre pour les littératures 81x-88x : 8x1 = Poésie (ex. 841.91), 8x2 = Théâtre (ex. 842.91).
+    // En 89x le chiffre après le point code la langue (ex. 895.13 = roman chinois), donc ne jamais tester `8xx.[12]`.
+    /^8[1-8][12](?:\b|\.)/.test(dewey) ||
+    (POETRY_THEATRE_RE.test(subjectsAndSeriesScope) && !POETRY_FALSE_POSITIVE_RE.test(subjectsAndSeriesScope))
   ) {
     mainCategory = 'Poésie / Théâtre';
   } else if (isYouthStructural) {
     mainCategory = 'Jeunesse';
   } else if (/^(64\d|635\b|794\.1)/.test(dewey) || PRATIQUE_SIGNAL_RE.test(subjectsAndTitle)) {
     mainCategory = 'Pratique';
-  } else if (/^7[0-7]\d/.test(dewey) || ART_SIGNAL_RE.test(subjectsAndTitle)) {
+  } else if (/^7[0-7]\d/.test(dewey) || ART_SIGNAL_RE.test(subjectsAndSeriesScope)) {
     mainCategory = 'Art / Beau livre';
   } else if (/^[0123459]\d\d|^6[012356789]\d|^7[89]\d|^8\d4\b|^809\b/.test(dewey)) {
     mainCategory = 'Essai';
   } else if (/^8\d\d/.test(dewey)) {
     mainCategory = 'Roman';
-  } else if (NOVEL_STRUCTURAL_RE.test(subjectsAndTitle)) {
+  } else if (NOVEL_STRUCTURAL_RE.test(subjectsAndSeriesScope)) {
     mainCategory = 'Roman';
-  } else if (ESSAI_STRUCTURAL_RE.test(subjectsAndTitle)) {
+  } else if (ESSAI_STRUCTURAL_RE.test(subjectsAndSeriesScope)) {
     mainCategory = 'Essai';
   } else if (cleanedDescription.trim().length > 0) {
     // === TIER 2 : Description (uniquement si aucun signal structurel décisif) ===

@@ -677,4 +677,80 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     });
     expect(regradeRes.status).toBe(200);
   });
+
+  it('persiste un CSV corrigé préchargé côté serveur et déclenche automatiquement la notation dès la fin de l’import + borne external_cache', async () => {
+    const adminCookie = await registerUser('AdminAutoGrade', 'admin@biblio.test');
+
+    // 1. Préchargement du CSV de correction sur le SERVEUR avant même de lancer l'import
+    const gtCsv =
+      'Ligne,Fichier_Origine,Categorie,Profil_Entree,ISBN_Attendu,Titre_Attendu,Serie_Attendue,Tome_Attendu,Auteur_Attendu,Editeur_Attendu,Collection_Editoriale,Annee_Attendue,Media_Attendu,Integrale_Attendue,Tomes_Inclus_Attendus,Statut_Attendu,Lecture_Attendue,Note_Attendue,Notes_Attendues,Regle_Verification\n' +
+      '1,auto_test.csv,cat1,isbn_seul,9782871293019,La Marque du diable,Le Scorpion,1,"Stephen Desberg, Enrico Marini",Dargaud,,2000,BD,Non,,owned,read,5,Top,Auto-grade test\n';
+
+    const savePendingRes = await appCtx.app.request('/api/admin/import-benchmarks/pending-ground-truth', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        filename: 'reponses_auto.csv',
+        contentBase64: Buffer.from(gtCsv, 'utf8').toString('base64')
+      })
+    });
+    expect(savePendingRes.status).toBe(200);
+    const savedMeta = (await savePendingRes.json()) as {
+      ok: true;
+      pendingGroundTruth: { filename: string; rowCount: number };
+    };
+    expect(savedMeta.pendingGroundTruth.filename).toBe('reponses_auto.csv');
+    expect(savedMeta.pendingGroundTruth.rowCount).toBe(1);
+
+    // 2. Import CSV exécuté par le BackgroundWorker (sans aucun navigateur ouvert)
+    const inputCsv =
+      'ISBN,Titre,Auteur,Statut,Lecture,Note,Notes\n' +
+      '9782871293019,La Marque du diable,Marini,owned,read,5,Top\n';
+    const importRes = await appCtx.app.request('/api/me/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({
+        filename: 'auto_test.csv',
+        contentBase64: Buffer.from(inputCsv, 'utf8').toString('base64'),
+        defaultStatus: 'owned'
+      })
+    });
+    expect(importRes.status).toBe(202);
+    const { job } = (await importRes.json()) as { job: { id: string } };
+
+    // Déroule le worker -> le hook afterComplete déclenche autoGradeWithPendingGroundTruth automatiquement !
+    while (await appCtx.worker.processNextJob()) {
+      // drain
+    }
+
+    // 3. Le rapport Markdown a été généré automatiquement et le pendingGroundTruth a été consommé
+    const gradeGetRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/grade`, {
+      headers: { cookie: adminCookie }
+    });
+    expect(gradeGetRes.status).toBe(200);
+    const gradeBody = (await gradeGetRes.json()) as {
+      ok: true;
+      hasGroundTruth: boolean;
+      report?: { totals: { evaluatedRows: number; resolvedRows: number } };
+    };
+    expect(gradeBody.hasGroundTruth).toBe(true);
+    expect(gradeBody.report?.totals.evaluatedRows).toBe(1);
+    expect(gradeBody.report?.totals.resolvedRows).toBe(1);
+
+    const pendingAfter = (await (
+      await appCtx.app.request('/api/admin/import-benchmarks/pending-ground-truth', {
+        headers: { cookie: adminCookie }
+      })
+    ).json()) as { pendingGroundTruth: unknown };
+    expect(pendingAfter.pendingGroundTruth).toBeNull();
+
+    // 4. Vérifie le plafonnement pruneExternalCache sur external_cache
+    const future = new Date(Date.now() + 86400_000).toISOString();
+    const past = new Date(Date.now() - 86400_000).toISOString();
+    for (let i = 0; i < 6; i++) {
+      appCtx.repos.jobRepo.setExternalCache(`k_${i}`, 'bnf', { text: 'ok' }, i < 2 ? past : future);
+    }
+    const purged = appCtx.repos.jobRepo.pruneExternalCache(new Date().toISOString(), 2);
+    expect(purged).toBe(4); // 2 expirés + 2 excédentaires au-dessus du plafond maxRows=2
+  });
 });

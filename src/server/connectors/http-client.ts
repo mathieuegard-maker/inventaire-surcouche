@@ -234,8 +234,11 @@ export class HttpClient {
 
             circuit.failures = 0;
 
-            if (options.cacheKey && this.jobRepo && !isJsonErrorPayload(text)) {
-              const ttlSec = options.cacheTtlSec ?? 86400;
+            // Plafonnement de taille du cache SQLite : ne jamais figer d'énormes payloads XML/JSON > 120 Ko,
+            // et borner à 24 h les réponses de recherche moyennes (> 24 Ko) afin d'éviter la croissance incontrôlée de biblio.sqlite.
+            if (options.cacheKey && this.jobRepo && !isJsonErrorPayload(text) && text.length <= 120_000) {
+              const requestedTtl = options.cacheTtlSec ?? 86400;
+              const ttlSec = text.length > 24_000 ? Math.min(requestedTtl, 86400) : requestedTtl;
               const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
               this.jobRepo.setExternalCache(options.cacheKey, options.source, { text }, expiresAt);
             }

@@ -1304,13 +1304,21 @@ export class SeriesGraphService {
       });
 
       // Protection anti-écrasement : un tome déjà en base conserve sa catégorie qualifiée ;
-      // un nouveau squelette sans signal explicite hérite de la catégorie dominante de la série graine.
+      // un nouveau squelette sans signal explicite (ou une intégrale BnF 741.5 générique d'une série Manga/Comics)
+      // hérite de la catégorie dominante de la série graine.
+      const isGenericBdInsideMangaOrComics =
+        classification.mainCategory === 'BD' &&
+        (seedSeriesCategory === 'Manga' || seedSeriesCategory === 'Comics') &&
+        (work.isIntegral || !work.originalLanguage);
+
       const effectiveMainCategory: BookMainCategory =
         existingBook && existingBook.main_category !== 'Autre'
           ? existingBook.main_category
-          : classification.confidence === 'explicit'
-            ? classification.mainCategory
-            : (seedSeriesCategory ?? classification.mainCategory);
+          : isGenericBdInsideMangaOrComics && seedSeriesCategory
+            ? seedSeriesCategory
+            : classification.confidence === 'explicit'
+              ? classification.mainCategory
+              : (seedSeriesCategory ?? classification.mainCategory);
 
       const saved = this.catalogRepo.upsertBookAutomatic({
         id: existingBook?.id ?? generateId('bk'),

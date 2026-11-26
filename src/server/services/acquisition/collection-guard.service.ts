@@ -85,7 +85,7 @@ export function evaluateAuthorHeterogeneity(sample: CollectionSampleItem[]): {
 }
 
 const EXPLICIT_EDITORIAL_COLLECTION_PREFIX_RE =
-  /^(?:(?:la\s+)?collection\s+|(?:la\s+|petite\s+|grande\s+)?biblioth[eè]que\s+)/i;
+  /^(?:(?:la\s+)?collection\s+|(?:la\s+|petite\s+|grande\s+)?biblioth[eè]que\s+|(?:œ|oe)uvres(?:\s+compl[èe]tes?)?(?:\s|$|\/|:|-))/i;
 
 export class CollectionGuardService {
   private readonly bnf?: BnfConnector;

@@ -7,6 +7,7 @@ import {
   cleanPublisher,
   cleanTitle,
   extractAuthorLastNameForQuery,
+  isLatinScriptLabel,
   normalizeTextKey
 } from '../../shared/bibliographic/text-normalize.util';
 import type { HttpClient } from './http-client';
@@ -37,6 +38,8 @@ interface GoogleBooksResponse {
 
 function mapVolumeInfoToCandidate(info: GoogleBooksVolumeInfo, fallbackIsbn13 = ''): SourceCandidateRecord | null {
   if (!info?.title) return null;
+  const cleanedTitle = cleanTitle(info.title);
+  if (!cleanedTitle || !isLatinScriptLabel(cleanedTitle)) return null;
 
   const rawThumb = info.imageLinks?.thumbnail ?? info.imageLinks?.smallThumbnail;
   const coverUrl = rawThumb ? rawThumb.replace(/^http:\/\//i, 'https://').replace('&edge=curl', '') : undefined;
@@ -50,7 +53,7 @@ function mapVolumeInfoToCandidate(info: GoogleBooksVolumeInfo, fallbackIsbn13 = 
   return {
     source: 'google_books',
     isbn13,
-    title: cleanTitle(info.title),
+    title: cleanedTitle,
     subtitle: info.subtitle ? cleanTitle(info.subtitle) : undefined,
     authors: (info.authors ?? []).map((a) => a.trim()).filter(Boolean),
     scriptwriters: [],
@@ -101,6 +104,27 @@ export function createGoogleBooksConnector(http: HttpClient): GoogleBooksConnect
       for (const item of data?.items ?? []) {
         const mapped = item.volumeInfo ? mapVolumeInfoToCandidate(item.volumeInfo) : null;
         if (mapped) out.push(mapped);
+      }
+      return out;
+    },
+
+    async searchByText(query: string, maxResults = 6): Promise<SourceCandidateRecord[]> {
+      const cleanQ = query.replace(/"/g, ' ').trim();
+      if (!cleanQ) return [];
+      const url = `https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(cleanQ)}&langRestrict=fr&maxResults=${Math.min(10, maxResults)}`;
+      const data = await http.fetchJson<GoogleBooksResponse>({
+        source: 'google_books',
+        url,
+        timeoutMs: 4000,
+        minIntervalMs: 250,
+        cacheKey: `gb:text:${normalizeTextKey(cleanQ)}:${maxResults}`,
+        cacheTtlSec: 60 * 60 * 48
+      });
+
+      const out: SourceCandidateRecord[] = [];
+      for (const item of data?.items ?? []) {
+        const mapped = item.volumeInfo ? mapVolumeInfoToCandidate(item.volumeInfo) : null;
+        if (mapped && mapped.isbn13) out.push(mapped);
       }
       return out;
     }

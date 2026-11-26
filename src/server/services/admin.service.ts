@@ -527,6 +527,88 @@ export class AdminService {
     return path.join(this.reportsDir, `series-${this.assertSafeJobId(jobId)}.md`);
   }
 
+  private getPendingGroundTruthPath(): string {
+    return path.join(this.reportsDir, 'pending-ground-truth.json');
+  }
+
+  async savePendingGroundTruth(input: {
+    filename: string;
+    contentBase64: string;
+  }): Promise<{ filename: string; rowCount: number; uploadedAt: string }> {
+    const cleanBase64 =
+      input.contentBase64.startsWith('data:') && input.contentBase64.includes(',')
+        ? input.contentBase64.slice(input.contentBase64.indexOf(',') + 1)
+        : input.contentBase64;
+    const buf = Buffer.from(cleanBase64, 'base64');
+    if (buf.byteLength === 0) {
+      throw new AppError(400, 'GROUND_TRUTH_EMPTY', 'Le fichier de correction est vide.');
+    }
+    if (buf.byteLength > MAX_GROUND_TRUTH_BYTES) {
+      throw new AppError(400, 'GROUND_TRUTH_TOO_LARGE', 'Fichier de correction trop volumineux (max 10 Mo).');
+    }
+    const rows = parseGroundTruthCsv(buf.toString('utf8'));
+    if (rows.length === 0) {
+      throw new AppError(
+        400,
+        'GROUND_TRUTH_INVALID',
+        'Aucune ligne exploitable détectée dans le CSV de correction (colonnes attendues : Ligne, Titre_Attendu, Serie_Attendue...).'
+      );
+    }
+    const stored: StoredGroundTruthFile = {
+      filename: input.filename.trim() || 'correction.csv',
+      uploadedAt: new Date().toISOString(),
+      rows
+    };
+    await fs.mkdir(this.reportsDir, { recursive: true });
+    await fs.writeFile(this.getPendingGroundTruthPath(), JSON.stringify(stored), 'utf8');
+    return { filename: stored.filename, rowCount: rows.length, uploadedAt: stored.uploadedAt };
+  }
+
+  getPendingGroundTruthMeta(): { filename: string; rowCount: number; uploadedAt: string } | null {
+    const p = this.getPendingGroundTruthPath();
+    try {
+      if (!fsSync.existsSync(p)) return null;
+      const parsed = JSON.parse(fsSync.readFileSync(p, 'utf8')) as Partial<StoredGroundTruthFile>;
+      if (!Array.isArray(parsed.rows) || parsed.rows.length === 0) return null;
+      return {
+        filename: typeof parsed.filename === 'string' ? parsed.filename : 'correction.csv',
+        rowCount: parsed.rows.length,
+        uploadedAt: typeof parsed.uploadedAt === 'string' ? parsed.uploadedAt : new Date().toISOString()
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async clearPendingGroundTruth(): Promise<void> {
+    await fs.rm(this.getPendingGroundTruthPath(), { force: true }).catch(() => undefined);
+  }
+
+  /**
+   * Si un CSV de correction a été préchargé sur le serveur avant/pendant l'import,
+   * exécute automatiquement la notation complète dès la fin du job (même si le navigateur est fermé).
+   */
+  async autoGradeWithPendingGroundTruth(jobId: string): Promise<boolean> {
+    const pendingPath = this.getPendingGroundTruthPath();
+    if (!fsSync.existsSync(pendingPath)) return false;
+    try {
+      const raw = await fs.readFile(pendingPath, 'utf8');
+      const storedGt = JSON.parse(raw) as StoredGroundTruthFile;
+      if (!storedGt || !Array.isArray(storedGt.rows) || storedGt.rows.length === 0) {
+        return false;
+      }
+      const { report, markdown, seriesMarkdown } = this.computeLiveGradedReport(jobId, storedGt);
+      await fs.mkdir(this.reportsDir, { recursive: true });
+      await fs.writeFile(this.getGroundTruthPath(jobId), JSON.stringify(storedGt), 'utf8');
+      await this.persistReportAndLog(jobId, report, markdown, seriesMarkdown);
+      await fs.rm(pendingPath, { force: true }).catch(() => undefined);
+      return true;
+    } catch (err) {
+      console.warn(`[benchmark_report] Auto-notation différée impossible pour ${jobId}:`, err);
+      return false;
+    }
+  }
+
   private readGroundTruthMetaSync(jobId: string): {
     hasGroundTruth: boolean;
     groundTruthFilename: string | null;

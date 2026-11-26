@@ -11,6 +11,7 @@ services:
     environment:
       PORT: "3000"
       DATA_DIR: /data
+      SQLITE_TMPDIR: /data
       CRON_ENABLED: "true"
       CRON_INTERVAL_MINUTES: "60"
     ports:

@@ -82,7 +82,28 @@ export function createAdminRoutes(deps: {
   router.get('/import-benchmarks', (c) => {
     const limit = Number(c.req.query('limit') || 15) || 15;
     const data = deps.adminService.listImportBenchmarks(limit);
-    return c.json({ ok: true, ...data });
+    const pendingGroundTruth = deps.adminService.getPendingGroundTruthMeta();
+    return c.json({ ok: true, ...data, pendingGroundTruth });
+  });
+
+  router.get('/import-benchmarks/pending-ground-truth', (c) => {
+    const pendingGroundTruth = deps.adminService.getPendingGroundTruthMeta();
+    return c.json({ ok: true, pendingGroundTruth });
+  });
+
+  router.post(
+    '/import-benchmarks/pending-ground-truth',
+    zValidator('json', adminBenchmarkGradeSchema),
+    async (c) => {
+      const body = c.req.valid('json');
+      const pendingGroundTruth = await deps.adminService.savePendingGroundTruth(body);
+      return c.json({ ok: true, pendingGroundTruth });
+    }
+  );
+
+  router.delete('/import-benchmarks/pending-ground-truth', async (c) => {
+    await deps.adminService.clearPendingGroundTruth();
+    return c.json({ ok: true });
   });
 
   router.get('/import-benchmarks/:jobId/grade', async (c) => {
