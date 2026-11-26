@@ -144,4 +144,18 @@ describe('search-query.util (parseSearchIntent)', () => {
     const yamimushiSplits = buildOmniboxSplitCandidates('tokyo yamimushi 2 honda');
     expect(yamimushiSplits[0]).toMatchObject({ titlePart: 'tokyo yamimushi', authorPart: 'honda', volumeNumber: '2' });
   });
+
+  it('nettoie les symboles Unicode de marque (™/®/©) et les underscores finaux (_) avant recherche (Vague 4)', () => {
+    const aqua = parseSearchIntent({ title: 'Aqua™', author: 'Jean-Marc Ligny' });
+    expect(aqua.cleanTitle).toBe('Aqua');
+    expect(aqua.relaxedTitle).toBe('Aqua');
+
+    const onMars = parseSearchIntent({ title: 'On Mars_', author: 'Runberg ; Grun' });
+    expect(onMars.cleanTitle).toBe('On Mars');
+    expect(onMars.relaxedTitle).toBe('On Mars');
+
+    const sanctuary = parseSearchIntent({ title: 'Sanctuary - Coffret intégrale' });
+    expect(sanctuary.wantsIntegral).toBe(true);
+    expect(sanctuary.integralSeriesBase).toBe('Sanctuary');
+  });
 });

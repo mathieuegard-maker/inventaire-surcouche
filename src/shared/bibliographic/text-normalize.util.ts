@@ -12,7 +12,7 @@ const STOP_WORDS = new Set([
 const UNIMARC_100_CODED_RE = /^\d{8}[a-z|]\d{4}|y0frey\d{2}/i;
 const GENERIC_VOLUME_TITLE_RE = /^(?:tome|vol\.?|volume|t\.?|n°|#)?\s*\d+(?:\s*[-–]\s*\d+)?$/i;
 const SERIES_PREFIX_NOISE_RE =
-  /^(?:les\s+aventures\s+d[e'’]\s*|une\s+aventure\s+d[e'’]\s*|la\s+s[ée]rie\s+|(?:l['’])?int[ée]grale\s+(?:d[e'’]\s*|des\s+aventures\s+d[e'’]\s*)?)/i;
+  /^(?:les\s+aventures\s+d(?:e\s+|es\s+|u\s+|['’]\s*)|une\s+aventure\s+d(?:e\s+|es\s+|u\s+|['’]\s*)|la\s+s[ée]rie\s+|(?:l['’])?int[ée]grale\s+(?:d(?:e\s+|es\s+|u\s+|['’]\s*)|des\s+aventures\s+d(?:e\s+|es\s+|u\s+|['’]\s*))?)/i;
 const SERIES_INTEGRAL_SUFFIX_RE = /\s*[-–—,:]?\s*(?:l['’])?int[ée]grale(?:\s+.*)?$/i;
 const COMPILATION_SERIES_PREFIX_RE =
   /^(?:(?:la\s+)?collection\s+|diptyque\s+|triptyque\s+|coffret\s+|(?:l['’])?int[ée]grale\s+|les\s+archives\s+|anthologie\s+|best\s+of\s+)/i;
@@ -22,7 +22,7 @@ export function normalizeTextKey(value: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    .replace(/['’".,:;!?()[\]/&-]+/g, ' ')
+    .replace(/['’"«»“”.,:;!?()[\]/&\-_™®©]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -163,6 +163,7 @@ export function cleanSeriesName(series: string): string {
   return series
     .replace(/\|/g, '')
     .replace(/\s*\([^)]*\)\s*$/, '')
+    .replace(/^[\s"«“”»]+|[\s"«“”»]+$/g, '')
     .replace(/\.+$/, '')
     .trim();
 }

@@ -361,6 +361,14 @@ function buildRelaxedText(
   return relaxed;
 }
 
+function sanitizeSearchSymbols(raw: string): string {
+  return raw
+    .replace(/[™®©]/g, '')
+    .replace(/(?:^|\s)_+|_+(?=\s|$|[.,:;!?])/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function parseSearchIntent(input: SearchIntentInput): ParsedSearchIntent {
   const state = {
     requestedMedia: null as RequestedMediaHint | null,
@@ -370,8 +378,8 @@ export function parseSearchIntent(input: SearchIntentInput): ParsedSearchIntent 
     inferredPublisher: undefined as string | undefined
   };
 
-  let rawTitle = (input.title || '').trim();
-  let rawSeries = (input.series || '').trim();
+  let rawTitle = sanitizeSearchSymbols((input.title || '').trim());
+  let rawSeries = sanitizeSearchSymbols((input.series || '').trim());
   const explicitPub = input.publisher?.trim() || undefined;
   let cleanAuthor = input.author?.trim() || undefined;
   let authorInferredFromTitle = false;

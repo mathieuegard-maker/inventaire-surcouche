@@ -38,7 +38,11 @@ export const SUGGESTED_GENRE_CHIPS: readonly string[] = [
 ];
 
 const SUBGENRE_RULES: Array<{ label: string; pattern: RegExp }> = [
-  { label: 'Jeunesse', pattern: /\b(jeunesse|enfants?|juvenile|children(?:'s)?|tout[- ]petits|premi[eè]res lectures|album jeunesse|kids|028\.5)\b/i },
+  {
+    label: 'Jeunesse',
+    pattern:
+      /\b(jeunesse|livres?\s+pour\s+enfants?|contes?\s+pour\s+enfants?|juvenile\s+(?:fiction|literature|works)|children(?:'s)?\s+(?:fiction|books|stories|literature)|tout[- ]petits|premi[eè]res lectures|album jeunesse|kids|028\.5)\b/i
+  },
   { label: 'Ados / Young Adult', pattern: /\b(young adult|adolescents?|ados?|teen)\b/i },
   { label: 'Fantasy / Fantastique', pattern: /\b(fantasy|heroic fantasy|fantastique|sorcellerie|magie|dragons?|f[ée]eri|magic)\b/i },
   { label: 'Science-Fiction', pattern: /\b(science[- ]fiction|cyberpunk|space opera|anticipation|dystopi|post-apocalypt)/i },
@@ -54,8 +58,14 @@ const SUBGENRE_RULES: Array<{ label: string; pattern: RegExp }> = [
   { label: 'Romance', pattern: /\b(romance|sentimental|amour)\b/i }
 ];
 
-const YOUTH_SUBJECT_REGEX =
-  /\b(jeunesse|enfants?|juvenile fiction|juvenile literature|juvenile works|children(?:'s)?|young adult|tout[- ]petits|premi[eè]res lectures|album jeunesse|ouvrages pour la jeunesse|litt[ée]rature pour la jeunesse|bandes dessin[ée]es pour la jeunesse|contes pour enfants)\b/i;
+// Marqueurs éditoriaux/bibliographiques explicites de littérature jeunesse :
+// ne JAMAIS déclencher sur le mot isolé "enfant(s)" dans un titre de roman adulte
+// (ex. "L'Enfant de sable", "Leurs enfants après eux", "Enfant de salaud").
+const YOUTH_EXPLICIT_FR_RE =
+  /\b(jeunesse|tout[- ]petits|premi[eè]res\s+lectures|album\s+jeunesse|ouvrages?\s+pour\s+la\s+jeunesse|litt[ée]rature\s+(?:pour\s+la\s+)?jeunesse|bandes?\s+dessin[ée]es?\s+pour\s+la\s+jeunesse|livres?\s+pour\s+enfants?|contes?\s+pour\s+enfants?|romans?\s+pour\s+(?:la\s+)?jeunesse|romans?\s+pour\s+enfants?|biblioth[eè]que\s+(?:rose|verte)|folio\s+junior|young\s+adult)\b/i;
+
+const YOUTH_EN_SUBJECT_RE =
+  /\b(juvenile\s+(?:fiction|literature|works|nonfiction)|children(?:'s)?\s+(?:fiction|stories|books|literature))\b/i;
 
 export function buildCombinedGenres(classification: Pick<ClassificationResult, 'mainCategory' | 'subgenres'>): string[] {
   const seen = new Set<string>();
@@ -77,6 +87,9 @@ const MANGA_SIGNAL_RE =
 
 const COMICS_STRONG_RE =
   /\b(super[- ]h[ée]ros|superheroes|bandes?\s+dessin[ée]es?\s+am[ée]ricaines?)\b/i;
+
+const COMICS_IMPRINT_RE =
+  /\b(marvel(?:\s+france)?|dc\s+comics|vertigo|urban\s+comics|panini\s+comics)\b/i;
 
 const GENERIC_EN_GRAPHIC_SUBJECT_RE =
   /\b(?:comics?\s*&\s*graphic\s+novels?|comic\s+books?,?\s*strips(?:,?\s*etc\.?)?|graphic\s+novels?)\b/gi;
@@ -152,9 +165,22 @@ export function classifyBookMetadata(input: {
 
   const combinedText = [structuralText, cleanedDescription].join(' | ');
 
+  const youthMetadataScope = [
+    input.series || '',
+    input.collection || '',
+    input.publisher || '',
+    subjectsText
+  ].join(' | ');
+
+  const hasAdultLiteraryOrEssayDewey = Boolean(
+    dewey && (/^8\d\d/.test(dewey) || /^[0123459]\d\d/.test(dewey)) && !/\.083\b/.test(dewey)
+  );
   const isYouthDewey = /^(028\.5|j\b|\[j\]|e\b|\[e\])/i.test(dewey) || /\.083\b/.test(dewey);
-  const isYouthStructural = YOUTH_SUBJECT_REGEX.test(subjectsAndTitle) || isYouthDewey;
-  const isYouth = isYouthStructural || YOUTH_SUBJECT_REGEX.test(cleanedDescription);
+  const isYouthStructural =
+    isYouthDewey ||
+    YOUTH_EXPLICIT_FR_RE.test(youthMetadataScope) ||
+    (!hasAdultLiteraryOrEssayDewey && YOUTH_EN_SUBJECT_RE.test(youthMetadataScope));
+  const isYouth = isYouthStructural || YOUTH_EXPLICIT_FR_RE.test(cleanedDescription);
 
   const isNovelOrStory =
     /\b(romans?|fiction|nouvelles|r[ée]cit|conte|fable)\b/i.test(combinedText) ||
@@ -164,6 +190,8 @@ export function classifyBookMetadata(input: {
   const hasExplicitNonGraphicDewey = Boolean(
     dewey && !dewey.startsWith('741.5') && /^[0-9]/.test(dewey)
   );
+  const isFrenchBdDewey = /^741\.594\s*[49]/.test(dewey);
+  const pubColSeriesText = [input.series || '', input.publisher || '', input.collection || ''].join(' | ');
 
   const hasGenericEnGraphicSubject = GENERIC_EN_GRAPHIC_SUBJECT_RE.test(subjectsText);
   GENERIC_EN_GRAPHIC_SUBJECT_RE.lastIndex = 0;
@@ -172,7 +200,8 @@ export function classifyBookMetadata(input: {
   const isGraphicSignal =
     dewey.startsWith('741.5') ||
     MANGA_SIGNAL_RE.test(structuralText) ||
-    COMICS_STRONG_RE.test(structuralText) ||
+    COMICS_STRONG_RE.test(subjectsText) ||
+    COMICS_IMPRINT_RE.test(pubColSeriesText) ||
     BD_SIGNAL_RE.test(structuralText) ||
     /\bcomics?\b/i.test(titleSeriesPubCol) ||
     (hasGenericEnGraphicSubject && input.contentKind !== 'text_only' && !hasExplicitNonGraphicDewey) ||
@@ -181,6 +210,7 @@ export function classifyBookMetadata(input: {
   const hasSpecificComicsSubject =
     /\bcomics?\b/i.test(cleanedSubjectsForComics) &&
     !isFrenchOriginal &&
+    !isFrenchBdDewey &&
     input.contentKind !== 'text_only' &&
     !hasExplicitNonGraphicDewey;
 
@@ -195,11 +225,13 @@ export function classifyBookMetadata(input: {
   ) {
     mainCategory = 'Manga';
   } else if (
-    COMICS_STRONG_RE.test(structuralText) ||
-    /\bcomics?\b/i.test(titleSeriesPubCol) ||
-    /^741\.597\s*3/.test(dewey) ||
-    (isGraphicSignal && isEnglishOriginal && !isYouthStructural) ||
-    hasSpecificComicsSubject
+    !isFrenchBdDewey &&
+    ((COMICS_STRONG_RE.test(subjectsText) && !isFrenchOriginal) ||
+      (COMICS_IMPRINT_RE.test(pubColSeriesText) && input.contentKind !== 'text_only' && !hasExplicitNonGraphicDewey) ||
+      /\bcomics?\b/i.test(titleSeriesPubCol) ||
+      /^741\.597\s*3/.test(dewey) ||
+      (isGraphicSignal && isEnglishOriginal && !isYouthStructural) ||
+      hasSpecificComicsSubject)
   ) {
     mainCategory = 'Comics';
   } else if (
@@ -233,13 +265,17 @@ export function classifyBookMetadata(input: {
     // === TIER 2 : Description (uniquement si aucun signal structurel décisif) ===
     if (MANGA_SIGNAL_RE.test(cleanedDescription)) {
       mainCategory = 'Manga';
-    } else if (COMICS_STRONG_RE.test(cleanedDescription) || /\bcomics?\b/i.test(cleanedDescription)) {
+    } else if (
+      !isFrenchBdDewey &&
+      !isFrenchOriginal &&
+      (COMICS_STRONG_RE.test(cleanedDescription) || /\bcomics?\b/i.test(cleanedDescription))
+    ) {
       mainCategory = 'Comics';
     } else if (BD_SIGNAL_RE.test(cleanedDescription)) {
       mainCategory = 'BD';
     } else if (POETRY_THEATRE_RE.test(cleanedDescription) && !POETRY_FALSE_POSITIVE_RE.test(cleanedDescription)) {
       mainCategory = 'Poésie / Théâtre';
-    } else if (YOUTH_SUBJECT_REGEX.test(cleanedDescription)) {
+    } else if (YOUTH_EXPLICIT_FR_RE.test(cleanedDescription)) {
       mainCategory = 'Jeunesse';
     } else if (PRATIQUE_SIGNAL_RE.test(cleanedDescription)) {
       mainCategory = 'Pratique';

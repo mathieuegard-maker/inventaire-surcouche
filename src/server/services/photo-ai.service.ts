@@ -14,6 +14,7 @@ import {
 } from '../../shared/bibliographic/search-query.util';
 import {
   cleanTitle,
+  extractAuthorLastNameForQuery,
   extractFranchiseBaseName,
   getLevenshteinDistance,
   isGenericVolumeTitle,
@@ -117,7 +118,7 @@ const DERIVATIVE_GUIDE_RE =
   /^(?:les\s+mondes\s+(?:magiques\s+)?d[e'’]|guide\s+(?:officiel|complet|de\s+lecture|pratique)?\s*d[e'’]|analyse\s+d[e'’]|commentaire\s+d[e'’]|autour\s+d[e'’]|dossier\s+|fiche\s+de\s+lecture|r[ée]sum[ée]\s+(?:complet\s+)?d[e'’]|profil\s+d['’]une\s+œuvre)/i;
 
 const CLUB_OR_ABRIDGED_PUBLISHER_RE =
-  /\b(france\s+loisirs|le\s+grand\s+livre\s+du\s+mois|s[ée]lection\s+du\s+reader|lire\s+c['’]est\s+partir)\b/i;
+  /\b(france\s+loisirs|le\s+grand\s+livre\s+du\s+mois|s[ée]lection\s+du\s+reader|lire\s+c['’]est\s+partir|books\s+on\s+demand|bod\b|[ée]dilivre|edilivre|createspace|independently\s+published|hachette\s+bnf)\b/i;
 
 function getOptionMediaBucket(cat?: BookMainCategory): RequestedMediaHint | null {
   if (!cat || cat === 'Autre') return null;
@@ -923,6 +924,18 @@ export class PhotoAiService {
       }
     }
 
+    // Passe C2-bis (intégrale / coffret sans résultat avec le libellé complet type "Sanctuary - Coffret intégrale") :
+    // retente sur la base de série propre + "intégrale", puis la base seule (attrape les éditions omnibus/deluxe/coffret).
+    if (wantsIntegral && options.length === 0 && integralQueryBase && normalizeTextKey(integralQueryBase).length >= 3) {
+      await runExternalPass(`${integralQueryBase} intégrale`, cleanAuthor, 12);
+      if (options.length === 0) {
+        await runExternalPass(integralQueryBase, cleanAuthor, 15);
+      }
+      if (options.length === 0 && cleanAuthor) {
+        await runExternalPass(`${integralQueryBase} intégrale`, undefined, 12);
+      }
+    }
+
     // Passe C3 (bascule '&' -> 'et', ex. "Paul & Virginie" -> "Paul et Virginie")
     if (options.length === 0 && (combinedTitle.includes('&') || relaxedCombined.includes('&'))) {
       const etQuery = (relaxedCombined || combinedTitle).replace(/\s*&\s*/g, ' et ').replace(/\s+/g, ' ').trim();
@@ -1025,8 +1038,12 @@ export class PhotoAiService {
       const pushFallback = (opt: PhotoCandidateOption | null) =>
         this.mergeOptionIntoAbstractList(omniboxCandidates, opt, mergePref);
 
-      // Secours F1 : BnF recherche globale `bib.anywhere` (1 seul appel : titre + auteur + éditeur tous champs confondus)
-      const anywhereQuery = [relaxedCombined || combinedTitle, cleanAuthor].filter(Boolean).join(' ').trim();
+      // Secours F1 : BnF recherche globale `bib.anywhere` (1 seul appel : titre propre + nom de famille du 1er auteur sans '&')
+      const primaryLastName = extractAuthorLastNameForQuery(cleanAuthor);
+      const fallbackBaseText =
+        wantsIntegral && integralQueryBase ? integralQueryBase : relaxedCombined || combinedTitle;
+      const cleanFallbackTitle = fallbackBaseText.replace(/[?¿!¡&]+/g, ' ').replace(/\s+/g, ' ').trim();
+      const anywhereQuery = [cleanFallbackTitle, primaryLastName].filter(Boolean).join(' ').trim();
       if (anywhereQuery && this.connectors.bnf.searchAnywhere) {
         const anyHits = await this.connectors.bnf.searchAnywhere(anywhereQuery, 12).catch(() => []);
         for (const hit of anyHits) {
@@ -1078,7 +1095,11 @@ export class PhotoAiService {
 
       // Secours F3 : Ultime recours API officielles (Google Books texte + Open Library texte — 100 % légal, zéro scraping)
       if (omniboxCandidates.length === 0) {
-        const officialQuery = [relaxedCombined || combinedTitle, cleanAuthor, volNumStr && !wantsIntegral ? volNumStr : '']
+        const officialQuery = [
+          cleanFallbackTitle,
+          primaryLastName,
+          volNumStr && !wantsIntegral ? volNumStr : ''
+        ]
           .filter(Boolean)
           .join(' ')
           .trim();

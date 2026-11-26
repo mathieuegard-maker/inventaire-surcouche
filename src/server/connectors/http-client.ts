@@ -106,6 +106,7 @@ export class HttpClient {
   private readonly rateLimiter: PriorityRateLimiter;
   private readonly fetchImpl: typeof fetch;
   private readonly hasCustomFetch: boolean;
+  private cacheWritesSincePrune = 0;
 
   constructor(options?: {
     jobRepo?: JobRepository;
@@ -241,6 +242,11 @@ export class HttpClient {
               const ttlSec = text.length > 24_000 ? Math.min(requestedTtl, 86400) : requestedTtl;
               const expiresAt = new Date(Date.now() + ttlSec * 1000).toISOString();
               this.jobRepo.setExternalCache(options.cacheKey, options.source, { text }, expiresAt);
+              // Écrêtage continu léger toutes les 500 écritures : maintient biblio.sqlite compact même durant un import massif
+              if (++this.cacheWritesSincePrune >= 500) {
+                this.cacheWritesSincePrune = 0;
+                this.jobRepo.pruneExternalCache(new Date().toISOString(), 6000);
+              }
             }
 
             return { kind: 'ok', text };

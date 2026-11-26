@@ -155,6 +155,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   let hasRdaStillImage = false;
   let hasRdaText = false;
   let hasInteriorIllustrations = false;
+  let hasColorIllustrations = false;
 
   const authors: string[] = [];
   const scriptwriters: string[] = [];
@@ -325,6 +326,9 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
         const withoutCoverOnly = rawIll.replace(/\b(?:couv(?:erture)?|jaquette|[ée]tui)\.?\s+ill\.?[^,;]*/gi, '');
         if (/(?:^|[\s,(;])ill\.(?=[\s,);]|$)|\billustrations?\b/i.test(withoutCoverOnly)) {
           hasInteriorIllustrations = true;
+          if (/\ben\s+coul(?:eur|eurs|\.)?\b/i.test(withoutCoverOnly)) {
+            hasColorIllustrations = true;
+          }
         }
       }
     }
@@ -358,10 +362,16 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     : undefined;
 
   const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
-  const hasProseDewey = Boolean(deweyCode && /^8\d\d/.test(deweyCode));
+  const hasProseOrEssayDewey = Boolean(deweyCode && !deweyCode.startsWith('741.5') && /^[0-9]/.test(deweyCode));
+  // Un roman ou essai de > 112 pages avec quelques photos/cartes ("ill." noir et blanc sans illustrateur)
+  // ne doit pas être confondu avec une BD ; les BD pré-2015 portent "ill. en coul." ou un format album (<= 112 p.).
+  const isStrongInteriorIllustration =
+    hasInteriorIllustrations &&
+    !hasProseOrEssayDewey &&
+    (hasColorIllustrations || (pageCount !== undefined && pageCount <= 112));
   const isExplicitGraphic =
     hasRdaStillImage ||
-    (hasInteriorIllustrations && !hasProseDewey) ||
+    isStrongInteriorIllustration ||
     illustrators.length > 0 ||
     Boolean(deweyCode && deweyCode.startsWith('741.5')) ||
     /\b(bandes?\s+dessin[ée]es?|comics?|mangas?|romans?\s+graphiques?)\b/i.test(graphicSubjectText);
@@ -376,16 +386,16 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const notesText = noteClauses.join(' ; ').trim();
   const integralNotes = [editionStmtText, notesText].filter(Boolean).join(' ; ') || undefined;
 
-  // Secours norme ISBD (`245$f`/`200$g`/`300$a`) si 041$h / 101$c absent : "traduit du japonais / coréen / anglais / chinois"
+  // Secours norme ISBD (`245$f`/`200$g`/`300$a`) si 041$h / 101$c absent : "traduit(e) du japonais / coréen / anglais / chinois"
   if (!originalLanguage) {
     const isbdTranslationText = [responsibilityMentions.join(' '), notesText].join(' ');
-    if (/\btrad(?:uit|uction|\.)?\s+du\s+japonais\b/i.test(isbdTranslationText)) {
+    if (/\btrad(?:uit[es]?|uction|\.)?\s+du\s+japonais\b/i.test(isbdTranslationText)) {
       originalLanguage = 'jpn';
-    } else if (/\btrad(?:uit|uction|\.)?\s+du\s+cor[ée]en\b/i.test(isbdTranslationText)) {
+    } else if (/\btrad(?:uit[es]?|uction|\.)?\s+du\s+cor[ée]en\b/i.test(isbdTranslationText)) {
       originalLanguage = 'kor';
-    } else if (/\btrad(?:uit|uction|\.)?\s+de\s+l['’](?:anglais|am[ée]ricain)\b/i.test(isbdTranslationText)) {
+    } else if (/\btrad(?:uit[es]?|uction|\.)?\s+de\s+l['’](?:anglais|am[ée]ricain)\b/i.test(isbdTranslationText)) {
       originalLanguage = 'eng';
-    } else if (/\btrad(?:uit|uction|\.)?\s+du\s+chinois\b/i.test(isbdTranslationText)) {
+    } else if (/\btrad(?:uit[es]?|uction|\.)?\s+du\s+chinois\b/i.test(isbdTranslationText)) {
       originalLanguage = 'chi';
     }
   }

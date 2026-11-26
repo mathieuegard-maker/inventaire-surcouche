@@ -1099,8 +1099,12 @@ export function generateSeriesAuditMarkdownSection(seriesAudit: BenchmarkSeriesA
   lines.push('| --- | :---: | ---: | ---: | ---: | ---: | ---: | --- |');
   for (const s of seriesAudit) {
     const labelParts = [s.canonicalName];
-    if (s.editionSignature) labelParts.push(`(${s.editionSignature})`);
-    else if (s.franchiseName && normalizeTextKey(s.franchiseName) !== normalizeTextKey(s.canonicalName)) {
+    if (
+      s.editionSignature &&
+      !normalizeTextKey(s.canonicalName).includes(normalizeTextKey(s.editionSignature))
+    ) {
+      labelParts.push(`(${s.editionSignature})`);
+    } else if (s.franchiseName && normalizeTextKey(s.franchiseName) !== normalizeTextKey(s.canonicalName)) {
       labelParts.push(`[Franchise: ${s.franchiseName}]`);
     }
     lines.push(
