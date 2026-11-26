@@ -660,4 +660,78 @@ describe('Jalon 6 — Séries, Auteurs, Nouveautés & CRON Calendaire Idempotent
     // Un job annulé ne passe jamais en 'done'
     expect(appCtx.repos.jobRepo.findJobById('job_cancel_test')?.status).not.toBe('done');
   });
+
+  it('v2.4.2 — isole collection_import sur sa propre voie pour que photo_ocr démarre immédiatement même pendant un gros import CSV', async () => {
+    const reg = await appCtx.app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'LaneTester',
+        email: 'lane@biblio.test',
+        password: 'Password123',
+        gdprAccepted: true
+      })
+    });
+    const regBody = (await reg.json()) as {
+      profile: { user: { id: string }; library: { id: string } };
+    };
+    const userId = regBody.profile.user.id;
+    const libraryId = regBody.profile.library.id;
+    const nowIso = new Date().toISOString();
+
+    let releaseImport!: () => void;
+    const importStarted = new Promise<void>((resolve) => {
+      appCtx.worker.registerHandler('collection_import', async () => {
+        resolve();
+        await new Promise<void>((done) => {
+          releaseImport = done;
+        });
+        return { result: { ok: true }, total: 1 };
+      });
+    });
+
+    let photoCompletedWhileImportRunning = false;
+    let importStillRunning = true;
+    appCtx.worker.registerHandler('photo_ocr', async () => {
+      photoCompletedWhileImportRunning = importStillRunning;
+      return { result: { items: [] }, total: 1 };
+    });
+
+    appCtx.repos.jobRepo.createJob({
+      id: 'imp_long_csv',
+      type: 'collection_import',
+      userId,
+      libraryId,
+      payload: {},
+      progressTotal: 50,
+      now: nowIso
+    });
+    appCtx.repos.jobRepo.createJob({
+      id: 'pjob_fast_ocr',
+      type: 'photo_ocr',
+      userId,
+      libraryId,
+      payload: {},
+      progressTotal: 1,
+      now: nowIso
+    });
+
+    appCtx.worker.start();
+    try {
+      await importStarted;
+      // Attendre que photo_ocr termine PENDANT que collection_import est encore bloqué en running
+      for (let i = 0; i < 40; i++) {
+        const pRow = appCtx.repos.jobRepo.findJobById('pjob_fast_ocr');
+        if (pRow?.status === 'done') break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(appCtx.repos.jobRepo.findJobById('pjob_fast_ocr')?.status).toBe('done');
+      expect(photoCompletedWhileImportRunning).toBe(true);
+      expect(appCtx.repos.jobRepo.findJobById('imp_long_csv')?.status).toBe('running');
+    } finally {
+      importStillRunning = false;
+      releaseImport?.();
+      appCtx.worker.stop();
+    }
+  });
 });

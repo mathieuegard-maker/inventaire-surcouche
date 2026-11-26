@@ -73,7 +73,10 @@ export interface JobUpdatedEvent {
 export const INTERACTIVE_LANE_TYPES: BackgroundJobType[] = [
   'photo_ocr',
   'photo_retry_item',
-  'photo_commit',
+  'photo_commit'
+];
+
+export const IMPORT_LANE_TYPES: BackgroundJobType[] = [
   'collection_import'
 ];
 
@@ -182,6 +185,7 @@ export class BackgroundWorker {
 
   private drainTick(): void {
     void this.drainLane('interactive', INTERACTIVE_LANE_TYPES);
+    void this.drainLane('import', IMPORT_LANE_TYPES);
     void this.drainLane('catalog', CATALOG_LANE_TYPES);
   }
 
@@ -226,7 +230,7 @@ export class BackgroundWorker {
     const startGeneration = this.cancelGeneration;
     const isCancelled = (): boolean =>
       this.cancelGeneration !== startGeneration || !this.jobRepo.findJobById(job.id);
-    const lanePriority: RequestPriority = CATALOG_LANE_TYPES.includes(job.type) ? 'low' : 'high';
+    const lanePriority: RequestPriority = INTERACTIVE_LANE_TYPES.includes(job.type) ? 'high' : 'low';
     try {
       const { result, total } = await runWithRequestPriority(lanePriority, () =>
         handler({
