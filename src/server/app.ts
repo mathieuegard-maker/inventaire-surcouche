@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { Hono } from 'hono';
+import { APP_VERSION } from '../shared/version';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
 import { createResendConnector, type MailSender } from './connectors/resend.connector';
@@ -433,7 +434,7 @@ export function createApp(options: CreateAppOptions) {
   app.get('/health', (c) =>
     c.json({
       ok: true,
-      version: '2.0.0',
+      version: APP_VERSION,
       mode: 'self-hosted-sqlite',
       uptimeSec: Math.floor((Date.now() - startedAt) / 1000)
     })

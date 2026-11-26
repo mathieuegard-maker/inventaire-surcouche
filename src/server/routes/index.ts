@@ -2,6 +2,7 @@
 // Routeur API unique V2 monté sous /api/* (zéro /api/gateway).
 
 import { Hono } from 'hono';
+import { APP_VERSION } from '../../shared/version';
 import type { ServerConfig } from '../config';
 import type { AuthService } from '../services/auth.service';
 import type { CoverService } from '../services/cover.service';
@@ -74,7 +75,7 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.get('/health', (c) =>
     c.json({
       ok: true,
-      version: '2.0.0',
+      version: APP_VERSION,
       mode: 'self-hosted-sqlite',
       uptimeSec: Math.floor((Date.now() - deps.startedAt) / 1000)
     })

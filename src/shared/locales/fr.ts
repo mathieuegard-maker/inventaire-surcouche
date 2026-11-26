@@ -632,6 +632,12 @@ export const fr = {
   },
   admin: {
     title: 'Administration — Catalogue Maître',
+    versionBadge: 'Version {version}',
+    versionMismatchBadge: 'App {client} · Serveur {server}',
+    forceUpdateBtn: 'Mettre à jour l’app',
+    checkUpdateBtn: 'Vérifier la mise à jour',
+    alreadyUpToDateToast: 'L’application est déjà sur la dernière version ({version}).',
+    updatingAppToast: 'Mise à jour de l’application en cours…',
     tabStats: 'Statistiques',
     tabCatalog: 'Catalogue Maître',
     tabUsers: 'Comptes & Maintenance',

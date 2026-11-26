@@ -100,6 +100,11 @@ Ce document s'applique à **toute session de travail** sur ce dépôt. Son but e
 
 ---
 
-## 7. Contrôle Qualité avant Clôture ou Déploiement
+## 7. Versioning, Commits & Contrôle Qualité avant Clôture ou Déploiement
+* **Versioning strict obligatoire (`package.json` + `src/shared/version.ts`) :**
+  * À **chaque modification livrée**, incrémenter le numéro de version de manière synchronisée dans `package.json` (`version`) et `src/shared/version.ts` (`APP_VERSION`, vérifié automatiquement par `src/server/version.test.ts`) :
+    * `+0.0.1` (`2.1.0` → `2.1.1`) pour un correctif / ajustement mineur ;
+    * `+0.1.0` (`2.1.0` → `2.2.0`) pour une nouvelle fonctionnalité ou évolution notable.
+  * Mentionner **systématiquement le numéro de version dans le message de commit** (ex. `feat(v2.2.0): ...` ou `fix(v2.1.1): ...`) afin que la version affichée dans l'interface `/admin` et sur `/api/health` corresponde exactement au commit déployé.
 * Exécuter systématiquement le typecheck client, le typecheck serveur et toute la suite Vitest (unitaires + intégration SQLite `:memory:` + rejeu migrations) et rapporter uniquement les résultats réellement observés.
 * Répondre en **français** avec des liens cliquables vers les fichiers modifiés.

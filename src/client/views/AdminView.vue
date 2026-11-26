@@ -7,6 +7,7 @@ import AdminBenchmarkTab from '../components/admin/AdminBenchmarkTab.vue';
 import { apiRequest, ApiClientError } from '../api/client';
 import { useUiStore } from '../stores/ui.store';
 import { t } from '../../shared/locales';
+import { APP_VERSION, APP_VERSION_LABEL } from '../../shared/version';
 import type { BookMainCategory } from '../../shared/types/domain.types';
 
 type AdminTab = 'stats' | 'catalog' | 'users' | 'logs' | 'benchmark';
@@ -87,6 +88,67 @@ const MAIN_CATEGORIES: BookMainCategory[] = [
 
 const uiStore = useUiStore();
 const activeTab = ref<AdminTab>('stats');
+
+// Version client vs serveur & mise à jour manuelle PWA
+const serverVersion = ref<string | null>(null);
+const checkingUpdate = ref(false);
+const hasVersionMismatch = computed(
+  () => Boolean(serverVersion.value && serverVersion.value !== APP_VERSION)
+);
+
+async function loadServerHealth(): Promise<void> {
+  try {
+    const res = await fetch('/api/health', { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = (await res.json()) as { version?: string };
+    if (typeof data.version === 'string' && data.version.trim()) {
+      serverVersion.value = data.version.trim();
+    }
+  } catch {
+    // ignore si hors-ligne
+  }
+}
+
+async function handleCheckOrForceUpdate(): Promise<void> {
+  if (checkingUpdate.value) return;
+  checkingUpdate.value = true;
+  try {
+    await loadServerHealth();
+    let activatedWaiting = false;
+
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await reg.update().catch(() => {});
+        const waiting = reg.waiting;
+        if (waiting) {
+          activatedWaiting = true;
+          uiStore.pushToast(t('admin.updatingAppToast'), 'info');
+          navigator.serviceWorker.addEventListener(
+            'controllerchange',
+            () => window.location.reload(),
+            { once: true }
+          );
+          waiting.postMessage({ type: 'SKIP_WAITING' });
+          window.setTimeout(() => window.location.reload(), 1200);
+          return;
+        }
+      }
+    }
+
+    if (hasVersionMismatch.value) {
+      uiStore.pushToast(t('admin.updatingAppToast'), 'info');
+      window.location.reload();
+      return;
+    }
+
+    if (!activatedWaiting) {
+      uiStore.pushToast(t('admin.alreadyUpToDateToast', { version: APP_VERSION_LABEL }), 'success');
+    }
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
 
 // Overview
 const overview = ref<AdminOverview | null>(null);
@@ -334,12 +396,42 @@ watch(activeTab, (tab) => {
 
 onMounted(() => {
   void loadOverview();
+  void loadServerHealth();
 });
 </script>
 
 <template>
   <section class="ds-stack">
-    <h1>{{ t('admin.title') }}</h1>
+    <div class="ds-row ds-row--between admin-header">
+      <h1>{{ t('admin.title') }}</h1>
+      <div class="ds-row">
+        <span
+          class="ds-badge"
+          :class="hasVersionMismatch ? 'admin-version-badge--outdated' : 'ds-badge--accent'"
+        >
+          {{
+            hasVersionMismatch && serverVersion
+              ? t('admin.versionMismatchBadge', { client: APP_VERSION_LABEL, server: `v${serverVersion}` })
+              : t('admin.versionBadge', { version: APP_VERSION_LABEL })
+          }}
+        </span>
+        <button
+          type="button"
+          class="ds-btn ds-btn--sm"
+          :class="{ 'ds-btn--primary': hasVersionMismatch }"
+          :disabled="checkingUpdate"
+          @click="handleCheckOrForceUpdate"
+        >
+          {{
+            checkingUpdate
+              ? t('app.loading')
+              : hasVersionMismatch
+                ? t('admin.forceUpdateBtn')
+                : t('admin.checkUpdateBtn')
+          }}
+        </button>
+      </div>
+    </div>
 
     <div class="ds-tabs" role="tablist">
       <button
@@ -764,6 +856,17 @@ onMounted(() => {
   cursor: pointer;
   flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.admin-header {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.admin-version-badge--outdated {
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  border-color: var(--warning-text);
 }
 
 .admin-log-pre {
