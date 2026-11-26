@@ -2,19 +2,22 @@
 // Service Photo IA 100 % Serveur : quota mensuel, OCR Gemini, résolution BnF, arbitrage persisté, relance BnF serveur & validation lot.
 
 import crypto from 'node:crypto';
+import { classifyBookMetadata } from '../../shared/bibliographic/category-classifier';
 import { hammingDistanceHex } from '../../shared/bibliographic/cover-dhash.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
 import { parseIncludedVolumeNumbers } from '../../shared/bibliographic/integral.util';
+import { parseSearchIntent, type RequestedMediaHint } from '../../shared/bibliographic/search-query.util';
 import {
   cleanTitle,
   extractFranchiseBaseName,
+  getLevenshteinDistance,
   isGenericVolumeTitle,
   matchesAuthorName,
   normalizeSeriesNumber,
   normalizeTextKey,
   tokenOverlapRatio
 } from '../../shared/bibliographic/text-normalize.util';
-import type { BackgroundJobView, OwnershipStatus } from '../../shared/types/domain.types';
+import type { BackgroundJobView, BookMainCategory, OwnershipStatus } from '../../shared/types/domain.types';
 import type { ServerConfig } from '../config';
 import type { BibliographicConnectors, SourceCandidateRecord } from '../connectors/types';
 import type { GeminiConnector, GeminiExtractedBookHint } from '../connectors/gemini.connector';
@@ -46,11 +49,13 @@ export interface PhotoCandidateOption {
   volumeNumber: string | null;
   authors: string[];
   publisher: string | null;
+  collectionName?: string | null;
   publishYear: string | null;
   coverUrl: string | null;
   coverOptions?: PhotoCoverOption[];
   isIntegral?: boolean;
   includedVolumes?: string[];
+  mainCategory?: BookMainCategory;
   source: string;
 }
 
@@ -101,6 +106,25 @@ function parseJsonStringArray(raw: string | null | undefined): string[] {
   }
 }
 
+const DERIVATIVE_GUIDE_RE =
+  /^(?:les\s+mondes\s+(?:magiques\s+)?d[e'’]|guide\s+(?:officiel|complet|de\s+lecture|pratique)?\s*d[e'’]|analyse\s+d[e'’]|commentaire\s+d[e'’]|autour\s+d[e'’]|dossier\s+|fiche\s+de\s+lecture|r[ée]sum[ée]\s+(?:complet\s+)?d[e'’]|profil\s+d['’]une\s+œuvre)/i;
+
+const CLUB_OR_ABRIDGED_PUBLISHER_RE =
+  /\b(france\s+loisirs|le\s+grand\s+livre\s+du\s+mois|s[ée]lection\s+du\s+reader|lire\s+c['’]est\s+partir)\b/i;
+
+function getOptionMediaBucket(cat?: BookMainCategory): RequestedMediaHint | null {
+  if (!cat || cat === 'Autre') return null;
+  if (cat === 'BD' || cat === 'Manga' || cat === 'Comics') return cat;
+  if (cat === 'Roman' || cat === 'Jeunesse' || cat === 'Poésie / Théâtre' || cat === 'Essai') return 'Roman';
+  return null;
+}
+
+function matchesRequestedMediaExact(cat: BookMainCategory | undefined, requested: RequestedMediaHint): boolean {
+  const bucket = getOptionMediaBucket(cat);
+  if (!bucket) return false;
+  return bucket === requested;
+}
+
 function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
   if (!rec.isbn13 || !rec.title) return null;
   const incVols = rec.isIntegralHint
@@ -117,6 +141,17 @@ function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
         }
       ]
     : [];
+  const classified = classifyBookMetadata({
+    title: rec.title,
+    series: rec.seriesName,
+    publisher: rec.publisher,
+    collection: rec.collectionName,
+    deweyCode: rec.deweyCode,
+    rawSubjects: rec.rawSubjects,
+    description: rec.description,
+    contentKind: rec.contentKind,
+    originalLanguage: rec.originalLanguage
+  });
   return {
     bookId: null,
     isbn13: rec.isbn13,
@@ -127,11 +162,13 @@ function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
     volumeNumber: rec.volumeNumber ?? null,
     authors: rec.authors,
     publisher: rec.publisher ?? null,
+    collectionName: rec.collectionName ?? null,
     publishYear: rec.publishYear ?? null,
     coverUrl: rec.coverUrl ?? null,
     coverOptions,
     isIntegral: Boolean(rec.isIntegralHint),
     includedVolumes: incVols,
+    mainCategory: classified.mainCategory,
     source: rec.source
   };
 }
@@ -139,6 +176,11 @@ function toOption(rec: SourceCandidateRecord): PhotoCandidateOption | null {
 function isSameAbstractWork(a: PhotoCandidateOption, b: PhotoCandidateOption): boolean {
   if (Boolean(a.isIntegral) !== Boolean(b.isIntegral)) return false;
   if (a.bookId && b.bookId) return a.bookId === b.bookId;
+
+  // Un roman et son adaptation BD/Manga/Comics ne sont JAMAIS la même œuvre abstraite
+  const bucketA = getOptionMediaBucket(a.mainCategory);
+  const bucketB = getOptionMediaBucket(b.mainCategory);
+  if (bucketA && bucketB && bucketA !== bucketB) return false;
 
   const seriesA = extractFranchiseBaseName(a.seriesName || '').normalizedKey;
   const seriesB = extractFranchiseBaseName(b.seriesName || '').normalizedKey;
@@ -320,19 +362,27 @@ export class PhotoAiService {
       volumeNumber: b.volume_label ?? (b.volume_number !== null ? String(b.volume_number) : null),
       authors: parseJsonStringArray(b.authors_json),
       publisher: b.publisher,
+      collectionName: b.collection_name,
       publishYear: b.publish_year,
       coverUrl: b.cover_key ? `/api/covers/${b.cover_key}` : (coverOptions[0]?.coverUrl ?? null),
       coverOptions,
       isIntegral: b.is_integral === 1,
       includedVolumes: parseJsonStringArray(b.included_volumes_json),
+      mainCategory: b.main_category,
       source: 'local'
     };
   }
 
   /**
    * Fusionne les éditions d'une même Œuvre abstraite dans la liste d'options au lieu d'exposer N rééditions redondantes.
+   * Si l'édition entrante correspond mieux à l'éditeur/format demandé (ou remplace une édition club type France Loisirs),
+   * elle devient l'édition primaire de l'option fusionnée tout en conservant les autres ISBNs dans `siblingIsbns`.
    */
-  private mergeOptionIntoAbstractList(list: PhotoCandidateOption[], incoming: PhotoCandidateOption | null): void {
+  private mergeOptionIntoAbstractList(
+    list: PhotoCandidateOption[],
+    incoming: PhotoCandidateOption | null,
+    pref?: { normPub?: string; editionHintTokens?: string[]; queryAsksForClub?: boolean }
+  ): void {
     if (!incoming || !incoming.isbn13) return;
     const existing = list.find(
       (opt) =>
@@ -357,12 +407,46 @@ export class PhotoAiService {
     );
     existing.siblingIsbns = mergedSiblings;
     existing.editionCount = Math.max(existing.editionCount ?? 1, mergedSiblings.length);
+
+    const editionPrefScore = (opt: PhotoCandidateOption): number => {
+      let s = 0;
+      const meta = normalizeTextKey(
+        `${opt.title} ${opt.seriesName ?? ''} ${opt.publisher ?? ''} ${opt.collectionName ?? ''}`
+      );
+      if (pref?.normPub && opt.publisher && normalizeTextKey(opt.publisher).includes(pref.normPub)) {
+        s += 25;
+      }
+      if (pref?.editionHintTokens && pref.editionHintTokens.length > 0) {
+        for (const tok of pref.editionHintTokens) {
+          if (meta.includes(tok)) s += 15;
+        }
+      }
+      if (!pref?.queryAsksForClub && opt.publisher && CLUB_OR_ABRIDGED_PUBLISHER_RE.test(opt.publisher)) {
+        s -= 12;
+      }
+      if (opt.bookId) s += 4;
+      return s;
+    };
+
+    if (editionPrefScore(incoming) > editionPrefScore(existing)) {
+      existing.isbn13 = incoming.isbn13;
+      if (incoming.title) existing.title = incoming.title;
+      if (incoming.publisher) existing.publisher = incoming.publisher;
+      if (incoming.collectionName) existing.collectionName = incoming.collectionName;
+      if (incoming.publishYear) existing.publishYear = incoming.publishYear;
+      if (incoming.coverUrl) existing.coverUrl = incoming.coverUrl;
+    }
+
     if (!existing.bookId && incoming.bookId) existing.bookId = incoming.bookId;
     if (!existing.coverUrl && incoming.coverUrl) existing.coverUrl = incoming.coverUrl;
     if (!existing.seriesName && incoming.seriesName) existing.seriesName = incoming.seriesName;
     if (!existing.volumeNumber && incoming.volumeNumber) existing.volumeNumber = incoming.volumeNumber;
     if (!existing.publisher && incoming.publisher) existing.publisher = incoming.publisher;
+    if (!existing.collectionName && incoming.collectionName) existing.collectionName = incoming.collectionName;
     if (!existing.publishYear && incoming.publishYear) existing.publishYear = incoming.publishYear;
+    if ((!existing.mainCategory || existing.mainCategory === 'Autre') && incoming.mainCategory && incoming.mainCategory !== 'Autre') {
+      existing.mainCategory = incoming.mainCategory;
+    }
     if (existing.authors.length === 0 && incoming.authors.length > 0) existing.authors = [...incoming.authors];
 
     const existingCovs = existing.coverOptions ?? [];
@@ -400,7 +484,8 @@ export class PhotoAiService {
   private async resolveCanonicalSeriesVolumeOption(
     seriesName: string,
     volumeNumber: number,
-    authorHint?: string
+    authorHint?: string,
+    mediaFamily: 'graphic' | 'prose' | 'neutral' = 'neutral'
   ): Promise<PhotoCandidateOption | null> {
     const cleanSeries = extractFranchiseBaseName(seriesName).baseName;
     let canonicalTitle: string | null = null;
@@ -409,7 +494,7 @@ export class PhotoAiService {
 
     try {
       const qids = this.connectors.wikidata.searchSeriesQids
-        ? await this.connectors.wikidata.searchSeriesQids(cleanSeries, 'neutral')
+        ? await this.connectors.wikidata.searchSeriesQids(cleanSeries, mediaFamily)
         : this.connectors.wikidata.searchSeriesQid
           ? [await this.connectors.wikidata.searchSeriesQid(cleanSeries)].filter((x): x is string => Boolean(x))
           : [];
@@ -436,7 +521,7 @@ export class PhotoAiService {
         title: canonicalTitle,
         volumeNumber,
         authors: canonicalAuthors,
-        mediaFamily: 'neutral',
+        mediaFamily,
         isIntegral: false
       },
       4
@@ -478,9 +563,30 @@ export class PhotoAiService {
     author?: string;
     publisher?: string;
     isbn?: string;
+    isIntegral?: boolean;
   }): Promise<PhotoCandidateOption[]> {
     const options: PhotoCandidateOption[] = [];
-    const pushOpt = (opt: PhotoCandidateOption | null) => this.mergeOptionIntoAbstractList(options, opt);
+
+    // 1B. Pré-nettoyage d'intention : extrait (BD)/(manga)/(comics), "Tome N"/"t2"/"Tome II", intégrales/plages et qualificatifs d'édition
+    const intent = parseSearchIntent({
+      title: hint.title,
+      series: hint.series,
+      volumeNumber: hint.volumeNumber,
+      author: hint.author,
+      publisher: hint.publisher,
+      isIntegral: hint.isIntegral
+    });
+
+    const normPub = intent.effectivePublisher ? normalizeTextKey(intent.effectivePublisher) : '';
+    const queryAsksForClub = Boolean(
+      intent.effectivePublisher && CLUB_OR_ABRIDGED_PUBLISHER_RE.test(intent.effectivePublisher)
+    );
+    const mergePref = {
+      normPub,
+      editionHintTokens: intent.editionHintTokens,
+      queryAsksForClub
+    };
+    const pushOpt = (opt: PhotoCandidateOption | null) => this.mergeOptionIntoAbstractList(options, opt, mergePref);
 
     // 1. Si ISBN fourni directement -> Catalogue Central local d'abord, puis BnF
     if (hint.isbn) {
@@ -499,50 +605,79 @@ export class PhotoAiService {
       }
     }
 
-    const cleanSeries = hint.series?.trim() || '';
-    const cleanTitle = hint.title?.trim() || '';
-    const cleanAuthor = hint.author?.trim() || undefined;
+    const cleanSeries = intent.cleanSeries;
+    const cleanTitle = intent.cleanTitle;
+    const relaxedSeries = intent.relaxedSeries;
+    const relaxedTitle = intent.relaxedTitle;
+    const cleanAuthor = intent.cleanAuthor;
     const normSeries = normalizeTextKey(cleanSeries);
     const normTitle = normalizeTextKey(cleanTitle);
-    const normPub = hint.publisher ? normalizeTextKey(hint.publisher) : '';
-    const volNumStr = normalizeSeriesNumber(hint.volumeNumber);
-    const volNum = /^\d+$/.test(volNumStr) ? parseInt(volNumStr, 10) : null;
-    const wantsIntegral = /\b(?:int[ée]grale|coffret|omnibus|compendium)\b/i.test(`${cleanSeries} ${cleanTitle}`);
+    const volNumStr = intent.volumeNumber ?? '';
+    const volNum = intent.volumeNumeric;
+    const wantsIntegral = intent.wantsIntegral;
+    const requestedMedia = intent.requestedMedia;
+    const mediaFamily: 'graphic' | 'prose' | 'neutral' =
+      requestedMedia === 'Roman' ? 'prose' : requestedMedia ? 'graphic' : 'neutral';
+
+    const matchesEditionHints = (opt: PhotoCandidateOption): boolean => {
+      if (intent.editionHintTokens.length === 0) return true;
+      const meta = normalizeTextKey(
+        `${opt.title} ${opt.seriesName ?? ''} ${opt.publisher ?? ''} ${opt.collectionName ?? ''}`
+      );
+      return intent.editionHintTokens.some((tok) => meta.includes(tok));
+    };
+
+    const matchesAuthorParts = (opt: PhotoCandidateOption): boolean => {
+      if (intent.allAuthorParts.length === 0) return true;
+      if (opt.authors.length === 0) return false;
+      return opt.authors.some((a) => intent.allAuthorParts.some((p) => matchesAuthorName(a, p)));
+    };
 
     // 2. Recherche Catalogue Central local d'abord (0 appel réseau si l'Œuvre abstraite est déjà en base !)
     if (cleanTitle || cleanSeries) {
       const local = this.catalogRepo.searchLocalCatalog({
-        titleNorm: cleanTitle ? normalizeTextKey(cleanTitle) : undefined,
-        seriesNorm: cleanSeries ? normalizeTextKey(cleanSeries) : undefined,
+        titleNorm: relaxedTitle ? normalizeTextKey(relaxedTitle) : cleanTitle ? normTitle : undefined,
+        seriesNorm: relaxedSeries ? normalizeTextKey(relaxedSeries) : cleanSeries ? normSeries : undefined,
         volumeNumber: volNum,
         authorNorm: cleanAuthor ? normalizeTextKey(cleanAuthor) : undefined,
-        publisherNorm: hint.publisher ? normalizeTextKey(hint.publisher) : undefined,
+        publisherNorm: intent.effectivePublisher ? normalizeTextKey(intent.effectivePublisher) : undefined,
         limit: 8
       });
       for (const b of local.books) {
         pushOpt(this.buildLocalAbstractOption(b));
       }
 
-      // Court-circuit Catalogue Central si correspondance locale exacte (ex. série déjà étendue en base)
-      const hintSeriesKey = extractFranchiseBaseName(cleanSeries || cleanTitle).normalizedKey;
+      // Court-circuit Catalogue Central uniquement si le média, l'auteur et les indices d'édition correspondent
+      // (empêche un roman en base de court-circuiter une recherche "(BD)" ou "(manga)" ou "Deluxe").
+      const localCompatible = (o: PhotoCandidateOption): boolean => {
+        if (o.source !== 'local') return false;
+        if (requestedMedia && !matchesRequestedMediaExact(o.mainCategory, requestedMedia)) return false;
+        if (intent.allAuthorParts.length > 0 && o.authors.length > 0 && !matchesAuthorParts(o)) return false;
+        if (intent.editionHintTokens.length > 0 && !matchesEditionHints(o)) return false;
+        if (wantsIntegral && !o.isIntegral) return false;
+        return true;
+      };
+
+      const hintSeriesKey = extractFranchiseBaseName(relaxedSeries || cleanSeries || relaxedTitle || cleanTitle).normalizedKey;
       const hasLocalExactVolume =
         volNumStr.length > 0 &&
+        !wantsIntegral &&
         options.some((o) => {
-          if (o.source !== 'local' || o.isIntegral) return false;
+          if (!localCompatible(o) || o.isIntegral) return false;
           const optVol = normalizeSeriesNumber(o.volumeNumber);
           if (optVol !== volNumStr) return false;
           if (!hintSeriesKey) return true;
           const optSeriesKey = extractFranchiseBaseName(o.seriesName || '').normalizedKey;
           return (
             optSeriesKey === hintSeriesKey ||
-            tokenOverlapRatio(cleanSeries || cleanTitle, `${o.seriesName ?? ''} ${o.title}`) >= 0.65
+            tokenOverlapRatio(relaxedSeries || cleanSeries || relaxedTitle || cleanTitle, `${o.seriesName ?? ''} ${o.title}`) >= 0.65
           );
         });
       const hasLocalExactSeriesTitle =
         Boolean(cleanSeries && cleanTitle) &&
         !isGenericVolumeTitle(cleanTitle, cleanSeries) &&
         options.some((o) => {
-          if (o.source !== 'local') return false;
+          if (!localCompatible(o)) return false;
           const optSeriesKey = extractFranchiseBaseName(o.seriesName || '').normalizedKey;
           return (
             optSeriesKey === extractFranchiseBaseName(cleanSeries).normalizedKey &&
@@ -554,7 +689,7 @@ export class PhotoAiService {
         !cleanSeries &&
         !volNumStr &&
         normTitle.length >= 5 &&
-        options.some((o) => o.source === 'local' && normalizeTextKey(o.title) === normTitle);
+        options.some((o) => localCompatible(o) && normalizeTextKey(o.title) === normTitle);
 
       if (hasLocalExactVolume || hasLocalExactSeriesTitle || hasLocalExactStandaloneTitle) {
         options.sort((a, b) => {
@@ -568,43 +703,72 @@ export class PhotoAiService {
     }
 
     // 3A. Si Série + N° de tome demandé non encore en base -> résolution canonique Série->Tome (Wikidata + BookIdentifier)
-    const seriesHint = cleanSeries || (volNum !== null ? cleanTitle : '');
-    if (seriesHint && volNum !== null) {
-      const canonicalOpt = await this.resolveCanonicalSeriesVolumeOption(seriesHint, volNum, cleanAuthor);
+    const seriesHint = relaxedSeries || cleanSeries || (volNum !== null ? (relaxedTitle || cleanTitle) : '');
+    if (seriesHint && volNum !== null && !wantsIntegral) {
+      const canonicalOpt = await this.resolveCanonicalSeriesVolumeOption(seriesHint, volNum, cleanAuthor, mediaFamily);
       if (canonicalOpt) {
         pushOpt(canonicalOpt);
       }
-      if (wantsIntegral && this.connectors.bnf.searchSeriesIntegrals) {
-        const integrals = await this.connectors.bnf.searchSeriesIntegrals(seriesHint, 10).catch(() => []);
-        for (const it of integrals.filter((x) => (x.includedVolumes ?? []).includes(String(volNum))).slice(0, 2)) {
-          if (!it.isbn13s[0]) continue;
-          pushOpt({
-            bookId: null,
-            isbn13: it.isbn13s[0],
-            siblingIsbns: it.isbn13s,
-            editionCount: Math.max(1, it.isbn13s.length),
+    }
+
+    // 3A-bis. Si une intégrale/coffret est demandée (avec ou sans n° de tome explicite) -> recherche dédiée BnF Intégrales
+    const integralQueryBase = intent.integralSeriesBase || seriesHint;
+    if (wantsIntegral && integralQueryBase && this.connectors.bnf.searchSeriesIntegrals) {
+      const integrals = await this.connectors.bnf.searchSeriesIntegrals(integralQueryBase, 15).catch(() => []);
+      const filteredIntegrals =
+        intent.integralRange.length >= 2
+          ? integrals
+              .filter((x) => {
+                const inc = x.includedVolumes ?? [];
+                return inc.length === 0 || intent.integralRange.some((v) => inc.includes(v));
+              })
+              .sort((a, b) => {
+                const aMatches = intent.integralRange.filter((v) => (a.includedVolumes ?? []).includes(v)).length;
+                const bMatches = intent.integralRange.filter((v) => (b.includedVolumes ?? []).includes(v)).length;
+                return bMatches - aMatches;
+              })
+          : volNum !== null
+            ? integrals.filter(
+                (x) => (x.includedVolumes ?? []).includes(String(volNum)) || x.volumeNumber === volNum
+              )
+            : integrals;
+
+      for (const it of (filteredIntegrals.length > 0 ? filteredIntegrals : integrals).slice(0, 4)) {
+        if (!it.isbn13s[0]) continue;
+        pushOpt({
+          bookId: null,
+          isbn13: it.isbn13s[0],
+          siblingIsbns: it.isbn13s,
+          editionCount: Math.max(1, it.isbn13s.length),
+          title: it.title,
+          seriesName: extractFranchiseBaseName(integralQueryBase).baseName,
+          volumeNumber: it.volumeLabel ?? 'Intégrale',
+          authors: it.authors,
+          publisher: it.publisher ?? null,
+          collectionName: it.collectionName ?? null,
+          publishYear: it.publishYear ?? null,
+          coverUrl: it.coverUrl ?? null,
+          coverOptions: it.coverUrl
+            ? [{ coverKey: null, coverUrl: it.coverUrl, label: it.publisher || 'Intégrale BnF', isbn13: it.isbn13s[0] }]
+            : [],
+          isIntegral: true,
+          includedVolumes: it.includedVolumes ?? [],
+          mainCategory: classifyBookMetadata({
             title: it.title,
-            seriesName: extractFranchiseBaseName(seriesHint).baseName,
-            volumeNumber: it.volumeLabel ?? 'Intégrale',
-            authors: it.authors,
-            publisher: it.publisher ?? null,
-            publishYear: it.publishYear ?? null,
-            coverUrl: it.coverUrl ?? null,
-            coverOptions: it.coverUrl
-              ? [{ coverKey: null, coverUrl: it.coverUrl, label: it.publisher || 'Intégrale BnF', isbn13: it.isbn13s[0] }]
-              : [],
-            isIntegral: true,
-            includedVolumes: it.includedVolumes ?? [],
-            source: 'bnf'
-          });
-        }
+            series: integralQueryBase,
+            publisher: it.publisher ?? undefined,
+            collection: it.collectionName ?? undefined,
+            deweyCode: it.deweyCode ?? undefined,
+            rawSubjects: it.rawSubjects,
+            contentKind: it.contentKind,
+            originalLanguage: it.originalLanguage ?? undefined
+          }).mainCategory,
+          source: 'bnf'
+        });
       }
     }
 
     // 3B. Cascade externe progressive (BnF SRU + Inventaire.io) agrégée par Œuvre abstraite :
-    //     Passe A : Série + Titre + Auteur
-    //     Passe B (si < 2 options et série connue) : Série + Auteur
-    //     Passe C (si 0 option et titre distinct de la série) : Titre + Auteur
     const runExternalPass = async (titleQuery: string, authorQuery?: string, bnfLimit = 10) => {
       if (!titleQuery && !authorQuery) return;
       const bnfHits = await this.connectors.bnf
@@ -633,28 +797,95 @@ export class PhotoAiService {
       }
     };
 
+    const hasTargetVolumeMatch = () =>
+      Boolean(
+        volNumStr &&
+          options.some(
+            (o) =>
+              !o.isIntegral &&
+              normalizeSeriesNumber(o.volumeNumber) === volNumStr &&
+              (!requestedMedia || matchesRequestedMediaExact(o.mainCategory, requestedMedia))
+          )
+      );
+
+    const hasRequestedMediaMatch = () =>
+      !requestedMedia || options.some((o) => matchesRequestedMediaExact(o.mainCategory, requestedMedia));
+
     const combinedTitle =
       cleanSeries && cleanTitle && !normTitle.includes(normSeries)
         ? `${cleanSeries} ${cleanTitle}`
         : cleanTitle || cleanSeries;
 
+    const normRelaxedTitle = normalizeTextKey(relaxedTitle);
+    const normRelaxedSeries = normalizeTextKey(relaxedSeries);
+    const relaxedCombined =
+      relaxedSeries && relaxedTitle && !normRelaxedTitle.includes(normRelaxedSeries)
+        ? `${relaxedSeries} ${relaxedTitle}`
+        : relaxedTitle || relaxedSeries;
+
+    // Passe A : requête stricte nettoyée (inclut n° de tome si pertinent)
     if (combinedTitle) {
-      await runExternalPass(combinedTitle, cleanAuthor, 12);
+      await runExternalPass(combinedTitle, cleanAuthor, requestedMedia ? 15 : 12);
     }
 
-    const hasTargetVolume = Boolean(
-      volNumStr && options.some((o) => !o.isIntegral && normalizeSeriesNumber(o.volumeNumber) === volNumStr)
-    );
-    if ((options.length < 2 || (volNumStr && !hasTargetVolume)) && cleanSeries) {
+    // Passe A-media : si un média explicite (BD/Manga/Comics) était demandé entre parenthèses et aucun résultat ne matche encore ce média
+    if (requestedMedia && requestedMedia !== 'Roman' && !hasRequestedMediaMatch()) {
+      const mediaBase = relaxedCombined || combinedTitle;
+      const mediaKeyword =
+        requestedMedia === 'Manga' ? 'manga' : requestedMedia === 'Comics' ? 'comics' : 'bande dessinée';
+      if (mediaBase) {
+        const mediaQuery = volNumStr && !wantsIntegral ? `${mediaBase} ${volNumStr}` : `${mediaBase} ${mediaKeyword}`;
+        await runExternalPass(mediaQuery, cleanAuthor, 15);
+        if (!hasRequestedMediaMatch() && mediaQuery !== `${mediaBase} ${mediaKeyword}`) {
+          await runExternalPass(`${mediaBase} ${mediaKeyword}`, cleanAuthor, 15);
+        }
+      }
+    }
+
+    // Passe B : recherche ciblée du tome N de la série (inclut les titres avec "Tome N" extrait !)
+    if (volNum !== null && !wantsIntegral && !hasTargetVolumeMatch()) {
+      const volBase = relaxedSeries || cleanSeries || relaxedTitle || cleanTitle;
+      if (volBase) {
+        await runExternalPass(`${volBase} ${volNum}`, cleanAuthor, 15);
+      }
+      if (!hasTargetVolumeMatch() && cleanSeries) {
+        await runExternalPass(cleanSeries, cleanAuthor, 25);
+      }
+    } else if (options.length < 2 && cleanSeries) {
       await runExternalPass(cleanSeries, cleanAuthor, 25);
     }
 
+    // Passe C1 : titre seul si distinct de combinedTitle
     if (options.length === 0 && cleanTitle && cleanTitle !== combinedTitle) {
       await runExternalPass(cleanTitle, cleanAuthor, 12);
     }
 
+    // Passe C2 (secours relâché sans qualificatifs d'édition/éditeur type "deluxe", "perfect", "black edition", "glénat", "kana"...)
+    if (
+      (options.length === 0 || (volNum !== null && !wantsIntegral && !hasTargetVolumeMatch())) &&
+      relaxedCombined &&
+      normalizeTextKey(relaxedCombined) !== normalizeTextKey(combinedTitle)
+    ) {
+      await runExternalPass(
+        volNum !== null && !wantsIntegral ? `${relaxedCombined} ${volNum}` : relaxedCombined,
+        cleanAuthor,
+        15
+      );
+      if (options.length === 0) {
+        await runExternalPass(relaxedCombined, cleanAuthor, 15);
+      }
+    }
+
+    // Passe C3 (bascule '&' -> 'et', ex. "Paul & Virginie" -> "Paul et Virginie")
+    if (options.length === 0 && (combinedTitle.includes('&') || relaxedCombined.includes('&'))) {
+      const etQuery = (relaxedCombined || combinedTitle).replace(/\s*&\s*/g, ' et ').replace(/\s+/g, ' ').trim();
+      if (etQuery && etQuery !== combinedTitle) {
+        await runExternalPass(etQuery, cleanAuthor, 12);
+      }
+    }
+
     // Passe D (secours pseudonyme / co-auteur absent de BnF)
-    const titleFallbackQuery = cleanTitle || cleanSeries;
+    const titleFallbackQuery = relaxedTitle || cleanTitle || relaxedSeries || cleanSeries;
     if (
       options.length === 0 &&
       cleanAuthor &&
@@ -662,40 +893,154 @@ export class PhotoAiService {
       normalizeTextKey(titleFallbackQuery).length >= 6 &&
       !isGenericVolumeTitle(titleFallbackQuery, cleanSeries)
     ) {
-      await runExternalPass(titleFallbackQuery, undefined, 10);
+      await runExternalPass(
+        volNum !== null && !wantsIntegral ? `${titleFallbackQuery} ${volNum}` : titleFallbackQuery,
+        undefined,
+        10
+      );
+      if (options.length === 0 && volNum !== null && !wantsIntegral) {
+        await runExternalPass(titleFallbackQuery, undefined, 10);
+      }
     }
+
+    // Garde-fou anti-hors-sujet : rejette les candidats dont le titre/série n'a quasiment aucun recouvrement avec la requête
+    // (ex. "Blast" -> "Persepolis", "Natacha" -> "Calvin et Hobbes", "La Peste blanche" -> "Vaincre la tuberculose")
+    const primaryQueryText = relaxedCombined || combinedTitle;
+    const normPrimaryQuery = normalizeTextKey(primaryQueryText);
+    const computeRelevanceOverlap = (opt: PhotoCandidateOption): number => {
+      const candText = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+      const scores = [tokenOverlapRatio(primaryQueryText, candText)];
+      if (cleanTitle) scores.push(tokenOverlapRatio(cleanTitle, candText));
+      if (relaxedTitle) scores.push(tokenOverlapRatio(relaxedTitle, candText));
+      if (relaxedSeries) scores.push(tokenOverlapRatio(relaxedSeries, candText));
+      // Tolérance faute de frappe sur titre court en 1 mot (Levenshtein <= 2)
+      const normCandTitle = normalizeTextKey(opt.title);
+      const normCandSeries = normalizeTextKey(opt.seriesName ?? '');
+      if (
+        normPrimaryQuery.length >= 4 &&
+        !normPrimaryQuery.includes(' ') &&
+        ((normCandTitle && getLevenshteinDistance(normPrimaryQuery, normCandTitle) <= 2) ||
+          (normCandSeries && getLevenshteinDistance(normPrimaryQuery, normCandSeries) <= 2))
+      ) {
+        scores.push(0.8);
+      }
+      return Math.max(...scores);
+    };
+
+    const relevantOptions =
+      normPrimaryQuery.length >= 2
+        ? options.filter((opt) => {
+            const overlap = computeRelevanceOverlap(opt);
+            if (overlap >= 0.25) return true;
+            // Exception : tome canonique d'une série exacte dont le titre d'album diffère du nom de série
+            if (cleanSeries && opt.seriesName) {
+              const sKey = extractFranchiseBaseName(relaxedSeries || cleanSeries).normalizedKey;
+              const oKey = extractFranchiseBaseName(opt.seriesName).normalizedKey;
+              if (sKey && oKey && sKey === oKey) return true;
+            }
+            return false;
+          })
+        : options;
+
+    const rawQueryCombined = `${hint.series ?? ''} ${hint.title ?? ''}`.trim();
+    const queryAsksForGuide = DERIVATIVE_GUIDE_RE.test(rawQueryCombined);
 
     // Scoring déterministe pour placer la meilleure Œuvre abstraite en #1
     const scoreOption = (opt: PhotoCandidateOption): number => {
       let score = 0;
       const optVol = normalizeSeriesNumber(opt.volumeNumber);
-      if (volNumStr) {
-        if (!opt.isIntegral && optVol && optVol === volNumStr) score += 55;
-        else if (opt.isIntegral && (opt.includedVolumes ?? []).includes(volNumStr)) score += wantsIntegral ? 65 : 25;
-        else if (optVol && optVol !== volNumStr) score -= 25;
+      const candText = `${opt.seriesName ?? ''} ${opt.title}`.trim();
+
+      if (wantsIntegral) {
+        if (opt.isIntegral) {
+          score += 35;
+          if (intent.integralRange.length >= 2) {
+            const inc = opt.includedVolumes ?? [];
+            const matchedCount = intent.integralRange.filter((v) => inc.includes(v)).length;
+            if (matchedCount === intent.integralRange.length) score += 30;
+            else if (matchedCount > 0) score += 15;
+          }
+        } else {
+          score -= 25;
+        }
+      } else if (volNumStr) {
+        if (!opt.isIntegral && optVol && optVol === volNumStr) score += 65;
+        else if (opt.isIntegral && (opt.includedVolumes ?? []).includes(volNumStr)) score += 15;
+        else if (optVol && optVol !== volNumStr) score -= 35;
         else if (new RegExp(`\\b${volNumStr}\\b`).test(opt.title)) score += 20;
+      } else if (opt.isIntegral) {
+        score -= 10;
       }
-      if (cleanTitle) {
-        score += Math.round(tokenOverlapRatio(cleanTitle, `${opt.seriesName ?? ''} ${opt.title}`) * 30);
+
+      if (requestedMedia && opt.mainCategory) {
+        const optBucket = getOptionMediaBucket(opt.mainCategory);
+        if (optBucket === requestedMedia) {
+          score += 45;
+        } else if (optBucket) {
+          const wantsGraphic = requestedMedia !== 'Roman';
+          const isOptGraphic = optBucket !== 'Roman';
+          score += wantsGraphic !== isOptGraphic ? -50 : -15;
+        }
       }
-      if (cleanSeries) {
-        score += Math.round(tokenOverlapRatio(cleanSeries, `${opt.seriesName ?? ''} ${opt.title}`) * 20);
+
+      if (relaxedTitle || cleanTitle) {
+        const tOverlap = Math.max(
+          cleanTitle ? tokenOverlapRatio(cleanTitle, candText) : 0,
+          relaxedTitle ? tokenOverlapRatio(relaxedTitle, candText) : 0
+        );
+        score += Math.round(tOverlap * 30);
       }
+      if (relaxedSeries || cleanSeries) {
+        const sOverlap = Math.max(
+          cleanSeries ? tokenOverlapRatio(cleanSeries, candText) : 0,
+          relaxedSeries ? tokenOverlapRatio(relaxedSeries, candText) : 0
+        );
+        score += Math.round(sOverlap * 20);
+      }
+
+      // Bonus qualificatifs d'édition / éditeur extraits (ex. "deluxe", "black", "perfect", "glénat", "kurokawa")
+      if (intent.editionHintTokens.length > 0) {
+        const candMetaNorm = normalizeTextKey(
+          `${opt.title} ${opt.seriesName ?? ''} ${opt.publisher ?? ''} ${opt.collectionName ?? ''}`
+        );
+        let hintBonus = 0;
+        for (const tok of intent.editionHintTokens) {
+          if (candMetaNorm.includes(tok)) hintBonus += 15;
+        }
+        score += Math.min(45, hintBonus);
+      }
+
       if (normPub && opt.publisher && normalizeTextKey(opt.publisher).includes(normPub)) {
-        score += 15;
+        score += 18;
       }
-      if (cleanAuthor && opt.authors.some((a) => matchesAuthorName(a, cleanAuthor))) {
-        score += 10;
+      if (intent.allAuthorParts.length > 0 && opt.authors.length > 0) {
+        const matchedParts = intent.allAuthorParts.filter((part) =>
+          opt.authors.some((a) => matchesAuthorName(a, part))
+        ).length;
+        if (matchedParts > 0) {
+          score += 15 + (matchedParts >= 2 ? 5 : 0);
+        }
       }
+
+      // Pénalité guides dérivés / fiches de lecture (ex. "Les mondes magiques d'Eragon" face à "Eragon")
+      if (!queryAsksForGuide && DERIVATIVE_GUIDE_RE.test(opt.title.trim())) {
+        score -= 40;
+      }
+
+      // Départage doux défavorisant les clubs/éditions abrégées (France Loisirs, Lire c'est partir) face aux éditions de référence
+      if (!queryAsksForClub && opt.publisher && CLUB_OR_ABRIDGED_PUBLISHER_RE.test(opt.publisher)) {
+        score -= 8;
+      }
+
       if (opt.source === 'local') score += 8;
       if (opt.source === 'wikidata') score += 6;
       if ((opt.editionCount ?? 1) > 1) score += Math.min(8, (opt.editionCount ?? 1) * 2);
       return score;
     };
 
-    options.sort((a, b) => scoreOption(b) - scoreOption(a));
+    relevantOptions.sort((a, b) => scoreOption(b) - scoreOption(a));
 
-    const topOptions = options.slice(0, 6);
+    const topOptions = relevantOptions.slice(0, 6);
 
     // 4. Enrichissement couverture WebP locale (/api/covers/...) + déduplication visuelle des coverOptions directes pour les 4 premières œuvres
     await Promise.allSettled(
@@ -1297,6 +1642,7 @@ export class PhotoAiService {
     author?: string;
     publisher?: string;
     isbn?: string;
+    isIntegral?: boolean;
   }): Promise<PhotoCandidateOption[]> {
     return this.resolveHintOptions(hints);
   }

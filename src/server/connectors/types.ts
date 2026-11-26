@@ -35,6 +35,7 @@ export interface SourceCandidateRecord {
   pageCount?: number;
   description?: string;
   language?: string;
+  originalLanguage?: string;
   deweyCode?: string;
   rawSubjects: string[];
   wikidataWorkQid?: string;
@@ -68,6 +69,9 @@ export interface GraphSeriesWork {
   publishYear?: string | null;
   pageCount?: number | null;
   language?: string | null;
+  originalLanguage?: string | null;
+  deweyCode?: string | null;
+  rawSubjects?: string[];
   coverUrl?: string | null;
   isHorsSerie?: boolean;
   isIntegral?: boolean;

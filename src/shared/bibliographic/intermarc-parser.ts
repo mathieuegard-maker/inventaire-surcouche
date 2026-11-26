@@ -43,6 +43,8 @@ export interface ParsedMarcRecord {
   pageCount?: number;
   description?: string;
   language?: string;
+  /** Langue originale de l'œuvre (InterMarc `041$h` ou UNIMARC `101$c`, ex. `jpn`, `kor`, `eng`). */
+  originalLanguage?: string;
   deweyCode?: string;
   rawSubjects: string[];
   bnfCoverUrl?: string;
@@ -151,9 +153,16 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const illustrators: string[] = [];
   const rawSubjects: string[] = [];
 
-  // Langue depuis 008 (InterMarc) ou 101$a (UNIMARC)
+  // Langue depuis 008 (InterMarc), 041$a/$h (InterMarc) ou 101$a/$c (UNIMARC)
   const cf008 = extractControlField(recordXml, '008');
   let language = cf008.length >= 38 ? cf008.slice(35, 38).trim().toLowerCase() : undefined;
+  let originalLanguage: string | undefined;
+
+  const parseIsoLangCode = (raw: string): string | undefined => {
+    const clean = raw.trim().toLowerCase().replace(/[^a-z]/g, '');
+    if (clean.length < 2) return undefined;
+    return clean.length >= 3 ? clean.slice(0, 3) : clean;
+  };
 
   for (const f of fields) {
     const sf = (code: string) => getSubfield(f, code)?.trim() || '';
@@ -169,9 +178,26 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       }
     }
 
-    if (f.tag === '101' && !language) {
-      const lang101 = sf('a').toLowerCase();
-      if (lang101) language = lang101;
+    if (f.tag === '041') {
+      if (!language) {
+        const lang041 = parseIsoLangCode(sf('a'));
+        if (lang041) language = lang041;
+      }
+      if (!originalLanguage) {
+        const orig041 = parseIsoLangCode(sf('h'));
+        if (orig041) originalLanguage = orig041;
+      }
+    }
+
+    if (f.tag === '101') {
+      if (!language) {
+        const lang101 = parseIsoLangCode(sf('a'));
+        if (lang101) language = lang101;
+      }
+      if (!originalLanguage) {
+        const orig101 = parseIsoLangCode(sf('c'));
+        if (orig101) originalLanguage = orig101;
+      }
     }
 
     // ISBN / EAN : 020$a, 038$a (InterMarc) ; 010$a, 073$a (UNIMARC)
@@ -339,6 +365,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     pageCount,
     description,
     language,
+    originalLanguage,
     deweyCode,
     rawSubjects,
     bnfCoverUrl,

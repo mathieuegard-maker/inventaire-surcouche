@@ -150,6 +150,42 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
     const imgVal = work.claims?.P18?.[0]?.mainsnak?.datavalue?.value;
     const coverUrl = typeof imgVal === 'string' ? commonsFilenameToUrl(imgVal) : undefined;
 
+    // Signaux structurels Wikidata (langue/pays d'origine P407/P495 + nature P31/P136 sur l'œuvre ou sa série)
+    const seriesEntity = seriesQid ? related[seriesQid] : undefined;
+    const langAndOriginQids = new Set([
+      ...getWdClaimQids(work, 'P407'),
+      ...getWdClaimQids(work, 'P495'),
+      ...getWdClaimQids(seriesEntity, 'P407'),
+      ...getWdClaimQids(seriesEntity, 'P495')
+    ]);
+    let originalLanguage: string | undefined;
+    if (langAndOriginQids.has('Q5287') || langAndOriginQids.has('Q17')) originalLanguage = 'jpn';
+    else if (langAndOriginQids.has('Q9176') || langAndOriginQids.has('Q884')) originalLanguage = 'kor';
+    else if (langAndOriginQids.has('Q1860') || langAndOriginQids.has('Q30') || langAndOriginQids.has('Q145')) originalLanguage = 'eng';
+    else if (langAndOriginQids.has('Q150') || langAndOriginQids.has('Q142') || langAndOriginQids.has('Q31')) originalLanguage = 'fre';
+
+    const typeAndGenreQids = new Set([
+      ...getWdClaimQids(work, 'P31'),
+      ...getWdClaimQids(work, 'P136'),
+      ...getWdClaimQids(seriesEntity, 'P31'),
+      ...getWdClaimQids(seriesEntity, 'P136')
+    ]);
+    const rawSubjects: string[] = [];
+    if (
+      typeAndGenreQids.has('Q8274') ||
+      typeAndGenreQids.has('Q21198342') ||
+      typeAndGenreQids.has('Q562214') ||
+      typeAndGenreQids.has('Q754669')
+    ) {
+      rawSubjects.push('Manga');
+    } else if (typeAndGenreQids.has('Q1760610') || typeAndGenreQids.has('Q1114461')) {
+      rawSubjects.push('Comics');
+    } else if (typeAndGenreQids.has('Q2831984') || typeAndGenreQids.has('Q725377')) {
+      rawSubjects.push('Bandes dessinées');
+    } else if (typeAndGenreQids.has('Q8261')) {
+      rawSubjects.push('Roman');
+    }
+
     return {
       source: 'wikidata',
       isbn13: fallbackIsbn13,
@@ -164,7 +200,8 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       illustrators: [],
       publishYear: publishYear || undefined,
       description: work.descriptions?.fr?.value || work.descriptions?.en?.value,
-      rawSubjects: [],
+      originalLanguage,
+      rawSubjects,
       coverUrl
     };
   }

@@ -2087,4 +2087,363 @@ describe('Non-régression Séries & Étage 2/3 (Invariants universels)', () => {
     expect(llIntegrals).toHaveLength(1);
     expect(llIntegrals[0].id).toBe('bk_ll_int_1');
   });
+
+  it('Cas 19 (Vague 1 — Catégorisation 2 paliers + langue originale MARC 041$h + protection anti-écrasement series_expand)', async () => {
+    const { parseMarcRecord } = await import('../../../shared/bibliographic/intermarc-parser');
+    const { classifyBookMetadata } = await import('../../../shared/bibliographic/category-classifier');
+
+    // 1. MARC 041$h=jpn + 051$a=sti -> Manga ; MARC 041$h=jpn + Dewey 895.63 -> Roman (zéro faux positif Manga sur roman japonais)
+    const vinlandXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-35142-932-7</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="041"><mxc:subfield code="a">fre</mxc:subfield><mxc:subfield code="h">jpn</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Vinland saga</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="460"><mxc:subfield code="t">Vinland saga</mxc:subfield><mxc:subfield code="v">13</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    const parsedVinland = parseMarcRecord(vinlandXml);
+    expect(parsedVinland?.originalLanguage).toBe('jpn');
+    expect(
+      classifyBookMetadata({
+        title: parsedVinland?.title,
+        series: parsedVinland?.ensembleSeriesName,
+        contentKind: parsedVinland?.contentKind,
+        originalLanguage: parsedVinland?.originalLanguage
+      })
+    ).toMatchObject({ mainCategory: 'Manga', confidence: 'explicit' });
+
+    const murakamiXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">978-2-264-04507-2</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="041"><mxc:subfield code="a">fre</mxc:subfield><mxc:subfield code="h">jpn</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Kafka sur le rivage</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="676"><mxc:subfield code="a">895.63</mxc:subfield></mxc:datafield>
+      </mxc:record>`;
+    const parsedMurakami = parseMarcRecord(murakamiXml);
+    expect(
+      classifyBookMetadata({
+        title: parsedMurakami?.title,
+        deweyCode: parsedMurakami?.deweyCode,
+        contentKind: parsedMurakami?.contentKind,
+        originalLanguage: parsedMurakami?.originalLanguage
+      }).mainCategory
+    ).toBe('Roman');
+
+    // 2. BD française avec BISAC Google Books "Comics & Graphic Novels" reste BD ; comics US traduit de l'anglais (041$h=eng + 741.5) -> Comics
+    expect(
+      classifyBookMetadata({
+        title: "Peau d'homme",
+        publisher: 'Glénat',
+        deweyCode: '741.5',
+        rawSubjects: ['Bandes dessinées', 'Comics & Graphic Novels'],
+        contentKind: 'illustrated'
+      }).mainCategory
+    ).toBe('BD');
+
+    expect(
+      classifyBookMetadata({
+        title: 'Au nom du diable',
+        series: 'Hellboy',
+        deweyCode: '741.5',
+        rawSubjects: ['Bandes dessinées'],
+        contentKind: 'illustrated',
+        originalLanguage: 'eng'
+      }).mainCategory
+    ).toBe('Comics');
+
+    // 3. Essai Dewey 330 dont la description cite "récit" et "adapté en bande dessinée" reste Essai
+    expect(
+      classifyBookMetadata({
+        title: 'Le Capital au XXIe siècle',
+        deweyCode: '330.1',
+        description: 'Un grand récit économique qui a même été adapté en bande dessinée.'
+      }).mainCategory
+    ).toBe('Essai');
+
+    // 4. expandSeriesByGraph ne rétrograde JAMAIS un tome Manga ou Roman en BD et propage la catégorie de la graine aux squelettes
+    const now = new Date().toISOString();
+    const connectors = createMockConnectors({
+      wikidataSeries: {
+        Q100001: [
+          { title: 'Vinland Saga, tome 1', volumeNumber: 1, volumeLabel: '1', sortOrder: 1, wikidataQid: 'Q100101', authors: ['Makoto Yukimura'], isbn13s: [], source: 'wikidata' },
+          { title: 'Vinland Saga, tome 13', volumeNumber: 13, volumeLabel: '13', sortOrder: 13, wikidataQid: 'Q100113', authors: ['Makoto Yukimura'], isbn13s: ['9782351429327'], source: 'wikidata' }
+        ]
+      }
+    });
+    const seriesGraph = new SeriesGraphService({ catalogRepo, connectors });
+    const { series: vsSeries } = seriesGraph.resolveOrCreateSeriesCut({
+      seriesName: 'Vinland Saga',
+      bookTitle: 'Vinland Saga, tome 13',
+      volumeNumber: 13,
+      isHorsSerie: false,
+      isIntegral: false,
+      wikidataSeriesQid: 'Q100001',
+      mainCategory: 'Manga',
+      authors: ['Makoto Yukimura'],
+      now
+    });
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_vs_13',
+      workCanonicalId: 'wd:Q100113',
+      seriesId: vsSeries.id,
+      title: 'Vinland Saga, tome 13',
+      normalizedTitle: 'vinland saga tome 13',
+      volumeNumber: 13,
+      volumeLabel: '13',
+      sortOrder: 13,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Makoto Yukimura'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Kurokawa',
+      collectionName: null,
+      publishYear: '2014',
+      pageCount: 208,
+      description: 'Manga historique viking.',
+      language: 'fr',
+      mainCategory: 'Manga',
+      subgenres: ['Historique'],
+      coverKey: null,
+      wikidataQid: 'Q100113',
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+
+    await seriesGraph.expandSeriesByGraph(vsSeries.id);
+    const vsBooks = catalogRepo.listBooksBySeriesId(vsSeries.id);
+    expect(vsBooks).toHaveLength(2);
+    expect(vsBooks.every((b) => b.main_category === 'Manga')).toBe(true);
+  });
+
+  it('Cas 20 (Vague 1 — PhotoAiService.searchBookCandidates : anti-hors-sujet, séparation média (BD), passe relâchée Deluxe et départage éditeur)', async () => {
+    const { PhotoAiService } = await import('../photo-ai.service');
+    const now = new Date().toISOString();
+
+    // Pré-insère le ROMAN "La Horde du Contrevent" dans le catalogue local :
+    // une recherche "La Horde du Contrevent (BD) Tome 1" NE doit PAS court-circuiter sur le roman local !
+    catalogRepo.upsertBookAutomatic({
+      id: 'bk_horde_roman',
+      workCanonicalId: 'isbn:9782070342266',
+      seriesId: null,
+      title: 'La Horde du Contrevent',
+      normalizedTitle: 'la horde du contrevent',
+      volumeNumber: null,
+      volumeLabel: null,
+      sortOrder: null,
+      isHorsSerie: false,
+      isIntegral: false,
+      includedVolumes: [],
+      authors: ['Alain Damasio'],
+      scriptwriters: [],
+      illustrators: [],
+      publisher: 'Folio SF',
+      collectionName: 'Folio SF',
+      publishYear: '2007',
+      pageCount: 736,
+      description: 'Roman de science-fiction.',
+      language: 'fr',
+      mainCategory: 'Roman',
+      subgenres: ['Science-Fiction'],
+      coverKey: null,
+      wikidataQid: null,
+      inventaireUri: null,
+      sourceOrigin: 'auto',
+      now
+    });
+    catalogRepo.upsertBookEdition({
+      isbn13: '9782070342266',
+      bookId: 'bk_horde_roman',
+      publisher: 'Folio SF',
+      collectionName: 'Folio SF',
+      publishYear: '2007',
+      pageCount: 736,
+      coverKey: null,
+      source: 'bnf',
+      now
+    });
+
+    const mockConnectors = createMockConnectors({});
+    mockConnectors.bnf.searchByTitleAndAuthor = async (query: string) => {
+      const q = query.toLowerCase();
+      // Cas Blast Tome II -> BnF renvoie un faux résultat hors-sujet "Persepolis - Tome II"
+      if (q.includes('blast')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782844140791',
+            title: 'Persepolis',
+            seriesName: 'Persepolis',
+            volumeNumber: '2',
+            authors: ['Marjane Satrapi'],
+            scriptwriters: [],
+            illustrators: ['Marjane Satrapi'],
+            publisher: "L'Association",
+            rawSubjects: ['Bandes dessinées'],
+            contentKind: 'illustrated'
+          }
+        ];
+      }
+      // Cas La Horde du Contrevent (BD) Tome 1
+      if (q.includes('horde du contrevent')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782070342266',
+            title: 'La Horde du Contrevent',
+            authors: ['Alain Damasio'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Folio SF',
+            deweyCode: '843',
+            rawSubjects: ['Roman'],
+            contentKind: 'text_only'
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782756067254',
+            title: 'Le cosmos est mon campement',
+            seriesName: 'La Horde du Contrevent',
+            volumeNumber: '1',
+            authors: ['Éric Henninot', 'Alain Damasio'],
+            scriptwriters: [],
+            illustrators: ['Éric Henninot'],
+            publisher: 'Delcourt',
+            deweyCode: '741.5',
+            rawSubjects: ['Bandes dessinées'],
+            contentKind: 'illustrated'
+          }
+        ];
+      }
+      // Cas bleach deluxe t2 -> strict échoue, passe relâchée "bleach 2" renvoie classique + Deluxe
+      if (q === 'bleach deluxe') return [];
+      if (q.includes('bleach')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782723442282',
+            title: 'Goodbye Parakeet, Goodnite My Sista',
+            seriesName: 'Bleach',
+            volumeNumber: '2',
+            authors: ['Tite Kubo'],
+            scriptwriters: [],
+            illustrators: ['Tite Kubo'],
+            publisher: 'Glénat',
+            originalLanguage: 'jpn',
+            rawSubjects: ['Mangas'],
+            contentKind: 'illustrated'
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782344058121',
+            title: 'Bleach Deluxe',
+            seriesName: 'Bleach',
+            volumeNumber: '2',
+            authors: ['Tite Kubo'],
+            scriptwriters: [],
+            illustrators: ['Tite Kubo'],
+            publisher: 'Glénat',
+            collectionName: 'Shonen Deluxe',
+            originalLanguage: 'jpn',
+            rawSubjects: ['Mangas'],
+            contentKind: 'illustrated'
+          }
+        ];
+      }
+      // Cas guide dérivé vs roman original ("Eragon") et France Loisirs vs Gallimard ("Chanson douce")
+      if (q.includes('eragon')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782747021111',
+            title: "Les mondes magiques d'Eragon",
+            authors: ['Lois H. Gresh'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Bayard',
+            rawSubjects: ['Guide'],
+            contentKind: 'text_only'
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782747014403',
+            title: 'Eragon',
+            authors: ['Christopher Paolini'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Bayard Jeunesse',
+            rawSubjects: ['Roman'],
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      if (q.includes('chanson douce')) {
+        return [
+          {
+            source: 'bnf',
+            isbn13: '9782298127003',
+            title: 'Chanson douce',
+            authors: ['Leïla Slimani'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Éditions France loisirs',
+            rawSubjects: ['Roman'],
+            contentKind: 'text_only'
+          },
+          {
+            source: 'bnf',
+            isbn13: '9782070196678',
+            title: 'Chanson douce',
+            authors: ['Leïla Slimani'],
+            scriptwriters: [],
+            illustrators: [],
+            publisher: 'Gallimard',
+            rawSubjects: ['Roman'],
+            contentKind: 'text_only'
+          }
+        ];
+      }
+      return [];
+    };
+
+    const photoAi = new PhotoAiService({
+      config: { monthlyAiQuota: 30 } as never,
+      gemini: { isConfigured: () => false } as never,
+      connectors: mockConnectors,
+      userRepo: {} as never,
+      catalogRepo,
+      libraryRepo: {} as never,
+      jobRepo: {} as never,
+      coverService: {
+        ingestFromExternalUrl: async () => null,
+        resolveBestCoverFromCascade: async () => null,
+        readCoverBinary: async () => null
+      } as never,
+      ingestionService: {} as never,
+      libraryService: {} as never
+    });
+
+    // 1. Anti-hors-sujet : "Blast Tome II" rejette "Persepolis - Tome II"
+    const blastOpts = await photoAi.searchBookCandidates({ title: 'Blast Tome II', author: 'Manu Larcenet' });
+    expect(blastOpts).toHaveLength(0);
+
+    // 2. Séparation média : "La Horde du Contrevent (BD) Tome 1" sélectionne la BD Delcourt et NON le roman local
+    const hordeOpts = await photoAi.searchBookCandidates({ title: 'La Horde du Contrevent (BD) Tome 1' });
+    expect(hordeOpts[0]?.isbn13).toBe('9782756067254');
+
+    // 3. Passe relâchée + bonus qualificatif : "bleach deluxe t2" retrouve l'édition Deluxe en #1
+    const bleachOpts = await photoAi.searchBookCandidates({ title: 'bleach deluxe t2', publisher: 'Glenat' });
+    expect(bleachOpts[0]?.isbn13).toBe('9782344058121');
+
+    // 4. Pénalité guide dérivé : "Eragon" bat "Les mondes magiques d'Eragon"
+    const eragonOpts = await photoAi.searchBookCandidates({ title: 'Eragon', author: 'Christopher Paolini' });
+    expect(eragonOpts[0]?.isbn13).toBe('9782747014403');
+
+    // 5. Départage club : Gallimard bat France Loisirs à pertinence égale (sans jamais fusionner/bloquer si seul)
+    const chansonOpts = await photoAi.searchBookCandidates({ title: 'Chanson douce', author: 'Leïla Slimani' });
+    expect(chansonOpts[0]?.isbn13).toBe('9782070196678');
+  });
 });

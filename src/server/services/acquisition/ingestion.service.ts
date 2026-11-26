@@ -640,7 +640,11 @@ export class IngestionService {
       pageCount: draft.pageCount ?? existing.page_count,
       description: draft.description ?? existing.description,
       language: draft.language || existing.language || 'fr',
-      mainCategory: existing.main_category !== 'Autre' ? existing.main_category : draft.mainCategory,
+      mainCategory:
+        draft.mainCategory !== 'Autre' &&
+        (existing.main_category === 'Autre' || draft.categoryConfidence === 'explicit')
+          ? draft.mainCategory
+          : existing.main_category,
       subgenres: draft.subgenres.length > 0 ? draft.subgenres : existingSubgenres,
       coverKey,
       wikidataQid: existing.wikidata_qid ?? draft.wikidataWorkQid,

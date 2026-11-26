@@ -41,6 +41,7 @@ export interface ConsolidatedBookDraft {
   description: string | null;
   language: string;
   mainCategory: BookMainCategory;
+  categoryConfidence?: 'explicit' | 'fallback';
   subgenres: string[];
   wikidataWorkQid: string | null;
   inventaireWorkUri: string | null;
@@ -337,6 +338,7 @@ export class ComparisonTableService {
     const deweyCode = pickBestString(columns, (c) => c.deweyCode) ?? undefined;
     const rawSubjects = mergeUniqueStrings(orderedCols.map((c) => c.rawSubjects));
     const contentKind = orderedCols.find((c) => c.contentKind)?.contentKind;
+    const originalLanguage = pickBestString(columns, (c) => c.originalLanguage) ?? undefined;
     const allCollectionSignals = Array.from(
       new Set([collectionName, ...orderedCols.map((c) => c.collectionName)].filter((x): x is string => Boolean(x?.trim())))
     ).join(' | ');
@@ -348,7 +350,8 @@ export class ComparisonTableService {
       deweyCode,
       rawSubjects,
       description: description ?? undefined,
-      contentKind
+      contentKind,
+      originalLanguage
     });
 
     // 8. Couvertures candidates (ordre de qualité : BnF, Inventaire, Wikidata, Google Books, Open Library)
@@ -394,6 +397,7 @@ export class ComparisonTableService {
       description,
       language,
       mainCategory: classification.mainCategory,
+      categoryConfidence: classification.confidence,
       subgenres: classification.subgenres,
       wikidataWorkQid,
       inventaireWorkUri,

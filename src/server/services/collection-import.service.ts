@@ -292,7 +292,8 @@ export class CollectionImportService {
             series: row.series ?? undefined,
             volumeNumber: row.volumeNumber ?? undefined,
             author: row.author ?? undefined,
-            publisher: row.publisher ?? undefined
+            publisher: row.publisher ?? undefined,
+            isIntegral: row.isIntegral ?? undefined
           });
           isbn13 = candidates[0]?.isbn13 ?? null;
           if (isbn13) resolvedViaSearch = true;
@@ -321,7 +322,8 @@ export class CollectionImportService {
             series: row.series ?? undefined,
             volumeNumber: row.volumeNumber ?? undefined,
             author: row.author ?? undefined,
-            publisher: row.publisher ?? undefined
+            publisher: row.publisher ?? undefined,
+            isIntegral: row.isIntegral ?? undefined
           });
           const altIsbn = candidates.find((c) => c.isbn13 && c.isbn13 !== isbn13)?.isbn13 ?? null;
           if (altIsbn) {

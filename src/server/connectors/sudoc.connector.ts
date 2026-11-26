@@ -74,11 +74,13 @@ export function createSudocConnector(http: HttpClient): SudocConnector {
         pageCount: parsed.pageCount,
         description: parsed.description,
         language: parsed.language,
+        originalLanguage: parsed.originalLanguage,
         deweyCode: parsed.deweyCode,
         rawSubjects: parsed.rawSubjects,
         sudocPpn: ppn,
         isNonBook: parsed.isNonBook,
-        isIntegralHint: parsed.isIntegralHint
+        isIntegralHint: parsed.isIntegralHint,
+        contentKind: parsed.contentKind
       };
     }
   };

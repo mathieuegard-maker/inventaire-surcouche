@@ -656,6 +656,25 @@ export class SeriesGraphService {
     return 'neutral';
   }
 
+  private getDominantSeriesCategory(books: BookRow[]): BookMainCategory | null {
+    const weights = new Map<BookMainCategory, number>();
+    for (const b of books) {
+      if (!b.main_category || b.main_category === 'Autre') continue;
+      const hasRichSignals = Boolean(b.description?.trim()) || this.parseJsonArray(b.subgenres_json).length > 0;
+      const weight = hasRichSignals ? 3 : 1;
+      weights.set(b.main_category, (weights.get(b.main_category) ?? 0) + weight);
+    }
+    let best: BookMainCategory | null = null;
+    let bestWeight = 0;
+    for (const [cat, weight] of weights.entries()) {
+      if (weight > bestWeight) {
+        best = cat;
+        bestWeight = weight;
+      }
+    }
+    return best;
+  }
+
   /**
    * Expansion d'une série ancrée sur l'édition graine de l'utilisateur :
    * 1. Précharge le dossier BnF d'origine de la graine unitaire (si présent) afin d'établir le profil du découpage éditorial ;
@@ -677,6 +696,7 @@ export class SeriesGraphService {
     const primaryAuthors = this.parseJsonArray(series.primary_authors_json);
     const existingBooks = this.catalogRepo.listBooksBySeriesId(series.id);
     const seriesMediaFamily = this.getSeriesMediaFamily(existingBooks);
+    const seedSeriesCategory = this.getDominantSeriesCategory(existingBooks);
 
     // Graine unitaire existante (une intégrale seule ne contraint JAMAIS l'expansion des tomes unitaires !)
     const existingUnitaryBooks = existingBooks.filter((b) => b.is_integral === 0 && b.is_hors_serie === 0);
@@ -1255,8 +1275,20 @@ export class SeriesGraphService {
         series: series.canonical_name,
         publisher: work.publisher ?? undefined,
         collection: work.collectionName ?? undefined,
-        contentKind: work.contentKind
+        deweyCode: work.deweyCode ?? undefined,
+        rawSubjects: work.rawSubjects,
+        contentKind: work.contentKind,
+        originalLanguage: work.originalLanguage ?? undefined
       });
+
+      // Protection anti-écrasement : un tome déjà en base conserve sa catégorie qualifiée ;
+      // un nouveau squelette sans signal explicite hérite de la catégorie dominante de la série graine.
+      const effectiveMainCategory: BookMainCategory =
+        existingBook && existingBook.main_category !== 'Autre'
+          ? existingBook.main_category
+          : classification.confidence === 'explicit'
+            ? classification.mainCategory
+            : (seedSeriesCategory ?? classification.mainCategory);
 
       const saved = this.catalogRepo.upsertBookAutomatic({
         id: existingBook?.id ?? generateId('bk'),
@@ -1279,7 +1311,7 @@ export class SeriesGraphService {
         pageCount: work.pageCount ?? null,
         description: null,
         language: 'fr',
-        mainCategory: classification.mainCategory,
+        mainCategory: effectiveMainCategory,
         subgenres: classification.subgenres,
         coverKey,
         wikidataQid: work.wikidataQid ?? null,
