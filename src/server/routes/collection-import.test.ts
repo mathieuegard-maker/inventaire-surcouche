@@ -255,7 +255,12 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
       COVERS_DIR: tmpCoversDir,
       CRON_ENABLED: 'false'
     });
-    appCtx = createApp({ db, config, connectors: mockConnectors });
+    appCtx = createApp({
+      db,
+      config,
+      connectors: mockConnectors,
+      coverFetchImpl: async () => new Response(null, { status: 404 })
+    });
   });
 
   afterEach(() => {
@@ -610,10 +615,14 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
       ok: true;
       reportFilename: string;
       archiveFilename: string;
+      seriesReportFilename: string;
+      seriesArchiveFilename: string;
       markdown: string;
+      seriesMarkdown: string;
       report: {
         alignmentMode: string;
         totals: { evaluatedRows: number; resolvedRows: number; failedRows: number };
+        seriesAudit: Array<{ canonicalName: string; volumes: Array<{ title: string }> }>;
         items: Array<{ dataLineNumber: number; verdict: string; failedFields: string[] }>;
       };
     };
@@ -624,13 +633,19 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     expect(graded.report.totals.failedRows).toBe(1);
     expect(graded.report.items[1].failedFields).toContain('media');
     expect(graded.report.items[2].verdict).toBe('failed');
+    expect(graded.report.seriesAudit.length).toBeGreaterThanOrEqual(2);
     expect(graded.markdown).toContain('# Rapport de Benchmark Automatique — `test_01.csv`');
+    expect(graded.markdown).toContain('## 7. Extensions de séries — Inventaire des tomes');
     expect(graded.markdown).toContain('Piège média volontaire');
+    expect(graded.seriesMarkdown).toContain('# Audit des Extensions de Séries — `test_01.csv`');
+    expect(graded.seriesMarkdown).toContain('La Marque du diable');
 
-    // Vérifie la persistance du rapport Markdown sur disque
+    // Vérifie la persistance des rapports Markdown sur disque (principal + séries)
     const reportsDir = path.join(tmpRootDir, 'benchmark-reports');
     expect(fs.existsSync(path.join(reportsDir, graded.reportFilename))).toBe(true);
     expect(fs.existsSync(path.join(reportsDir, graded.archiveFilename))).toBe(true);
+    expect(fs.existsSync(path.join(reportsDir, graded.seriesReportFilename))).toBe(true);
+    expect(fs.existsSync(path.join(reportsDir, graded.seriesArchiveFilename))).toBe(true);
 
     // Vérifie l'enregistrement dans pipeline_logs (stage = benchmark_report)
     const logsRes = await appCtx.app.request('/api/admin/logs?stage=benchmark_report', {
@@ -641,13 +656,20 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     expect(logsBody.logs.length).toBeGreaterThanOrEqual(1);
     expect(logsBody.logs[0].summary).toContain('test_01.csv');
 
-    // Vérifie le téléchargement brut .md et le recalcul /regrade
+    // Vérifie les téléchargements bruts .md (global + séries) et le recalcul /regrade
     const mdRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/report.md`, {
       headers: { cookie: adminCookie }
     });
     expect(mdRes.status).toBe(200);
     expect(mdRes.headers.get('content-type')).toContain('text/markdown');
     expect(await mdRes.text()).toContain('## 1. Synthèse globale');
+
+    const seriesMdRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/series-report.md`, {
+      headers: { cookie: adminCookie }
+    });
+    expect(seriesMdRes.status).toBe(200);
+    expect(seriesMdRes.headers.get('content-type')).toContain('text/markdown');
+    expect(await seriesMdRes.text()).toContain('Le Scorpion');
 
     const regradeRes = await appCtx.app.request(`/api/admin/import-benchmarks/${job.id}/regrade`, {
       method: 'POST',

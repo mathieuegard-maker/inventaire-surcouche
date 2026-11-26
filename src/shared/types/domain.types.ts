@@ -382,6 +382,54 @@ export interface BenchmarkFieldStat {
   passRatePct: number;
 }
 
+export type BenchmarkSeriesAuditFlag =
+  | 'not_expanded'
+  | 'single_volume'
+  | 'duplicate_volume_numbers'
+  | 'volume_gaps'
+  | 'mixed_media'
+  | 'missing_covers'
+  | 'missing_isbns'
+  | 'generic_titles';
+
+export interface BenchmarkSeriesVolumeSummary {
+  bookId: string;
+  title: string;
+  volumeNumber: number | null;
+  volumeLabel: string | null;
+  isHorsSerie: boolean;
+  isIntegral: boolean;
+  includedVolumes: string[];
+  primaryIsbn13: string | null;
+  publisher: string | null;
+  mainCategory: BookMainCategory;
+  hasCover: boolean;
+  authors: string[];
+  isGenericTitle: boolean;
+}
+
+export interface BenchmarkSeriesAuditEntry {
+  seriesId: string;
+  canonicalName: string;
+  editionSignature: string | null;
+  franchiseName: string | null;
+  wikidataQid: string | null;
+  isCompleteExpanded: boolean;
+  totalCount: number;
+  regularVolumesCount: number;
+  horsSerieCount: number;
+  integralsCount: number;
+  coversCount: number;
+  missingIsbnCount: number;
+  genericTitlesCount: number;
+  duplicateVolumeNumbers: number[];
+  missingVolumeGaps: number[];
+  distinctMedia: BookMainCategory[];
+  flags: BenchmarkSeriesAuditFlag[];
+  sourceRowNumbers: number[];
+  volumes: BenchmarkSeriesVolumeSummary[];
+}
+
 export interface AdminBenchmarkGradedReport {
   jobId: string;
   inputFilename: string;
@@ -404,5 +452,6 @@ export interface AdminBenchmarkGradedReport {
   fieldStats: BenchmarkFieldStat[];
   byCategory: BenchmarkRateBucket[];
   byProfile: BenchmarkRateBucket[];
+  seriesAudit: BenchmarkSeriesAuditEntry[];
   items: BenchmarkGradedItem[];
 }

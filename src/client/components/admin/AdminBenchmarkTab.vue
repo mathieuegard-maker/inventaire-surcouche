@@ -17,6 +17,8 @@ import type {
   BackgroundJobView,
   BenchmarkCheckField,
   BenchmarkGradedItem,
+  BenchmarkSeriesAuditFlag,
+  BenchmarkSeriesVolumeSummary,
   BenchmarkWarningCode,
   CollectionImportComparisonSnapshot,
   CollectionImportResolutionChannel,
@@ -51,6 +53,7 @@ const gtFileInputRef = ref<HTMLInputElement | null>(null);
 const gradingBusy = ref(false);
 const gradedReport = ref<AdminBenchmarkGradedReport | null>(null);
 const gradedMarkdown = ref<string>('');
+const gradedSeriesMarkdown = ref<string>('');
 const latestReportFilename = ref<string | null>(null);
 
 // Filtres & pagination (fluide sur 1 080+ lignes)
@@ -259,6 +262,25 @@ function getFieldCheckLabel(field: BenchmarkCheckField): string {
   return t(`admin.benchmarkFieldCheck_${field}`);
 }
 
+function getSeriesFlagLabel(flag: BenchmarkSeriesAuditFlag): string {
+  return t(`admin.benchmarkSeriesFlag_${flag}`);
+}
+
+function formatSeriesVolumeTag(v: BenchmarkSeriesVolumeSummary): string {
+  if (v.isIntegral) {
+    return v.includedVolumes.length > 0 ? `INT [${v.includedVolumes.join(',')}]` : 'INT';
+  }
+  if (v.isHorsSerie) {
+    return v.volumeNumber !== null ? `HS.${v.volumeNumber}` : 'HS';
+  }
+  if (v.volumeNumber !== null) return `T.${v.volumeNumber}`;
+  return v.volumeLabel || '—';
+}
+
+const flaggedSeriesCount = computed(() =>
+  (gradedReport.value?.seriesAudit ?? []).filter((s) => s.flags.length > 0).length
+);
+
 function getChannelLabel(channel: CollectionImportResolutionChannel): string {
   if (channel === 'isbn_direct') return t('admin.benchmarkChannelIsbn');
   if (channel === 'search_to_isbn') return t('admin.benchmarkChannelSearch');
@@ -345,6 +367,7 @@ async function loadExistingGradeForJob(jobId: string): Promise<void> {
   if (!jobId) {
     gradedReport.value = null;
     gradedMarkdown.value = '';
+    gradedSeriesMarkdown.value = '';
     latestReportFilename.value = null;
     return;
   }
@@ -354,20 +377,24 @@ async function loadExistingGradeForJob(jobId: string): Promise<void> {
       hasGroundTruth: boolean;
       report?: AdminBenchmarkGradedReport;
       markdown?: string;
+      seriesMarkdown?: string;
       reportFilename?: string;
     }>(`/api/admin/import-benchmarks/${encodeURIComponent(jobId)}/grade`);
     if (res.hasGroundTruth && res.report) {
       gradedReport.value = res.report;
       gradedMarkdown.value = res.markdown ?? '';
+      gradedSeriesMarkdown.value = res.seriesMarkdown ?? '';
       latestReportFilename.value = res.reportFilename ?? null;
     } else {
       gradedReport.value = null;
       gradedMarkdown.value = '';
+      gradedSeriesMarkdown.value = '';
       latestReportFilename.value = null;
     }
   } catch {
     gradedReport.value = null;
     gradedMarkdown.value = '';
+    gradedSeriesMarkdown.value = '';
     latestReportFilename.value = null;
   }
 }
@@ -502,6 +529,7 @@ async function handleGroundTruthSelected(event: Event): Promise<void> {
       ok: true;
       report: AdminBenchmarkGradedReport;
       markdown: string;
+      seriesMarkdown: string;
       reportFilename: string;
       archiveFilename: string;
     }>(`/api/admin/import-benchmarks/${encodeURIComponent(job.id)}/grade`, {
@@ -514,6 +542,7 @@ async function handleGroundTruthSelected(event: Event): Promise<void> {
     });
     gradedReport.value = res.report;
     gradedMarkdown.value = res.markdown;
+    gradedSeriesMarkdown.value = res.seriesMarkdown;
     latestReportFilename.value = res.archiveFilename || res.reportFilename;
     currentPage.value = 1;
     uiStore.pushToast(
@@ -540,6 +569,7 @@ async function handleRegrade(): Promise<void> {
       ok: true;
       report: AdminBenchmarkGradedReport;
       markdown: string;
+      seriesMarkdown: string;
       reportFilename: string;
       archiveFilename: string;
     }>(`/api/admin/import-benchmarks/${encodeURIComponent(job.id)}/regrade`, {
@@ -548,6 +578,7 @@ async function handleRegrade(): Promise<void> {
     });
     gradedReport.value = res.report;
     gradedMarkdown.value = res.markdown;
+    gradedSeriesMarkdown.value = res.seriesMarkdown;
     latestReportFilename.value = res.archiveFilename || res.reportFilename;
     activeCatalogJobsCount.value = res.report.activeCatalogJobsCount;
     uiStore.pushToast(
@@ -598,6 +629,21 @@ function handleDownloadGradedMarkdown(): void {
   const job = selectedJob.value;
   if (!job) return;
   window.location.href = `/api/admin/import-benchmarks/${encodeURIComponent(job.id)}/report.md`;
+}
+
+async function handleCopySeriesMarkdown(): Promise<void> {
+  if (!gradedSeriesMarkdown.value) return;
+  const ok = await copyTextToClipboard(gradedSeriesMarkdown.value);
+  uiStore.pushToast(
+    ok ? t('admin.benchmarkSeriesReportCopiedToast') : t('admin.benchmarkCopyErrorToast'),
+    ok ? 'success' : 'danger'
+  );
+}
+
+function handleDownloadSeriesMarkdown(): void {
+  const job = selectedJob.value;
+  if (!job) return;
+  window.location.href = `/api/admin/import-benchmarks/${encodeURIComponent(job.id)}/series-report.md`;
 }
 
 function buildAnomaliesMarkdown(job: AdminBenchmarkJobView): { count: number; markdown: string } {
@@ -733,6 +779,7 @@ async function confirmResetCatalog(): Promise<void> {
     selectedJobId.value = '';
     gradedReport.value = null;
     gradedMarkdown.value = '';
+    gradedSeriesMarkdown.value = '';
     latestReportFilename.value = null;
     activeCatalogJobsCount.value = 0;
     uiStore.pushToast(
@@ -978,6 +1025,22 @@ onMounted(() => {
           >
             {{ t('admin.benchmarkDownloadReportBtn') }}
           </button>
+          <button
+            v-if="gradedSeriesMarkdown"
+            type="button"
+            class="ds-btn ds-btn--sm"
+            @click="handleCopySeriesMarkdown"
+          >
+            {{ t('admin.benchmarkCopySeriesReportBtn') }}
+          </button>
+          <button
+            v-if="gradedSeriesMarkdown"
+            type="button"
+            class="ds-btn ds-btn--ghost ds-btn--sm"
+            @click="handleDownloadSeriesMarkdown"
+          >
+            {{ t('admin.benchmarkDownloadSeriesReportBtn') }}
+          </button>
         </div>
       </div>
 
@@ -1082,6 +1145,98 @@ onMounted(() => {
               {{ prof.perfect }}✓ · {{ prof.partial }}⚠ · {{ prof.failed }}✕ ({{ prof.total }})
             </span>
           </button>
+        </div>
+      </details>
+
+      <!-- Audit des extensions de séries (inventaire des tomes) -->
+      <details class="ds-panel">
+        <summary class="bench-details-summary">
+          {{
+            t('admin.benchmarkBreakdownSeriesTitle', {
+              count: gradedReport.seriesAudit.length,
+              flagged: flaggedSeriesCount
+            })
+          }}
+        </summary>
+        <p v-if="gradedReport.seriesAudit.length === 0" class="ds-text-muted bench-series-empty">
+          {{ t('admin.benchmarkSeriesEmpty') }}
+        </p>
+        <div v-else class="bench-series-list">
+          <div
+            v-for="s in gradedReport.seriesAudit"
+            :key="s.seriesId"
+            class="bench-series-card"
+            :class="{ 'bench-series-card--flagged': s.flags.length > 0 }"
+          >
+            <div class="ds-row ds-row--between bench-series-head">
+              <div class="ds-row bench-series-title-row">
+                <strong>{{ s.canonicalName }}</strong>
+                <span v-if="s.editionSignature" class="ds-badge bench-mono">{{ s.editionSignature }}</span>
+                <span
+                  class="ds-badge"
+                  :class="s.isCompleteExpanded ? 'bench-badge--ok' : 'bench-badge--warning'"
+                >
+                  {{ s.isCompleteExpanded ? t('admin.benchmarkSeriesExpandedYes') : t('admin.benchmarkSeriesExpandedNo') }}
+                </span>
+                <span class="ds-badge">
+                  {{ t('admin.benchmarkSeriesCountBadge', { count: s.totalCount }) }}
+                </span>
+                <span
+                  class="ds-badge"
+                  :class="s.coversCount === s.totalCount ? 'bench-badge--ok' : 'bench-badge--warning'"
+                >
+                  {{ t('admin.benchmarkSeriesCoversSummary', { covers: s.coversCount, total: s.totalCount }) }}
+                </span>
+                <span v-if="s.missingIsbnCount > 0" class="ds-badge bench-badge--warning">
+                  {{ t('admin.benchmarkSeriesNoIsbnSummary', { count: s.missingIsbnCount }) }}
+                </span>
+              </div>
+              <router-link
+                :to="`/series/${s.seriesId}`"
+                target="_blank"
+                rel="noopener"
+                class="ds-btn ds-btn--ghost ds-btn--sm"
+              >
+                {{ t('admin.benchmarkSeriesOpenLink') }}
+              </router-link>
+            </div>
+
+            <div v-if="s.flags.length > 0" class="bench-badges-row">
+              <span
+                v-for="flag in s.flags"
+                :key="flag"
+                class="ds-badge"
+                :class="flag === 'mixed_media' || flag === 'duplicate_volume_numbers' ? 'bench-badge--danger' : 'bench-badge--warning'"
+              >
+                {{ getSeriesFlagLabel(flag) }}
+              </span>
+            </div>
+
+            <details class="bench-series-vols-details">
+              <summary class="ds-text-muted bench-series-vols-summary">
+                {{ t('admin.benchmarkSeriesVolumesToggle', { count: s.volumes.length }) }}
+              </summary>
+              <ul class="bench-series-vols-list">
+                <li v-for="v in s.volumes" :key="v.bookId" class="bench-series-vol-item">
+                  <span class="ds-badge bench-mono">{{ formatSeriesVolumeTag(v) }}</span>
+                  <router-link
+                    :to="`/book/${v.bookId}`"
+                    target="_blank"
+                    rel="noopener"
+                    class="bench-book-link"
+                  >
+                    {{ v.title }}
+                  </router-link>
+                  <span class="ds-text-muted bench-mono">
+                    {{ v.primaryIsbn13 ?? t('admin.benchmarkSeriesNoIsbnTag') }}
+                  </span>
+                  <span v-if="v.publisher" class="ds-text-muted">· {{ v.publisher }}</span>
+                  <span class="ds-badge">{{ v.mainCategory }}</span>
+                  <span>{{ v.hasCover ? '✅' : '❌' }}</span>
+                </li>
+              </ul>
+            </details>
+          </div>
         </div>
       </details>
     </div>
@@ -1762,6 +1917,69 @@ onMounted(() => {
 .bench-stat-chip--active {
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.bench-series-empty {
+  margin-top: var(--space-2);
+}
+
+.bench-series-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.bench-series-card {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bench-series-card--flagged {
+  border-color: var(--border-strong);
+}
+
+.bench-series-head {
+  gap: var(--space-2);
+}
+
+.bench-series-title-row {
+  gap: var(--space-1);
+}
+
+.bench-series-vols-summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.bench-series-vols-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.bench-series-vol-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.82rem;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bench-series-vol-item:last-child {
+  border-bottom: none;
 }
 
 .bench-kpi-grid {

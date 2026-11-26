@@ -9,9 +9,12 @@ import path from 'node:path';
 import {
   alignGroundTruthToItems,
   buildBenchmarkGradedReport,
+  buildSeriesAuditEntries,
   evaluateBenchmarkItemAgainstGroundTruth,
   generateBenchmarkMarkdownReport,
-  parseGroundTruthCsv
+  generateBenchmarkSeriesStandaloneMarkdown,
+  parseGroundTruthCsv,
+  type RawSeriesAuditInput
 } from '../../shared/bibliographic/benchmark-grading.util';
 import {
   isCompatibleSeriesName,
@@ -520,6 +523,10 @@ export class AdminService {
     return path.join(this.reportsDir, `report-${this.assertSafeJobId(jobId)}.md`);
   }
 
+  private getLatestSeriesReportPath(jobId: string): string {
+    return path.join(this.reportsDir, `series-${this.assertSafeJobId(jobId)}.md`);
+  }
+
   private readGroundTruthMetaSync(jobId: string): {
     hasGroundTruth: boolean;
     groundTruthFilename: string | null;
@@ -670,10 +677,79 @@ export class AdminService {
     };
   }
 
+  private collectLiveSeriesAudit(
+    gradedItems: Array<{ dataLineNumber: number; actual: BenchmarkGradedActualState }>
+  ) {
+    const rowsBySeriesId = new Map<string, number[]>();
+    for (const it of gradedItems) {
+      if (!it.actual.seriesId) continue;
+      const list = rowsBySeriesId.get(it.actual.seriesId) ?? [];
+      list.push(it.dataLineNumber);
+      rowsBySeriesId.set(it.actual.seriesId, list);
+    }
+
+    // Inclut aussi les séries sœurs partageant la même franchise afin de repérer immédiatement une fragmentation
+    const allSeriesIds = new Set<string>(rowsBySeriesId.keys());
+    const franchiseCache = new Map<string, string>();
+    for (const sId of Array.from(allSeriesIds)) {
+      const sRow = this.catalogRepo.findSeriesById(sId);
+      if (!sRow?.franchise_id) continue;
+      const fRow = this.catalogRepo.findFranchiseById(sRow.franchise_id);
+      if (fRow) franchiseCache.set(fRow.id, fRow.canonical_name);
+      for (const sibling of this.catalogRepo.findSeriesByFranchiseId(sRow.franchise_id)) {
+        allSeriesIds.add(sibling.id);
+      }
+    }
+
+    const rawInputs: RawSeriesAuditInput[] = [];
+    for (const sId of allSeriesIds) {
+      const sRow = this.catalogRepo.findSeriesById(sId);
+      if (!sRow) continue;
+      let franchiseName: string | null = null;
+      if (sRow.franchise_id) {
+        franchiseName =
+          franchiseCache.get(sRow.franchise_id) ??
+          this.catalogRepo.findFranchiseById(sRow.franchise_id)?.canonical_name ??
+          null;
+      }
+
+      const books = this.catalogRepo.listBooksBySeriesId(sId);
+      rawInputs.push({
+        seriesId: sRow.id,
+        canonicalName: sRow.canonical_name,
+        editionSignature: sRow.edition_signature || null,
+        franchiseName,
+        wikidataQid: sRow.wikidata_qid,
+        isCompleteExpanded: sRow.is_complete_expanded === 1,
+        sourceRowNumbers: rowsBySeriesId.get(sId) ?? [],
+        volumes: books.map((b) => {
+          const editions = this.catalogRepo.listEditionsByBookId(b.id);
+          return {
+            bookId: b.id,
+            title: b.title,
+            volumeNumber: b.volume_number,
+            volumeLabel: b.volume_label,
+            sortOrder: b.sort_order,
+            isHorsSerie: b.is_hors_serie === 1,
+            isIntegral: b.is_integral === 1,
+            includedVolumes: parseJsonArray(b.included_volumes_json),
+            primaryIsbn13: editions[0]?.isbn13 ?? null,
+            publisher: b.publisher,
+            mainCategory: b.main_category,
+            hasCover: Boolean(b.cover_key),
+            authors: parseJsonArray(b.authors_json)
+          };
+        })
+      });
+    }
+
+    return buildSeriesAuditEntries(rawInputs);
+  }
+
   private computeLiveGradedReport(
     jobId: string,
     storedGt: StoredGroundTruthFile
-  ): { report: AdminBenchmarkGradedReport; markdown: string } {
+  ): { report: AdminBenchmarkGradedReport; markdown: string; seriesMarkdown: string } {
     const jobRow = this.adminRepo.findCollectionImportJobById(jobId);
     if (!jobRow) {
       throw new AppError(404, 'BENCHMARK_JOB_NOT_FOUND', 'Lot d’import introuvable.');
@@ -732,6 +808,8 @@ export class AdminService {
       })
     );
 
+    const seriesAudit = this.collectLiveSeriesAudit(gradedItems);
+
     const report = buildBenchmarkGradedReport({
       jobId,
       inputFilename,
@@ -739,32 +817,50 @@ export class AdminService {
       alignmentMode,
       activeCatalogJobsCount,
       unalignedRows: unalignedCount,
-      items: gradedItems
+      items: gradedItems,
+      seriesAudit
     });
     const markdown = generateBenchmarkMarkdownReport(report);
-    return { report, markdown };
+    const seriesMarkdown = generateBenchmarkSeriesStandaloneMarkdown(report);
+    return { report, markdown, seriesMarkdown };
   }
 
   private async persistReportAndLog(
     jobId: string,
     report: AdminBenchmarkGradedReport,
-    markdown: string
-  ): Promise<{ reportFilename: string; archiveFilename: string }> {
+    markdown: string,
+    seriesMarkdown: string
+  ): Promise<{
+    reportFilename: string;
+    archiveFilename: string;
+    seriesReportFilename: string;
+    seriesArchiveFilename: string;
+  }> {
     await fs.mkdir(this.reportsDir, { recursive: true });
     const safeId = this.assertSafeJobId(jobId);
     const stamp = report.generatedAt.replace(/[:.]/g, '-').slice(0, 19);
     const reportFilename = `report-${safeId}.md`;
     const archiveFilename = `report-${safeId}-${stamp}.md`;
+    const seriesReportFilename = `series-${safeId}.md`;
+    const seriesArchiveFilename = `series-${safeId}-${stamp}.md`;
 
     await fs.writeFile(path.join(this.reportsDir, reportFilename), markdown, 'utf8');
     await fs.writeFile(path.join(this.reportsDir, archiveFilename), markdown, 'utf8');
+    await fs.writeFile(path.join(this.reportsDir, seriesReportFilename), seriesMarkdown, 'utf8');
+    await fs.writeFile(path.join(this.reportsDir, seriesArchiveFilename), seriesMarkdown, 'utf8');
 
     const { totals } = report;
+    const totalSeries = report.seriesAudit.length;
+    const flaggedSeries = report.seriesAudit.filter((s) => s.flags.length > 0).length;
+    const totalSeriesVolumes = report.seriesAudit.reduce((sum, s) => sum + s.totalCount, 0);
+    const totalSeriesCovers = report.seriesAudit.reduce((sum, s) => sum + s.coversCount, 0);
+
     const summaryLine =
       `Benchmark ${report.inputFilename} vs ${report.groundTruthFilename} : ` +
       `${totals.resolvedRows}/${totals.evaluatedRows} trouvés (${totals.resolvedRatePct}%), ` +
       `${totals.perfectRows} parfaits (${totals.perfectRatePct}%), ` +
-      `précision champs ${totals.fieldAccuracyPct}% → ${archiveFilename}`;
+      `précision champs ${totals.fieldAccuracyPct}%, ` +
+      `séries ${totalSeries} (${flaggedSeries} avec signaux, ${totalSeriesCovers}/${totalSeriesVolumes} couv.) → ${archiveFilename}`;
 
     this.logRepo.append({
       traceId: jobId,
@@ -777,21 +873,29 @@ export class AdminService {
       payload: {
         reportFilename,
         archiveFilename,
+        seriesReportFilename,
+        seriesArchiveFilename,
         alignmentMode: report.alignmentMode,
         totals,
         fieldStats: report.fieldStats,
         byCategory: report.byCategory,
-        byProfile: report.byProfile
+        byProfile: report.byProfile,
+        seriesAuditSummary: {
+          totalSeries,
+          flaggedSeries,
+          totalVolumes: totalSeriesVolumes,
+          totalCovers: totalSeriesCovers
+        }
       }
     });
 
     console.info(`[benchmark_report] ${summaryLine}`);
-    return { reportFilename, archiveFilename };
+    return { reportFilename, archiveFilename, seriesReportFilename, seriesArchiveFilename };
   }
 
   /**
    * Charge un CSV de correction (`reponses_complet_1080.csv` ou unitaire), l'associe au lot d'import,
-   * exécute la comparaison automatique champ par champ et génère le rapport Markdown en log.
+   * exécute la comparaison automatique champ par champ et génère les rapports Markdown en log.
    */
   async gradeImportBenchmark(
     jobId: string,
@@ -799,8 +903,11 @@ export class AdminService {
   ): Promise<{
     report: AdminBenchmarkGradedReport;
     markdown: string;
+    seriesMarkdown: string;
     reportFilename: string;
     archiveFilename: string;
+    seriesReportFilename: string;
+    seriesArchiveFilename: string;
   }> {
     this.assertSafeJobId(jobId);
     const cleanBase64 =
@@ -830,12 +937,12 @@ export class AdminService {
       rows
     };
 
-    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
+    const { report, markdown, seriesMarkdown } = this.computeLiveGradedReport(jobId, storedGt);
     await fs.mkdir(this.reportsDir, { recursive: true });
     await fs.writeFile(this.getGroundTruthPath(jobId), JSON.stringify(storedGt), 'utf8');
-    const { reportFilename, archiveFilename } = await this.persistReportAndLog(jobId, report, markdown);
+    const files = await this.persistReportAndLog(jobId, report, markdown, seriesMarkdown);
 
-    return { report, markdown, reportFilename, archiveFilename };
+    return { report, markdown, seriesMarkdown, ...files };
   }
 
   /**
@@ -845,8 +952,11 @@ export class AdminService {
   async regradeImportBenchmark(jobId: string): Promise<{
     report: AdminBenchmarkGradedReport;
     markdown: string;
+    seriesMarkdown: string;
     reportFilename: string;
     archiveFilename: string;
+    seriesReportFilename: string;
+    seriesArchiveFilename: string;
   }> {
     const gtPath = this.getGroundTruthPath(jobId);
     let storedGt: StoredGroundTruthFile;
@@ -860,9 +970,9 @@ export class AdminService {
       );
     }
 
-    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
-    const { reportFilename, archiveFilename } = await this.persistReportAndLog(jobId, report, markdown);
-    return { report, markdown, reportFilename, archiveFilename };
+    const { report, markdown, seriesMarkdown } = this.computeLiveGradedReport(jobId, storedGt);
+    const files = await this.persistReportAndLog(jobId, report, markdown, seriesMarkdown);
+    return { report, markdown, seriesMarkdown, ...files };
   }
 
   /**
@@ -872,7 +982,9 @@ export class AdminService {
     hasGroundTruth: boolean;
     report?: AdminBenchmarkGradedReport;
     markdown?: string;
+    seriesMarkdown?: string;
     reportFilename?: string;
+    seriesReportFilename?: string;
   }> {
     const gtPath = this.getGroundTruthPath(jobId);
     let storedGt: StoredGroundTruthFile;
@@ -881,12 +993,15 @@ export class AdminService {
     } catch {
       return { hasGroundTruth: false };
     }
-    const { report, markdown } = this.computeLiveGradedReport(jobId, storedGt);
+    const { report, markdown, seriesMarkdown } = this.computeLiveGradedReport(jobId, storedGt);
+    const safeId = this.assertSafeJobId(jobId);
     return {
       hasGroundTruth: true,
       report,
       markdown,
-      reportFilename: `report-${this.assertSafeJobId(jobId)}.md`
+      seriesMarkdown,
+      reportFilename: `report-${safeId}.md`,
+      seriesReportFilename: `series-${safeId}.md`
     };
   }
 
@@ -903,6 +1018,24 @@ export class AdminService {
       const live = await this.getImportBenchmarkGrade(safeId);
       if (live.hasGroundTruth && live.markdown) {
         return { filename: `rapport-benchmark-${safeId}.md`, markdown: live.markdown };
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Lit le rapport Markdown dédié aux extensions de séries (`series-<jobId>.md`).
+   */
+  async getBenchmarkSeriesMarkdownReport(jobId: string): Promise<{ filename: string; markdown: string } | null> {
+    const safeId = this.assertSafeJobId(jobId);
+    const repPath = this.getLatestSeriesReportPath(safeId);
+    try {
+      const markdown = await fs.readFile(repPath, 'utf8');
+      return { filename: `rapport-series-${safeId}.md`, markdown };
+    } catch {
+      const live = await this.getImportBenchmarkGrade(safeId);
+      if (live.hasGroundTruth && live.seriesMarkdown) {
+        return { filename: `rapport-series-${safeId}.md`, markdown: live.seriesMarkdown };
       }
       return null;
     }

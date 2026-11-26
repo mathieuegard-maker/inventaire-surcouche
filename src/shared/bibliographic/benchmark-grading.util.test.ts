@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   alignGroundTruthToItems,
   buildBenchmarkGradedReport,
+  buildSeriesAuditEntries,
   evaluateBenchmarkItemAgainstGroundTruth,
   generateBenchmarkMarkdownReport,
+  generateBenchmarkSeriesStandaloneMarkdown,
   parseGroundTruthCsv
 } from './benchmark-grading.util';
 import type { BenchmarkGradedActualState, CollectionImportComparisonItem } from '../types/domain.types';
@@ -191,5 +193,170 @@ describe('benchmark-grading.util — Parsing corrigé 20 colonnes, alignement & 
     expect(md).toContain('## 6. Écarts détectés : Attendu vs Trouvé (1)');
     expect(md).toContain('Folio est une collection éditoriale, jamais une série');
     expect(md).toContain('Anti-fausse série (Collection)');
+  });
+
+  it('construit l’audit des extensions de séries (ordre T.1..N -> HS -> INT, doublons, trous, mélange médias) et génère le Markdown dédié', () => {
+    const seriesAudit = buildSeriesAuditEntries([
+      {
+        seriesId: 'ser_clean',
+        canonicalName: 'Astérix',
+        editionSignature: null,
+        franchiseName: 'Astérix',
+        wikidataQid: 'Q42490',
+        isCompleteExpanded: true,
+        sourceRowNumbers: [1],
+        volumes: [
+          {
+            bookId: 'b2',
+            title: 'La Serpe d’or',
+            volumeNumber: 2,
+            volumeLabel: '2',
+            sortOrder: 2,
+            isHorsSerie: false,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: '9782012101340',
+            publisher: 'Hachette',
+            mainCategory: 'BD',
+            hasCover: true,
+            authors: ['René Goscinny', 'Albert Uderzo']
+          },
+          {
+            bookId: 'b1',
+            title: 'Astérix le Gaulois',
+            volumeNumber: 1,
+            volumeLabel: '1',
+            sortOrder: 1,
+            isHorsSerie: false,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: '9782012101333',
+            publisher: 'Hachette',
+            mainCategory: 'BD',
+            hasCover: true,
+            authors: ['René Goscinny', 'Albert Uderzo']
+          }
+        ]
+      },
+      {
+        seriesId: 'ser_bug',
+        canonicalName: 'Série Suspecte',
+        editionSignature: null,
+        franchiseName: 'Série Suspecte',
+        wikidataQid: null,
+        isCompleteExpanded: true,
+        sourceRowNumbers: [12, 45],
+        volumes: [
+          {
+            bookId: 's_int',
+            title: 'Intégrale 1',
+            volumeNumber: 1,
+            volumeLabel: '1',
+            sortOrder: 1,
+            isHorsSerie: false,
+            isIntegral: true,
+            includedVolumes: ['1', '2', '3'],
+            primaryIsbn13: '9780000000009',
+            publisher: 'Éditeur',
+            mainCategory: 'BD',
+            hasCover: true,
+            authors: ['Auteur']
+          },
+          {
+            bookId: 's_hs',
+            title: 'Spécial Noël',
+            volumeNumber: null,
+            volumeLabel: 'HS',
+            sortOrder: 100,
+            isHorsSerie: true,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: null,
+            publisher: 'Éditeur',
+            mainCategory: 'BD',
+            hasCover: false,
+            authors: ['Auteur']
+          },
+          {
+            bookId: 's_t1a',
+            title: 'Premier album',
+            volumeNumber: 1,
+            volumeLabel: '1',
+            sortOrder: 1,
+            isHorsSerie: false,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: '9780000000001',
+            publisher: 'Éditeur',
+            mainCategory: 'BD',
+            hasCover: true,
+            authors: ['Auteur']
+          },
+          {
+            bookId: 's_t1b',
+            title: 'Version Roman intruse',
+            volumeNumber: 1,
+            volumeLabel: '1',
+            sortOrder: 1,
+            isHorsSerie: false,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: '9780000000002',
+            publisher: 'Éditeur',
+            mainCategory: 'Roman',
+            hasCover: true,
+            authors: ['Auteur']
+          },
+          {
+            bookId: 's_t4',
+            title: 'Tome 4',
+            volumeNumber: 4,
+            volumeLabel: '4',
+            sortOrder: 4,
+            isHorsSerie: false,
+            isIntegral: false,
+            includedVolumes: [],
+            primaryIsbn13: null,
+            publisher: null,
+            mainCategory: 'BD',
+            hasCover: false,
+            authors: ['Auteur']
+          }
+        ]
+      }
+    ]);
+
+    // La série avec signaux critiques remonte en 1er devant la série propre
+    expect(seriesAudit[0].seriesId).toBe('ser_bug');
+    expect(seriesAudit[0].flags).toEqual(
+      expect.arrayContaining(['mixed_media', 'duplicate_volume_numbers', 'volume_gaps', 'missing_covers', 'missing_isbns', 'generic_titles'])
+    );
+    expect(seriesAudit[0].duplicateVolumeNumbers).toEqual([1]);
+    expect(seriesAudit[0].missingVolumeGaps).toEqual([2, 3]);
+    // Ordre des tomes : T.1, T.1, T.4, HS, INT
+    expect(seriesAudit[0].volumes.map((v) => v.bookId)).toEqual(['s_t1a', 's_t1b', 's_t4', 's_hs', 's_int']);
+
+    expect(seriesAudit[1].seriesId).toBe('ser_clean');
+    expect(seriesAudit[1].flags).toEqual([]);
+
+    const report = buildBenchmarkGradedReport({
+      jobId: 'imp_ser01',
+      inputFilename: 'tests_fusionnes.csv',
+      groundTruthFilename: 'reponses_complet_1080.csv',
+      alignmentMode: 'ligne',
+      activeCatalogJobsCount: 0,
+      unalignedRows: 0,
+      items: [],
+      seriesAudit
+    });
+
+    const standaloneMd = generateBenchmarkSeriesStandaloneMarkdown(report);
+    expect(standaloneMd).toContain('# Audit des Extensions de Séries');
+    expect(standaloneMd).toContain('### Série Suspecte');
+    expect(standaloneMd).toContain('`T.1` — **Premier album**');
+    expect(standaloneMd).toContain('`HS` — **Spécial Noël**');
+    expect(standaloneMd).toContain('`INT [1,2,3]` — **Intégrale 1**');
+    expect(standaloneMd).toContain('Médias mélangés (BD/Roman)');
+    expect(standaloneMd).toContain('Trous (2,3)');
   });
 });

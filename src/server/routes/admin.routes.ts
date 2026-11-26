@@ -124,6 +124,22 @@ export function createAdminRoutes(deps: {
     });
   });
 
+  router.get('/import-benchmarks/:jobId/series-report.md', async (c) => {
+    const jobId = c.req.param('jobId');
+    const found = await deps.adminService.getBenchmarkSeriesMarkdownReport(jobId);
+    if (!found) {
+      throw new AppError(404, 'BENCHMARK_SERIES_REPORT_NOT_FOUND', 'Aucun rapport séries généré pour ce lot.');
+    }
+    return new Response(found.markdown, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${found.filename}"`,
+        'Cache-Control': 'no-store'
+      }
+    });
+  });
+
   router.post('/reset-book-catalog', zValidator('json', adminResetCatalogSchema), async (c) => {
     const result = await deps.adminService.resetBookCatalogForTests();
     return c.json({ ok: true, ...result });

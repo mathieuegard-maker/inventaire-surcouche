@@ -8,6 +8,7 @@ import { isbnUtil } from './isbn.util';
 import {
   extractFranchiseBaseName,
   isCompatibleSeriesName,
+  isGenericVolumeTitle,
   matchesAuthorName,
   normalizeSeriesNumber,
   normalizeTextKey,
@@ -21,6 +22,9 @@ import type {
   BenchmarkGradedActualState,
   BenchmarkGradedItem,
   BenchmarkRateBucket,
+  BenchmarkSeriesAuditEntry,
+  BenchmarkSeriesAuditFlag,
+  BenchmarkSeriesVolumeSummary,
   BookMainCategory,
   CollectionImportComparisonItem,
   GroundTruthRow,
@@ -148,6 +152,53 @@ const ALL_CHECK_FIELDS: BenchmarkCheckField[] = [
   'cover',
   'user_data'
 ];
+
+const SERIES_FLAG_LABELS_FR: Record<BenchmarkSeriesAuditFlag, string> = {
+  mixed_media: 'Mélange médias',
+  duplicate_volume_numbers: 'Doublon n° tome',
+  volume_gaps: 'Trous numérotation',
+  not_expanded: 'Non étendue',
+  single_volume: '1 seul tome',
+  missing_covers: 'Couv. manquantes',
+  missing_isbns: 'Tomes sans ISBN',
+  generic_titles: 'Titres génériques'
+};
+
+const SERIES_FLAG_SEVERITY: Record<BenchmarkSeriesAuditFlag, number> = {
+  mixed_media: 100,
+  duplicate_volume_numbers: 90,
+  volume_gaps: 70,
+  not_expanded: 60,
+  single_volume: 50,
+  generic_titles: 30,
+  missing_isbns: 20,
+  missing_covers: 10
+};
+
+export interface RawSeriesAuditInput {
+  seriesId: string;
+  canonicalName: string;
+  editionSignature: string | null;
+  franchiseName: string | null;
+  wikidataQid: string | null;
+  isCompleteExpanded: boolean;
+  sourceRowNumbers: number[];
+  volumes: Array<{
+    bookId: string;
+    title: string;
+    volumeNumber: number | null;
+    volumeLabel: string | null;
+    sortOrder: number | null;
+    isHorsSerie: boolean;
+    isIntegral: boolean;
+    includedVolumes: string[];
+    primaryIsbn13: string | null;
+    publisher: string | null;
+    mainCategory: BookMainCategory;
+    hasCover: boolean;
+    authors: string[];
+  }>;
+}
 
 function normalizeHeaderKey(raw: string): string {
   return String(raw ?? '')
@@ -720,8 +771,141 @@ export function evaluateBenchmarkItemAgainstGroundTruth(input: {
   };
 }
 
+function sortSeriesVolumes(
+  volumes: RawSeriesAuditInput['volumes'],
+  seriesName: string
+): BenchmarkSeriesVolumeSummary[] {
+  const bucket = (v: RawSeriesAuditInput['volumes'][number]): number => {
+    if (v.isIntegral) return 2;
+    if (v.isHorsSerie) return 1;
+    return 0;
+  };
+  const firstIncludedNum = (arr: string[]): number => {
+    for (const s of arr) {
+      const n = parseInt(s, 10);
+      if (Number.isFinite(n)) return n;
+    }
+    return 999999;
+  };
+
+  return [...volumes]
+    .sort((a, b) => {
+      const ba = bucket(a);
+      const bb = bucket(b);
+      if (ba !== bb) return ba - bb;
+      const na = a.isIntegral
+        ? (a.volumeNumber ?? firstIncludedNum(a.includedVolumes))
+        : (a.volumeNumber ?? a.sortOrder ?? 999999);
+      const nb = b.isIntegral
+        ? (b.volumeNumber ?? firstIncludedNum(b.includedVolumes))
+        : (b.volumeNumber ?? b.sortOrder ?? 999999);
+      if (na !== nb) return na - nb;
+      return a.title.localeCompare(b.title, 'fr');
+    })
+    .map((v) => ({
+      bookId: v.bookId,
+      title: v.title,
+      volumeNumber: v.volumeNumber,
+      volumeLabel: v.volumeLabel,
+      isHorsSerie: v.isHorsSerie,
+      isIntegral: v.isIntegral,
+      includedVolumes: v.includedVolumes,
+      primaryIsbn13: v.primaryIsbn13,
+      publisher: v.publisher,
+      mainCategory: v.mainCategory,
+      hasCover: v.hasCover,
+      authors: v.authors,
+      isGenericTitle: !v.isIntegral && isGenericVolumeTitle(v.title, seriesName)
+    }));
+}
+
 /**
- * Agrège tous les items notés en un rapport complet (KPIs, taux par champ, par catégorie et par profil d'entrée).
+ * Construit l'audit structuré de chaque série étendue (inventaire ordonné des tomes + signaux mécaniques évidents)
+ * pour permettre la vérification humaine / IA de la qualité des extensions de séries.
+ */
+export function buildSeriesAuditEntries(rawList: RawSeriesAuditInput[]): BenchmarkSeriesAuditEntry[] {
+  const entries: BenchmarkSeriesAuditEntry[] = rawList.map((raw) => {
+    const volumes = sortSeriesVolumes(raw.volumes, raw.canonicalName);
+    const regular = volumes.filter((v) => !v.isIntegral && !v.isHorsSerie);
+    const horsSeries = volumes.filter((v) => v.isHorsSerie && !v.isIntegral);
+    const integrals = volumes.filter((v) => v.isIntegral);
+
+    const coversCount = volumes.filter((v) => v.hasCover).length;
+    const missingIsbnCount = volumes.filter((v) => !v.primaryIsbn13).length;
+    const genericTitlesCount = volumes.filter((v) => v.isGenericTitle).length;
+
+    const numCounts = new Map<number, number>();
+    for (const v of regular) {
+      if (v.volumeNumber !== null && v.volumeNumber > 0) {
+        numCounts.set(v.volumeNumber, (numCounts.get(v.volumeNumber) ?? 0) + 1);
+      }
+    }
+    const duplicateVolumeNumbers = Array.from(numCounts.entries())
+      .filter(([, cnt]) => cnt > 1)
+      .map(([n]) => n)
+      .sort((a, b) => a - b);
+
+    const presentNums = Array.from(numCounts.keys()).sort((a, b) => a - b);
+    const missingVolumeGaps: number[] = [];
+    if (presentNums.length >= 2) {
+      const maxCheck = Math.min(presentNums[presentNums.length - 1], 120);
+      for (let n = 1; n <= maxCheck; n++) {
+        if (!numCounts.has(n)) {
+          missingVolumeGaps.push(n);
+          if (missingVolumeGaps.length >= 25) break;
+        }
+      }
+    }
+
+    const distinctMedia = Array.from(new Set(volumes.map((v) => v.mainCategory)));
+    const nonAutreMedia = distinctMedia.filter((m) => m !== 'Autre');
+
+    const flags: BenchmarkSeriesAuditFlag[] = [];
+    if (nonAutreMedia.length > 1) flags.push('mixed_media');
+    if (duplicateVolumeNumbers.length > 0) flags.push('duplicate_volume_numbers');
+    if (missingVolumeGaps.length > 0) flags.push('volume_gaps');
+    if (!raw.isCompleteExpanded) flags.push('not_expanded');
+    if (volumes.length <= 1) flags.push('single_volume');
+    if (genericTitlesCount > 0) flags.push('generic_titles');
+    if (missingIsbnCount > 0) flags.push('missing_isbns');
+    if (coversCount < volumes.length) flags.push('missing_covers');
+
+    return {
+      seriesId: raw.seriesId,
+      canonicalName: raw.canonicalName,
+      editionSignature: raw.editionSignature,
+      franchiseName: raw.franchiseName,
+      wikidataQid: raw.wikidataQid,
+      isCompleteExpanded: raw.isCompleteExpanded,
+      totalCount: volumes.length,
+      regularVolumesCount: regular.length,
+      horsSerieCount: horsSeries.length,
+      integralsCount: integrals.length,
+      coversCount,
+      missingIsbnCount,
+      genericTitlesCount,
+      duplicateVolumeNumbers,
+      missingVolumeGaps,
+      distinctMedia,
+      flags,
+      sourceRowNumbers: Array.from(new Set(raw.sourceRowNumbers)).sort((a, b) => a - b),
+      volumes
+    };
+  });
+
+  const severityScore = (e: BenchmarkSeriesAuditEntry): number =>
+    e.flags.reduce((acc, f) => acc + SERIES_FLAG_SEVERITY[f], 0);
+
+  return entries.sort((a, b) => {
+    const sa = severityScore(a);
+    const sb = severityScore(b);
+    if (sa !== sb) return sb - sa;
+    return a.canonicalName.localeCompare(b.canonicalName, 'fr');
+  });
+}
+
+/**
+ * Agrège tous les items notés en un rapport complet (KPIs, taux par champ, par catégorie, par profil d'entrée et audit séries).
  */
 export function buildBenchmarkGradedReport(input: {
   jobId: string;
@@ -731,6 +915,7 @@ export function buildBenchmarkGradedReport(input: {
   activeCatalogJobsCount: number;
   unalignedRows: number;
   items: BenchmarkGradedItem[];
+  seriesAudit?: BenchmarkSeriesAuditEntry[];
   generatedAt?: string;
 }): AdminBenchmarkGradedReport {
   const generatedAt = input.generatedAt ?? new Date().toISOString();
@@ -846,6 +1031,7 @@ export function buildBenchmarkGradedReport(input: {
     fieldStats,
     byCategory: toBuckets(catAcc, CATEGORY_LABELS),
     byProfile: toBuckets(profAcc),
+    seriesAudit: input.seriesAudit ?? [],
     items
   };
 }
@@ -855,6 +1041,125 @@ function escapeMdCell(raw: string): string {
     .replace(/\|/g, '\\|')
     .replace(/\r?\n/g, ' ')
     .trim();
+}
+
+function formatVolumeTag(v: BenchmarkSeriesVolumeSummary): string {
+  if (v.isIntegral) {
+    return v.includedVolumes.length > 0 ? `INT [${v.includedVolumes.join(',')}]` : 'INT';
+  }
+  if (v.isHorsSerie) {
+    return v.volumeNumber !== null ? `HS.${v.volumeNumber}` : 'HS';
+  }
+  if (v.volumeNumber !== null) return `T.${v.volumeNumber}`;
+  if (v.volumeLabel) return v.volumeLabel;
+  return '—';
+}
+
+function formatSeriesFlagsInline(entry: BenchmarkSeriesAuditEntry): string {
+  if (entry.flags.length === 0) return '✅ RAS';
+  return entry.flags
+    .map((f) => {
+      if (f === 'duplicate_volume_numbers') {
+        return `⚠️ Doublon n° (${entry.duplicateVolumeNumbers.slice(0, 6).join(',')})`;
+      }
+      if (f === 'volume_gaps') {
+        const preview = entry.missingVolumeGaps.slice(0, 8).join(',');
+        const suffix = entry.missingVolumeGaps.length > 8 ? '…' : '';
+        return `⚠️ Trous (${preview}${suffix})`;
+      }
+      if (f === 'mixed_media') {
+        return `❌ Médias mélangés (${entry.distinctMedia.join('/')})`;
+      }
+      return SERIES_FLAG_LABELS_FR[f];
+    })
+    .join(' · ');
+}
+
+/**
+ * Génère la section Markdown d'audit des extensions de séries (tableau récapitulatif + liste compacte des tomes).
+ */
+export function generateSeriesAuditMarkdownSection(seriesAudit: BenchmarkSeriesAuditEntry[]): string {
+  const lines: string[] = [];
+  if (seriesAudit.length === 0) {
+    lines.push('_Aucune série créée ou rattachée sur ce lot._');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  const flaggedCount = seriesAudit.filter((s) => s.flags.length > 0).length;
+  const totalVols = seriesAudit.reduce((sum, s) => sum + s.totalCount, 0);
+  const totalCovers = seriesAudit.reduce((sum, s) => sum + s.coversCount, 0);
+  const totalMissingIsbn = seriesAudit.reduce((sum, s) => sum + s.missingIsbnCount, 0);
+
+  lines.push(
+    `- **Séries auditées :** ${seriesAudit.length} (${seriesAudit.length - flaggedCount} RAS · ${flaggedCount} avec signaux) · **Total tomes en base :** ${totalVols} · **Couvertures :** ${totalCovers}/${totalVols} (${roundPct(totalCovers, totalVols)} %) · **Sans ISBN :** ${totalMissingIsbn}`
+  );
+  lines.push('');
+  lines.push('| Série (Franchise / découpage) | Étendue | Tomes | HS | Intégrales | Couv. | Sans ISBN | Signaux |');
+  lines.push('| --- | :---: | ---: | ---: | ---: | ---: | ---: | --- |');
+  for (const s of seriesAudit) {
+    const labelParts = [s.canonicalName];
+    if (s.editionSignature) labelParts.push(`(${s.editionSignature})`);
+    else if (s.franchiseName && normalizeTextKey(s.franchiseName) !== normalizeTextKey(s.canonicalName)) {
+      labelParts.push(`[Franchise: ${s.franchiseName}]`);
+    }
+    lines.push(
+      `| ${escapeMdCell(labelParts.join(' '))} | ${s.isCompleteExpanded ? '✅' : '⏳'} | ${s.regularVolumesCount} | ${s.horsSerieCount} | ${s.integralsCount} | ${s.coversCount}/${s.totalCount} | ${s.missingIsbnCount} | ${escapeMdCell(formatSeriesFlagsInline(s))} |`
+    );
+  }
+  lines.push('');
+
+  for (const s of seriesAudit) {
+    const metaParts: string[] = [
+      `\`${s.seriesId}\``,
+      s.franchiseName ? `Franchise: ${s.franchiseName}` : null,
+      s.editionSignature ? `Découpage: \`${s.editionSignature}\`` : null,
+      s.wikidataQid ? `WD: \`${s.wikidataQid}\`` : null,
+      `Étendue: ${s.isCompleteExpanded ? 'Oui' : 'Non'}`,
+      `Tomes: ${s.regularVolumesCount}${s.horsSerieCount > 0 ? ` + ${s.horsSerieCount} HS` : ''}${s.integralsCount > 0 ? ` + ${s.integralsCount} Int.` : ''}`,
+      `Couv: ${s.coversCount}/${s.totalCount}`
+    ].filter((x): x is string => Boolean(x));
+
+    lines.push(`### ${s.canonicalName} (${metaParts.join(' · ')})`);
+    if (s.sourceRowNumbers.length > 0) {
+      lines.push(`- **Déclenchée par ligne(s) CSV :** ${s.sourceRowNumbers.map((n) => `#${n}`).join(', ')}`);
+    }
+    if (s.flags.length > 0) {
+      lines.push(`- **Signaux :** ${formatSeriesFlagsInline(s)}`);
+    }
+    for (const v of s.volumes) {
+      const tag = formatVolumeTag(v);
+      const isbnPart = v.primaryIsbn13 ? `\`${v.primaryIsbn13}\`` : '`sans ISBN`';
+      const pubPart = v.publisher || '—';
+      const covPart = v.hasCover ? '✅' : '❌';
+      const genericTag = v.isGenericTitle ? ' _(titre générique)_' : '';
+      lines.push(`- \`${tag}\` — **${v.title}**${genericTag} | ${isbnPart} | ${pubPart} | ${v.mainCategory} | Couv: ${covPart}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Génère un fichier Markdown dédié uniquement à l'audit des extensions de séries (`series-<jobId>.md`).
+ */
+export function generateBenchmarkSeriesStandaloneMarkdown(report: AdminBenchmarkGradedReport): string {
+  const lines: string[] = [
+    `# Audit des Extensions de Séries — \`${report.inputFilename}\``,
+    '',
+    `- **Job ID :** \`${report.jobId}\``,
+    `- **Fichier corrigé :** \`${report.groundTruthFilename}\``,
+    `- **Généré le :** ${report.generatedAt.slice(0, 19).replace('T', ' ')} UTC`,
+    ...(report.activeCatalogJobsCount > 0
+      ? [
+          `- **⚠️ Attention :** ${report.activeCatalogJobsCount} tâche(s) de fond (déploiement séries / couvertures) étaient encore actives au moment du calcul.`
+        ]
+      : []),
+    '',
+    generateSeriesAuditMarkdownSection(report.seriesAudit)
+  ];
+  return lines.join('\n');
 }
 
 /**
@@ -1012,6 +1317,11 @@ export function generateBenchmarkMarkdownReport(report: AdminBenchmarkGradedRepo
       lines.push('');
     }
   }
+
+  // 7. Audit des extensions de séries (tableau récapitulatif + liste complète des tomes)
+  lines.push(`## 7. Extensions de séries — Inventaire des tomes (${report.seriesAudit.length})`);
+  lines.push('');
+  lines.push(generateSeriesAuditMarkdownSection(report.seriesAudit));
 
   return lines.join('\n');
 }
