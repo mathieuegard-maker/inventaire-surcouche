@@ -7,3 +7,4 @@ export * from './social.schema';
 export * from './jobs.schema';
 export * from './sync.schema';
 export * from './admin.schema';
+export * from './contact.schema';

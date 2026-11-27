@@ -2,6 +2,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { Mail } from '@lucide/vue';
+import ContactModal from '../components/contact/ContactModal.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { ApiClientError } from '../api/client';
@@ -15,6 +17,7 @@ const authStore = useAuthStore();
 const uiStore = useUiStore();
 
 const mode = ref<AuthMode>('login');
+const contactModalOpen = ref(false);
 const submitting = ref(false);
 const errorMessage = ref('');
 const infoMessage = ref('');
@@ -416,6 +419,15 @@ async function handleForgotStep2(): Promise<void> {
         </div>
       </form>
     </div>
+
+    <div class="auth-help-footer">
+      <button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" @click="contactModalOpen = true">
+        <Mail :size="15" aria-hidden="true" />
+        {{ t('contact.loginHelpBtn') }}
+      </button>
+    </div>
+
+    <ContactModal :open="contactModalOpen" @close="contactModalOpen = false" />
   </section>
 </template>
 
@@ -456,5 +468,10 @@ async function handleForgotStep2(): Promise<void> {
 
 .auth-actions-end {
   justify-content: flex-end;
+}
+
+.auth-help-footer {
+  display: flex;
+  justify-content: center;
 }
 </style>

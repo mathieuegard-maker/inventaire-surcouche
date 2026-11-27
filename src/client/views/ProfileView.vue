@@ -12,6 +12,7 @@ import {
   Download,
   GripVertical,
   LogOut,
+  Mail,
   Palette,
   RotateCcw,
   ScanBarcode,
@@ -21,6 +22,7 @@ import {
   User
 } from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
+import ContactModal from '../components/contact/ContactModal.vue';
 import CollectionImportPanel from '../components/import/CollectionImportPanel.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
@@ -251,7 +253,8 @@ async function handleResetGenres(): Promise<void> {
   }
 }
 
-// ==================== DÉCONNEXION & SUPPRESSION DE COMPTE ====================
+// ==================== DÉCONNEXION, CONTACT & SUPPRESSION DE COMPTE ====================
+const contactModalOpen = ref(false);
 const deleteModalOpen = ref(false);
 const deletePassword = ref('');
 const deleteError = ref('');
@@ -735,6 +738,20 @@ async function disableWebPush(): Promise<void> {
       <CollectionImportPanel id-prefix="prof-import" />
 
       <div class="ds-card ds-stack">
+        <div class="ds-row">
+          <Mail :size="18" aria-hidden="true" />
+          <h2>{{ t('contact.profileCardTitle') }}</h2>
+        </div>
+        <p class="ds-text-muted">{{ t('contact.profileCardDesc') }}</p>
+        <div class="ds-row">
+          <button type="button" class="ds-btn" @click="contactModalOpen = true">
+            <Mail :size="15" aria-hidden="true" />
+            {{ t('contact.openBtn') }}
+          </button>
+        </div>
+      </div>
+
+      <div class="ds-card ds-stack">
         <h2>{{ t('profile.dangerZoneTitle') }}</h2>
         <div class="ds-row">
           <button type="button" class="ds-btn ds-btn--danger" @click="openDeleteModal">
@@ -1128,6 +1145,8 @@ async function disableWebPush(): Promise<void> {
         </button>
       </template>
     </BaseModal>
+
+    <ContactModal :open="contactModalOpen" @close="contactModalOpen = false" />
   </section>
 </template>
 

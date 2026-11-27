@@ -22,6 +22,7 @@ import type { SocialService } from '../services/social.service';
 import type { StatsExportService } from '../services/stats-export.service';
 import type { CollectionImportService } from '../services/collection-import.service';
 import type { AdminService } from '../services/admin.service';
+import type { ContactService } from '../services/contact.service';
 import {
   createRequireAdminMiddleware,
   createRequireAuthMiddleware,
@@ -43,6 +44,7 @@ import { createNotificationsRoutes, createReleasesRoutes } from './notifications
 import { createSocialRoutes } from './social.routes';
 import { createStatsRoutes } from './stats.routes';
 import { createAdminRoutes } from './admin.routes';
+import { createContactRoutes } from './contact.routes';
 
 export interface ApiRouterDeps {
   config: ServerConfig;
@@ -62,6 +64,7 @@ export interface ApiRouterDeps {
   statsExportService: StatsExportService;
   collectionImportService: CollectionImportService;
   adminService: AdminService;
+  contactService: ContactService;
   jobRepo: JobRepository;
   worker: BackgroundWorker;
   startedAt: number;
@@ -113,6 +116,7 @@ export function createApiRouter(deps: ApiRouterDeps) {
   api.route('/social', createSocialRoutes({ socialService: deps.socialService, authService: deps.authService, requireAuth }));
   api.route('/stats', createStatsRoutes({ statsExportService: deps.statsExportService, requireAuth }));
   api.route('/admin', createAdminRoutes({ adminService: deps.adminService, requireAuth, requireAdmin }));
+  api.route('/contact', createContactRoutes({ contactService: deps.contactService, authService: deps.authService }));
 
   return api;
 }

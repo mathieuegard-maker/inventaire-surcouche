@@ -17,10 +17,16 @@ const envSchema = z.object({
   JWT_SECRET: z.string().default('dev-only-secret-change-in-production'),
   GEMINI_API_KEY: z.string().default(''),
   RESEND_API_KEY: z.string().default(''),
-  MAIL_FROM: z.string().default('Biblio Collection <noreply@mathieuegardtest.fr>'),
+  SMTP_HOST: z.string().trim().default(''),
+  SMTP_PORT: z.coerce.number().int().positive().default(465),
+  SMTP_SECURE: z.string().default('true'),
+  SMTP_USER: z.string().trim().default(''),
+  SMTP_PASS: z.string().default(''),
+  CONTACT_EMAIL: z.string().trim().email().or(z.literal('')).default(''),
+  MAIL_FROM: z.string().default('Ma Bibliothèque Cloud <contact@mabibliocloud.fr>'),
   VAPID_PUBLIC_KEY: z.string().default(''),
   VAPID_PRIVATE_JWK: z.string().default(''),
-  VAPID_SUBJECT: z.string().default('mailto:contact@mathieuegardtest.fr'),
+  VAPID_SUBJECT: z.string().default('mailto:contact@mabibliocloud.fr'),
   CRON_ENABLED: z.string().default('true'),
   CRON_NIGHTLY_HOUR: z.coerce.number().int().min(0).max(23).default(2),
   MONTHLY_AI_QUOTA: z.coerce.number().int().positive().default(30)
@@ -39,6 +45,12 @@ export interface ServerConfig {
   jwtSecret: string;
   geminiApiKey: string;
   resendApiKey: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpSecure: boolean;
+  smtpUser: string;
+  smtpPass: string;
+  contactEmail: string;
   mailFrom: string;
   vapidPublicKey: string;
   vapidPrivateJwk: string;
@@ -64,6 +76,12 @@ export function loadServerConfig(rawEnv: Record<string, string | undefined> = pr
     jwtSecret: parsed.JWT_SECRET,
     geminiApiKey: parsed.GEMINI_API_KEY,
     resendApiKey: parsed.RESEND_API_KEY,
+    smtpHost: parsed.SMTP_HOST,
+    smtpPort: parsed.SMTP_PORT,
+    smtpSecure: parsed.SMTP_SECURE !== 'false',
+    smtpUser: parsed.SMTP_USER,
+    smtpPass: parsed.SMTP_PASS,
+    contactEmail: parsed.CONTACT_EMAIL.toLowerCase(),
     mailFrom: parsed.MAIL_FROM,
     vapidPublicKey: parsed.VAPID_PUBLIC_KEY,
     vapidPrivateJwk: parsed.VAPID_PRIVATE_JWK,

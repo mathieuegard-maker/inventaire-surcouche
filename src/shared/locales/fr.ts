@@ -1152,6 +1152,36 @@ export const fr = {
     statsSummary: '{books} livre(s) · {series} série(s) · {loans} prêt(s) · {outbox} action(s) en attente',
     lastSyncLabel: 'Dernière synchronisation : {date}',
     neverSynced: 'Jamais'
+  },
+  contact: {
+    openBtn: 'Contacter l’administrateur',
+    loginHelpBtn: 'Besoin d’aide ? Contacter l’administrateur',
+    profileCardTitle: 'Aide & Contact',
+    profileCardDesc:
+      'Une question, un bug à signaler ou une idée d’amélioration ? Écrivez directement à l’administrateur de la plateforme.',
+    modalTitle: 'Contacter l’administrateur',
+    modalIntro:
+      'Votre message sera transmis par e-mail à l’administrateur, qui pourra vous répondre directement sur votre adresse.',
+    categoryLegend: 'Type de demande',
+    categoryQuestion: 'Question',
+    categoryBug: 'Signaler un bug',
+    categorySuggestion: 'Suggestion',
+    categoryOther: 'Autre',
+    emailLabel: 'Votre adresse e-mail',
+    emailHint: 'Format attendu : prenom@exemple.fr (pour recevoir la réponse).',
+    emailError: 'Merci de saisir une adresse e-mail valide (ex. prenom@exemple.fr).',
+    nameLabel: 'Votre prénom ou pseudo (facultatif)',
+    subjectLabel: 'Objet (facultatif)',
+    subjectPlaceholder: 'Ex. Souci de connexion, idée de filtre…',
+    messageLabel: 'Votre message',
+    messageHint: 'Minimum 10 caractères.',
+    messageError: 'Merci de détailler votre message (au moins 10 caractères).',
+    messagePlaceholder: 'Décrivez votre question ou le problème rencontré…',
+    submitBtn: 'Envoyer le message',
+    sendingBtn: 'Envoi en cours…',
+    successBanner: 'Votre message a bien été envoyé ! Vous recevrez une réponse par e-mail dès que possible.',
+    successToast: 'Message envoyé à l’administrateur.',
+    closeAfterSuccessBtn: 'Fermer'
   }
 } as const;
 

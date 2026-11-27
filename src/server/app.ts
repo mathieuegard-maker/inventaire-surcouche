@@ -7,7 +7,8 @@ import { Hono } from 'hono';
 import { APP_VERSION } from '../shared/version';
 import type { DatabaseAdapter } from './db/database.adapter';
 import type { ServerConfig } from './config';
-import { createResendConnector, type MailSender } from './connectors/resend.connector';
+import type { MailSender } from './connectors/resend.connector';
+import { createMailConnector } from './connectors/mail.connector';
 import {
   createBibliographicConnectors,
   PriorityRateLimiter,
@@ -45,6 +46,7 @@ import { SocialService } from './services/social.service';
 import { StatsExportService } from './services/stats-export.service';
 import { CollectionImportService } from './services/collection-import.service';
 import { AdminService } from './services/admin.service';
+import { ContactService } from './services/contact.service';
 import { BackgroundWorker } from './workers/background-worker';
 import { CronScheduler } from './workers/cron-scheduler';
 import { createApiRouter } from './routes';
@@ -96,8 +98,7 @@ export function createApp(options: CreateAppOptions) {
   });
 
   // Connecteurs isolés
-  const mailSender =
-    options.mailSender ?? createResendConnector(options.config.resendApiKey, options.config.mailFrom);
+  const mailSender = options.mailSender ?? createMailConnector(options.config);
   const webPushSender =
     options.webPushSender ??
     createWebPushConnector({
@@ -285,6 +286,11 @@ export function createApp(options: CreateAppOptions) {
     onCatalogReset: () => worker.cancelActiveJobs()
   });
 
+  const contactService = new ContactService({
+    config: options.config,
+    mailSender
+  });
+
   // Enregistrement des handlers du worker continu
   worker.registerHandler('photo_ocr', async (ctx) => {
     return photoAiService.executePhotoOcrJob(ctx);
@@ -439,6 +445,7 @@ export function createApp(options: CreateAppOptions) {
     statsExportService,
     collectionImportService,
     adminService,
+    contactService,
     jobRepo,
     worker,
     startedAt
@@ -478,7 +485,8 @@ export function createApp(options: CreateAppOptions) {
       socialService,
       statsExportService,
       collectionImportService,
-      adminService
+      adminService,
+      contactService
     },
     worker,
     cronScheduler
