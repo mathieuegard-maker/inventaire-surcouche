@@ -9,9 +9,67 @@ import type { LoanRepository } from '../repositories/loan.repo';
 import type { SocialRepository } from '../repositories/social.repo';
 import type { IngestionService } from './acquisition/ingestion.service';
 import type { AuthSessionContext } from './auth.service';
+import type { FamilyDetachPolicy } from '../../shared/types/domain.types';
 import { AppError } from '../middleware/error.middleware';
 
 export type GiftReservationStatus = 'available' | 'reserved_by_me' | 'reserved_by_other';
+
+export interface FamilyDetachBookItem {
+  id: string;
+  title: string;
+  seriesId: string | null;
+  seriesName: string | null;
+  volumeNumber: number | null;
+  volumeLabel: string | null;
+  isIntegral: boolean;
+  includedVolumes: string[];
+  authors: string[];
+  mainCategory: string;
+  genres: string[];
+  coverUrl: string | null;
+  ownershipStatus: 'owned' | 'wish';
+  wishedByUserId: string | null;
+  wishedByName: string | null;
+  activeLoan: {
+    borrowerName: string;
+    loanedAt: string;
+  } | null;
+}
+
+export interface FamilyDetachPreviewPayload {
+  libraryId: string;
+  libraryName: string;
+  detachPolicy: FamilyDetachPolicy;
+  isActorOwner: boolean;
+  isSelfDetach: boolean;
+  canTransferOwned: boolean;
+  targetMember: {
+    userId: string;
+    username: string;
+    role: 'owner' | 'member';
+  };
+  willTransferOwnershipTo: {
+    userId: string;
+    username: string;
+  } | null;
+  defaultNewLibraryName: string;
+  preselectedBookIds: string[];
+  books: FamilyDetachBookItem[];
+}
+
+export interface FamilyDetachResult {
+  newLibraryId: string;
+  newLibraryName: string;
+  targetUserId: string;
+  targetUsername: string;
+  selfDetached: boolean;
+  promotedOwnerUsername: string | null;
+  mode: 'move' | 'copy';
+  transferredOwnedCount: number;
+  transferredWishCount: number;
+  transferredLoansCount: number;
+  keptAsFriends: boolean;
+}
 
 export interface SharedBookView {
   id: string;
@@ -110,6 +168,310 @@ export class SocialService {
     });
 
     return { targetLibraryId: targetLib.id, targetLibraryName: targetLib.name };
+  }
+
+  /**
+   * Met à jour la politique de départ du foyer (réservé au propriétaire / chef du foyer).
+   */
+  updateFamilyDetachPolicy(
+    libraryId: string,
+    actorUserId: string,
+    detachPolicy: FamilyDetachPolicy
+  ): { detachPolicy: FamilyDetachPolicy } {
+    const lib = this.libraryRepo.findLibraryById(libraryId);
+    if (!lib) {
+      throw new AppError(404, 'LIBRARY_NOT_FOUND', 'Foyer introuvable.');
+    }
+    if (lib.owner_user_id !== actorUserId) {
+      throw new AppError(
+        403,
+        'FORBIDDEN_NOT_OWNER',
+        'Seul le propriétaire du foyer peut modifier la règle de départ.'
+      );
+    }
+    this.libraryRepo.updateDetachPolicy(libraryId, detachPolicy, new Date().toISOString());
+    return { detachPolicy };
+  }
+
+  /**
+   * Prépare l'aperçu de détachement/départ d'un membre du foyer (séries, livres, wishlist, prêts actifs & droits).
+   */
+  getFamilyDetachPreview(input: {
+    libraryId: string;
+    actorUserId: string;
+    targetUserIdParam: string;
+  }): FamilyDetachPreviewPayload {
+    const lib = this.libraryRepo.findLibraryById(input.libraryId);
+    if (!lib) {
+      throw new AppError(404, 'LIBRARY_NOT_FOUND', 'Foyer introuvable.');
+    }
+    const members = this.libraryRepo.listMembers(lib.id);
+    if (members.length < 2) {
+      throw new AppError(
+        400,
+        'CANNOT_DETACH_SOLO_LIBRARY',
+        'Vous êtes le seul membre de ce foyer : aucun détachement nécessaire.'
+      );
+    }
+
+    const resolvedTargetId = input.targetUserIdParam === 'me' ? input.actorUserId : input.targetUserIdParam;
+    const targetMember = members.find((m) => m.user_id === resolvedTargetId);
+    if (!targetMember) {
+      throw new AppError(404, 'MEMBER_NOT_FOUND', 'Ce membre ne fait pas partie de votre foyer.');
+    }
+
+    const isActorOwner = lib.owner_user_id === input.actorUserId;
+    const isSelfDetach = resolvedTargetId === input.actorUserId;
+    if (!isSelfDetach && !isActorOwner) {
+      throw new AppError(
+        403,
+        'FORBIDDEN_NOT_OWNER',
+        'Seul le propriétaire du foyer peut détacher un autre membre.'
+      );
+    }
+
+    const detachPolicy: FamilyDetachPolicy =
+      lib.detach_policy === 'owner_only' ? 'owner_only' : 'member_choice';
+    const canTransferOwned = isActorOwner || detachPolicy === 'member_choice';
+
+    const remainingMembers = members.filter((m) => m.user_id !== resolvedTargetId);
+    const willTransferOwnershipTo =
+      lib.owner_user_id === resolvedTargetId && remainingMembers.length > 0
+        ? {
+            userId: remainingMembers[0].user_id,
+            username: remainingMembers[0].username || ''
+          }
+        : null;
+
+    const libRows = this.libraryRepo.listLibraryBooks(lib.id);
+    const activeLoansByBook = new Map(
+      this.loanRepo.listActiveLoans(lib.id).map((l) => [l.book_id, l])
+    );
+    const usernames = this.libraryRepo.mapUsernamesByIds(
+      libRows.map((r) => r.wished_by_user_id).filter((id): id is string => Boolean(id))
+    );
+
+    const books: FamilyDetachBookItem[] = [];
+    const preselectedBookIds: string[] = [];
+
+    for (const lr of libRows) {
+      if (lr.deleted_at || (lr.status !== 'owned' && lr.status !== 'wish')) continue;
+      if (!canTransferOwned && !(lr.status === 'wish' && lr.wished_by_user_id === resolvedTargetId)) {
+        continue;
+      }
+      const bookRow = this.catalogRepo.findBookById(lr.book_id);
+      if (!bookRow) continue;
+      const merged = this.ingestionService.buildMergedBookView(bookRow, lr);
+      const activeLoan = activeLoansByBook.get(bookRow.id) ?? null;
+
+      books.push({
+        id: merged.id,
+        title: merged.title,
+        seriesId: merged.seriesId,
+        seriesName: merged.seriesName,
+        volumeNumber: merged.volumeNumber,
+        volumeLabel: merged.volumeLabel,
+        isIntegral: merged.isIntegral,
+        includedVolumes: merged.includedVolumes,
+        authors: merged.authors,
+        mainCategory: merged.mainCategory,
+        genres: merged.genres,
+        coverUrl: merged.coverUrl,
+        ownershipStatus: lr.status,
+        wishedByUserId: lr.wished_by_user_id ?? null,
+        wishedByName: lr.wished_by_user_id ? (usernames.get(lr.wished_by_user_id) ?? null) : null,
+        activeLoan: activeLoan
+          ? { borrowerName: activeLoan.borrower_name, loanedAt: activeLoan.loaned_at }
+          : null
+      });
+
+      if (lr.status === 'wish' && lr.wished_by_user_id === resolvedTargetId) {
+        preselectedBookIds.push(merged.id);
+      }
+    }
+
+    const targetName = targetMember.username || 'Membre';
+    return {
+      libraryId: lib.id,
+      libraryName: lib.name,
+      detachPolicy,
+      isActorOwner,
+      isSelfDetach,
+      canTransferOwned,
+      targetMember: {
+        userId: targetMember.user_id,
+        username: targetName,
+        role: targetMember.role
+      },
+      willTransferOwnershipTo,
+      defaultNewLibraryName: `Foyer de ${targetName}`,
+      preselectedBookIds,
+      books
+    };
+  }
+
+  /**
+   * Détache un membre du foyer dans une transaction SQLite atomique :
+   * - Crée un foyer indépendant pour le membre sortant (owner + codes FAM/PUB neufs)
+   * - Promeut le membre le plus ancien si le propriétaire quitte le foyer
+   * - Transfère (Déplacer ou Copier) les livres sélectionnés en préservant les surcharges Couche 3
+   * - Gère les prêts actifs (transfer / return / skip) et déplace silencieusement les réservations cadeaux (anti-spoiler)
+   * - Crée optionnellement le lien Ami bidirectionnel entre les 2 foyers
+   */
+  detachFamilyMember(input: {
+    libraryId: string;
+    actorUserId: string;
+    targetUserId: string;
+    mode: 'move' | 'copy';
+    bookIds: string[];
+    loanDecisions: Record<string, 'transfer' | 'return' | 'skip'>;
+    keepAsFriends: boolean;
+    newLibraryName?: string;
+  }): FamilyDetachResult {
+    const lib = this.libraryRepo.findLibraryById(input.libraryId);
+    if (!lib) {
+      throw new AppError(404, 'LIBRARY_NOT_FOUND', 'Foyer introuvable.');
+    }
+    const members = this.libraryRepo.listMembers(lib.id);
+    if (members.length < 2) {
+      throw new AppError(
+        400,
+        'CANNOT_DETACH_SOLO_LIBRARY',
+        'Impossible de détacher le seul membre du foyer.'
+      );
+    }
+
+    const resolvedTargetId = input.targetUserId === 'me' ? input.actorUserId : input.targetUserId;
+    const targetMember = members.find((m) => m.user_id === resolvedTargetId);
+    if (!targetMember) {
+      throw new AppError(404, 'MEMBER_NOT_FOUND', 'Ce membre ne fait pas partie de votre foyer.');
+    }
+
+    const isActorOwner = lib.owner_user_id === input.actorUserId;
+    const isSelfDetach = resolvedTargetId === input.actorUserId;
+    if (!isSelfDetach && !isActorOwner) {
+      throw new AppError(
+        403,
+        'FORBIDDEN_NOT_OWNER',
+        'Seul le propriétaire du foyer peut détacher un autre membre.'
+      );
+    }
+
+    const detachPolicy: FamilyDetachPolicy =
+      lib.detach_policy === 'owner_only' ? 'owner_only' : 'member_choice';
+    const canTransferOwned = isActorOwner || detachPolicy === 'member_choice';
+
+    const remainingMembers = members.filter((m) => m.user_id !== resolvedTargetId);
+    const targetUsername = targetMember.username || 'Membre';
+    const finalNewLibraryName = input.newLibraryName?.trim() || `Foyer de ${targetUsername}`;
+    const newLibraryId = `lib_${crypto.randomBytes(8).toString('hex')}`;
+    const now = new Date().toISOString();
+
+    const uniqueBookIds = Array.from(new Set(input.bookIds));
+    if (!canTransferOwned) {
+      for (const bookId of uniqueBookIds) {
+        const lr = this.libraryRepo.findLibraryBook(lib.id, bookId);
+        if (!lr || lr.deleted_at) continue;
+        if (lr.status === 'owned' || (lr.status === 'wish' && lr.wished_by_user_id !== resolvedTargetId)) {
+          throw new AppError(
+            403,
+            'FORBIDDEN_DETACH_POLICY',
+            'Selon la politique de ce foyer, seul le chef de foyer peut transférer des livres possédés ou les souhaits d’autres membres.'
+          );
+        }
+      }
+    }
+    let transferredOwnedCount = 0;
+    let transferredWishCount = 0;
+    let transferredLoansCount = 0;
+    let promotedOwnerUsername: string | null = null;
+
+    this.db.transaction(() => {
+      // 1. Créer le nouveau foyer indépendant du membre sortant
+      this.libraryRepo.createLibrary({
+        id: newLibraryId,
+        name: finalNewLibraryName,
+        ownerUserId: resolvedTargetId,
+        familyInviteCode: generateShareCode('FAM'),
+        friendShareToken: generateShareCode('PUB'),
+        now
+      });
+
+      // 2. Succession owner si le propriétaire actuel quitte le foyer
+      if (lib.owner_user_id === resolvedTargetId && remainingMembers.length > 0) {
+        this.libraryRepo.transferOwnership(lib.id, remainingMembers[0].user_id, now);
+        promotedOwnerUsername = remainingMembers[0].username || null;
+      }
+
+      // 3. Retirer le membre de l'ancien foyer
+      this.libraryRepo.removeMember(lib.id, resolvedTargetId);
+
+      // 4. Transférer les ouvrages sélectionnés (Couche 3 préservée)
+      for (const bookId of uniqueBookIds) {
+        const lr = this.libraryRepo.findLibraryBook(lib.id, bookId);
+        if (!lr || lr.deleted_at || (lr.status !== 'owned' && lr.status !== 'wish')) {
+          continue;
+        }
+        if (!canTransferOwned && !(lr.status === 'wish' && lr.wished_by_user_id === resolvedTargetId)) {
+          continue;
+        }
+
+        const activeLoan = this.loanRepo.findActiveLoanByBook(lib.id, bookId);
+        if (activeLoan && input.mode === 'move') {
+          const decision = input.loanDecisions[bookId] ?? 'transfer';
+          if (decision === 'skip') {
+            continue;
+          }
+          if (decision === 'return') {
+            this.loanRepo.markReturnedByBook(lib.id, bookId, now);
+          } else if (decision === 'transfer') {
+            if (this.loanRepo.moveActiveLoanToLibrary(lib.id, newLibraryId, bookId, now)) {
+              transferredLoansCount++;
+            }
+          }
+        }
+
+        this.libraryRepo.copyLibraryBookToTarget(
+          lr,
+          newLibraryId,
+          lr.status === 'wish' ? resolvedTargetId : null,
+          now
+        );
+
+        if (input.mode === 'move') {
+          // Déplacement silencieux des réservations cadeaux (zéro spoiler!)
+          if (lr.status === 'wish') {
+            this.socialRepo.moveReservationToLibrary(lib.id, newLibraryId, bookId);
+          }
+          this.libraryRepo.softRemoveLibraryBook(lib.id, bookId, now);
+        }
+
+        if (lr.status === 'owned') transferredOwnedCount++;
+        else if (lr.status === 'wish') transferredWishCount++;
+      }
+
+      // 5. Option « Rester amis automatiquement » (bidirectionnel)
+      if (input.keepAsFriends) {
+        this.libraryRepo.addFriendConnection(resolvedTargetId, lib.id, now);
+        for (const rem of remainingMembers) {
+          this.libraryRepo.addFriendConnection(rem.user_id, newLibraryId, now);
+        }
+      }
+    });
+
+    return {
+      newLibraryId,
+      newLibraryName: finalNewLibraryName,
+      targetUserId: resolvedTargetId,
+      targetUsername,
+      selfDetached: isSelfDetach,
+      promotedOwnerUsername,
+      mode: input.mode,
+      transferredOwnedCount,
+      transferredWishCount,
+      transferredLoansCount,
+      keptAsFriends: input.keepAsFriends
+    };
   }
 
   /**

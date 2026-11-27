@@ -107,6 +107,25 @@ export class LoanRepository {
     return res.changes;
   }
 
+  moveActiveLoanToLibrary(
+    fromLibraryId: string,
+    toLibraryId: string,
+    bookId: string,
+    now: string
+  ): boolean {
+    const active = this.findActiveLoanByBook(fromLibraryId, bookId);
+    if (!active) return false;
+    const res = this.db.run(
+      'UPDATE loans SET library_id = ?, updated_at = ? WHERE id = ?',
+      [toLibraryId, now, active.id]
+    );
+    if (res.changes > 0) {
+      this.upsertContact(toLibraryId, active.borrower_name, now);
+      return true;
+    }
+    return false;
+  }
+
   upsertContact(libraryId: string, name: string, now: string): void {
     const clean = name.trim();
     if (!clean) return;

@@ -5,7 +5,7 @@ import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
 import { apiRequest } from '../api/client';
 import { clearAllLocalCache } from '../cache/indexeddb';
-import type { LibraryMemberRole, LocaleId, ThemeId } from '../../shared/types/domain.types';
+import type { FamilyDetachPolicy, LibraryMemberRole, LocaleId, ThemeId } from '../../shared/types/domain.types';
 import { setLocale } from '../../shared/locales';
 
 export interface AuthProfile {
@@ -25,6 +25,7 @@ export interface AuthProfile {
     role: LibraryMemberRole;
     familyInviteCode: string;
     friendShareToken: string;
+    detachPolicy: FamilyDetachPolicy;
     members: Array<{
       userId: string;
       username: string;

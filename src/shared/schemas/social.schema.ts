@@ -5,6 +5,19 @@ export const joinFamilySchema = z.object({
   inviteCode: z.string().trim().min(4).max(80)
 });
 
+export const updateFamilyPolicySchema = z.object({
+  detachPolicy: z.enum(['member_choice', 'owner_only'])
+});
+
+export const detachFamilyMemberSchema = z.object({
+  targetUserId: z.string().trim().min(1).max(80),
+  mode: z.enum(['move', 'copy']).default('move'),
+  bookIds: z.array(z.string().trim().min(1).max(80)).max(5000).default([]),
+  loanDecisions: z.record(z.string().min(1), z.enum(['transfer', 'return', 'skip'])).default({}),
+  keepAsFriends: z.boolean().default(true),
+  newLibraryName: z.string().trim().min(2).max(80).optional()
+});
+
 export const regenerateTokenSchema = z.object({
   tokenType: z.enum(['family', 'friend'])
 });

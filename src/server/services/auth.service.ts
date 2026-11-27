@@ -9,7 +9,7 @@ import { LibraryRepository } from '../repositories/library.repo';
 import { UserRepository, type UserRow } from '../repositories/user.repo';
 import { AppError } from '../middleware/error.middleware';
 import { SUGGESTED_GENRE_CHIPS } from '../../shared/bibliographic/category-classifier';
-import type { LibraryMemberRole, LocaleId, ThemeId } from '../../shared/types/domain.types';
+import type { FamilyDetachPolicy, LibraryMemberRole, LocaleId, ThemeId } from '../../shared/types/domain.types';
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 jours
 const RESET_CODE_TTL_MS = 1000 * 60 * 15; // 15 minutes
@@ -41,6 +41,7 @@ export interface ProfilePayload {
     role: LibraryMemberRole;
     familyInviteCode: string;
     friendShareToken: string;
+    detachPolicy: FamilyDetachPolicy;
     members: Array<{
       userId: string;
       username: string;
@@ -190,6 +191,7 @@ export class AuthService {
         role: meMember?.role ?? 'member',
         familyInviteCode: lib.family_invite_code,
         friendShareToken: lib.friend_share_token,
+        detachPolicy: lib.detach_policy === 'owner_only' ? 'owner_only' : 'member_choice',
         members: members.map((m) => ({
           userId: m.user_id,
           username: m.username || '',
@@ -241,7 +243,12 @@ export class AuthService {
         now
       });
 
-      this.userRepo.replaceDefaultGenres(userId, SUGGESTED_GENRE_CHIPS, now);
+      const globalGenres = this.userRepo.listGlobalDefaultGenres();
+      this.userRepo.replaceDefaultGenres(
+        userId,
+        globalGenres.length > 0 ? globalGenres : SUGGESTED_GENRE_CHIPS,
+        now
+      );
 
       // Rattachement au foyer invité si un code FAM-... valide est fourni, sinon création d'un foyer propre
       const invitedLibrary = input.inviteCode
@@ -419,7 +426,12 @@ export class AuthService {
   updateDefaultGenres(userId: string, action: 'add' | 'remove' | 'reset', genre?: string): string[] {
     const now = new Date().toISOString();
     if (action === 'reset') {
-      this.userRepo.replaceDefaultGenres(userId, SUGGESTED_GENRE_CHIPS, now);
+      const globalGenres = this.userRepo.listGlobalDefaultGenres();
+      this.userRepo.replaceDefaultGenres(
+        userId,
+        globalGenres.length > 0 ? globalGenres : SUGGESTED_GENRE_CHIPS,
+        now
+      );
     } else if (action === 'add' && genre?.trim()) {
       this.userRepo.addDefaultGenre(userId, genre.trim(), now);
     } else if (action === 'remove' && genre?.trim()) {

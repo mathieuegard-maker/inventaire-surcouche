@@ -1,7 +1,15 @@
 // src/shared/schemas/auth.schema.ts
 import { z } from 'zod';
 
-export const themeIdSchema = z.enum(['editorial-light', 'dark', 'warm']);
+export const themeIdSchema = z.enum([
+  'editorial-light',
+  'dark',
+  'warm',
+  'librairie',
+  'studio',
+  'atelier-bd',
+  'nocturne'
+]);
 export const localeIdSchema = z.enum(['fr']);
 
 export const registerSchema = z.object({

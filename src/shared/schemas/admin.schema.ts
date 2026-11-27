@@ -32,3 +32,7 @@ export const adminBenchmarkGradeSchema = z.object({
   filename: z.string().trim().min(1).max(200),
   contentBase64: z.string().min(1)
 });
+
+export const adminDefaultGenresSchema = z.object({
+  genres: z.array(z.string().trim().min(1).max(60)).min(1).max(100)
+});

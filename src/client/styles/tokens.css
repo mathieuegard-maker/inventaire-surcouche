@@ -28,6 +28,7 @@
   --accent-soft: #eff6ff;
   --accent-border: #bfdbfe;
   --accent-contrast: #ffffff;
+  --text-on-accent: #ffffff;
 
   --status-owned-bg: #dcfce7;
   --status-owned-text: #166534;
@@ -100,6 +101,7 @@
   --accent-soft: rgba(59, 130, 246, 0.16);
   --accent-border: rgba(96, 165, 250, 0.35);
   --accent-contrast: #0b1120;
+  --text-on-accent: #0b1120;
 
   --status-owned-bg: rgba(34, 197, 94, 0.18);
   --status-owned-text: #86efac;
@@ -147,6 +149,7 @@
   --accent-soft: #ffedd5;
   --accent-border: #fed7aa;
   --accent-contrast: #fffdf8;
+  --text-on-accent: #fffdf8;
 
   --status-owned-bg: #dcfce7;
   --status-owned-text: #166534;
@@ -167,4 +170,230 @@
   --warning-text: #92400e;
   --success-bg: #dcfce7;
   --success-text: #166534;
+}
+
+/* ==================== NOUVELLES APPARENCES PRO (V2.7) ==================== */
+
+/* 1. Librairie Éditoriale (façon Apple Books / maison d'édition) */
+[data-theme="librairie"] {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: 'Fraunces', Georgia, 'Times New Roman', serif;
+
+  --bg-page: #f8f5ef;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f1ece2;
+  --bg-subtle: #fbf9f5;
+  --bg-backdrop: rgba(22, 18, 15, 0.52);
+
+  --text-primary: #171412;
+  --text-secondary: #4e473f;
+  --text-muted: #787066;
+
+  --border-subtle: #e5ded2;
+  --border-strong: #c9bfb0;
+
+  --accent: #8c2734;
+  --accent-hover: #6e1c27;
+  --accent-soft: #f9ecee;
+  --accent-border: #e7c2c8;
+  --accent-contrast: #fffcf8;
+  --text-on-accent: #fffcf8;
+
+  --status-owned-bg: #e7f3ec;
+  --status-owned-text: #1c5437;
+  --status-wish-bg: #faf1dc;
+  --status-wish-text: #855210;
+  --status-lent-bg: #e8edf8;
+  --status-lent-text: #2a437c;
+  --status-integral-bg: #f1e9f8;
+  --status-integral-text: #5b2c82;
+
+  --danger: #b4232c;
+  --danger-hover: #911a21;
+  --danger-soft: #fdf0f1;
+  --danger-border: #f1c4c7;
+  --danger-contrast: #ffffff;
+
+  --warning-bg: #faf1dc;
+  --warning-text: #7c4d0f;
+  --success-bg: #e7f3ec;
+  --success-text: #1c5437;
+
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 6px;
+  --radius-pill: 4px;
+
+  --shadow-sm: 0 1px 2px rgba(23, 20, 18, 0.04);
+  --shadow-md: 0 8px 22px rgba(23, 20, 18, 0.08);
+  --shadow-lg: 0 18px 42px rgba(23, 20, 18, 0.14);
+}
+
+/* 2. Studio Moderne (façon iOS / Linear / Notion Pro — sans bordures dures, pilules & dock verre dépoli) */
+[data-theme="studio"] {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  --bg-page: #f1f4f9;
+  --bg-surface: #ffffff;
+  --bg-elevated: #edf1f8;
+  --bg-subtle: #f7f9fc;
+  --bg-backdrop: rgba(15, 23, 42, 0.42);
+
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+
+  --border-subtle: rgba(15, 23, 42, 0.06);
+  --border-strong: rgba(15, 23, 42, 0.14);
+
+  --accent: #4f46e5;
+  --accent-hover: #4338ca;
+  --accent-soft: #eef2ff;
+  --accent-border: #c7d2fe;
+  --accent-contrast: #ffffff;
+  --text-on-accent: #ffffff;
+
+  --status-owned-bg: #dcfce7;
+  --status-owned-text: #15803d;
+  --status-wish-bg: #fef3c7;
+  --status-wish-text: #b45309;
+  --status-lent-bg: #e0e7ff;
+  --status-lent-text: #3730a3;
+  --status-integral-bg: #f3e8ff;
+  --status-integral-text: #6d28d9;
+
+  --danger: #e11d48;
+  --danger-hover: #be123c;
+  --danger-soft: #fff1f2;
+  --danger-border: #fecdd3;
+  --danger-contrast: #ffffff;
+
+  --warning-bg: #fef9c3;
+  --warning-text: #854d0e;
+  --success-bg: #dcfce7;
+  --success-text: #15803d;
+
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 10px 30px rgba(15, 23, 42, 0.09);
+  --shadow-lg: 0 20px 48px rgba(15, 23, 42, 0.16);
+
+  --tabbar-height: 74px;
+}
+
+/* 3. Atelier BD (façon Ligne Claire / édition graphique — traits nets 2px & ombres franches) */
+[data-theme="atelier-bd"] {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: 'Space Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --bg-page: #fdf8eb;
+  --bg-surface: #ffffff;
+  --bg-elevated: #f6ecd4;
+  --bg-subtle: #fffdf6;
+  --bg-backdrop: rgba(24, 24, 27, 0.56);
+
+  --text-primary: #18181b;
+  --text-secondary: #3f3f46;
+  --text-muted: #52525b;
+
+  --border-subtle: #18181b;
+  --border-strong: #18181b;
+
+  --accent: #d93829;
+  --accent-hover: #b8291c;
+  --accent-soft: #fde68a;
+  --accent-border: #18181b;
+  --accent-contrast: #ffffff;
+  --text-on-accent: #ffffff;
+
+  --status-owned-bg: #bbf7d0;
+  --status-owned-text: #14532d;
+  --status-wish-bg: #fde68a;
+  --status-wish-text: #78350f;
+  --status-lent-bg: #bfdbfe;
+  --status-lent-text: #1e3a8a;
+  --status-integral-bg: #e9d5ff;
+  --status-integral-text: #581c87;
+
+  --danger: #dc2626;
+  --danger-hover: #b91c1c;
+  --danger-soft: #fecaca;
+  --danger-border: #18181b;
+  --danger-contrast: #ffffff;
+
+  --warning-bg: #fde68a;
+  --warning-text: #713f12;
+  --success-bg: #bbf7d0;
+  --success-text: #14532d;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 3px 3px 0 #18181b;
+  --shadow-md: 5px 5px 0 #18181b;
+  --shadow-lg: 8px 8px 0 #18181b;
+}
+
+/* 4. Nocturne Prestige (façon Letterboxd / OLED Cinéma — obsidienne, verre sombre & ambre doré) */
+[data-theme="nocturne"] {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-heading: 'Fraunces', Georgia, 'Times New Roman', serif;
+
+  --bg-page: #090a0f;
+  --bg-surface: #131620;
+  --bg-elevated: #1b1f2e;
+  --bg-subtle: #10131c;
+  --bg-backdrop: rgba(4, 5, 10, 0.78);
+
+  --text-primary: #f5f2ea;
+  --text-secondary: #cbc5b8;
+  --text-muted: #8f8b82;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --accent: #e5a93c;
+  --accent-hover: #d19324;
+  --accent-soft: rgba(229, 169, 60, 0.14);
+  --accent-border: rgba(229, 169, 60, 0.36);
+  --accent-contrast: #141008;
+  --text-on-accent: #141008;
+
+  --status-owned-bg: rgba(52, 211, 153, 0.16);
+  --status-owned-text: #6ee7b7;
+  --status-wish-bg: rgba(229, 169, 60, 0.18);
+  --status-wish-text: #fcd34d;
+  --status-lent-bg: rgba(129, 140, 248, 0.18);
+  --status-lent-text: #c7d2fe;
+  --status-integral-bg: rgba(192, 132, 252, 0.18);
+  --status-integral-text: #e9d5ff;
+
+  --danger: #f87171;
+  --danger-hover: #ef4444;
+  --danger-soft: rgba(248, 113, 113, 0.16);
+  --danger-border: rgba(248, 113, 113, 0.38);
+  --danger-contrast: #190909;
+
+  --warning-bg: rgba(229, 169, 60, 0.18);
+  --warning-text: #fde68a;
+  --success-bg: rgba(52, 211, 153, 0.16);
+  --success-text: #6ee7b7;
+
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.52);
+  --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.72);
+
+  --tabbar-height: 74px;
 }

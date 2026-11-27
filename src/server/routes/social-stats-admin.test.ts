@@ -431,4 +431,247 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
     });
     expect(regularLoginRestored.status).toBe(200);
   });
+
+  it('gère les genres Admin en 2 volets (Catalogue Maître Couche 2 subgenres + genres par défaut globaux)', async () => {
+    const admin = await registerUser('genreAdmin', 'admin@biblio.test');
+    const book = await createManualBook(admin.cookie, {
+      title: 'Blacksad T.1',
+      authors: ['Juan Díaz Canales'],
+      ownershipStatus: 'owned'
+    });
+
+    // Volet A : édition Couche 2 des subgenres + verrouillage automatique dans locked_fields
+    const patchGenresRes = await ctx.app.request('/api/admin/catalog/bulk', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: admin.cookie },
+      body: JSON.stringify({
+        bookIds: [book.id],
+        patch: {
+          subgenres: ['Policier', 'Noir', 'Animalier']
+        }
+      })
+    });
+    expect(patchGenresRes.status).toBe(200);
+    const patchGenresJson = (await patchGenresRes.json()) as { lockedFieldsAdded: string[] };
+    expect(patchGenresJson.lockedFieldsAdded).toContain('subgenres');
+    const storedBook = ctx.repos.catalogRepo.findBookById(book.id)!;
+    expect(JSON.parse(storedBook.subgenres_json)).toEqual(['Policier', 'Noir', 'Animalier']);
+
+    // Volet B : genres par défaut globaux de l'application (GET / PUT / héritage register / POST reset)
+    const getDefaultsRes = await ctx.app.request('/api/admin/default-genres', {
+      headers: { cookie: admin.cookie }
+    });
+    expect(getDefaultsRes.status).toBe(200);
+    const getDefaultsJson = (await getDefaultsRes.json()) as { defaultGenres: string[] };
+    expect(getDefaultsJson.defaultGenres.length).toBeGreaterThanOrEqual(20);
+
+    const customDefaults = ['Polar Nordique', 'Franco-Belge', 'Space Opera'];
+    const putDefaultsRes = await ctx.app.request('/api/admin/default-genres', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie: admin.cookie },
+      body: JSON.stringify({ genres: customDefaults })
+    });
+    expect(putDefaultsRes.status).toBe(200);
+    const putDefaultsJson = (await putDefaultsRes.json()) as { defaultGenres: string[] };
+    expect(putDefaultsJson.defaultGenres).toEqual(customDefaults);
+
+    // Un nouvel inscrit hérite automatiquement des genres par défaut configurés par l'admin
+    const newcomer = await registerUser('newcomer', 'newcomer@biblio.test');
+    const meNewcomerRes = await ctx.app.request('/api/me', { headers: { cookie: newcomer.cookie } });
+    expect(meNewcomerRes.status).toBe(200);
+    const meNewcomer = (await meNewcomerRes.json()) as { profile: { defaultGenres: string[] } };
+    expect(meNewcomer.profile.defaultGenres).toEqual(customDefaults);
+
+    // Réinitialisation des genres globaux par défaut -> retour à la liste standard
+    const resetDefaultsRes = await ctx.app.request('/api/admin/default-genres/reset', {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(resetDefaultsRes.status).toBe(200);
+    const resetDefaultsJson = (await resetDefaultsRes.json()) as { defaultGenres: string[] };
+    expect(resetDefaultsJson.defaultGenres.length).toBeGreaterThanOrEqual(20);
+  });
+
+  it('gère la politique detach_policy, le détachement atomique avec transfert (Couche 3, prêts, réservations anti-spoiler, amis) et la succession du chef de foyer', async () => {
+    const owner = await registerUser('chef', 'chef@biblio.test');
+    const clara = await registerUser('clara', 'clara@biblio.test');
+    const leo = await registerUser('leo', 'leo@biblio.test');
+    const extFriend = await registerUser('externe', 'externe@biblio.test');
+
+    // Clara et Léo rejoignent le foyer de Chef
+    for (const member of [clara, leo]) {
+      const joinRes = await ctx.app.request('/api/social/family/join', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: member.cookie },
+        body: JSON.stringify({ inviteCode: owner.profile.library.familyInviteCode })
+      });
+      expect(joinRes.status).toBe(200);
+    }
+
+    const householdLibraryId = owner.profile.library.id;
+    const shareToken = owner.profile.library.friendShareToken;
+
+    // 1 livre possédé avec surcharge Couche 3 + prêt actif, 1 livre souhaité par Clara avec réservation cadeau externe
+    const ownedBook = await createManualBook(owner.cookie, {
+      title: 'Thorgal T.1',
+      authors: ['Jean Van Hamme'],
+      ownershipStatus: 'owned'
+    });
+    const overrideRes = await ctx.app.request(`/api/library/books/${ownedBook.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: owner.cookie },
+      body: JSON.stringify({ title: 'Thorgal — La Magicienne trahie (Perso)' })
+    });
+    expect(overrideRes.status).toBe(200);
+
+    const loanRes = await ctx.app.request('/api/loans', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: owner.cookie },
+      body: JSON.stringify({ bookIds: [ownedBook.id], borrowerName: 'Oncle Paul' })
+    });
+    expect(loanRes.status).toBe(201);
+
+    const claraWish = await createManualBook(clara.cookie, {
+      title: 'Lanfeust de Troy T.1',
+      authors: ['Christophe Arleston'],
+      ownershipStatus: 'wish'
+    });
+
+    // Un ami externe réserve secrètement le souhait de Clara
+    const reserveRes = await ctx.app.request(`/api/social/share/${shareToken}/reserve/${claraWish.id}`, {
+      method: 'POST',
+      headers: { cookie: extFriend.cookie }
+    });
+    expect(reserveRes.status).toBe(201);
+
+    // 1. Politique 'owner_only' : seul le propriétaire peut modifier la politique ; Clara ne peut plus déplacer de livre possédé
+    const forbiddenPolicy = await ctx.app.request('/api/social/family/policy', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: clara.cookie },
+      body: JSON.stringify({ detachPolicy: 'owner_only' })
+    });
+    expect(forbiddenPolicy.status).toBe(403);
+
+    const setOwnerOnly = await ctx.app.request('/api/social/family/policy', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: owner.cookie },
+      body: JSON.stringify({ detachPolicy: 'owner_only' })
+    });
+    expect(setOwnerOnly.status).toBe(200);
+
+    const claraPreviewRestrictedRes = await ctx.app.request('/api/social/family/detach-preview/me', {
+      headers: { cookie: clara.cookie }
+    });
+    expect(claraPreviewRestrictedRes.status).toBe(200);
+    const claraPreviewRestricted = (await claraPreviewRestrictedRes.json()) as {
+      preview: { canTransferOwned: boolean; preselectedBookIds: string[]; books: Array<{ id: string }> };
+    };
+    expect(claraPreviewRestricted.preview.canTransferOwned).toBe(false);
+    expect(claraPreviewRestricted.preview.preselectedBookIds).toContain(claraWish.id);
+    expect(claraPreviewRestricted.preview.books.map((b) => b.id)).not.toContain(ownedBook.id);
+
+    // Si Clara tente de forcer un livre possédé alors que detachPolicy = 'owner_only' -> 403 (aucune mutation)
+    const claraForbiddenOwnedDetach = await ctx.app.request('/api/social/family/detach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: clara.cookie },
+      body: JSON.stringify({
+        targetUserId: 'me',
+        mode: 'move',
+        bookIds: [ownedBook.id],
+        keepAsFriends: true
+      })
+    });
+    expect(claraForbiddenOwnedDetach.status).toBe(403);
+
+    // 2. Retour à 'member_choice' et détachement atomique de Clara (avec ownedBook + prêt transféré + claraWish réservé)
+    const setMemberChoice = await ctx.app.request('/api/social/family/policy', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', cookie: owner.cookie },
+      body: JSON.stringify({ detachPolicy: 'member_choice' })
+    });
+    expect(setMemberChoice.status).toBe(200);
+
+    const detachClaraRes = await ctx.app.request('/api/social/family/detach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: clara.cookie },
+      body: JSON.stringify({
+        targetUserId: 'me',
+        mode: 'move',
+        bookIds: [ownedBook.id, claraWish.id],
+        loanDecisions: { [ownedBook.id]: 'transfer' },
+        keepAsFriends: true,
+        newLibraryName: 'Bibliothèque de Clara'
+      })
+    });
+    expect(detachClaraRes.status).toBe(200);
+    const detachClaraJson = (await detachClaraRes.json()) as {
+      result: {
+        newLibraryId: string;
+        transferredOwnedCount: number;
+        transferredWishCount: number;
+        transferredLoansCount: number;
+        keptAsFriends: boolean;
+      };
+      profile: { library: { id: string; name: string; role: string } };
+    };
+    const claraNewLibId = detachClaraJson.result.newLibraryId;
+    expect(claraNewLibId).not.toBe(householdLibraryId);
+    expect(detachClaraJson.result.transferredOwnedCount).toBe(1);
+    expect(detachClaraJson.result.transferredWishCount).toBe(1);
+    expect(detachClaraJson.result.transferredLoansCount).toBe(1);
+    expect(detachClaraJson.result.keptAsFriends).toBe(true);
+    expect(detachClaraJson.profile.library.id).toBe(claraNewLibId);
+    expect(detachClaraJson.profile.library.name).toBe('Bibliothèque de Clara');
+    expect(detachClaraJson.profile.library.role).toBe('owner');
+
+    // Vérifier Couche 3 conservée dans la nouvelle bibliothèque et livre retiré de l'ancien foyer
+    const movedRow = ctx.repos.libraryRepo.findLibraryBook(claraNewLibId, ownedBook.id);
+    expect(movedRow).not.toBeNull();
+    expect(movedRow!.status).toBe('owned');
+    expect(JSON.parse(movedRow!.overrides_json).title).toBe('Thorgal — La Magicienne trahie (Perso)');
+    const oldHouseholdBook = ctx.repos.libraryRepo.findLibraryBook(householdLibraryId, ownedBook.id);
+    expect(oldHouseholdBook === null || oldHouseholdBook.deleted_at !== null).toBe(true);
+
+    // Prêt actif transféré vers la nouvelle bibliothèque
+    const claraLoans = ctx.repos.loanRepo.listActiveLoans(claraNewLibId);
+    expect(claraLoans).toHaveLength(1);
+    expect(claraLoans[0].book_id).toBe(ownedBook.id);
+    expect(ctx.repos.loanRepo.listActiveLoans(householdLibraryId)).toHaveLength(0);
+
+    // Réservation cadeau migrée silencieusement vers le nouveau foyer de Clara (et toujours anti-spoiler pour Clara !)
+    const migratedReservation = ctx.repos.socialRepo.findReservation(claraNewLibId, claraWish.id);
+    expect(migratedReservation).not.toBeNull();
+    expect(migratedReservation!.reserved_by_user_id).toBe(extFriend.profile.user.id);
+    expect(ctx.repos.socialRepo.findReservation(householdLibraryId, claraWish.id)).toBeNull();
+    const claraMeText = await (await ctx.app.request('/api/me', { headers: { cookie: clara.cookie } })).text();
+    expect(claraMeText).not.toContain(extFriend.profile.user.id);
+
+    // Connexions amis bidirectionnelles créées entre Clara et Chef
+    const claraFriends = ctx.repos.socialRepo.listFriendsForUser(clara.profile.user.id);
+    expect(claraFriends.map((f) => f.target_library_id)).toContain(householdLibraryId);
+    const ownerFriends = ctx.repos.socialRepo.listFriendsForUser(owner.profile.user.id);
+    expect(ownerFriends.map((f) => f.target_library_id)).toContain(claraNewLibId);
+
+    // 3. Succession automatique du chef de foyer : quand Chef quitte le foyer, Léo devient automatiquement 'owner'
+    const ownerLeaveRes = await ctx.app.request('/api/social/family/detach', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: owner.cookie },
+      body: JSON.stringify({
+        targetUserId: 'me',
+        mode: 'copy',
+        bookIds: [],
+        keepAsFriends: false
+      })
+    });
+    expect(ownerLeaveRes.status).toBe(200);
+    const ownerLeaveJson = (await ownerLeaveRes.json()) as {
+      result: { promotedOwnerUsername: string | null };
+    };
+    expect(ownerLeaveJson.result.promotedOwnerUsername).toBe('leo');
+
+    const leoMeRes = await ctx.app.request('/api/me', { headers: { cookie: leo.cookie } });
+    const leoMe = (await leoMeRes.json()) as { profile: { library: { id: string; role: string } } };
+    expect(leoMe.profile.library.id).toBe(householdLibraryId);
+    expect(leoMe.profile.library.role).toBe('owner');
+  });
 });

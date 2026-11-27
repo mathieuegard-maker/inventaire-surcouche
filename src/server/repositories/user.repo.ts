@@ -261,6 +261,39 @@ export class UserRepository {
     ]);
   }
 
+  listGlobalDefaultGenres(): string[] {
+    const rows = this.db.all<{ genre_label: string }>(
+      'SELECT genre_label FROM app_default_genres ORDER BY sort_order ASC, created_at ASC, genre_label ASC'
+    );
+    return rows.map((r) => r.genre_label);
+  }
+
+  replaceGlobalDefaultGenres(genres: readonly string[], now: string): string[] {
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of genres) {
+      const clean = raw.trim();
+      if (!clean) continue;
+      const key = clean.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(clean);
+    }
+
+    this.db.transaction(() => {
+      this.db.run('DELETE FROM app_default_genres');
+      for (let i = 0; i < deduped.length; i++) {
+        this.db.run(
+          `INSERT INTO app_default_genres (genre_label, sort_order, created_at)
+           VALUES (?, ?, ?)`,
+          [deduped[i], i, now]
+        );
+      }
+    });
+
+    return this.listGlobalDefaultGenres();
+  }
+
   getAiUsage(userId: string): UserAiUsageRow | null {
     return this.db.get<UserAiUsageRow>('SELECT * FROM user_ai_usage WHERE user_id = ? LIMIT 1', [userId]);
   }

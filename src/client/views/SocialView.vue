@@ -4,14 +4,29 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Copy, ExternalLink, Link2, RefreshCw, RotateCcw, Share2, Trash2, UserPlus, Users } from '@lucide/vue';
+import {
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  Home,
+  Link2,
+  LogOut,
+  RefreshCw,
+  RotateCcw,
+  Share2,
+  Trash2,
+  UserMinus,
+  UserPlus,
+  Users
+} from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
 import HelpTooltip from '../components/base/HelpTooltip.vue';
 import QrCodeDisplay from '../components/base/QrCodeDisplay.vue';
 import { useAuthStore } from '../stores/auth.store';
-import { useSocialStore, type FriendContact } from '../stores/social.store';
+import { useSocialStore, type FriendItem } from '../stores/social.store';
 import { useUiStore } from '../stores/ui.store';
 import { ApiClientError } from '../api/client';
+import type { FamilyDetachPolicy } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
 type SocialTab = 'family' | 'friends';
@@ -52,12 +67,19 @@ const friendUrl = computed(() =>
 
 const joinCodeInput = ref('');
 const joiningFamily = ref(false);
+const savingPolicy = ref(false);
 const addFriendModalOpen = ref(false);
 const addFriendInput = ref('');
 const addingFriend = ref(false);
-const removeConfirmFriend = ref<FriendContact | null>(null);
+const removeConfirmFriend = ref<FriendItem | null>(null);
 const removingFriend = ref(false);
 const restoringLibraryId = ref<string | null>(null);
+
+const isFamilyOwner = computed(() => authStore.profile?.library.role === 'owner');
+const familyMembers = computed(() => authStore.profile?.library.members ?? []);
+const currentDetachPolicy = computed<FamilyDetachPolicy>(
+  () => authStore.profile?.library.detachPolicy ?? 'member_choice'
+);
 
 const regenTarget = ref<'family' | 'friend' | null>(null);
 const regenBusy = ref(false);
@@ -122,6 +144,23 @@ async function handleJoinFamily(): Promise<void> {
   } finally {
     joiningFamily.value = false;
   }
+}
+
+async function handleDetachPolicyChange(nextPolicy: FamilyDetachPolicy): Promise<void> {
+  if (savingPolicy.value || nextPolicy === currentDetachPolicy.value) return;
+  savingPolicy.value = true;
+  try {
+    await socialStore.updateFamilyPolicy(nextPolicy);
+    uiStore.pushToast(t('social.detachPolicyUpdatedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    savingPolicy.value = false;
+  }
+}
+
+function openDetachWizard(targetUserId: string): void {
+  void router.push(`/social/detach/${encodeURIComponent(targetUserId)}`);
 }
 
 async function handleAddFriend(): Promise<void> {
@@ -207,14 +246,24 @@ async function handleRestoreFriend(libraryId: string): Promise<void> {
 
     <!-- ==================== ONGLET FOYER & LIENS ==================== -->
     <div v-if="activeTab === 'family'" class="ds-stack">
-      <div class="ds-grid-2">
-        <!-- Carte Code Foyer -->
-        <div class="ds-card ds-stack">
+      <!-- Bloc 1 (replié sur 1 ligne claire) : Inviter un membre dans mon foyer -->
+      <details class="ds-card social-expand-card">
+        <summary class="social-expand-card__summary">
+          <span class="social-expand-card__icon" aria-hidden="true">
+            <Users :size="20" />
+          </span>
+          <span class="social-expand-card__head">
+            <strong>{{ t('social.familyCodeLabel') }}</strong>
+            <span class="ds-text-muted">{{ t('social.familyCodeShortHint') }}</span>
+          </span>
+          <ChevronDown :size="18" class="social-expand-card__chev" aria-hidden="true" />
+        </summary>
+
+        <div class="social-expand-card__body ds-stack">
           <div class="ds-row ds-row--between">
-            <h2>{{ t('social.familyCodeLabel') }}</h2>
+            <p class="ds-text-muted social-no-margin">{{ t('social.familyCodeDesc') }}</p>
             <HelpTooltip :title="t('social.familyCodeLabel')" :text="t('social.familyCodeHelp')" />
           </div>
-          <p class="ds-text-muted">{{ t('social.familyCodeDesc') }}</p>
 
           <div class="social-qr-center">
             <QrCodeDisplay :value="familyUrl" :alt="t('social.familyCodeLabel')" />
@@ -276,14 +325,26 @@ async function handleRestoreFriend(libraryId: string): Promise<void> {
             </button>
           </div>
         </div>
+      </details>
 
-        <!-- Carte Code Amis -->
-        <div class="ds-card ds-stack">
+      <!-- Bloc 2 (replié sur 1 ligne claire) : Partager ma collection avec un ami -->
+      <details class="ds-card social-expand-card">
+        <summary class="social-expand-card__summary">
+          <span class="social-expand-card__icon" aria-hidden="true">
+            <Share2 :size="20" />
+          </span>
+          <span class="social-expand-card__head">
+            <strong>{{ t('social.friendCodeLabel') }}</strong>
+            <span class="ds-text-muted">{{ t('social.friendCodeShortHint') }}</span>
+          </span>
+          <ChevronDown :size="18" class="social-expand-card__chev" aria-hidden="true" />
+        </summary>
+
+        <div class="social-expand-card__body ds-stack">
           <div class="ds-row ds-row--between">
-            <h2>{{ t('social.friendCodeLabel') }}</h2>
+            <p class="ds-text-muted social-no-margin">{{ t('social.friendCodeDesc') }}</p>
             <HelpTooltip :title="t('social.friendCodeLabel')" :text="t('social.friendCodeHelp')" />
           </div>
-          <p class="ds-text-muted">{{ t('social.friendCodeDesc') }}</p>
 
           <div class="social-qr-center">
             <QrCodeDisplay :value="friendUrl" :alt="t('social.friendCodeLabel')" />
@@ -351,32 +412,21 @@ async function handleRestoreFriend(libraryId: string): Promise<void> {
             </div>
           </div>
         </div>
-      </div>
+      </details>
 
-      <!-- Membres du foyer -->
-      <div class="ds-card ds-stack">
-        <div class="ds-row">
-          <Users :size="18" aria-hidden="true" />
-          <h2>{{ t('social.membersTitle', { count: authStore.profile?.library.members.length ?? 0 }) }}</h2>
-        </div>
-        <div class="ds-stack--sm">
-          <div
-            v-for="member in authStore.profile?.library.members ?? []"
-            :key="member.userId"
-            class="ds-panel ds-row ds-row--between"
-          >
-            <strong>{{ member.username }}</strong>
-            <span class="ds-badge" :class="member.role === 'owner' ? 'ds-badge--accent' : ''">
-              {{ member.role === 'owner' ? t('social.ownerBadge') : t('social.memberBadge') }}
+      <!-- Bloc 3 (mis en valeur, toujours visible) : Rejoindre le foyer d'un autre membre -->
+      <div class="ds-card ds-stack social-join-card">
+        <div class="ds-row ds-row--between">
+          <div class="ds-row">
+            <span class="social-expand-card__icon social-expand-card__icon--accent" aria-hidden="true">
+              <Home :size="19" />
             </span>
+            <h2 class="social-no-margin">{{ t('social.joinFamilyTitle') }}</h2>
           </div>
+          <HelpTooltip :title="t('social.joinFamilyTitle')" :text="t('social.joinFamilyHelp')" />
         </div>
-      </div>
-
-      <!-- Rejoindre un foyer -->
-      <details class="ds-accordion">
-        <summary>{{ t('social.joinFamilyTitle') }}</summary>
-        <form class="ds-row social-inline-form" @submit.prevent="handleJoinFamily">
+        <p class="ds-text-muted social-no-margin">{{ t('social.joinFamilyCardDesc') }}</p>
+        <form class="ds-row" @submit.prevent="handleJoinFamily">
           <input
             v-model="joinCodeInput"
             type="text"
@@ -391,7 +441,85 @@ async function handleRestoreFriend(libraryId: string): Promise<void> {
             {{ joiningFamily ? t('app.loading') : t('social.joinFamilyBtn') }}
           </button>
         </form>
-      </details>
+      </div>
+
+      <!-- Bloc 4 : Membres du foyer, politique de départ & détachement -->
+      <div class="ds-card ds-stack">
+        <div class="ds-row ds-row--between">
+          <div class="ds-row">
+            <Users :size="18" aria-hidden="true" />
+            <h2 class="social-no-margin">{{ t('social.membersTitle', { count: familyMembers.length }) }}</h2>
+          </div>
+          <button
+            v-if="familyMembers.length >= 2"
+            type="button"
+            class="ds-btn ds-btn--ghost ds-btn--sm"
+            @click="openDetachWizard('me')"
+          >
+            <LogOut :size="14" aria-hidden="true" />
+            {{ t('social.leaveFamilyBtn') }}
+          </button>
+        </div>
+
+        <div class="ds-stack--sm">
+          <div
+            v-for="member in familyMembers"
+            :key="member.userId"
+            class="ds-panel ds-row ds-row--between"
+          >
+            <div class="ds-row">
+              <strong>{{ member.username }}</strong>
+              <span class="ds-badge" :class="member.role === 'owner' ? 'ds-badge--accent' : ''">
+                {{ member.role === 'owner' ? t('social.ownerBadge') : t('social.memberBadge') }}
+              </span>
+            </div>
+
+            <button
+              v-if="isFamilyOwner && familyMembers.length >= 2 && member.userId !== authStore.profile?.user.id"
+              type="button"
+              class="ds-btn ds-btn--sm"
+              @click="openDetachWizard(member.userId)"
+            >
+              <UserMinus :size="14" aria-hidden="true" />
+              {{ t('social.detachMemberBtn') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Réglage chef de foyer : qui choisit les livres lors d'un départ -->
+        <div v-if="isFamilyOwner && familyMembers.length >= 2" class="ds-panel ds-stack--sm social-policy-box">
+          <div class="ds-row ds-row--between">
+            <strong class="social-policy-title">{{ t('social.detachPolicyLabel') }}</strong>
+            <HelpTooltip :title="t('social.detachPolicyLabel')" :text="t('social.detachPolicyHelp')" />
+          </div>
+          <label class="ds-radio-option">
+            <input
+              type="radio"
+              name="family-detach-policy"
+              value="member_choice"
+              :checked="currentDetachPolicy === 'member_choice'"
+              :disabled="savingPolicy"
+              @change="handleDetachPolicyChange('member_choice')"
+            />
+            <span class="ds-radio-option__body">
+              <span>{{ t('social.detachPolicyMemberChoice') }}</span>
+            </span>
+          </label>
+          <label class="ds-radio-option">
+            <input
+              type="radio"
+              name="family-detach-policy"
+              value="owner_only"
+              :checked="currentDetachPolicy === 'owner_only'"
+              :disabled="savingPolicy"
+              @change="handleDetachPolicyChange('owner_only')"
+            />
+            <span class="ds-radio-option__body">
+              <span>{{ t('social.detachPolicyOwnerOnly') }}</span>
+            </span>
+          </label>
+        </div>
+      </div>
     </div>
 
     <!-- ==================== ONGLET MES AMIS ==================== -->
@@ -532,6 +660,83 @@ async function handleRestoreFriend(libraryId: string): Promise<void> {
 </template>
 
 <style scoped>
+.social-no-margin {
+  margin: 0;
+}
+
+.social-expand-card {
+  padding: var(--space-3) var(--space-4);
+}
+
+.social-expand-card__summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+
+.social-expand-card__summary::-webkit-details-marker {
+  display: none;
+}
+
+.social-expand-card__icon {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.social-expand-card__icon--accent {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.social-expand-card__head {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.social-expand-card__head .ds-text-muted {
+  font-size: 0.82rem;
+}
+
+.social-expand-card__chev {
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform 0.18s ease;
+}
+
+.social-expand-card[open] .social-expand-card__chev {
+  transform: rotate(180deg);
+}
+
+.social-expand-card__body {
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.social-join-card {
+  border-color: var(--accent-border);
+}
+
+.social-policy-box {
+  margin-top: var(--space-1);
+}
+
+.social-policy-title {
+  font-size: 0.9rem;
+}
+
 .social-qr-center {
   display: flex;
   justify-content: center;

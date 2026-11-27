@@ -2,15 +2,19 @@
 <!-- Administration V2.6 : KPIs cliquables, miniatures couvertures + PaginationBar (20/50/100) + BatchActionBar flottante,
      infobulles ? sur la maintenance, bannissement réversible (soft delete) et suppression de l'onglet temporaire Labo CSV. -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import Sortable from 'sortablejs';
 import {
   Ban,
   ChevronRight,
   Download,
   Edit3,
+  GripVertical,
+  Plus,
   RefreshCw,
   RotateCcw,
   Search,
+  Tags,
   Trash2,
   UserCheck
 } from '@lucide/vue';
@@ -254,10 +258,114 @@ function toggleSelectAllCatalog(): void {
   }
 }
 
+// ==================== GENRES PAR DÉFAUT GLOBAUX (ADMIN) ====================
+const globalDefaultGenres = ref<string[]>([]);
+const newGlobalGenreInput = ref('');
+const globalGenresBusy = ref(false);
+const adminGenresListRef = ref<HTMLElement | null>(null);
+let adminGenresSortable: Sortable | null = null;
+
+function destroyAdminGenresSortable(): void {
+  if (adminGenresSortable) {
+    adminGenresSortable.destroy();
+    adminGenresSortable = null;
+  }
+}
+
+function initAdminGenresSortable(): void {
+  destroyAdminGenresSortable();
+  if (activeTab.value !== 'catalog' || !adminGenresListRef.value) return;
+  adminGenresSortable = Sortable.create(adminGenresListRef.value, {
+    animation: 180,
+    delay: 180,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 6,
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackTolerance: 4,
+    swapThreshold: 0.65,
+    filter: '.ds-chip__remove',
+    preventOnFilter: false,
+    onEnd: (evt) => {
+      const oldIdx = evt.oldIndex;
+      const newIdx = evt.newIndex;
+      if (oldIdx === undefined || newIdx === undefined || oldIdx === newIdx) return;
+      const next = [...globalDefaultGenres.value];
+      if (oldIdx < 0 || oldIdx >= next.length || newIdx < 0 || newIdx >= next.length) return;
+      const [moved] = next.splice(oldIdx, 1);
+      next.splice(newIdx, 0, moved);
+      void persistGlobalDefaultGenres(next);
+    }
+  });
+}
+
+async function loadGlobalDefaultGenres(): Promise<void> {
+  try {
+    const res = await apiRequest<{ ok: true; defaultGenres: string[] }>('/api/admin/default-genres');
+    globalDefaultGenres.value = res.defaultGenres;
+    await nextTick();
+    initAdminGenresSortable();
+  } catch {
+    // non bloquant
+  }
+}
+
+async function persistGlobalDefaultGenres(next: string[]): Promise<void> {
+  if (next.length === 0) return;
+  globalDefaultGenres.value = next;
+  globalGenresBusy.value = true;
+  try {
+    const res = await apiRequest<{ ok: true; defaultGenres: string[] }>('/api/admin/default-genres', {
+      method: 'PUT',
+      body: { genres: next }
+    });
+    globalDefaultGenres.value = res.defaultGenres;
+    uiStore.pushToast(t('admin.defaultGenresSavedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+    await loadGlobalDefaultGenres();
+  } finally {
+    globalGenresBusy.value = false;
+  }
+}
+
+async function handleAddGlobalGenre(): Promise<void> {
+  const clean = newGlobalGenreInput.value.trim();
+  if (!clean) return;
+  if (globalDefaultGenres.value.some((g) => g.toLowerCase() === clean.toLowerCase())) {
+    newGlobalGenreInput.value = '';
+    return;
+  }
+  newGlobalGenreInput.value = '';
+  await persistGlobalDefaultGenres([...globalDefaultGenres.value, clean]);
+}
+
+async function handleRemoveGlobalGenre(genre: string): Promise<void> {
+  const next = globalDefaultGenres.value.filter((g) => g.toLowerCase() !== genre.toLowerCase());
+  if (next.length === 0) return;
+  await persistGlobalDefaultGenres(next);
+}
+
+async function handleResetGlobalGenres(): Promise<void> {
+  globalGenresBusy.value = true;
+  try {
+    const res = await apiRequest<{ ok: true; defaultGenres: string[] }>('/api/admin/default-genres/reset', {
+      method: 'POST'
+    });
+    globalDefaultGenres.value = res.defaultGenres;
+    uiStore.pushToast(t('admin.defaultGenresResetToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    globalGenresBusy.value = false;
+  }
+}
+
 // Bulk Edit Modal (Couche 2 locked_fields)
 const bulkModalOpen = ref(false);
 const bulkSaving = ref(false);
 const bulkTargetIds = ref<string[]>([]);
+const customBulkGenreInput = ref('');
 
 const bulkForm = reactive({
   enableTitle: false,
@@ -273,8 +381,43 @@ const bulkForm = reactive({
   enablePublishYear: false,
   publishYear: '',
   enableMainCategory: false,
-  mainCategory: 'BD' as BookMainCategory
+  mainCategory: 'BD' as BookMainCategory,
+  enableSubgenres: false,
+  subgenres: [] as string[]
 });
+
+const allBulkGenreChoices = computed(() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const g of [...globalDefaultGenres.value, ...bulkForm.subgenres]) {
+    const clean = g.trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+});
+
+function toggleBulkSubgenre(genre: string): void {
+  const exists = bulkForm.subgenres.some((g) => g.toLowerCase() === genre.toLowerCase());
+  if (exists) {
+    bulkForm.subgenres = bulkForm.subgenres.filter((g) => g.toLowerCase() !== genre.toLowerCase());
+  } else {
+    bulkForm.subgenres = [...bulkForm.subgenres, genre];
+  }
+}
+
+function addCustomBulkSubgenre(): void {
+  const clean = customBulkGenreInput.value.trim();
+  if (!clean) return;
+  if (!bulkForm.subgenres.some((g) => g.toLowerCase() === clean.toLowerCase())) {
+    bulkForm.subgenres = [...bulkForm.subgenres, clean];
+  }
+  customBulkGenreInput.value = '';
+}
 
 function openBulkModal(ids: string[], prefill?: AdminCatalogItem): void {
   bulkTargetIds.value = [...ids];
@@ -293,6 +436,12 @@ function openBulkModal(ids: string[], prefill?: AdminCatalogItem): void {
   bulkForm.publishYear = prefill?.publishYear ?? '';
   bulkForm.enableMainCategory = false;
   bulkForm.mainCategory = prefill?.mainCategory ?? 'BD';
+  bulkForm.enableSubgenres = false;
+  bulkForm.subgenres = prefill ? [...prefill.subgenres] : [];
+  customBulkGenreInput.value = '';
+  if (globalDefaultGenres.value.length === 0) {
+    void loadGlobalDefaultGenres();
+  }
   bulkModalOpen.value = true;
 }
 
@@ -314,6 +463,7 @@ async function submitBulkEdit(): Promise<void> {
   if (bulkForm.enablePublisher) patch.publisher = bulkForm.publisher.trim() || null;
   if (bulkForm.enablePublishYear) patch.publishYear = bulkForm.publishYear.trim() || null;
   if (bulkForm.enableMainCategory) patch.mainCategory = bulkForm.mainCategory;
+  if (bulkForm.enableSubgenres) patch.subgenres = [...bulkForm.subgenres];
 
   if (Object.keys(patch).length === 0) {
     bulkModalOpen.value = false;
@@ -455,9 +605,16 @@ async function handlePurgeLogs(): Promise<void> {
 
 watch(activeTab, (tab) => {
   if (tab === 'stats') void loadOverview();
-  else if (tab === 'catalog') void loadCatalog();
-  else if (tab === 'users') void loadUsers();
+  else if (tab === 'catalog') {
+    void loadCatalog();
+    void loadGlobalDefaultGenres();
+  } else if (tab === 'users') void loadUsers();
   else if (tab === 'logs') void loadLogs();
+  if (tab !== 'catalog') destroyAdminGenresSortable();
+});
+
+onBeforeUnmount(() => {
+  destroyAdminGenresSortable();
 });
 
 onMounted(() => {
@@ -625,8 +782,64 @@ onMounted(() => {
       </template>
     </div>
 
-    <!-- ==================== ONGLET 2 : CATALOGUE MAÎTRE (MINIATURES + PAGINATION 20/50/100 + BARRE FLOTTANTE) ==================== -->
+    <!-- ==================== ONGLET 2 : CATALOGUE MAÎTRE (GENRES PAR DÉFAUT + MINIATURES + PAGINATION + BARRE FLOTTANTE) ==================== -->
     <div v-else-if="activeTab === 'catalog'" class="ds-stack">
+      <!-- Volet B : Gestion globale des genres par défaut de l'application -->
+      <details class="ds-card ds-accordion admin-genres-accordion">
+        <summary class="admin-genres-summary">
+          <span class="ds-row">
+            <Tags :size="17" aria-hidden="true" />
+            <strong>{{ t('admin.defaultGenresTitle', { count: globalDefaultGenres.length }) }}</strong>
+          </span>
+        </summary>
+
+        <div class="ds-stack--sm admin-genres-body">
+          <p class="ds-text-muted">{{ t('admin.defaultGenresDesc') }}</p>
+
+          <form class="ds-row" @submit.prevent="handleAddGlobalGenre">
+            <input
+              v-model="newGlobalGenreInput"
+              type="text"
+              class="ds-input admin-search-input"
+              :placeholder="t('profile.genresAddPlaceholder')"
+            />
+            <button
+              type="submit"
+              class="ds-btn ds-btn--primary ds-btn--sm"
+              :disabled="globalGenresBusy || !newGlobalGenreInput.trim()"
+            >
+              <Plus :size="15" aria-hidden="true" />
+              {{ t('profile.genresAddBtn') }}
+            </button>
+            <button
+              type="button"
+              class="ds-btn ds-btn--ghost ds-btn--sm"
+              :disabled="globalGenresBusy"
+              @click="handleResetGlobalGenres"
+            >
+              <RotateCcw :size="14" aria-hidden="true" />
+              {{ t('profile.resetDefaultGenresBtn') }}
+            </button>
+          </form>
+
+          <div ref="adminGenresListRef" class="ds-chips admin-genres-sortable">
+            <span v-for="genre in globalDefaultGenres" :key="genre" class="ds-chip admin-genre-chip">
+              <GripVertical :size="14" class="admin-genre-chip__grip" aria-hidden="true" />
+              <span>{{ genre }}</span>
+              <button
+                type="button"
+                class="ds-chip__remove"
+                :aria-label="t('app.delete')"
+                :disabled="globalGenresBusy"
+                @click.stop="handleRemoveGlobalGenre(genre)"
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        </div>
+      </details>
+
       <form class="ds-card ds-row admin-filter-bar" @submit.prevent="catalogPage = 1; loadCatalog()">
         <input
           v-model="catalogSearch"
@@ -697,6 +910,7 @@ onMounted(() => {
               </span>
               <div class="ds-chips">
                 <span class="ds-chip">{{ item.mainCategory }}</span>
+                <span v-for="sub in item.subgenres" :key="sub" class="ds-chip">{{ sub }}</span>
                 <span v-if="item.lockedFields.length > 0" class="ds-badge ds-badge--accent">
                   {{ t('admin.lockedBadge', { count: item.lockedFields.length }) }}
                 </span>
@@ -947,6 +1161,50 @@ onMounted(() => {
             <option v-for="cat in MAIN_CATEGORIES" :key="cat" :value="cat">{{ cat }}</option>
           </select>
         </div>
+
+        <!-- Volet A : Édition Couche 2 des sous-genres (chips cliquables + ajout libre) -->
+        <div class="ds-field">
+          <label class="ds-row">
+            <input v-model="bulkForm.enableSubgenres" type="checkbox" />
+            <span>{{ t('admin.bulkSubgenresLabel') }}</span>
+          </label>
+          <div v-if="bulkForm.enableSubgenres" class="ds-stack--sm admin-bulk-genres-box">
+            <div class="ds-chips">
+              <button
+                v-for="genre in allBulkGenreChoices"
+                :key="genre"
+                type="button"
+                class="ds-chip admin-bulk-genre-chip"
+                :class="{
+                  'admin-bulk-genre-chip--selected': bulkForm.subgenres.some(
+                    (g) => g.toLowerCase() === genre.toLowerCase()
+                  )
+                }"
+                @click="toggleBulkSubgenre(genre)"
+              >
+                {{ genre }}
+              </button>
+            </div>
+            <div class="ds-row">
+              <input
+                v-model="customBulkGenreInput"
+                type="text"
+                class="ds-input admin-search-input"
+                :placeholder="t('admin.bulkSubgenresCustomPlaceholder')"
+                @keydown.enter.prevent="addCustomBulkSubgenre"
+              />
+              <button
+                type="button"
+                class="ds-btn ds-btn--sm"
+                :disabled="!customBulkGenreInput.trim()"
+                @click="addCustomBulkSubgenre"
+              >
+                <Plus :size="14" aria-hidden="true" />
+                {{ t('profile.genresAddBtn') }}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <template #footer>
@@ -1183,5 +1441,46 @@ onMounted(() => {
   border: 1px solid var(--border-subtle);
   overflow-x: auto;
   font-size: 0.8rem;
+}
+
+.admin-genres-accordion {
+  padding: var(--space-3) var(--space-4);
+}
+
+.admin-genres-summary {
+  cursor: pointer;
+}
+
+.admin-genres-body {
+  margin-top: var(--space-3);
+}
+
+.admin-genres-sortable {
+  gap: var(--space-2);
+}
+
+.admin-genre-chip {
+  cursor: grab;
+  user-select: none;
+  touch-action: manipulation;
+}
+
+.admin-genre-chip__grip {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.admin-bulk-genres-box {
+  margin-top: var(--space-2);
+}
+
+.admin-bulk-genre-chip {
+  cursor: pointer;
+}
+
+.admin-bulk-genre-chip--selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
 }
 </style>

@@ -95,6 +95,12 @@ export const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/social/detach/:targetUserId',
+      name: 'family-detach',
+      component: () => import('../views/FamilyDetachView.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/shared/:token',
       name: 'public-share',
       component: () => import('../views/PublicShareView.vue')

@@ -15,6 +15,7 @@ const EXPECTED_TABLES = [
   'password_reset_tokens',
   'user_reading_states',
   'user_default_genres',
+  'app_default_genres',
   'user_notification_prefs',
   'user_push_subscriptions',
   'user_ai_usage',
@@ -43,9 +44,10 @@ describe('SQLite V2 Migrator & Schema Integrity', () => {
       expect(firstRun.applied).toContain('0001_v2_initial.sql');
       expect(firstRun.applied).toContain('0002_ui_v2_6.sql');
       expect(firstRun.applied).toContain('0003_v2_6_1_ux.sql');
+      expect(firstRun.applied).toContain('0004_v2_7_0_features.sql');
       expect(firstRun.skipped).toBe(0);
 
-      // Vérifie les colonnes ajoutées par les migrations 0002 et 0003
+      // Vérifie les colonnes ajoutées par les migrations 0002, 0003 et 0004
       const genreCols = db.all<{ name: string }>('PRAGMA table_info(user_default_genres)').map((c) => c.name);
       expect(genreCols).toContain('sort_order');
       const userCols = db.all<{ name: string }>('PRAGMA table_info(users)').map((c) => c.name);
@@ -54,6 +56,10 @@ describe('SQLite V2 Migrator & Schema Integrity', () => {
       expect(jobCols).toContain('archived_at');
       const friendCols = db.all<{ name: string }>('PRAGMA table_info(friend_connections)').map((c) => c.name);
       expect(friendCols).toContain('deleted_at');
+      const libraryCols = db.all<{ name: string }>('PRAGMA table_info(libraries)').map((c) => c.name);
+      expect(libraryCols).toContain('detach_policy');
+      const seededDefaultGenres = db.all<{ genre_label: string }>('SELECT genre_label FROM app_default_genres');
+      expect(seededDefaultGenres.length).toBeGreaterThanOrEqual(20);
 
       const secondRun = applySqlMigrations(db, migrationsDir);
       expect(secondRun.applied).toEqual([]);

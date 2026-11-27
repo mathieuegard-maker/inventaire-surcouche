@@ -4,7 +4,13 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
-import { addFriendSchema, joinFamilySchema, regenerateTokenSchema } from '../../shared/schemas';
+import {
+  addFriendSchema,
+  detachFamilyMemberSchema,
+  joinFamilySchema,
+  regenerateTokenSchema,
+  updateFamilyPolicySchema
+} from '../../shared/schemas';
 import { SESSION_COOKIE_NAME, type AppVariables } from '../middleware/auth.middleware';
 import type { AuthService } from '../services/auth.service';
 import type { SocialService } from '../services/social.service';
@@ -59,6 +65,42 @@ export function createSocialRoutes(deps: {
     const joined = deps.socialService.joinFamily(auth.userId, inviteCode);
     const profile = deps.authService.buildProfilePayload(auth.userId);
     return c.json({ ok: true, ...joined, profile });
+  });
+
+  router.patch('/family/policy', deps.requireAuth, zValidator('json', updateFamilyPolicySchema), (c) => {
+    const auth = c.get('auth')!;
+    const { detachPolicy } = c.req.valid('json');
+    const updated = deps.socialService.updateFamilyDetachPolicy(auth.libraryId, auth.userId, detachPolicy);
+    const profile = deps.authService.buildProfilePayload(auth.userId);
+    return c.json({ ok: true, ...updated, profile });
+  });
+
+  router.get('/family/detach-preview/:targetUserId', deps.requireAuth, (c) => {
+    const auth = c.get('auth')!;
+    const targetUserIdParam = c.req.param('targetUserId');
+    const preview = deps.socialService.getFamilyDetachPreview({
+      libraryId: auth.libraryId,
+      actorUserId: auth.userId,
+      targetUserIdParam
+    });
+    return c.json({ ok: true, preview });
+  });
+
+  router.post('/family/detach', deps.requireAuth, zValidator('json', detachFamilyMemberSchema), (c) => {
+    const auth = c.get('auth')!;
+    const body = c.req.valid('json');
+    const result = deps.socialService.detachFamilyMember({
+      libraryId: auth.libraryId,
+      actorUserId: auth.userId,
+      targetUserId: body.targetUserId,
+      mode: body.mode,
+      bookIds: body.bookIds,
+      loanDecisions: body.loanDecisions,
+      keepAsFriends: body.keepAsFriends,
+      newLibraryName: body.newLibraryName
+    });
+    const profile = deps.authService.buildProfilePayload(auth.userId);
+    return c.json({ ok: true, result, profile });
   });
 
   router.post('/tokens/regenerate', deps.requireAuth, zValidator('json', regenerateTokenSchema), (c) => {

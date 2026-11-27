@@ -6,8 +6,66 @@ import { ref } from 'vue';
 import { apiRequest } from '../api/client';
 import { useAuthStore, type AuthProfile } from './auth.store';
 import { useLibraryStore } from './library.store';
+import type { FamilyDetachPolicy } from '../../shared/types/domain.types';
 
 export type GiftReservationStatus = 'available' | 'reserved_by_me' | 'reserved_by_other';
+
+export interface FamilyDetachBookItem {
+  id: string;
+  title: string;
+  seriesId: string | null;
+  seriesName: string | null;
+  volumeNumber: number | null;
+  volumeLabel: string | null;
+  isIntegral: boolean;
+  includedVolumes: string[];
+  authors: string[];
+  mainCategory: string;
+  genres: string[];
+  coverUrl: string | null;
+  ownershipStatus: 'owned' | 'wish';
+  wishedByUserId: string | null;
+  wishedByName: string | null;
+  activeLoan: {
+    borrowerName: string;
+    loanedAt: string;
+  } | null;
+}
+
+export interface FamilyDetachPreview {
+  libraryId: string;
+  libraryName: string;
+  detachPolicy: FamilyDetachPolicy;
+  isActorOwner: boolean;
+  isSelfDetach: boolean;
+  canTransferOwned: boolean;
+  targetMember: {
+    userId: string;
+    username: string;
+    role: 'owner' | 'member';
+  };
+  willTransferOwnershipTo: {
+    userId: string;
+    username: string;
+  } | null;
+  defaultNewLibraryName: string;
+  preselectedBookIds: string[];
+  books: FamilyDetachBookItem[];
+}
+
+export interface FamilyDetachResult {
+  newLibraryId: string;
+  newLibraryName: string;
+  targetUserId: string;
+  targetUsername: string;
+  selfDetached: boolean;
+  promotedOwnerUsername: string | null;
+  mode: 'move' | 'copy';
+  transferredOwnedCount: number;
+  transferredWishCount: number;
+  transferredLoansCount: number;
+  keptAsFriends: boolean;
+}
 
 export interface FriendItem {
   libraryId: string;
@@ -116,6 +174,51 @@ export const useSocialStore = defineStore('social', () => {
     return { targetLibraryName: res.targetLibraryName };
   }
 
+  async function updateFamilyPolicy(detachPolicy: FamilyDetachPolicy): Promise<FamilyDetachPolicy> {
+    const authStore = useAuthStore();
+    const res = await apiRequest<{
+      ok: true;
+      detachPolicy: FamilyDetachPolicy;
+      profile: AuthProfile;
+    }>('/api/social/family/policy', {
+      method: 'PATCH',
+      body: { detachPolicy }
+    });
+    authStore.hydrateProfile(res.profile);
+    return res.detachPolicy;
+  }
+
+  async function fetchDetachPreview(targetUserId: string): Promise<FamilyDetachPreview> {
+    const res = await apiRequest<{ ok: true; preview: FamilyDetachPreview }>(
+      `/api/social/family/detach-preview/${encodeURIComponent(targetUserId)}`
+    );
+    return res.preview;
+  }
+
+  async function detachFamilyMember(payload: {
+    targetUserId: string;
+    mode: 'move' | 'copy';
+    bookIds: string[];
+    loanDecisions: Record<string, 'transfer' | 'return' | 'skip'>;
+    keepAsFriends: boolean;
+    newLibraryName?: string;
+  }): Promise<FamilyDetachResult> {
+    const authStore = useAuthStore();
+    const libraryStore = useLibraryStore();
+    const res = await apiRequest<{
+      ok: true;
+      result: FamilyDetachResult;
+      profile: AuthProfile;
+    }>('/api/social/family/detach', {
+      method: 'POST',
+      body: payload
+    });
+    authStore.hydrateProfile(res.profile);
+    await libraryStore.syncNow({ forceFullPull: true });
+    await fetchFriends().catch(() => undefined);
+    return res.result;
+  }
+
   async function regenerateToken(tokenType: 'family' | 'friend'): Promise<string> {
     const authStore = useAuthStore();
     const res = await apiRequest<{
@@ -162,6 +265,9 @@ export const useSocialStore = defineStore('social', () => {
     removeFriend,
     restoreFriend,
     joinFamily,
+    updateFamilyPolicy,
+    fetchDetachPreview,
+    detachFamilyMember,
     regenerateToken,
     fetchSharedLibrary,
     reserveGift,

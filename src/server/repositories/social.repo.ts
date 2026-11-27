@@ -131,4 +131,20 @@ export class SocialRepository {
     );
     return res.changes > 0;
   }
+
+  moveReservationToLibrary(fromLibraryId: string, toLibraryId: string, bookId: string): boolean {
+    const existing = this.findReservation(fromLibraryId, bookId);
+    if (!existing) return false;
+    this.db.run(
+      `INSERT INTO wishlist_reservations (library_id, book_id, reserved_by_user_id, reserved_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (library_id, book_id) DO NOTHING`,
+      [toLibraryId, bookId, existing.reserved_by_user_id, existing.reserved_at]
+    );
+    this.db.run('DELETE FROM wishlist_reservations WHERE library_id = ? AND book_id = ?', [
+      fromLibraryId,
+      bookId
+    ]);
+    return true;
+  }
 }

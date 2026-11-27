@@ -107,10 +107,23 @@ async function handleSaveProfile(): Promise<void> {
 }
 
 // ==================== APPARENCE (THÈMES) ====================
-const themeOptions = computed<Array<{ id: ThemeId; label: string }>>(() => [
-  { id: 'editorial-light', label: t('profile.themeLight') },
-  { id: 'dark', label: t('profile.themeDark') },
-  { id: 'warm', label: t('profile.themeWarm') }
+interface ThemeChoiceItem {
+  id: ThemeId;
+  label: string;
+  desc: string;
+}
+
+const proThemeOptions = computed<ThemeChoiceItem[]>(() => [
+  { id: 'librairie', label: t('profile.themeLibrairie'), desc: t('profile.themeLibrairieDesc') },
+  { id: 'studio', label: t('profile.themeStudio'), desc: t('profile.themeStudioDesc') },
+  { id: 'atelier-bd', label: t('profile.themeAtelierBd'), desc: t('profile.themeAtelierBdDesc') },
+  { id: 'nocturne', label: t('profile.themeNocturne'), desc: t('profile.themeNocturneDesc') }
+]);
+
+const classicThemeOptions = computed<ThemeChoiceItem[]>(() => [
+  { id: 'editorial-light', label: t('profile.themeLight'), desc: t('profile.themeLightDesc') },
+  { id: 'dark', label: t('profile.themeDark'), desc: t('profile.themeDarkDesc') },
+  { id: 'warm', label: t('profile.themeWarm'), desc: t('profile.themeWarmDesc') }
 ]);
 
 async function handleSelectTheme(theme: ThemeId): Promise<void> {
@@ -676,6 +689,22 @@ async function disableWebPush(): Promise<void> {
           <h2>{{ t('profile.quickShortcutTitle') }}</h2>
         </div>
         <p class="ds-text-muted">{{ t('profile.quickShortcutDesc') }}</p>
+
+        <div class="ds-stack--sm">
+          <div class="ds-panel quick-shortcut-step">
+            <strong>{{ t('profile.quickShortcutMethod1Title') }}</strong>
+            <p class="ds-text-muted">{{ t('profile.quickShortcutMethod1Steps') }}</p>
+          </div>
+          <div class="ds-panel quick-shortcut-step">
+            <strong>{{ t('profile.quickShortcutMethod2Title') }}</strong>
+            <p class="ds-text-muted">{{ t('profile.quickShortcutMethod2Steps') }}</p>
+          </div>
+          <div class="ds-panel quick-shortcut-step">
+            <strong>{{ t('profile.quickShortcutMethod3Title') }}</strong>
+            <p class="ds-text-muted">{{ t('profile.quickShortcutMethod3Steps') }}</p>
+          </div>
+        </div>
+
         <div class="ds-row">
           <button type="button" class="ds-btn ds-btn--primary ds-btn--sm" @click="handleOpenQuickCheck">
             <ScanBarcode :size="15" aria-hidden="true" />
@@ -717,23 +746,59 @@ async function disableWebPush(): Promise<void> {
     </div>
 
     <!-- ==================== ONGLET 2 : APPARENCE ==================== -->
-    <div v-else-if="activeTab === 'appearance'" class="ds-card ds-stack">
-      <h2>{{ t('profile.themeLabel') }}</h2>
-      <div class="ds-grid-3">
-        <button
-          v-for="themeOpt in themeOptions"
-          :key="themeOpt.id"
-          type="button"
-          class="theme-card"
-          :class="{ 'theme-card--active': authStore.activeTheme === themeOpt.id }"
-          @click="handleSelectTheme(themeOpt.id)"
-        >
-          <span class="theme-card__preview" :data-theme="themeOpt.id" aria-hidden="true">
-            <span class="theme-card__dot" />
-            <span class="theme-card__line" />
-          </span>
-          <span>{{ themeOpt.label }}</span>
-        </button>
+    <div v-else-if="activeTab === 'appearance'" class="ds-stack">
+      <div class="ds-card ds-stack">
+        <h2>{{ t('profile.themeProGroupTitle') }}</h2>
+        <div class="theme-cards-grid">
+          <button
+            v-for="themeOpt in proThemeOptions"
+            :key="themeOpt.id"
+            type="button"
+            class="theme-card"
+            :class="{ 'theme-card--active': authStore.activeTheme === themeOpt.id }"
+            @click="handleSelectTheme(themeOpt.id)"
+          >
+            <span class="theme-card__preview" :data-theme="themeOpt.id" aria-hidden="true">
+              <span class="theme-card__mini-card">
+                <span class="theme-card__mini-title">Aa</span>
+                <span class="theme-card__mini-lines">
+                  <span class="theme-card__line" />
+                  <span class="theme-card__line theme-card__line--short" />
+                </span>
+                <span class="theme-card__dot" />
+              </span>
+            </span>
+            <strong class="theme-card__name">{{ themeOpt.label }}</strong>
+            <span class="theme-card__desc">{{ themeOpt.desc }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="ds-card ds-stack">
+        <h2>{{ t('profile.themeClassicGroupTitle') }}</h2>
+        <div class="theme-cards-grid">
+          <button
+            v-for="themeOpt in classicThemeOptions"
+            :key="themeOpt.id"
+            type="button"
+            class="theme-card"
+            :class="{ 'theme-card--active': authStore.activeTheme === themeOpt.id }"
+            @click="handleSelectTheme(themeOpt.id)"
+          >
+            <span class="theme-card__preview" :data-theme="themeOpt.id" aria-hidden="true">
+              <span class="theme-card__mini-card">
+                <span class="theme-card__mini-title">Aa</span>
+                <span class="theme-card__mini-lines">
+                  <span class="theme-card__line" />
+                  <span class="theme-card__line theme-card__line--short" />
+                </span>
+                <span class="theme-card__dot" />
+              </span>
+            </span>
+            <strong class="theme-card__name">{{ themeOpt.label }}</strong>
+            <span class="theme-card__desc">{{ themeOpt.desc }}</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1128,42 +1193,95 @@ async function disableWebPush(): Promise<void> {
   justify-content: flex-end;
 }
 
+.quick-shortcut-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quick-shortcut-step p {
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.theme-cards-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-3);
+}
+
+@media (min-width: 600px) {
+  .theme-cards-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .theme-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4);
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-3);
   border-radius: var(--radius-lg);
   border: 2px solid var(--border-subtle);
   background: var(--bg-subtle);
   color: var(--text-primary);
-  font-weight: 600;
   cursor: pointer;
-  text-align: center;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.theme-card:hover {
+  border-color: var(--accent-border);
 }
 
 .theme-card--active {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
 }
 
 .theme-card__preview {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  justify-content: center;
   width: 100%;
-  height: 44px;
-  padding: 0 var(--space-3);
+  padding: 10px;
   border-radius: var(--radius-md);
-  background: var(--bg-app);
+  background: var(--bg-page);
   border: 1px solid var(--border-subtle);
 }
 
+.theme-card__mini-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+}
+
+.theme-card__mini-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.theme-card__mini-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-inline-size: 0;
+}
+
 .theme-card__dot {
-  width: 16px;
+  width: 24px;
   height: 16px;
   border-radius: var(--radius-pill);
   background: var(--accent);
@@ -1171,11 +1289,25 @@ async function disableWebPush(): Promise<void> {
 }
 
 .theme-card__line {
-  flex: 1;
-  height: 10px;
-  border-radius: var(--radius-pill);
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  width: 100%;
+  height: 7px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.theme-card__line--short {
+  width: 62%;
+}
+
+.theme-card__name {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.theme-card__desc {
+  font-size: 0.81rem;
+  line-height: 1.38;
+  color: var(--text-secondary);
 }
 
 .genres-input {

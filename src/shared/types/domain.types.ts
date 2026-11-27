@@ -1,8 +1,16 @@
 // src/shared/types/domain.types.ts
 // Types métier unifiés V2 (couche partagée pure — zéro import Vue / Node / SQL / réseau).
 
-export type ThemeId = 'editorial-light' | 'dark' | 'warm';
+export type ThemeId =
+  | 'editorial-light'
+  | 'dark'
+  | 'warm'
+  | 'librairie'
+  | 'studio'
+  | 'atelier-bd'
+  | 'nocturne';
 export type LocaleId = 'fr';
+export type FamilyDetachPolicy = 'member_choice' | 'owner_only';
 
 export type BookMainCategory =
   | 'BD'

@@ -5,6 +5,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/primitives.css';
 import './styles/layouts.css';
+import './styles/themes.css';
 
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
@@ -12,10 +13,20 @@ import App from './App.vue';
 import { router } from './router';
 import { useUiStore } from './stores/ui.store';
 
+const VALID_THEMES = new Set([
+  'editorial-light',
+  'dark',
+  'warm',
+  'librairie',
+  'studio',
+  'atelier-bd',
+  'nocturne'
+]);
+
 // Restauration immédiate du thème avant le premier rendu (évite tout flash visuel)
 try {
   const savedTheme = localStorage.getItem('biblio_theme_v2');
-  if (savedTheme === 'editorial-light' || savedTheme === 'dark' || savedTheme === 'warm') {
+  if (savedTheme && VALID_THEMES.has(savedTheme)) {
     document.documentElement.setAttribute('data-theme', savedTheme);
   }
 } catch {

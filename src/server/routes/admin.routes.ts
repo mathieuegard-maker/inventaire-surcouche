@@ -6,6 +6,7 @@ import { zValidator } from '@hono/zod-validator';
 import {
   adminBenchmarkGradeSchema,
   adminCatalogPatchSchema,
+  adminDefaultGenresSchema,
   adminMaintenanceTaskSchema,
   adminResetCatalogSchema
 } from '../../shared/schemas';
@@ -44,6 +45,21 @@ export function createAdminRoutes(deps: {
     const body = c.req.valid('json');
     const result = deps.adminService.updateCatalogBulk(body);
     return c.json({ ok: true, ...result });
+  });
+
+  router.get('/default-genres', (c) => {
+    return c.json({ ok: true, defaultGenres: deps.adminService.listGlobalDefaultGenres() });
+  });
+
+  router.put('/default-genres', zValidator('json', adminDefaultGenresSchema), (c) => {
+    const { genres } = c.req.valid('json');
+    const defaultGenres = deps.adminService.setGlobalDefaultGenres(genres);
+    return c.json({ ok: true, defaultGenres });
+  });
+
+  router.post('/default-genres/reset', (c) => {
+    const defaultGenres = deps.adminService.resetGlobalDefaultGenres();
+    return c.json({ ok: true, defaultGenres });
   });
 
   router.get('/users', (c) => {

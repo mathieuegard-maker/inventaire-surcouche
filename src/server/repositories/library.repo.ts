@@ -2,7 +2,12 @@
 // Repository SQL pur pour l'espace Foyer (libraries, library_members, friend_connections).
 
 import type { DatabaseAdapter } from '../db/database.adapter';
-import type { LibraryBookOverrides, LibraryMemberRole, OwnershipStatus } from '../../shared/types/domain.types';
+import type {
+  FamilyDetachPolicy,
+  LibraryBookOverrides,
+  LibraryMemberRole,
+  OwnershipStatus
+} from '../../shared/types/domain.types';
 
 export interface LibraryRow {
   id: string;
@@ -10,6 +15,7 @@ export interface LibraryRow {
   owner_user_id: string;
   family_invite_code: string;
   friend_share_token: string;
+  detach_policy?: FamilyDetachPolicy;
   created_at: string;
   updated_at: string;
 }
@@ -138,6 +144,54 @@ export class LibraryRepository {
 
   deleteLibrary(libraryId: string): void {
     this.db.run('DELETE FROM libraries WHERE id = ?', [libraryId]);
+  }
+
+  updateDetachPolicy(libraryId: string, policy: FamilyDetachPolicy, now: string): void {
+    this.db.run('UPDATE libraries SET detach_policy = ?, updated_at = ? WHERE id = ?', [
+      policy,
+      now,
+      libraryId
+    ]);
+  }
+
+  copyLibraryBookToTarget(
+    sourceRow: LibraryBookRow,
+    targetLibraryId: string,
+    wishedByUserId: string | null,
+    now: string
+  ): void {
+    this.db.run(
+      `INSERT INTO library_books (
+         library_id, book_id, status, wished_by_user_id, overrides_json,
+         overrides_updated_at, added_at, updated_at, deleted_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT (library_id, book_id) DO UPDATE SET
+         status = excluded.status,
+         wished_by_user_id = excluded.wished_by_user_id,
+         overrides_json = excluded.overrides_json,
+         overrides_updated_at = excluded.overrides_updated_at,
+         updated_at = excluded.updated_at,
+         deleted_at = NULL`,
+      [
+        targetLibraryId,
+        sourceRow.book_id,
+        sourceRow.status,
+        sourceRow.status === 'wish' ? wishedByUserId : null,
+        sourceRow.overrides_json || '{}',
+        sourceRow.overrides_updated_at,
+        sourceRow.added_at || now,
+        now
+      ]
+    );
+  }
+
+  softRemoveLibraryBook(libraryId: string, bookId: string, now: string): void {
+    this.db.run(
+      `UPDATE library_books
+       SET status = 'none', wished_by_user_id = NULL, deleted_at = ?, updated_at = ?
+       WHERE library_id = ? AND book_id = ?`,
+      [now, now, libraryId, bookId]
+    );
   }
 
   addFriendConnection(userId: string, targetLibraryId: string, now: string): void {

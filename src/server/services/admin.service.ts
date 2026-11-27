@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fsSync from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { SUGGESTED_GENRE_CHIPS } from '../../shared/bibliographic/category-classifier';
 import {
   alignGroundTruthToItems,
   buildBenchmarkGradedReport,
@@ -307,6 +308,23 @@ export class AdminService {
   resetUserAiQuota(userId: string): void {
     const monthKey = new Date().toISOString().slice(0, 7);
     this.userRepo.resetAiUsage(userId, monthKey, new Date().toISOString());
+  }
+
+  listGlobalDefaultGenres(): string[] {
+    const stored = this.userRepo.listGlobalDefaultGenres();
+    return stored.length > 0 ? stored : [...SUGGESTED_GENRE_CHIPS];
+  }
+
+  setGlobalDefaultGenres(genres: string[]): string[] {
+    const clean = genres.map((g) => g.trim()).filter(Boolean);
+    if (clean.length === 0) {
+      throw new AppError(400, 'EMPTY_DEFAULT_GENRES', 'Au moins un genre par défaut est requis.');
+    }
+    return this.userRepo.replaceGlobalDefaultGenres(clean, new Date().toISOString());
+  }
+
+  resetGlobalDefaultGenres(): string[] {
+    return this.userRepo.replaceGlobalDefaultGenres(SUGGESTED_GENRE_CHIPS, new Date().toISOString());
   }
 
   listLogs(input: { stage?: string; status?: string; query?: string; limit?: number }) {
