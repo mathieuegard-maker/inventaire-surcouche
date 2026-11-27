@@ -1,5 +1,6 @@
 // src/client/stores/jobs.store.ts
-// Store Pinia global unique pour le suivi temps réel des tâches longues serveur (`background_jobs`) via SSE.
+// Store Pinia global unique pour le suivi temps réel des tâches longues serveur (`background_jobs`) via SSE
+// + gestion de l'historique Photo IA (30 jours glissants).
 
 import { defineStore } from 'pinia';
 import { computed, ref } from 'vue';
@@ -9,6 +10,8 @@ import type { BackgroundJobView } from '../../shared/types/domain.types';
 
 export const useJobsStore = defineStore('jobs', () => {
   const jobs = ref<BackgroundJobView[]>([]);
+  const photoHistory = ref<BackgroundJobView[]>([]);
+  const photoHistoryRetentionDays = ref<number>(30);
   const isStreamConnected = ref(false);
 
   let eventSource: EventSource | null = null;
@@ -20,9 +23,17 @@ export const useJobsStore = defineStore('jobs', () => {
 
   const hasRunningJobs = computed(() => activeJobs.value.length > 0);
 
-  const latestPhotoJob = computed(() =>
-    jobs.value.find((j) => j.type === 'photo_ocr') ?? null
+  /** Lots Photo IA non archivés (en attente, en cours ou terminés en attente de validation). */
+  const activePhotoJobs = computed(() =>
+    jobs.value.filter((j) => j.type === 'photo_ocr' && !j.archivedAt)
   );
+
+  /** Dernier lot Photo IA non archivé (disparaît automatiquement dès validation / archivage). */
+  const latestPhotoJob = computed(() => {
+    const running = activePhotoJobs.value.find((j) => j.status === 'running' || j.status === 'pending');
+    if (running) return running;
+    return activePhotoJobs.value[0] ?? null;
+  });
 
   const activePhotoCommitJob = computed(() =>
     jobs.value.find((j) => j.type === 'photo_commit' && (j.status === 'pending' || j.status === 'running')) ?? null
@@ -32,14 +43,24 @@ export const useJobsStore = defineStore('jobs', () => {
     jobs.value.find((j) => j.type === 'collection_import') ?? null
   );
 
+  const activeCollectionImportJob = computed(() =>
+    jobs.value.find((j) => j.type === 'collection_import' && (j.status === 'pending' || j.status === 'running')) ?? null
+  );
+
   // Priorise TOUJOURS un job réellement en cours (`running`) avant un job en attente (`pending` à 0/N)
   const activeSeriesEnrichJob = computed(() => {
     const running = jobs.value.find(
-      (j) => j.type === 'series_enrich_volumes' && j.status === 'running'
+      (j) =>
+        (j.type === 'series_enrich_volumes' || j.type === 'series_apply_edition_covers' || j.type === 'series_expand') &&
+        j.status === 'running'
     );
     if (running) return running;
     return (
-      jobs.value.find((j) => j.type === 'series_enrich_volumes' && j.status === 'pending') ?? null
+      jobs.value.find(
+        (j) =>
+          (j.type === 'series_enrich_volumes' || j.type === 'series_apply_edition_covers' || j.type === 'series_expand') &&
+          j.status === 'pending'
+      ) ?? null
     );
   });
 
@@ -52,6 +73,16 @@ export const useJobsStore = defineStore('jobs', () => {
     } else {
       jobs.value.unshift(incoming);
     }
+
+    if (incoming.type === 'photo_ocr') {
+      const hIdx = photoHistory.value.findIndex((j) => j.id === incoming.id);
+      if (hIdx >= 0) {
+        photoHistory.value[hIdx] = incoming;
+      } else {
+        photoHistory.value.unshift(incoming);
+      }
+    }
+
     if (
       (incoming.type === 'photo_commit' ||
         incoming.type === 'series_expand' ||
@@ -78,6 +109,16 @@ export const useJobsStore = defineStore('jobs', () => {
       jobs.value = res.jobs;
     } catch {
       // ignore si offline ou non connecté
+    }
+  }
+
+  async function refreshPhotoHistory(): Promise<void> {
+    try {
+      const res = await apiRequest<{ ok: true; retentionDays: number; jobs: BackgroundJobView[] }>('/api/jobs/photo/history');
+      photoHistory.value = res.jobs;
+      photoHistoryRetentionDays.value = res.retentionDays ?? 30;
+    } catch {
+      // ignore si offline
     }
   }
 
@@ -159,15 +200,20 @@ export const useJobsStore = defineStore('jobs', () => {
 
   return {
     jobs,
+    photoHistory,
+    photoHistoryRetentionDays,
     activeJobs,
+    activePhotoJobs,
     hasRunningJobs,
     latestPhotoJob,
     activePhotoCommitJob,
     latestCollectionImportJob,
+    activeCollectionImportJob,
     activeSeriesEnrichJob,
     isStreamConnected,
     upsertJob,
     refreshJobs,
+    refreshPhotoHistory,
     connectStream,
     disconnectStream
   };

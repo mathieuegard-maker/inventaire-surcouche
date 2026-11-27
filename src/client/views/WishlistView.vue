@@ -1,16 +1,19 @@
 <!-- src/client/views/WishlistView.vue -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import BookCard from '../components/books/BookCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import ListControlBar from '../components/base/ListControlBar.vue';
+import PaginationBar from '../components/base/PaginationBar.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import BatchGenreModal from '../components/modals/BatchGenreModal.vue';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
-import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import { applyBookListFilters, extractFilterFacets } from '../../shared/bibliographic/list-filter.util';
+import { normalizeTextKey, stripLeadingArticles } from '../../shared/bibliographic/text-normalize.util';
 import type { BookView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
@@ -25,39 +28,53 @@ const deleteModalOpen = ref(false);
 const genreModalOpen = ref(false);
 const modalBusy = ref(false);
 
-const availableGenres = computed(() => {
-  const set = new Set<string>();
-  for (const b of libraryStore.wishedBooks) {
-    for (const g of b.genres) set.add(g);
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr'));
-});
+const sortOptions = computed(() => [
+  { value: 'alpha', label: t('collection.sortAlpha') },
+  { value: 'date', label: t('collection.sortDate') },
+  { value: 'author', label: t('collection.sortAuthor') }
+]);
 
-const availableAuthors = computed(() => {
-  const set = new Set<string>();
-  for (const b of libraryStore.wishedBooks) {
-    for (const a of b.authors) set.add(a);
-  }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr'));
-});
+const facets = computed(() =>
+  extractFilterFacets(libraryStore.wishedBooks, authStore.profile?.defaultGenres ?? [])
+);
 
 const filteredWished = computed(() => {
-  const needle = normalizeTextKey(state.query);
-  return libraryStore.wishedBooks.filter((b) => {
-    if (state.genre && !b.genres.includes(state.genre)) return false;
-    if (state.author && !b.authors.includes(state.author)) return false;
-    if (needle) {
-      const hay = normalizeTextKey([b.title, b.seriesName ?? '', ...b.authors, ...b.genres].join(' '));
-      if (!hay.includes(needle)) return false;
-    }
-    return true;
-  });
+  const list = applyBookListFilters(libraryStore.wishedBooks, state.filters);
+  if (state.sortBy === 'date') {
+    list.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  } else if (state.sortBy === 'author') {
+    list.sort((a, b) => (a.authors[0] ?? 'zzz').localeCompare(b.authors[0] ?? 'zzz', 'fr', { sensitivity: 'base' }));
+  } else {
+    list.sort((a, b) =>
+      stripLeadingArticles(a.title).localeCompare(stripLeadingArticles(b.title), 'fr', { sensitivity: 'base' })
+    );
+  }
+  return list;
 });
 
-// Regroupement Séries puis Livres indépendants
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredWished.value.length / state.pageSize)));
+
+watch(
+  [() => state.filters, () => state.sortBy, () => state.pageSize],
+  () => {
+    state.page = 1;
+  },
+  { deep: true }
+);
+
+watch(totalPages, (max) => {
+  if (state.page > max) state.page = max;
+});
+
+const paginatedWished = computed(() => {
+  const start = (state.page - 1) * state.pageSize;
+  return filteredWished.value.slice(start, start + state.pageSize);
+});
+
+// Regroupement Séries puis Livres indépendants sur la page courante
 const seriesGroups = computed(() => {
   const map = new Map<string, { seriesName: string; books: BookView[] }>();
-  for (const b of filteredWished.value) {
+  for (const b of paginatedWished.value) {
     if (!b.seriesId && !b.seriesName) continue;
     const key = b.seriesId ?? normalizeTextKey(b.seriesName ?? '');
     const label = b.seriesName ?? '';
@@ -77,7 +94,7 @@ const seriesGroups = computed(() => {
 });
 
 const standaloneBooks = computed(() =>
-  filteredWished.value.filter((b) => !b.seriesId && !b.seriesName)
+  paginatedWished.value.filter((b) => !b.seriesId && !b.seriesName)
 );
 
 const selectedBooks = computed(() =>
@@ -88,6 +105,18 @@ function toggleSelect(bookId: string): void {
   const next = new Set(selectedIds.value);
   if (next.has(bookId)) next.delete(bookId);
   else next.add(bookId);
+  selectedIds.value = next;
+}
+
+function toggleSelectAllPage(): void {
+  const pageIds = paginatedWished.value.map((b) => b.id);
+  const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.value.has(id));
+  const next = new Set(selectedIds.value);
+  if (allSelected) {
+    for (const id of pageIds) next.delete(id);
+  } else {
+    for (const id of pageIds) next.add(id);
+  }
   selectedIds.value = next;
 }
 
@@ -157,27 +186,23 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('wishlist.title') }}</h1>
-      <span class="ds-badge">{{ t('collection.booksCount', { count: filteredWished.length }) }}</span>
+      <span class="ds-badge ds-badge--accent">{{ t('collection.booksCount', { count: filteredWished.length }) }}</span>
     </div>
 
-    <div class="ds-panel ds-row">
-      <input
-        v-model="state.query"
-        type="search"
-        class="ds-input wish-search-input"
-        :placeholder="t('wishlist.searchPlaceholder')"
-      />
-      <select v-model="state.genre" class="ds-input wish-select" :aria-label="t('wishlist.allGenres')">
-        <option value="">{{ t('wishlist.allGenres') }}</option>
-        <option v-for="g in availableGenres" :key="g" :value="g">{{ g }}</option>
-      </select>
-      <select v-model="state.author" class="ds-input wish-select" :aria-label="t('wishlist.allAuthors')">
-        <option value="">{{ t('wishlist.allAuthors') }}</option>
-        <option v-for="a in availableAuthors" :key="a" :value="a">{{ a }}</option>
-      </select>
-    </div>
+    <ListControlBar
+      :filters="state.filters"
+      :facets="facets"
+      :enabled-facets="['genre', 'author', 'publisher', 'series', 'volumeNumber', 'integralOnly']"
+      :placeholder="t('wishlist.searchPlaceholder')"
+      :sort-value="state.sortBy"
+      :sort-options="sortOptions"
+      :show-select-all="paginatedWished.length > 0"
+      @update:filters="(next) => (state.filters = next)"
+      @update:sort-value="(v) => (state.sortBy = v as 'date' | 'alpha' | 'author')"
+      @select-all="toggleSelectAllPage"
+    />
 
     <p v-if="filteredWished.length === 0" class="ds-card ds-text-muted">
       {{ t('wishlist.empty') }}
@@ -220,6 +245,15 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
+    <PaginationBar
+      :page="state.page"
+      :total-pages="totalPages"
+      :page-size="state.pageSize"
+      :total-items="filteredWished.length"
+      @update:page="(p) => (state.page = p)"
+      @update:page-size="(s) => (state.pageSize = s)"
+    />
+
     <BatchActionBar
       :selected-books="selectedBooks"
       @action="handleBatchAction"
@@ -246,15 +280,3 @@ onBeforeUnmount(() => {
     />
   </section>
 </template>
-
-<style scoped>
-.wish-search-input {
-  flex: 1;
-  min-width: 200px;
-}
-
-.wish-select {
-  width: auto;
-  min-width: 170px;
-}
-</style>

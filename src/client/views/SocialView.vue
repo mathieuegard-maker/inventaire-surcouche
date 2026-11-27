@@ -1,8 +1,12 @@
 <!-- src/client/views/SocialView.vue -->
+<!-- Partage Foyer & Amis (V2.6 mobile-first) : 2 lignes distinctes (Code + Copier, Lien + Copier le lien),
+     infobulles ? dédiées et onglets tactiles homogènes. -->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { Copy, ExternalLink, Link2, RefreshCw, Share2, Trash2, UserPlus, Users } from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
+import HelpTooltip from '../components/base/HelpTooltip.vue';
 import QrCodeDisplay from '../components/base/QrCodeDisplay.vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useSocialStore } from '../stores/social.store';
@@ -39,8 +43,12 @@ function selectTab(tab: SocialTab): void {
 const origin = computed(() => (typeof window !== 'undefined' ? window.location.origin : ''));
 const familyCode = computed(() => authStore.profile?.library.familyInviteCode ?? '');
 const friendCode = computed(() => authStore.profile?.library.friendShareToken ?? '');
-const familyUrl = computed(() => (familyCode.value ? `${origin.value}/login?invite=${encodeURIComponent(familyCode.value)}` : ''));
-const friendUrl = computed(() => (friendCode.value ? `${origin.value}/shared/${encodeURIComponent(friendCode.value)}` : ''));
+const familyUrl = computed(() =>
+  familyCode.value ? `${origin.value}/login?invite=${encodeURIComponent(familyCode.value)}` : ''
+);
+const friendUrl = computed(() =>
+  friendCode.value ? `${origin.value}/shared/${encodeURIComponent(friendCode.value)}` : ''
+);
 
 const joinCodeInput = ref('');
 const joiningFamily = ref(false);
@@ -54,7 +62,10 @@ onMounted(() => {
   void socialStore.fetchFriends();
 });
 
-async function copyText(text: string, toastKey: 'social.familyCodeCopied' | 'social.friendCodeCopied'): Promise<void> {
+async function copyText(
+  text: string,
+  toastKey: 'social.familyCodeCopied' | 'social.friendCodeCopied'
+): Promise<void> {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
@@ -64,7 +75,11 @@ async function copyText(text: string, toastKey: 'social.familyCodeCopied' | 'soc
   }
 }
 
-async function nativeShare(url: string, label: string, toastKey: 'social.familyCodeCopied' | 'social.friendCodeCopied'): Promise<void> {
+async function nativeShare(
+  url: string,
+  label: string,
+  toastKey: 'social.familyCodeCopied' | 'social.friendCodeCopied'
+): Promise<void> {
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
       await navigator.share({ title: label, url });
@@ -132,14 +147,16 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <h1>{{ t('social.title') }}</h1>
+    <div class="ds-page-head">
+      <h1>{{ t('social.title') }}</h1>
+    </div>
 
-    <div class="ds-tabs" role="tablist">
+    <div class="ds-segmented" role="tablist">
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'family' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': activeTab === 'family' }"
         :aria-selected="activeTab === 'family'"
         @click="selectTab('family')"
       >
@@ -148,8 +165,8 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'friends' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': activeTab === 'friends' }"
         :aria-selected="activeTab === 'friends'"
         @click="selectTab('friends')"
       >
@@ -157,96 +174,149 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
       </button>
     </div>
 
-    <!-- Onglet Foyer & Liens -->
+    <!-- ==================== ONGLET FOYER & LIENS ==================== -->
     <div v-if="activeTab === 'family'" class="ds-stack">
       <div class="ds-grid-2">
-        <!-- Carte Foyer -->
+        <!-- Carte Code Foyer -->
         <div class="ds-card ds-stack">
-          <h2>{{ t('social.familyCodeLabel') }}</h2>
+          <div class="ds-row ds-row--between">
+            <h2>{{ t('social.familyCodeLabel') }}</h2>
+            <HelpTooltip :title="t('social.familyCodeLabel')" :text="t('social.familyCodeHelp')" />
+          </div>
           <p class="ds-text-muted">{{ t('social.familyCodeDesc') }}</p>
 
-          <div class="social-qr-row">
+          <div class="social-qr-center">
             <QrCodeDisplay :value="familyUrl" :alt="t('social.familyCodeLabel')" />
-            <div class="ds-stack social-code-col">
-              <code class="social-code-pill">{{ familyCode }}</code>
-              <div class="ds-row social-btn-wrap">
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm"
-                  @click="copyText(familyCode, 'social.familyCodeCopied')"
-                >
-                  {{ t('social.copyCode') }}
-                </button>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm"
-                  @click="copyText(familyUrl, 'social.familyCodeCopied')"
-                >
-                  {{ t('social.copyLink') }}
-                </button>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm ds-btn--primary"
-                  @click="nativeShare(familyUrl, t('social.familyCodeLabel'), 'social.familyCodeCopied')"
-                >
-                  {{ t('social.shareBtn') }}
-                </button>
-              </div>
+          </div>
+
+          <!-- Ligne 1 : Code + Copier -->
+          <div class="social-copy-block">
+            <span class="ds-label">{{ t('social.codeFieldLabel') }}</span>
+            <div class="social-copy-row">
+              <code class="social-copy-value">{{ familyCode }}</code>
               <button
                 type="button"
-                class="ds-btn ds-btn--sm ds-btn--danger"
-                @click="regenTarget = 'family'"
+                class="ds-btn ds-btn--sm"
+                @click="copyText(familyCode, 'social.familyCodeCopied')"
               >
-                {{ t('social.regenerateCodeBtn') }}
+                <Copy :size="15" aria-hidden="true" />
+                {{ t('social.copyCode') }}
               </button>
             </div>
           </div>
+
+          <!-- Ligne 2 : Lien visible + Copier le lien -->
+          <div class="social-copy-block">
+            <span class="ds-label">{{ t('social.linkFieldLabel') }}</span>
+            <div class="social-copy-row">
+              <code class="social-copy-value social-copy-value--url" :title="familyUrl">{{ familyUrl }}</code>
+              <button
+                type="button"
+                class="ds-btn ds-btn--sm"
+                @click="copyText(familyUrl, 'social.familyCodeCopied')"
+              >
+                <Link2 :size="15" aria-hidden="true" />
+                {{ t('social.copyLink') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Actions Partager (?) + Régénérer -->
+          <div class="ds-row ds-row--between social-card-footer">
+            <div class="ds-row">
+              <button
+                type="button"
+                class="ds-btn ds-btn--primary ds-btn--sm"
+                @click="nativeShare(familyUrl, t('social.familyCodeLabel'), 'social.familyCodeCopied')"
+              >
+                <Share2 :size="15" aria-hidden="true" />
+                {{ t('social.shareBtn') }}
+              </button>
+              <HelpTooltip :title="t('social.shareBtn')" :text="t('social.shareHelp')" />
+            </div>
+
+            <button
+              type="button"
+              class="ds-btn ds-btn--danger-soft ds-btn--sm"
+              @click="regenTarget = 'family'"
+            >
+              <RefreshCw :size="14" aria-hidden="true" />
+              {{ t('social.regenerateCodeBtn') }}
+            </button>
+          </div>
         </div>
 
-        <!-- Carte Vitrine Amis -->
+        <!-- Carte Code Amis -->
         <div class="ds-card ds-stack">
-          <h2>{{ t('social.friendCodeLabel') }}</h2>
+          <div class="ds-row ds-row--between">
+            <h2>{{ t('social.friendCodeLabel') }}</h2>
+            <HelpTooltip :title="t('social.friendCodeLabel')" :text="t('social.friendCodeHelp')" />
+          </div>
           <p class="ds-text-muted">{{ t('social.friendCodeDesc') }}</p>
 
-          <div class="social-qr-row">
+          <div class="social-qr-center">
             <QrCodeDisplay :value="friendUrl" :alt="t('social.friendCodeLabel')" />
-            <div class="ds-stack social-code-col">
-              <code class="social-code-pill">{{ friendCode }}</code>
-              <div class="ds-row social-btn-wrap">
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm"
-                  @click="copyText(friendCode, 'social.friendCodeCopied')"
-                >
-                  {{ t('social.copyCode') }}
-                </button>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm"
-                  @click="copyText(friendUrl, 'social.friendCodeCopied')"
-                >
-                  {{ t('social.copyLink') }}
-                </button>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm ds-btn--primary"
-                  @click="nativeShare(friendUrl, t('social.friendCodeLabel'), 'social.friendCodeCopied')"
-                >
-                  {{ t('social.shareBtn') }}
-                </button>
-              </div>
-              <div class="ds-row social-btn-wrap">
-                <router-link :to="`/shared/${friendCode}`" class="ds-btn ds-btn--sm">
-                  {{ t('social.viewCollectionBtn') }}
-                </router-link>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--sm ds-btn--danger"
-                  @click="regenTarget = 'friend'"
-                >
-                  {{ t('social.regenerateCodeBtn') }}
-                </button>
-              </div>
+          </div>
+
+          <!-- Ligne 1 : Code + Copier -->
+          <div class="social-copy-block">
+            <span class="ds-label">{{ t('social.codeFieldLabel') }}</span>
+            <div class="social-copy-row">
+              <code class="social-copy-value">{{ friendCode }}</code>
+              <button
+                type="button"
+                class="ds-btn ds-btn--sm"
+                @click="copyText(friendCode, 'social.friendCodeCopied')"
+              >
+                <Copy :size="15" aria-hidden="true" />
+                {{ t('social.copyCode') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Ligne 2 : Lien visible + Copier le lien -->
+          <div class="social-copy-block">
+            <span class="ds-label">{{ t('social.linkFieldLabel') }}</span>
+            <div class="social-copy-row">
+              <code class="social-copy-value social-copy-value--url" :title="friendUrl">{{ friendUrl }}</code>
+              <button
+                type="button"
+                class="ds-btn ds-btn--sm"
+                @click="copyText(friendUrl, 'social.friendCodeCopied')"
+              >
+                <Link2 :size="15" aria-hidden="true" />
+                {{ t('social.copyLink') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Actions Partager (?) + Aperçu + Régénérer -->
+          <div class="ds-row ds-row--between social-card-footer">
+            <div class="ds-row">
+              <button
+                type="button"
+                class="ds-btn ds-btn--primary ds-btn--sm"
+                @click="nativeShare(friendUrl, t('social.friendCodeLabel'), 'social.friendCodeCopied')"
+              >
+                <Share2 :size="15" aria-hidden="true" />
+                {{ t('social.shareBtn') }}
+              </button>
+              <HelpTooltip :title="t('social.shareBtn')" :text="t('social.shareHelp')" />
+            </div>
+
+            <div class="ds-row">
+              <router-link :to="`/shared/${friendCode}`" class="ds-btn ds-btn--sm">
+                <ExternalLink :size="14" aria-hidden="true" />
+                {{ t('social.viewCollectionBtn') }}
+              </router-link>
+              <button
+                type="button"
+                class="ds-btn ds-btn--danger-soft ds-btn--sm"
+                @click="regenTarget = 'friend'"
+              >
+                <RefreshCw :size="14" aria-hidden="true" />
+                {{ t('social.regenerateCodeBtn') }}
+              </button>
             </div>
           </div>
         </div>
@@ -254,8 +324,11 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 
       <!-- Membres du foyer -->
       <div class="ds-card ds-stack">
-        <h2>{{ t('social.membersTitle', { count: authStore.profile?.library.members.length ?? 0 }) }}</h2>
-        <div class="ds-stack">
+        <div class="ds-row">
+          <Users :size="18" aria-hidden="true" />
+          <h2>{{ t('social.membersTitle', { count: authStore.profile?.library.members.length ?? 0 }) }}</h2>
+        </div>
+        <div class="ds-stack--sm">
           <div
             v-for="member in authStore.profile?.library.members ?? []"
             :key="member.userId"
@@ -270,8 +343,8 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
       </div>
 
       <!-- Rejoindre un foyer -->
-      <details class="ds-card">
-        <summary class="social-summary">{{ t('social.joinFamilyTitle') }}</summary>
+      <details class="ds-accordion">
+        <summary>{{ t('social.joinFamilyTitle') }}</summary>
         <form class="ds-row social-inline-form" @submit.prevent="handleJoinFamily">
           <input
             v-model="joinCodeInput"
@@ -290,7 +363,7 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
       </details>
     </div>
 
-    <!-- Onglet Mes Amis -->
+    <!-- ==================== ONGLET MES AMIS ==================== -->
     <div v-else class="ds-stack">
       <div class="ds-card ds-stack">
         <h2>{{ t('social.followFriendTitle') }}</h2>
@@ -306,6 +379,7 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
             class="ds-btn ds-btn--primary"
             :disabled="addingFriend || !addFriendInput.trim()"
           >
+            <UserPlus :size="16" aria-hidden="true" />
             {{ addingFriend ? t('app.loading') : t('social.addFriendBtn') }}
           </button>
         </form>
@@ -330,13 +404,15 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 
           <div class="ds-row ds-row--between">
             <router-link :to="`/shared/${friend.shareToken}`" class="ds-btn ds-btn--primary ds-btn--sm">
+              <ExternalLink :size="14" aria-hidden="true" />
               {{ t('social.viewCollectionBtn') }}
             </router-link>
             <button
               type="button"
-              class="ds-btn ds-btn--sm ds-btn--danger"
+              class="ds-btn ds-btn--danger-soft ds-btn--sm"
               @click="handleRemoveFriend(friend.libraryId)"
             >
+              <Trash2 :size="14" aria-hidden="true" />
               {{ t('social.removeFriendBtn') }}
             </button>
           </div>
@@ -347,6 +423,7 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
     <BaseModal
       :open="regenTarget !== null"
       :title="t('social.regenerateCodeTitle')"
+      max-width="440px"
       @close="regenTarget = null"
     >
       <p>{{ t('social.regenerateCodeConfirm') }}</p>
@@ -363,35 +440,49 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 </template>
 
 <style scoped>
-.social-qr-row {
+.social-qr-center {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
+  justify-content: center;
+}
+
+.social-copy-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.social-copy-row {
+  display: flex;
   align-items: center;
+  gap: var(--space-2);
 }
 
-.social-code-col {
+.social-copy-value {
   flex: 1;
-  min-width: 180px;
-}
-
-.social-code-pill {
-  display: inline-block;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
+  min-width: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   font-weight: 700;
-  letter-spacing: 0.04em;
+  font-size: 0.86rem;
+  letter-spacing: 0.03em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.social-btn-wrap {
+.social-copy-value--url {
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--text-secondary);
+}
+
+.social-card-footer {
   flex-wrap: wrap;
-}
-
-.social-summary {
-  font-weight: 600;
-  cursor: pointer;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .social-inline-form {
@@ -400,6 +491,6 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 
 .social-flex-input {
   flex: 1;
-  min-width: 200px;
+  min-width: 180px;
 }
 </style>

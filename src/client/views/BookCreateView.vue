@@ -136,12 +136,6 @@ onMounted(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
-      <button type="button" class="ds-btn ds-btn--sm" @click="router.back()">
-        ← {{ t('app.back') }}
-      </button>
-    </div>
-
     <h1>{{ t('book.createUnknownTitle') }}</h1>
 
     <form class="ds-card ds-stack" @submit.prevent="handleCreate">

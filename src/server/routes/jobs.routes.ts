@@ -96,6 +96,16 @@ export function createJobsRoutes(deps: {
 
   // ==================== PHOTO IA 100 % SERVEUR ====================
 
+  router.get('/photo/history', (c) => {
+    const auth = c.get('auth')!;
+    const jobs = deps.photoAiService.listPhotoHistory({
+      userId: auth.userId,
+      libraryId: auth.libraryId,
+      retentionDays: 30
+    });
+    return c.json({ ok: true, retentionDays: 30, jobs });
+  });
+
   router.post('/photo', zValidator('json', createPhotoJobSchema), async (c) => {
     const auth = c.get('auth')!;
     const body = c.req.valid('json');
@@ -105,7 +115,8 @@ export function createJobsRoutes(deps: {
       isAdmin: auth.isAdmin,
       mode: body.mode,
       imageDataUrl: body.imageDataUrl,
-      mimeType: body.mimeType
+      mimeType: body.mimeType,
+      notifyOnComplete: body.notifyOnComplete
     });
     deps.worker.nudge();
     return c.json({ ok: true, ...created }, 201);
@@ -191,12 +202,24 @@ export function createJobsRoutes(deps: {
       jobId,
       targetStatus: body.targetStatus,
       itemIds: body.itemIds,
-      async: body.async
+      async: body.async,
+      archiveAfterCommit: body.archiveAfterCommit
     });
     if (outcome.queued) {
       deps.worker.nudge();
     }
     return c.json({ ok: true, ...outcome });
+  });
+
+  router.post('/photo/:jobId/archive', (c) => {
+    const auth = c.get('auth')!;
+    const jobId = c.req.param('jobId');
+    const job = deps.photoAiService.archivePhotoJob({
+      userId: auth.userId,
+      libraryId: auth.libraryId,
+      jobId
+    });
+    return c.json({ ok: true, job });
   });
 
   router.delete('/photo/:jobId', (c) => {

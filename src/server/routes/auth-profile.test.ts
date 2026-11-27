@@ -183,7 +183,22 @@ describe('Jalon 1 — Routes Auth & Profil (Hono + SQLite :memory:)', () => {
     });
     expect(resetGenreRes.status).toBe(200);
     const resetData = (await resetGenreRes.json()) as { defaultGenres: string[] };
-    expect(resetData.defaultGenres.length).toBeGreaterThan(0);
+    expect(resetData.defaultGenres.length).toBeGreaterThan(2);
+
+    // Réordonnancement manuel des genres par défaut (PUT /api/me/genres/reorder)
+    const reversed = [...resetData.defaultGenres].reverse();
+    const reorderRes = await app.request('/api/me/genres/reorder', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ genres: reversed })
+    });
+    expect(reorderRes.status).toBe(200);
+    const reorderData = (await reorderRes.json()) as { defaultGenres: string[] };
+    expect(reorderData.defaultGenres).toEqual(reversed);
+
+    const meAfterReorder = await app.request('/api/me', { headers: { cookie } });
+    const meBody = (await meAfterReorder.json()) as { profile: { defaultGenres: string[] } };
+    expect(meBody.profile.defaultGenres).toEqual(reversed);
   });
 
   it('exécute la récupération de mot de passe en 2 étapes et révoque les anciennes sessions', async () => {

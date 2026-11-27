@@ -2,10 +2,11 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { Image, RotateCcw, Search } from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
 import BookLookupModal from '../components/modals/BookLookupModal.vue';
+import CoverChangeModal from '../components/modals/CoverChangeModal.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
-import CoverPicker, { type CoverPropagationPlan } from '../components/books/CoverPicker.vue';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
@@ -39,6 +40,7 @@ const replacing = ref(false);
 const book = ref<BookView | null>(null);
 const resetModalOpen = ref(false);
 const replaceModalOpen = ref(false);
+const coverModalOpen = ref(false);
 
 const title = ref('');
 const authorsText = ref('');
@@ -54,8 +56,6 @@ const mainCategory = ref<BookMainCategory>('BD');
 const genres = ref<string[]>([]);
 const customGenreInput = ref('');
 const propagateGenresToSeries = ref(false);
-const coverKey = ref<string | null>(null);
-const coverPropagationPlan = ref<CoverPropagationPlan | null>(null);
 
 function hydrateForm(b: BookView): void {
   title.value = b.title;
@@ -70,7 +70,6 @@ function hydrateForm(b: BookView): void {
   pageCount.value = b.pageCount !== null ? String(b.pageCount) : '';
   mainCategory.value = b.mainCategory;
   genres.value = [...b.genres];
-  coverKey.value = b.coverKey;
 }
 
 async function load(): Promise<void> {
@@ -102,6 +101,16 @@ function addCustomGenre(alsoToDefaults: boolean): void {
   customGenreInput.value = '';
 }
 
+async function returnToBookCleanly(bookId: string): Promise<void> {
+  // Évite d'empiler une nouvelle entrée /book/:id au-dessus de /edit dans l'historique :
+  // revenir en arrière dépile /edit proprement pour que le retour suivant ramène à la série / liste.
+  if (typeof window !== 'undefined' && window.history.length > 1) {
+    router.back();
+  } else {
+    await router.replace(`/book/${encodeURIComponent(bookId)}`);
+  }
+}
+
 async function handleSave(): Promise<void> {
   if (!book.value) return;
   saving.value = true;
@@ -127,53 +136,10 @@ async function handleSave(): Promise<void> {
       pageCount: parsedPages,
       mainCategory: mainCategory.value,
       genres: genres.value,
-      coverKey: coverKey.value,
       propagateGenresToSeries: propagateGenresToSeries.value
     });
 
-    const plan = coverPropagationPlan.value;
-    if (
-      !oneShotForced.value &&
-      book.value.seriesId &&
-      coverKey.value &&
-      plan &&
-      plan.scope !== 'single' &&
-      plan.targetEdition
-    ) {
-      const propRes = await libraryStore.applySeriesEditionCovers(book.value.seriesId, {
-        sourceBookId: book.value.id,
-        sourceCoverKey: coverKey.value,
-        scope: plan.scope,
-        bookIds: plan.scope === 'selected' ? plan.selectedBookIds : [],
-        targetEdition: {
-          isbn13: plan.targetEdition.isbn13 ?? null,
-          publisher: plan.targetEdition.publisher ?? null,
-          collectionName: plan.targetEdition.collectionName ?? null,
-          isbnPrefix: plan.targetEdition.isbnPrefix ?? null,
-          lineageKey: plan.targetEdition.lineageKey,
-          label: plan.targetEdition.lineageLabel
-        },
-        searchMissingInBackground: plan.searchMissingInBackground
-      });
-
-      if (propRes.backgroundJobId && propRes.missingBookIds.length > 0) {
-        uiStore.pushToast(
-          t('book.coverAppliedWithJobToast', {
-            count: propRes.appliedCount,
-            missing: propRes.missingBookIds.length
-          }),
-          'success'
-        );
-      } else if (propRes.appliedCount > 1) {
-        uiStore.pushToast(t('book.coverAppliedMultiToast', { count: propRes.appliedCount }), 'success');
-      } else {
-        uiStore.pushToast(t('book.overridesSavedToast'), 'success');
-      }
-    } else {
-      uiStore.pushToast(t('book.overridesSavedToast'), 'success');
-    }
-
-    await router.push(`/book/${encodeURIComponent(book.value.id)}`);
+    await returnToBookCleanly(book.value.id);
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -224,43 +190,40 @@ onMounted(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
-      <button type="button" class="ds-btn ds-btn--sm" @click="router.back()">
-        ← {{ t('app.back') }}
-      </button>
-      <div class="ds-row">
-        <button
-          v-if="book"
-          type="button"
-          class="ds-btn ds-btn--sm"
-          @click="replaceModalOpen = true"
-        >
-          {{ t('book.wrongBookBtn') }}
+    <div class="ds-page-head">
+      <h1>{{ t('book.editViewTitle') }}</h1>
+      <div v-if="book" class="ds-row">
+        <button type="button" class="ds-btn ds-btn--sm" @click="replaceModalOpen = true">
+          <Search :size="15" aria-hidden="true" />
+          <span>{{ t('book.wrongBookBtn') }}</span>
         </button>
         <button
-          v-if="book?.hasUserOverrides"
+          v-if="book.hasUserOverrides"
           type="button"
           class="ds-btn ds-btn--ghost ds-btn--sm"
           @click="resetModalOpen = true"
         >
-          {{ t('book.resetOverridesBtn') }}
+          <RotateCcw :size="15" aria-hidden="true" />
+          <span>{{ t('book.resetOverridesBtn') }}</span>
         </button>
       </div>
     </div>
-
-    <h1>{{ t('book.editViewTitle') }}</h1>
-    <p class="ds-banner ds-banner--warning">{{ t('book.editLayer3Hint') }}</p>
 
     <div v-if="loading" class="ds-card ds-text-muted">{{ t('app.loading') }}</div>
     <div v-else-if="!book" class="ds-card ds-text-muted">{{ t('book.notFound') }}</div>
 
     <form v-else class="ds-card ds-stack" @submit.prevent="handleSave">
-      <CoverPicker
-        v-model="coverKey"
-        :book-id="book.id"
-        :series-id="oneShotForced ? null : book.seriesId"
-        @update:propagation-plan="coverPropagationPlan = $event"
-      />
+      <!-- Raccourci léger vers la modale dédiée « Changer la couverture » -->
+      <div class="edit-cover-shortcut ds-panel">
+        <div class="edit-cover-shortcut__thumb">
+          <img v-if="book.coverUrl" :src="book.coverUrl" :alt="book.title" />
+          <span v-else>{{ book.title.slice(0, 2).toUpperCase() }}</span>
+        </div>
+        <button type="button" class="ds-btn ds-btn--soft ds-btn--sm" @click="coverModalOpen = true">
+          <Image :size="16" aria-hidden="true" />
+          <span>{{ t('book.changeCoverBtn') }}</span>
+        </button>
+      </div>
 
       <div class="ds-field">
         <label class="ds-label" for="edit-title">{{ t('scan.fieldTitle') }}</label>
@@ -350,14 +313,24 @@ onMounted(() => {
       </div>
 
       <div class="ds-row edit-actions-end">
-        <button type="button" class="ds-btn" @click="router.back()">{{ t('app.cancel') }}</button>
+        <button type="button" class="ds-btn" @click="book && returnToBookCleanly(book.id)">
+          {{ t('app.cancel') }}
+        </button>
         <button type="submit" class="ds-btn ds-btn--primary" :disabled="saving || !title.trim()">
           {{ saving ? t('app.loading') : t('app.save') }}
         </button>
       </div>
     </form>
 
-    <BaseModal :open="resetModalOpen" :title="t('book.resetOverridesConfirmTitle')" @close="resetModalOpen = false">
+    <CoverChangeModal
+      v-if="book"
+      :open="coverModalOpen"
+      :book="book"
+      @close="coverModalOpen = false"
+      @saved="load"
+    />
+
+    <BaseModal :open="resetModalOpen" :title="t('book.resetOverridesConfirmTitle')" size="sm" @close="resetModalOpen = false">
       <p>{{ t('book.resetOverridesConfirmDesc') }}</p>
       <template #footer>
         <button type="button" class="ds-btn" @click="resetModalOpen = false">{{ t('app.cancel') }}</button>
@@ -366,6 +339,7 @@ onMounted(() => {
         </button>
       </template>
     </BaseModal>
+
     <BookLookupModal
       :open="replaceModalOpen"
       mode="pick"
@@ -379,6 +353,34 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.edit-cover-shortcut {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.edit-cover-shortcut__thumb {
+  width: 44px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.edit-cover-shortcut__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .edit-genre-chip {
   cursor: pointer;
 }
@@ -392,7 +394,7 @@ onMounted(() => {
 
 .edit-genre-input {
   flex: 1;
-  min-width: 180px;
+  min-width: 160px;
 }
 
 .edit-actions-end {

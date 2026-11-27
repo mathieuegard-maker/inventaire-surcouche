@@ -239,6 +239,7 @@ export interface BackgroundJobView {
   targetSeriesId?: string | null;
   errorMessage: string | null;
   result: unknown;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }

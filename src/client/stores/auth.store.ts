@@ -176,6 +176,17 @@ export const useAuthStore = defineStore('auth', () => {
     return res.defaultGenres;
   }
 
+  async function reorderDefaultGenres(genres: string[]): Promise<string[]> {
+    const res = await apiRequest<{ ok: true; defaultGenres: string[] }>('/api/me/genres/reorder', {
+      method: 'PUT',
+      body: { genres }
+    });
+    if (profile.value) {
+      profile.value = { ...profile.value, defaultGenres: res.defaultGenres };
+    }
+    return res.defaultGenres;
+  }
+
   async function deleteAccount(password: string): Promise<void> {
     await apiRequest('/api/me', {
       method: 'DELETE',
@@ -202,6 +213,7 @@ export const useAuthStore = defineStore('auth', () => {
     resetPassword,
     updateProfile,
     updateDefaultGenres,
+    reorderDefaultGenres,
     deleteAccount
   };
 });

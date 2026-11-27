@@ -1,15 +1,23 @@
 <!-- src/client/views/ReleasesView.vue -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { RefreshCw } from '@lucide/vue';
 import BookCard from '../components/books/BookCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import ListControlBar from '../components/base/ListControlBar.vue';
+import PaginationBar from '../components/base/PaginationBar.vue';
 import { apiRequest, ApiClientError } from '../api/client';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
-import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
+import {
+  applyBookListFilters,
+  createEmptyListFilters,
+  extractFilterFacets,
+  type CompositeListFilters
+} from '../../shared/bibliographic/list-filter.util';
 import type { BookView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
@@ -29,9 +37,25 @@ const uiStore = useUiStore();
 const loading = ref(true);
 const checking = ref(false);
 const alerts = ref<ReleaseAlertItem[]>([]);
-const query = ref('');
+const filters = ref<CompositeListFilters>(createEmptyListFilters());
 const sortBy = ref<'dateDesc' | 'dateAsc' | 'alphaAsc' | 'alphaDesc'>('dateDesc');
+const page = ref(1);
+const pageSize = ref(20);
 const selectedBookIds = ref<Set<string>>(new Set());
+
+const sortOptions = computed(() => [
+  { value: 'dateDesc', label: t('releases.sortDateDesc') },
+  { value: 'dateAsc', label: t('releases.sortDateAsc') },
+  { value: 'alphaAsc', label: t('releases.sortAlphaAsc') },
+  { value: 'alphaDesc', label: t('releases.sortAlphaDesc') }
+]);
+
+const facets = computed(() =>
+  extractFilterFacets(
+    alerts.value.map((a) => a.book),
+    authStore.profile?.defaultGenres ?? []
+  )
+);
 
 function syncUnreadCount(count: number): void {
   if (authStore.profile) {
@@ -83,11 +107,13 @@ async function dismissAll(): Promise<void> {
 }
 
 const filteredAlerts = computed(() => {
-  const needle = normalizeTextKey(query.value);
-  const list = alerts.value.filter((a) => {
-    if (!needle) return true;
-    return normalizeTextKey([a.seriesName, a.book.title, ...a.book.authors].join(' ')).includes(needle);
-  });
+  const matchedBookIds = new Set(
+    applyBookListFilters(
+      alerts.value.map((a) => a.book),
+      filters.value
+    ).map((b) => b.id)
+  );
+  const list = alerts.value.filter((a) => matchedBookIds.has(a.book.id));
 
   return [...list].sort((a, b) => {
     if (sortBy.value === 'dateAsc') return a.detectedAt.localeCompare(b.detectedAt);
@@ -95,6 +121,17 @@ const filteredAlerts = computed(() => {
     if (sortBy.value === 'alphaDesc') return b.book.title.localeCompare(a.book.title, 'fr');
     return b.detectedAt.localeCompare(a.detectedAt);
   });
+});
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredAlerts.value.length / pageSize.value)));
+
+watch([filters, sortBy, pageSize], () => {
+  page.value = 1;
+}, { deep: true });
+
+const paginatedAlerts = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  return filteredAlerts.value.slice(start, start + pageSize.value);
 });
 
 const selectedBooks = computed(() =>
@@ -105,6 +142,18 @@ function toggleSelect(bookId: string): void {
   const next = new Set(selectedBookIds.value);
   if (next.has(bookId)) next.delete(bookId);
   else next.add(bookId);
+  selectedBookIds.value = next;
+}
+
+function toggleSelectAllPage(): void {
+  const pageIds = paginatedAlerts.value.map((a) => a.book.id);
+  const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedBookIds.value.has(id));
+  const next = new Set(selectedBookIds.value);
+  if (allSelected) {
+    for (const id of pageIds) next.delete(id);
+  } else {
+    for (const id of pageIds) next.add(id);
+  }
   selectedBookIds.value = next;
 }
 
@@ -129,11 +178,12 @@ onMounted(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('releases.title') }}</h1>
       <div class="ds-row">
         <button type="button" class="ds-btn ds-btn--primary ds-btn--sm" :disabled="checking" @click="handleCheckNow">
-          {{ checking ? t('releases.checkingBtn') : t('releases.checkNowBtn') }}
+          <RefreshCw :size="15" aria-hidden="true" />
+          <span>{{ checking ? t('releases.checkingBtn') : t('releases.checkNowBtn') }}</span>
         </button>
         <button
           v-if="alerts.length > 0"
@@ -146,27 +196,25 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="ds-panel ds-row">
-      <input
-        v-model="query"
-        type="search"
-        class="ds-input releases-search-input"
-        :placeholder="t('releases.searchPlaceholder')"
-      />
-      <select v-model="sortBy" class="ds-input releases-sort-select" :aria-label="t('releases.sortDateDesc')">
-        <option value="dateDesc">{{ t('releases.sortDateDesc') }}</option>
-        <option value="dateAsc">{{ t('releases.sortDateAsc') }}</option>
-        <option value="alphaAsc">{{ t('releases.sortAlphaAsc') }}</option>
-        <option value="alphaDesc">{{ t('releases.sortAlphaDesc') }}</option>
-      </select>
-    </div>
+    <ListControlBar
+      :filters="filters"
+      :facets="facets"
+      :enabled-facets="['genre', 'author', 'publisher', 'series', 'volumeNumber']"
+      :placeholder="t('releases.searchPlaceholder')"
+      :sort-value="sortBy"
+      :sort-options="sortOptions"
+      :show-select-all="paginatedAlerts.length > 0"
+      @update:filters="(next) => (filters = next)"
+      @update:sort-value="(v) => (sortBy = v as 'dateDesc' | 'dateAsc' | 'alphaAsc' | 'alphaDesc')"
+      @select-all="toggleSelectAllPage"
+    />
 
     <div v-if="loading" class="ds-card ds-text-muted">{{ t('app.loading') }}</div>
     <div v-else-if="filteredAlerts.length === 0" class="ds-card ds-text-muted">{{ t('releases.empty') }}</div>
 
     <div v-else class="ds-grid-2">
       <BookCard
-        v-for="alert in filteredAlerts"
+        v-for="alert in paginatedAlerts"
         :key="alert.alertId"
         :book="alert.book"
         selectable
@@ -182,6 +230,15 @@ onMounted(() => {
       </BookCard>
     </div>
 
+    <PaginationBar
+      :page="page"
+      :total-pages="totalPages"
+      :page-size="pageSize"
+      :total-items="filteredAlerts.length"
+      @update:page="(p) => (page = p)"
+      @update:page-size="(s) => (pageSize = s)"
+    />
+
     <BatchActionBar
       :selected-books="selectedBooks"
       @action="handleBatchAction"
@@ -190,15 +247,3 @@ onMounted(() => {
     />
   </section>
 </template>
-
-<style scoped>
-.releases-search-input {
-  flex: 1;
-  min-width: 200px;
-}
-
-.releases-sort-select {
-  width: auto;
-  min-width: 180px;
-}
-</style>

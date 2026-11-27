@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import ListControlBar from '../components/base/ListControlBar.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import LendModal from '../components/modals/LendModal.vue';
 import BatchGenreModal from '../components/modals/BatchGenreModal.vue';
@@ -13,6 +14,12 @@ import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
+import {
+  applyBookListFilters,
+  createEmptyListFilters,
+  extractFilterFacets,
+  type CompositeListFilters
+} from '../../shared/bibliographic/list-filter.util';
 import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type { BookView, SeriesView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
@@ -50,13 +57,15 @@ const seriesList = ref<SeriesView[]>([]);
 const books = ref<BookView[]>([]);
 const externalSeries = ref<AuthorExternalSeriesHit[]>([]);
 const externalBooks = ref<AuthorExternalBookHit[]>([]);
-const query = ref('');
+const filters = ref<CompositeListFilters>(createEmptyListFilters());
 const selectedIds = ref<Set<string>>(new Set());
 
 const deleteOpen = ref(false);
 const lendOpen = ref(false);
 const genreOpen = ref(false);
 const modalBusy = ref(false);
+
+const facets = computed(() => extractFilterFacets(books.value, authStore.profile?.defaultGenres ?? []));
 
 async function loadAuthor(): Promise<void> {
   const raw = typeof route.params.name === 'string' ? decodeURIComponent(route.params.name) : '';
@@ -83,23 +92,25 @@ async function loadAuthor(): Promise<void> {
   }
 }
 
-watch(() => route.params.name, () => {
-  void loadAuthor();
-}, { immediate: true });
+watch(
+  () => route.params.name,
+  () => {
+    void loadAuthor();
+  },
+  { immediate: true }
+);
 
-const needle = computed(() => normalizeTextKey(query.value));
+const needle = computed(() => normalizeTextKey(filters.value.query));
+const filteredBookIds = computed(() => new Set(applyBookListFilters(books.value, filters.value).map((b) => b.id)));
 
 function matchesSeriesFilter(name: string, extra = ''): boolean {
+  if (filters.value.series.trim() && !normalizeTextKey(name).includes(normalizeTextKey(filters.value.series))) {
+    return false;
+  }
   if (!needle.value) return true;
   return normalizeTextKey(`${name} ${extra}`).includes(needle.value);
 }
 
-function matchesBookFilter(b: BookView): boolean {
-  if (!needle.value) return true;
-  return normalizeTextKey([b.title, b.seriesName ?? '', ...b.genres].join(' ')).includes(needle.value);
-}
-
-// Séries qui contiennent au moins 1 livre possédé ou en wishlist dans le foyer
 const wishedSeriesIds = computed(() => {
   const set = new Set<string>();
   for (const b of books.value) {
@@ -110,7 +121,6 @@ const wishedSeriesIds = computed(() => {
   return set;
 });
 
-// 1. Dans votre bibliothèque : d'abord vos séries, puis vos œuvres indépendantes
 const ownedSeries = computed(() =>
   seriesList.value.filter(
     (s) => (s.ownedCount > 0 || wishedSeriesIds.value.has(s.id)) && matchesSeriesFilter(s.canonicalName)
@@ -119,13 +129,12 @@ const ownedSeries = computed(() =>
 
 const ownedStandaloneBooks = computed(() =>
   books.value.filter(
-    (b) => !b.seriesId && (b.ownershipStatus === 'owned' || b.ownershipStatus === 'wish') && matchesBookFilter(b)
+    (b) => !b.seriesId && (b.ownershipStatus === 'owned' || b.ownershipStatus === 'wish') && filteredBookIds.value.has(b.id)
   )
 );
 
 const hasOwnedSection = computed(() => ownedSeries.value.length > 0 || ownedStandaloneBooks.value.length > 0);
 
-// 2. Autres œuvres de cet auteur : d'abord les séries (locales non possédées + externes), puis les œuvres indépendantes
 const otherLocalSeries = computed(() =>
   seriesList.value.filter(
     (s) => s.ownedCount === 0 && !wishedSeriesIds.value.has(s.id) && matchesSeriesFilter(s.canonicalName)
@@ -137,12 +146,12 @@ const filteredExternalSeries = computed(() =>
 );
 
 const otherLocalStandaloneBooks = computed(() =>
-  books.value.filter((b) => !b.seriesId && b.ownershipStatus === 'none' && matchesBookFilter(b))
+  books.value.filter((b) => !b.seriesId && b.ownershipStatus === 'none' && filteredBookIds.value.has(b.id))
 );
 
 const filteredExternalBooks = computed(() =>
-  externalBooks.value.filter((b) =>
-    !needle.value || normalizeTextKey(`${b.title} ${b.publisher ?? ''}`).includes(needle.value)
+  externalBooks.value.filter(
+    (b) => !needle.value || normalizeTextKey(`${b.title} ${b.publisher ?? ''}`).includes(needle.value)
   )
 );
 
@@ -152,9 +161,7 @@ const totalOtherStandaloneCount = computed(
 );
 const hasOtherSection = computed(() => totalOtherSeriesCount.value > 0 || totalOtherStandaloneCount.value > 0);
 
-const selectedBooks = computed(() =>
-  books.value.filter((b) => selectedIds.value.has(b.id))
-);
+const selectedBooks = computed(() => books.value.filter((b) => selectedIds.value.has(b.id)));
 
 function toggleSelect(bookId: string): void {
   const next = new Set(selectedIds.value);
@@ -270,22 +277,15 @@ async function confirmGenres(genres: string[]): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row">
-      <button type="button" class="ds-btn ds-btn--sm" @click="router.back()">
-        ← {{ t('app.back') }}
-      </button>
-    </div>
-
     <h1>{{ t('series.authorTitle', { name: authorName }) }}</h1>
 
-    <div class="ds-panel">
-      <input
-        v-model="query"
-        type="search"
-        class="ds-input"
-        :placeholder="t('series.authorSearchPlaceholder')"
-      />
-    </div>
+    <ListControlBar
+      :filters="filters"
+      :facets="facets"
+      :enabled-facets="['genre', 'publisher', 'series', 'readingStatus', 'integralOnly']"
+      :placeholder="t('series.authorSearchPlaceholder')"
+      @update:filters="(next) => (filters = next)"
+    />
 
     <div v-if="loading" class="ds-card ds-text-muted">{{ t('app.loading') }}</div>
     <div v-else-if="!hasOwnedSection && !hasOtherSection" class="ds-card ds-text-muted">
@@ -293,7 +293,6 @@ async function confirmGenres(genres: string[]): Promise<void> {
     </div>
 
     <template v-else>
-      <!-- 1. En priorité : ce que l'utilisateur possède / souhaite déjà -->
       <div v-if="hasOwnedSection" class="ds-stack">
         <h2>{{ t('series.authorOwnedSection') }}</h2>
 
@@ -325,7 +324,6 @@ async function confirmGenres(genres: string[]): Promise<void> {
         </div>
       </div>
 
-      <!-- 2. Ensuite : autres œuvres de cet auteur (séries d'abord, puis œuvres indépendantes) -->
       <div v-if="hasOtherSection" class="ds-stack">
         <h2>{{ t('series.authorOtherSection') }}</h2>
 
@@ -345,7 +343,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
               :key="extSer.normalizedKey"
               class="ds-card author-ext-card"
             >
-              <div class="ds-stack">
+              <div class="ds-stack--sm">
                 <strong>{{ extSer.seriesName }}</strong>
                 <span class="ds-text-muted">
                   {{ t('series.authorExternalSeriesVolumes', { count: extSer.volumesCount }) }}
@@ -385,7 +383,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
               :key="extBook.isbn13"
               class="ds-card author-ext-card"
             >
-              <div class="ds-stack">
+              <div class="ds-stack--sm">
                 <strong>{{ extBook.title }}</strong>
                 <span class="ds-text-muted">
                   {{ [extBook.publisher, extBook.publishYear].filter(Boolean).join(' · ') || extBook.isbn13 }}

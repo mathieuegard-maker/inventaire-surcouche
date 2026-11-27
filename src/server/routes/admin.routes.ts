@@ -56,6 +56,20 @@ export function createAdminRoutes(deps: {
     return c.json({ ok: true });
   });
 
+  router.post('/users/:userId/ban', (c) => {
+    const auth = c.get('auth')!;
+    const userId = c.req.param('userId');
+    const result = deps.adminService.setUserBanned(userId, auth.userId, true);
+    return c.json({ ok: true, ...result });
+  });
+
+  router.post('/users/:userId/unban', (c) => {
+    const auth = c.get('auth')!;
+    const userId = c.req.param('userId');
+    const result = deps.adminService.setUserBanned(userId, auth.userId, false);
+    return c.json({ ok: true, ...result });
+  });
+
   router.get('/logs', (c) => {
     const stage = c.req.query('stage') || undefined;
     const status = c.req.query('status') || undefined;

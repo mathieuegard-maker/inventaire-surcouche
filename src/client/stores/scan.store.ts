@@ -1,5 +1,5 @@
 // src/client/stores/scan.store.ts
-// Store Pinia persistant pour l'acquisition 4 onglets : Photo IA (serveur), Rafale, Scan simple et Recherche textuelle.
+// Store Pinia persistant pour l'acquisition 5 onglets : Photo IA (serveur + historique 30j), Rafale (sélection persistante), Scan simple, Recherche textuelle et Importer.
 
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
@@ -10,7 +10,7 @@ import { useJobsStore } from './jobs.store';
 import { useLibraryStore } from './library.store';
 import { useAuthStore } from './auth.store';
 
-export type ScanTab = 'photo' | 'burst' | 'simple' | 'search';
+export type ScanTab = 'photo' | 'burst' | 'simple' | 'search' | 'import';
 
 export interface PhotoCoverOption {
   coverKey: string | null;
@@ -68,12 +68,16 @@ export interface PhotoJobItem {
   isIntegral: boolean;
   includedVolumes: string[];
   committedBookId: string | null;
+  committedAction?: 'owned' | 'wish' | null;
+  approximateMatch?: boolean;
 }
 
 export interface PhotoJobResultPayload {
-  mode: 'shelf' | 'cover';
+  mode: 'auto' | 'shelf' | 'cover';
   previewCoverKey: string | null;
   previewUrl: string | null;
+  notifyOnComplete?: boolean;
+  committedAt?: string | null;
   items: PhotoJobItem[];
 }
 
@@ -113,8 +117,9 @@ export interface SearchFormFields {
 export const useScanStore = defineStore('scan', () => {
   const activeTab = ref<ScanTab>('photo');
 
-  // Mode Rafale persistant entre navigations
+  // Mode Rafale persistant entre navigations (items + sélection cochée !)
   const burstItems = ref<BurstScannedItem[]>([]);
+  const burstSelectedBookIds = ref<string[]>([]);
 
   // Recherche textuelle persistante (7 champs + résultats)
   const searchForm = ref<SearchFormFields>({
@@ -135,9 +140,10 @@ export const useScanStore = defineStore('scan', () => {
   // ==================== PHOTO IA (100 % SERVEUR) ====================
 
   async function submitPhotoJob(input: {
-    mode: 'shelf' | 'cover';
+    mode?: 'auto' | 'shelf' | 'cover';
     imageDataUrl: string;
     mimeType: string;
+    notifyOnComplete?: boolean;
   }): Promise<BackgroundJobView> {
     const res = await apiRequest<{
       ok: true;
@@ -145,7 +151,12 @@ export const useScanStore = defineStore('scan', () => {
       quota: { monthKey: string; used: number; limit: number; remaining: number };
     }>('/api/jobs/photo', {
       method: 'POST',
-      body: input,
+      body: {
+        mode: input.mode ?? 'auto',
+        imageDataUrl: input.imageDataUrl,
+        mimeType: input.mimeType,
+        notifyOnComplete: Boolean(input.notifyOnComplete)
+      },
       timeoutMs: 45000
     });
 
@@ -244,8 +255,9 @@ export const useScanStore = defineStore('scan', () => {
 
   async function commitPhotoJob(
     jobId: string,
-    targetStatus: 'owned' | 'wish'
-  ): Promise<{ committedCount: number; queued: boolean; targetCount: number }> {
+    targetStatus: 'owned' | 'wish',
+    options?: { archiveAfterCommit?: boolean; itemIds?: string[] }
+  ): Promise<{ committedCount: number; queued: boolean; targetCount: number; job: BackgroundJobView }> {
     const res = await apiRequest<{
       ok: true;
       committedCount: number;
@@ -255,7 +267,11 @@ export const useScanStore = defineStore('scan', () => {
       job: BackgroundJobView;
     }>(`/api/jobs/photo/${encodeURIComponent(jobId)}/commit`, {
       method: 'POST',
-      body: { targetStatus },
+      body: {
+        targetStatus,
+        itemIds: options?.itemIds,
+        archiveAfterCommit: options?.archiveAfterCommit ?? true
+      },
       timeoutMs: 30000
     });
     const jobsStore = useJobsStore();
@@ -269,14 +285,25 @@ export const useScanStore = defineStore('scan', () => {
     return {
       committedCount: res.committedCount,
       queued: Boolean(res.queued),
-      targetCount: res.targetCount ?? res.committedCount
+      targetCount: res.targetCount ?? res.committedCount,
+      job: res.job
     };
+  }
+
+  async function archivePhotoJob(jobId: string): Promise<BackgroundJobView> {
+    const res = await apiRequest<{ ok: true; job: BackgroundJobView }>(
+      `/api/jobs/photo/${encodeURIComponent(jobId)}/archive`,
+      { method: 'POST' }
+    );
+    useJobsStore().upsertJob(res.job);
+    return res.job;
   }
 
   async function deletePhotoJob(jobId: string): Promise<void> {
     await apiRequest(`/api/jobs/photo/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
     const jobsStore = useJobsStore();
     jobsStore.jobs = jobsStore.jobs.filter((j) => j.id !== jobId);
+    jobsStore.photoHistory = jobsStore.photoHistory.filter((j) => j.id !== jobId);
   }
 
   // ==================== RAFALE (CODE-BARRES) ====================
@@ -316,7 +343,6 @@ export const useScanStore = defineStore('scan', () => {
         return;
       } catch {
         if (attempt === 1) {
-          // Si la 1re tentative a expiré pendant un job IA lourd, retenter 1 fois (le serveur aura souvent déjà mis en cache l'ISBN)
           await new Promise((r) => setTimeout(r, 1200));
           continue;
         }
@@ -326,12 +352,30 @@ export const useScanStore = defineStore('scan', () => {
     }
   }
 
+  function toggleBurstBookSelection(bookId: string): void {
+    const idx = burstSelectedBookIds.value.indexOf(bookId);
+    if (idx >= 0) {
+      burstSelectedBookIds.value = burstSelectedBookIds.value.filter((id) => id !== bookId);
+    } else {
+      burstSelectedBookIds.value = [...burstSelectedBookIds.value, bookId];
+    }
+  }
+
+  function clearBurstSelection(): void {
+    burstSelectedBookIds.value = [];
+  }
+
   function removeBurstItem(isbn13: string): void {
+    const target = burstItems.value.find((it) => it.isbn13 === isbn13);
+    if (target?.book) {
+      burstSelectedBookIds.value = burstSelectedBookIds.value.filter((id) => id !== target.book!.id);
+    }
     burstItems.value = burstItems.value.filter((it) => it.isbn13 !== isbn13);
   }
 
   function clearBurstItems(): void {
     burstItems.value = [];
+    burstSelectedBookIds.value = [];
   }
 
   // ==================== RECHERCHE TEXTUELLE MULTI-CRITÈRES ====================
@@ -389,6 +433,7 @@ export const useScanStore = defineStore('scan', () => {
   return {
     activeTab,
     burstItems,
+    burstSelectedBookIds,
     searchForm,
     searchLoading,
     hasSearched,
@@ -402,8 +447,11 @@ export const useScanStore = defineStore('scan', () => {
     retryPhotoJobFailed,
     retryPhotoJobOcr,
     commitPhotoJob,
+    archivePhotoJob,
     deletePhotoJob,
     captureBurstIsbn,
+    toggleBurstBookSelection,
+    clearBurstSelection,
     removeBurstItem,
     clearBurstItems,
     runCatalogSearch,

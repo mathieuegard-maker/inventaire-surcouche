@@ -7,6 +7,7 @@ import { apiRequest } from '../api/client';
 import { clearAllLocalCache, localDb, type CachedLoanContact, type PendingOfflineScan } from '../cache/indexeddb';
 import { enqueueOutboxOp, runSyncCycle } from '../cache/sync-engine';
 import { annotateIntegralCoverage } from '../../shared/bibliographic/integral.util';
+import { createEmptyListFilters, type CompositeListFilters } from '../../shared/bibliographic/list-filter.util';
 import type {
   ActiveLoanView,
   ApplySeriesEditionCoversResponse,
@@ -42,22 +43,26 @@ export type { CoverCandidateItem };
 
 export interface CollectionViewMemory {
   tab: 'books' | 'series' | 'oneshots';
-  filterQuery: string;
+  filters: CompositeListFilters;
   sortBy: 'date' | 'alpha' | 'author';
   page: number;
+  pageSize: number;
   scrollY: number;
 }
 
 export interface WishlistViewMemory {
-  query: string;
-  genre: string;
-  author: string;
+  filters: CompositeListFilters;
+  sortBy: 'date' | 'alpha' | 'author';
+  page: number;
+  pageSize: number;
   scrollY: number;
 }
 
 export interface LoansViewMemory {
   mode: 'borrower' | 'chrono';
-  query: string;
+  filters: CompositeListFilters;
+  page: number;
+  pageSize: number;
   scrollY: number;
 }
 
@@ -76,25 +81,29 @@ export const useLibraryStore = defineStore('library', () => {
   const isSyncing = ref(false);
   const isHydrated = ref(false);
 
-  // Mémoire d'état par vue (filtres, tris, pagination, scroll)
+  // Mémoire d'état par vue (filtres composites, tris, pagination 20/50/100, scroll)
   const collectionState = ref<CollectionViewMemory>({
     tab: 'books',
-    filterQuery: '',
+    filters: createEmptyListFilters(),
     sortBy: 'date',
     page: 1,
+    pageSize: 20,
     scrollY: 0
   });
 
   const wishlistState = ref<WishlistViewMemory>({
-    query: '',
-    genre: '',
-    author: '',
+    filters: createEmptyListFilters(),
+    sortBy: 'alpha',
+    page: 1,
+    pageSize: 20,
     scrollY: 0
   });
 
   const loansState = ref<LoansViewMemory>({
     mode: 'borrower',
-    query: '',
+    filters: createEmptyListFilters(),
+    page: 1,
+    pageSize: 20,
     scrollY: 0
   });
 

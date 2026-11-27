@@ -2,7 +2,21 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  Image,
+  Layers,
+  Link2,
+  Pencil,
+  RotateCcw,
+  Star,
+  Unlink
+} from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
+import HelpTooltip from '../components/base/HelpTooltip.vue';
 import BookActions from '../components/books/BookActions.vue';
 import IntegralFields from '../components/books/IntegralFields.vue';
 import CoverChangeModal from '../components/modals/CoverChangeModal.vue';
@@ -22,6 +36,7 @@ const uiStore = useUiStore();
 const loading = ref(true);
 const book = ref<BookView | null>(null);
 const seriesContext = ref<BookSeriesContext | null>(null);
+const moreActionsOpen = ref(false);
 
 // Bloc Lecture individuelle (strictement user_id)
 const readingStatus = ref<ReadingStatus>('none');
@@ -36,8 +51,9 @@ const draftIncludedVolumes = ref<string[]>([]);
 const integralModalMode = ref<'create_separate' | 'convert_self'>('create_separate');
 const savingOverrides = ref(false);
 
-// Modale confirmation Réinitialiser Couche 3, Rattachement série & Changement rapide de couverture
+// Modales secondaires & confirmations
 const resetModalOpen = ref(false);
+const excludeModalOpen = ref(false);
 const attachModalOpen = ref(false);
 const coverModalOpen = ref(false);
 
@@ -49,6 +65,29 @@ const readingOptions = computed<Array<{ value: ReadingStatus; label: string }>>(
   { value: 'abandoned', label: t('book.readingAbandoned') }
 ]);
 
+// Genres cliquables : catégorie principale + sous-genres dédupliqués
+const displayGenres = computed(() => {
+  if (!book.value) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const candidates = [book.value.mainCategory, ...(book.value.genres ?? [])];
+  for (const g of candidates) {
+    const clean = (g ?? '').trim();
+    if (!clean || clean === 'Autre') continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(clean);
+    }
+  }
+  return out;
+});
+
+// Masque totalement les ISBN inconnus / factices
+const validKnownIsbns = computed(() =>
+  (book.value?.knownIsbns ?? []).filter((isbn) => /^(97[89]\d{10}|\d{9}[\dX])$/i.test(isbn.replace(/[-\s]/g, '')))
+);
+
 function syncReadingForm(b: BookView | null): void {
   readingStatus.value = b?.readingState?.status ?? 'none';
   readingRating.value = b?.readingState?.rating ?? 0;
@@ -59,6 +98,7 @@ async function loadBook(): Promise<void> {
   const rawId = typeof route.params.bookId === 'string' ? route.params.bookId : '';
   if (!rawId) return;
   loading.value = true;
+  moreActionsOpen.value = false;
   try {
     const res = await libraryStore.fetchBookDetail(rawId);
     book.value = res?.book ?? null;
@@ -69,9 +109,23 @@ async function loadBook(): Promise<void> {
   }
 }
 
-watch(() => route.params.bookId, () => {
-  void loadBook();
-}, { immediate: true });
+watch(
+  () => route.params.bookId,
+  () => {
+    void loadBook();
+  },
+  { immediate: true }
+);
+
+function navigateAdjacent(targetBookId: string | null): void {
+  if (!targetBookId) return;
+  // Remplace l'entrée d'historique pour qu'un seul Retour ramène directement à la série / liste d'origine
+  void router.replace(`/book/${encodeURIComponent(targetBookId)}`);
+}
+
+function openGenreFilter(genre: string): void {
+  void router.push({ path: '/collection', query: { genre } });
+}
 
 async function handleSaveReading(): Promise<void> {
   if (!book.value) return;
@@ -83,7 +137,7 @@ async function handleSaveReading(): Promise<void> {
       notes: readingNotes.value
     });
     book.value = { ...book.value, readingState: res.readingState };
-    uiStore.pushToast(res.offlineQueued ? t('batch.offlineQueuedToast') : t('book.readingSavedToast'), 'success');
+    uiStore.pushToast(res.offlineQueued ? t('batch.offlineQueuedToast') : t('book.readingSavedToast'), 'success', 2400);
   } finally {
     savingReading.value = false;
   }
@@ -92,7 +146,6 @@ async function handleSaveReading(): Promise<void> {
 function openIntegralModal(): void {
   if (!book.value) return;
   if (!book.value.isIntegral && book.value.seriesId) {
-    // Par défaut sur un tome unitaire d'une série : créer/associer une œuvre Intégrale distincte SANS écraser ce tome !
     integralModalMode.value = 'create_separate';
     draftIsIntegral.value = true;
     draftIncludedVolumes.value =
@@ -142,7 +195,7 @@ async function saveIntegralModal(): Promise<void> {
   }
 }
 
-async function handleExcludeFromSeries(): Promise<void> {
+async function confirmExcludeFromSeries(): Promise<void> {
   if (!book.value || !book.value.seriesId) return;
   savingOverrides.value = true;
   try {
@@ -152,6 +205,7 @@ async function handleExcludeFromSeries(): Promise<void> {
       oneShotForced: true
     });
     seriesContext.value = null;
+    excludeModalOpen.value = false;
     uiStore.pushToast(t('book.excludedFromSeriesToast'), 'info');
   } finally {
     savingOverrides.value = false;
@@ -174,33 +228,6 @@ async function confirmResetOverrides(): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
-      <button type="button" class="ds-btn ds-btn--sm" @click="router.back()">
-        ← {{ t('app.back') }}
-      </button>
-
-      <div v-if="seriesContext" class="ds-row">
-        <button
-          type="button"
-          class="ds-btn ds-btn--sm"
-          :disabled="!seriesContext.prevBookId"
-          :aria-label="t('book.prevBook')"
-          @click="seriesContext.prevBookId && router.push(`/book/${encodeURIComponent(seriesContext.prevBookId)}`)"
-        >
-          ‹ {{ t('book.prevBook') }}
-        </button>
-        <button
-          type="button"
-          class="ds-btn ds-btn--sm"
-          :disabled="!seriesContext.nextBookId"
-          :aria-label="t('book.nextBook')"
-          @click="seriesContext.nextBookId && router.push(`/book/${encodeURIComponent(seriesContext.nextBookId)}`)"
-        >
-          {{ t('book.nextBook') }} ›
-        </button>
-      </div>
-    </div>
-
     <div v-if="loading" class="ds-card ds-text-muted">
       {{ t('app.loading') }}
     </div>
@@ -211,15 +238,45 @@ async function confirmResetOverrides(): Promise<void> {
 
     <template v-else>
       <article class="ds-card book-hero">
-        <div class="book-hero__cover">
-          <img v-if="book.coverUrl" :src="book.coverUrl" :alt="book.title" />
-          <div v-else class="book-hero__placeholder">
-            {{ book.title.slice(0, 2).toUpperCase() }}
+        <!-- Couverture centrée + flèches latérales œuvre précédente / suivante -->
+        <div class="book-cover-stage">
+          <button
+            v-if="seriesContext"
+            type="button"
+            class="ds-btn ds-btn--icon book-cover-stage__arrow"
+            :disabled="!seriesContext.prevBookId"
+            :aria-label="t('book.prevBook')"
+            @click="navigateAdjacent(seriesContext.prevBookId)"
+          >
+            <ChevronLeft :size="22" aria-hidden="true" />
+          </button>
+
+          <div class="book-hero__cover">
+            <img v-if="book.coverUrl" :src="book.coverUrl" :alt="book.title" />
+            <div v-else class="book-hero__placeholder">
+              {{ book.title.slice(0, 2).toUpperCase() }}
+            </div>
           </div>
+
+          <button
+            v-if="seriesContext"
+            type="button"
+            class="ds-btn ds-btn--icon book-cover-stage__arrow"
+            :disabled="!seriesContext.nextBookId"
+            :aria-label="t('book.nextBook')"
+            @click="navigateAdjacent(seriesContext.nextBookId)"
+          >
+            <ChevronRight :size="22" aria-hidden="true" />
+          </button>
         </div>
 
-        <div class="book-hero__info ds-stack">
+        <div class="book-hero__info ds-stack--sm">
           <div class="ds-row">
+            <span v-if="book.isIntegral" class="detail-badge detail-badge--integral">
+              {{ formatIntegralRangeLabel(book.includedVolumes, book.volumeLabel ?? undefined) }}
+            </span>
+            <span v-else-if="book.volumeLabel" class="ds-badge">T.{{ book.volumeLabel }}</span>
+
             <span v-if="book.activeLoan" class="detail-badge detail-badge--lent">
               {{ t('loans.lentTo', { name: book.activeLoan.borrowerName }) }}
             </span>
@@ -234,34 +291,25 @@ async function confirmResetOverrides(): Promise<void> {
               {{ t('book.includedIn', { title: book.ownedViaIntegral.title }) }}
             </span>
             <span v-else class="ds-badge">{{ t('book.statusUnowned') }}</span>
-
-            <span v-if="book.isIntegral" class="detail-badge detail-badge--integral">
-              {{ formatIntegralRangeLabel(book.includedVolumes, book.volumeLabel ?? undefined) }}
-            </span>
-            <span v-else-if="book.volumeLabel" class="ds-badge">T.{{ book.volumeLabel }}</span>
-
-            <span v-if="book.hasUserOverrides" class="ds-badge ds-badge--accent">
-              {{ t('book.overridesActiveBadge') }}
-            </span>
           </div>
 
-          <h1>{{ book.title }}</h1>
+          <h1 class="book-hero__title">{{ book.title }}</h1>
 
           <div v-if="book.seriesName && book.seriesId" class="ds-row">
             <router-link :to="`/series/${encodeURIComponent(book.seriesId)}`" class="book-hero__series-link">
               {{ book.seriesName }}
               <span v-if="seriesContext">
-                ({{ t('book.seeWholeSeries', { count: seriesContext.totalVolumes }) }})
+                · {{ t('book.seeWholeSeries', { count: seriesContext.totalVolumes }) }}
               </span>
             </router-link>
           </div>
 
-          <div v-if="book.authors.length > 0" class="ds-row">
+          <div v-if="book.authors.length > 0" class="ds-chips">
             <router-link
               v-for="author in book.authors"
               :key="author"
               :to="`/author/${encodeURIComponent(author)}`"
-              class="ds-chip"
+              class="ds-chip ds-chip--clickable"
             >
               {{ author }}
             </router-link>
@@ -277,65 +325,119 @@ async function confirmResetOverrides(): Promise<void> {
             </span>
           </div>
 
-          <p class="ds-text-muted">
+          <p v-if="book.publisher || book.publishYear || book.pageCount || book.collectionName" class="ds-text-muted book-hero__meta">
             <span v-if="book.publisher">{{ book.publisher }}</span>
             <span v-if="book.publishYear"> · {{ book.publishYear }}</span>
             <span v-if="book.pageCount"> · {{ book.pageCount }} p.</span>
             <span v-if="book.collectionName"> · {{ book.collectionName }}</span>
           </p>
 
-          <div v-if="book.genres.length > 0" class="ds-chips">
-            <span v-for="genre in book.genres" :key="genre" class="ds-badge">{{ genre }}</span>
+          <!-- Genres cliquables avec libellé « Genre : » -->
+          <div v-if="displayGenres.length > 0" class="book-genres-row">
+            <span class="book-genres-label">{{ t('book.genresPrefix') }}</span>
+            <div class="ds-chips">
+              <button
+                v-for="genre in displayGenres"
+                :key="genre"
+                type="button"
+                class="ds-chip ds-chip--clickable"
+                @click="openGenreFilter(genre)"
+              >
+                {{ genre }}
+              </button>
+            </div>
           </div>
 
-          <BookActions :book="book" @updated="loadBook" />
+          <!-- Actions principales en gros boutons -->
+          <div class="book-actions-block">
+            <BookActions :book="book" @updated="loadBook" />
 
-          <div class="ds-row">
-            <router-link :to="`/book/${encodeURIComponent(book.id)}/edit`" class="ds-btn ds-btn--sm">
-              {{ t('book.editBtn') }}
-            </router-link>
-            <button type="button" class="ds-btn ds-btn--sm" @click="coverModalOpen = true">
-              {{ t('book.changeCoverBtn') }}
-            </button>
-            <button type="button" class="ds-btn ds-btn--sm" @click="attachModalOpen = true">
-              {{ t('book.attachSeriesBtn') }}
-            </button>
-            <button type="button" class="ds-btn ds-btn--sm" @click="openIntegralModal">
-              {{ book.isIntegral ? t('book.editIntegralBtn') : t('book.integralBtn') }}
-            </button>
+            <!-- Tiroir « Autres actions » -->
             <button
-              v-if="book.seriesId"
               type="button"
-              class="ds-btn ds-btn--sm"
-              :disabled="savingOverrides"
-              @click="handleExcludeFromSeries"
+              class="ds-btn ds-btn--ghost ds-btn--sm book-more-toggle"
+              :aria-expanded="moreActionsOpen"
+              @click="moreActionsOpen = !moreActionsOpen"
             >
-              {{ t('book.excludeFromSeriesBtn') }}
+              <span>{{ moreActionsOpen ? t('app.lessActions') : t('app.moreActions') }}</span>
+              <ChevronUp v-if="moreActionsOpen" :size="16" aria-hidden="true" />
+              <ChevronDown v-else :size="16" aria-hidden="true" />
             </button>
-            <button
-              v-if="book.hasUserOverrides"
-              type="button"
-              class="ds-btn ds-btn--ghost ds-btn--sm"
-              @click="resetModalOpen = true"
-            >
-              {{ t('book.resetOverridesBtn') }}
-            </button>
+
+            <div v-if="moreActionsOpen" class="book-more-panel ds-panel ds-stack--sm">
+              <div class="book-more-item">
+                <router-link :to="`/book/${encodeURIComponent(book.id)}/edit`" class="ds-btn ds-btn--sm book-more-item__btn">
+                  <Pencil :size="15" aria-hidden="true" />
+                  <span>{{ t('book.editBtn') }}</span>
+                </router-link>
+                <HelpTooltip :title="t('book.editBtn')" :text="t('book.editHelp')" />
+              </div>
+
+              <div class="book-more-item">
+                <button type="button" class="ds-btn ds-btn--sm book-more-item__btn" @click="coverModalOpen = true">
+                  <Image :size="15" aria-hidden="true" />
+                  <span>{{ t('book.changeCoverBtn') }}</span>
+                </button>
+                <HelpTooltip :title="t('book.changeCoverBtn')" :text="t('book.changeCoverHelp')" />
+              </div>
+
+              <div class="book-more-item">
+                <button type="button" class="ds-btn ds-btn--sm book-more-item__btn" @click="attachModalOpen = true">
+                  <Link2 :size="15" aria-hidden="true" />
+                  <span>{{ t('book.attachSeriesBtn') }}</span>
+                </button>
+                <HelpTooltip :title="t('book.attachSeriesBtn')" :text="t('book.attachSeriesHelp')" />
+              </div>
+
+              <div class="book-more-item">
+                <button type="button" class="ds-btn ds-btn--sm book-more-item__btn" @click="openIntegralModal">
+                  <Layers :size="15" aria-hidden="true" />
+                  <span>{{ book.isIntegral ? t('book.editIntegralBtn') : t('book.integralBtn') }}</span>
+                </button>
+                <HelpTooltip :title="t('book.integralBtn')" :text="t('book.integralHelp')" />
+              </div>
+
+              <div v-if="book.seriesId" class="book-more-item">
+                <button
+                  type="button"
+                  class="ds-btn ds-btn--sm book-more-item__btn"
+                  :disabled="savingOverrides"
+                  @click="excludeModalOpen = true"
+                >
+                  <Unlink :size="15" aria-hidden="true" />
+                  <span>{{ t('book.excludeFromSeriesBtn') }}</span>
+                </button>
+                <HelpTooltip :title="t('book.excludeFromSeriesBtn')" :text="t('book.excludeFromSeriesHelp')" />
+              </div>
+
+              <div v-if="book.hasUserOverrides" class="book-more-item">
+                <button
+                  type="button"
+                  class="ds-btn ds-btn--ghost ds-btn--sm book-more-item__btn"
+                  @click="resetModalOpen = true"
+                >
+                  <RotateCcw :size="15" aria-hidden="true" />
+                  <span>{{ t('book.resetOverridesBtn') }}</span>
+                </button>
+                <HelpTooltip :title="t('book.resetOverridesBtn')" :text="t('book.resetOverridesHelp')" />
+              </div>
+            </div>
           </div>
         </div>
       </article>
 
-      <!-- Résumé & ISBN -->
-      <div v-if="book.description || book.knownIsbns.length > 0" class="ds-card ds-stack">
-        <div v-if="book.description" class="ds-stack">
+      <!-- Résumé & ISBN connus uniquement (jamais « ISBN inconnu ») -->
+      <div v-if="book.description || validKnownIsbns.length > 0" class="ds-card ds-stack">
+        <div v-if="book.description" class="ds-stack--sm">
           <h2>{{ t('book.descriptionLabel') }}</h2>
-          <p>{{ book.description }}</p>
+          <p class="book-desc-text">{{ book.description }}</p>
         </div>
-        <div v-if="book.knownIsbns.length > 0" class="ds-text-muted">
-          <strong>{{ t('book.editionsLabel') }} :</strong> {{ book.knownIsbns.join(', ') }}
+        <div v-if="validKnownIsbns.length > 0" class="ds-text-muted">
+          <strong>{{ t('book.editionsLabel') }} :</strong> {{ validKnownIsbns.join(', ') }}
         </div>
       </div>
 
-      <!-- Bloc Lecture, Note & Notes personnelles (strictement individuel user_id) -->
+      <!-- Bloc Lecture, Note & Notes personnelles (conservé tel quel) -->
       <div class="ds-card ds-stack">
         <h2>{{ t('book.myReadingLabel') }}</h2>
 
@@ -362,7 +464,7 @@ async function confirmResetOverrides(): Promise<void> {
                   :aria-label="t('book.ratingStarLabel', { n: star })"
                   @click="readingRating = star"
                 >
-                  ★
+                  <Star :size="16" :fill="star <= readingRating ? 'currentColor' : 'none'" aria-hidden="true" />
                 </button>
                 <button
                   v-if="readingRating > 0"
@@ -395,21 +497,25 @@ async function confirmResetOverrides(): Promise<void> {
         </form>
       </div>
 
-      <!-- Modale Intégrale rapide -->
+      <!-- Modale Intégrale rapide (radios proprement alignés en début de ligne) -->
       <BaseModal
         :open="integralModalOpen"
         :title="book.isIntegral ? t('book.editIntegralBtn') : t('book.integralBtn')"
         @close="integralModalOpen = false"
       >
         <div class="ds-stack">
-          <div v-if="!book.isIntegral && book.seriesId" class="ds-stack">
-            <label class="ds-row">
+          <div v-if="!book.isIntegral && book.seriesId" class="ds-stack--sm">
+            <label class="ds-radio-option">
               <input v-model="integralModalMode" type="radio" value="create_separate" />
-              <span>{{ t('book.integralCreateSeparateMode') }}</span>
+              <span class="ds-radio-option__body">
+                <span>{{ t('book.integralCreateSeparateMode') }}</span>
+              </span>
             </label>
-            <label class="ds-row">
+            <label class="ds-radio-option">
               <input v-model="integralModalMode" type="radio" value="convert_self" />
-              <span>{{ t('book.integralConvertSelfMode') }}</span>
+              <span class="ds-radio-option__body">
+                <span>{{ t('book.integralConvertSelfMode') }}</span>
+              </span>
             </label>
             <p v-if="integralModalMode === 'create_separate'" class="ds-text-muted">
               {{ t('book.integralSeparateHint') }}
@@ -430,10 +536,29 @@ async function confirmResetOverrides(): Promise<void> {
         </template>
       </BaseModal>
 
-      <!-- Modale Confirmation Réinitialisation Couche 3 -->
+      <!-- Modale Confirmation « Ne fait pas partie de cette série » -->
+      <BaseModal
+        :open="excludeModalOpen"
+        :title="t('book.excludeFromSeriesConfirmTitle')"
+        size="sm"
+        @close="excludeModalOpen = false"
+      >
+        <p>{{ t('book.excludeFromSeriesConfirmDesc', { series: book.seriesName ?? '' }) }}</p>
+        <template #footer>
+          <button type="button" class="ds-btn" :disabled="savingOverrides" @click="excludeModalOpen = false">
+            {{ t('app.cancel') }}
+          </button>
+          <button type="button" class="ds-btn ds-btn--danger" :disabled="savingOverrides" @click="confirmExcludeFromSeries">
+            {{ t('app.confirm') }}
+          </button>
+        </template>
+      </BaseModal>
+
+      <!-- Modale Confirmation Réinitialisation -->
       <BaseModal
         :open="resetModalOpen"
         :title="t('book.resetOverridesConfirmTitle')"
+        size="sm"
         @close="resetModalOpen = false"
       >
         <p>{{ t('book.resetOverridesConfirmDesc') }}</p>
@@ -446,6 +571,7 @@ async function confirmResetOverrides(): Promise<void> {
           </button>
         </template>
       </BaseModal>
+
       <SeriesAttachModal
         :open="attachModalOpen"
         :book-ids="[book.id]"
@@ -466,24 +592,54 @@ async function confirmResetOverrides(): Promise<void> {
 <style scoped>
 .book-hero {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-5);
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+@media (min-width: 760px) {
+  .book-hero {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: var(--space-5);
+  }
+}
+
+.book-cover-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+@media (min-width: 760px) {
+  .book-cover-stage {
+    width: auto;
+    flex: 0 0 auto;
+  }
+}
+
+.book-cover-stage__arrow {
+  flex-shrink: 0;
+  min-inline-size: 42px;
+  min-block-size: 42px;
 }
 
 .book-hero__cover {
-  flex: 0 0 180px;
-  width: 180px;
+  width: clamp(148px, 44vw, 200px);
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
+  box-shadow: var(--shadow-md);
 }
 
 .book-hero__cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  display: block;
 }
 
 .book-hero__placeholder {
@@ -499,7 +655,15 @@ async function confirmResetOverrides(): Promise<void> {
 
 .book-hero__info {
   flex: 1;
-  min-width: 260px;
+  min-width: 0;
+}
+
+.book-hero__title {
+  margin: 0;
+}
+
+.book-hero__meta {
+  margin: 0;
 }
 
 .book-hero__series-link {
@@ -507,12 +671,58 @@ async function confirmResetOverrides(): Promise<void> {
   color: var(--accent);
 }
 
+.book-genres-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.book-genres-label {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.book-actions-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.book-more-toggle {
+  width: 100%;
+  justify-content: center;
+}
+
+.book-more-panel {
+  padding: var(--space-3);
+}
+
+.book-more-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.book-more-item__btn {
+  flex: 1;
+  justify-content: flex-start;
+}
+
+.book-desc-text {
+  margin: 0;
+  white-space: pre-line;
+}
+
 .detail-badge {
   display: inline-flex;
   align-items: center;
   padding: 4px 10px;
   border-radius: var(--radius-pill);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
 }
 
@@ -537,7 +747,7 @@ async function confirmResetOverrides(): Promise<void> {
 }
 
 .rating-star {
-  font-size: 1.05rem;
+  min-inline-size: 40px;
   color: var(--text-muted);
 }
 

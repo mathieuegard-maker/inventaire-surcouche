@@ -6,6 +6,11 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-padding-top: calc(var(--header-height) + env(safe-area-inset-top, 0px) + var(--space-4));
+  scroll-padding-bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom, 0px) + var(--space-6));
+}
+
 html,
 body {
   margin: 0;
@@ -16,7 +21,18 @@ body {
   font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow-wrap: break-word;
+}
+
+img,
+video,
+svg {
+  max-inline-size: 100%;
+}
+
+img,
+video {
+  block-size: auto;
 }
 
 h1,
@@ -27,6 +43,24 @@ h4 {
   color: var(--text-primary);
   margin: 0 0 var(--space-3);
   line-height: 1.25;
+  text-wrap: balance;
+}
+
+h1 {
+  font-size: var(--text-h1);
+}
+
+h2 {
+  font-size: var(--text-h2);
+}
+
+h3 {
+  font-size: var(--text-h3);
+}
+
+p,
+li {
+  text-wrap: pretty;
 }
 
 p {
@@ -37,6 +71,10 @@ p {
 a {
   color: var(--accent);
   text-decoration: none;
+}
+
+:where(a, code) {
+  overflow-wrap: anywhere;
 }
 
 a:hover {

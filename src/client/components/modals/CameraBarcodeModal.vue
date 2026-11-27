@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import { CheckCircle2, AlertTriangle } from '@lucide/vue';
 import BaseModal from '../base/BaseModal.vue';
 import { isbnUtil } from '../../../shared/bibliographic/isbn.util';
 import { t } from '../../../shared/locales';
@@ -11,10 +12,14 @@ const props = withDefaults(
     open: boolean;
     mode?: 'simple' | 'burst' | 'picker';
     flashState?: 'none' | 'added' | 'duplicate';
+    scannedCount?: number;
+    lastScannedLabel?: string;
   }>(),
   {
     mode: 'simple',
-    flashState: 'none'
+    flashState: 'none',
+    scannedCount: 0,
+    lastScannedLabel: ''
   }
 );
 
@@ -102,7 +107,7 @@ async function startScanner(): Promise<void> {
         lastDetectedAt.set(isbn13, now);
 
         if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          navigator.vibrate(45);
+          navigator.vibrate(55);
         }
 
         emit('detected', isbn13);
@@ -144,8 +149,10 @@ onBeforeUnmount(() => {
 
 <template>
   <BaseModal :open="open" :title="modalTitle" max-width="540px" @close="emit('close')">
-    <div class="ds-stack">
-      <p class="ds-text-muted">{{ t('scan.cameraHint') }}</p>
+    <div class="ds-stack--sm">
+      <p class="ds-text-muted camera-help">
+        {{ mode === 'burst' ? t('scan.burstHelpText') : t('scan.cameraHint') }}
+      </p>
 
       <div v-if="cameraError" class="ds-banner ds-banner--danger" role="alert">
         {{ cameraError }}
@@ -160,10 +167,40 @@ onBeforeUnmount(() => {
       >
         <div :id="readerElementId" class="camera-reader" />
       </div>
+
+      <!-- Feedback de scan intégré DANS la modale (remplace le bandeau vert flottant gênant) -->
+      <div
+        v-if="mode === 'burst' && (lastScannedLabel || scannedCount > 0)"
+        class="camera-burst-status"
+        :class="{
+          'camera-burst-status--added': flashState === 'added',
+          'camera-burst-status--duplicate': flashState === 'duplicate'
+        }"
+        role="status"
+      >
+        <div class="ds-row ds-row--between">
+          <span class="ds-badge ds-badge--accent">
+            {{ t('scan.burstModalCounter', { count: scannedCount }) }}
+          </span>
+          <span v-if="lastScannedLabel" class="camera-burst-status__last">
+            <AlertTriangle v-if="flashState === 'duplicate'" :size="14" aria-hidden="true" />
+            <CheckCircle2 v-else :size="14" aria-hidden="true" />
+            <span>{{ lastScannedLabel }}</span>
+          </span>
+        </div>
+      </div>
     </div>
 
     <template #footer>
-      <button type="button" class="ds-btn" @click="emit('close')">
+      <button
+        v-if="mode === 'burst' && scannedCount > 0"
+        type="button"
+        class="ds-btn ds-btn--primary"
+        @click="emit('close')"
+      >
+        {{ t('scan.burstAccessListBtn', { count: scannedCount }) }}
+      </button>
+      <button v-else type="button" class="ds-btn" @click="emit('close')">
         {{ t('app.close') }}
       </button>
     </template>
@@ -171,12 +208,17 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.camera-help {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
 .camera-viewport {
   border-radius: var(--radius-md);
   overflow: hidden;
   border: 3px solid var(--border-subtle);
   background: var(--bg-elevated);
-  min-height: 240px;
+  min-height: 230px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -192,5 +234,34 @@ onBeforeUnmount(() => {
 
 .camera-reader {
   width: 100%;
+}
+
+.camera-burst-status {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.camera-burst-status--added {
+  background: var(--success-bg);
+  border-color: var(--success-text);
+  color: var(--success-text);
+}
+
+.camera-burst-status--duplicate {
+  background: var(--warning-bg);
+  border-color: var(--warning-text);
+  color: var(--warning-text);
+}
+
+.camera-burst-status__last {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.84rem;
+  font-weight: 600;
+  min-inline-size: 0;
 }
 </style>

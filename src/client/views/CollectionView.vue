@@ -1,10 +1,11 @@
 <!-- src/client/views/CollectionView.vue -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import ListControlBar from '../components/base/ListControlBar.vue';
 import PaginationBar from '../components/base/PaginationBar.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import LendModal from '../components/modals/LendModal.vue';
@@ -13,11 +14,17 @@ import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
-import { normalizeTextKey, stripLeadingArticles } from '../../shared/bibliographic/text-normalize.util';
+import {
+  applyBookListFilters,
+  applySeriesListFilters,
+  createEmptyListFilters,
+  extractFilterFacets
+} from '../../shared/bibliographic/list-filter.util';
+import { stripLeadingArticles } from '../../shared/bibliographic/text-normalize.util';
+import type { BookView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
-const PAGE_SIZE = 24;
-
+const route = useRoute();
 const router = useRouter();
 const libraryStore = useLibraryStore();
 const authStore = useAuthStore();
@@ -30,16 +37,40 @@ const lendModalOpen = ref(false);
 const genreModalOpen = ref(false);
 const modalBusy = ref(false);
 
-// Suggestions dynamiques pour le champ de filtre libre (genres, séries, auteurs, éditeurs)
-const filterSuggestions = computed(() => {
-  const set = new Set<string>();
+const sortOptions = computed(() => [
+  { value: 'date', label: t('collection.sortDate') },
+  { value: 'alpha', label: t('collection.sortAlpha') },
+  { value: 'author', label: t('collection.sortAuthor') }
+]);
+
+const enabledFacets = computed(() =>
+  state.tab === 'series'
+    ? (['genre', 'author', 'publisher', 'series', 'seriesCompletion'] as const)
+    : ([
+        'genre',
+        'author',
+        'publisher',
+        'series',
+        'volumeNumber',
+        'readingStatus',
+        'loanState',
+        'integralOnly'
+      ] as const)
+);
+
+const facets = computed(() =>
+  extractFilterFacets(libraryStore.ownedBooks, authStore.profile?.defaultGenres ?? [])
+);
+
+const booksBySeriesId = computed(() => {
+  const map = new Map<string, BookView[]>();
   for (const b of libraryStore.ownedBooks) {
-    if (b.seriesName) set.add(b.seriesName);
-    if (b.publisher) set.add(b.publisher);
-    for (const a of b.authors) set.add(a);
-    for (const g of b.genres) set.add(g);
+    if (!b.seriesId) continue;
+    const list = map.get(b.seriesId) ?? [];
+    list.push(b);
+    map.set(b.seriesId, list);
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr')).slice(0, 120);
+  return map;
 });
 
 const baseBooksList = computed(() =>
@@ -47,16 +78,7 @@ const baseBooksList = computed(() =>
 );
 
 const filteredBooks = computed(() => {
-  const needle = normalizeTextKey(state.filterQuery);
-  const filtered = needle
-    ? baseBooksList.value.filter((b) => {
-        const hay = normalizeTextKey(
-          [b.title, b.seriesName ?? '', b.publisher ?? '', ...b.authors, ...b.genres].join(' ')
-        );
-        return hay.includes(needle);
-      })
-    : [...baseBooksList.value];
-
+  const filtered = applyBookListFilters(baseBooksList.value, state.filters);
   if (state.sortBy === 'alpha') {
     filtered.sort((a, b) =>
       stripLeadingArticles(a.title).localeCompare(stripLeadingArticles(b.title), 'fr', { sensitivity: 'base' })
@@ -70,14 +92,8 @@ const filteredBooks = computed(() => {
 });
 
 const filteredSeries = computed(() => {
-  const needle = normalizeTextKey(state.filterQuery);
   const ownedSeries = libraryStore.series.filter((s) => s.ownedCount > 0);
-  const list = needle
-    ? ownedSeries.filter((s) => {
-        const hay = normalizeTextKey([s.canonicalName, ...s.primaryAuthors, ...s.aliases].join(' '));
-        return hay.includes(needle);
-      })
-    : [...ownedSeries];
+  const list = applySeriesListFilters(ownedSeries, state.filters, booksBySeriesId.value);
 
   if (state.sortBy === 'alpha') {
     list.sort((a, b) =>
@@ -99,24 +115,48 @@ const totalItems = computed(() =>
   state.tab === 'series' ? filteredSeries.value.length : filteredBooks.value.length
 );
 
-const totalPages = computed(() => Math.max(1, Math.ceil(totalItems.value / PAGE_SIZE)));
+const totalPages = computed(() => Math.max(1, Math.ceil(totalItems.value / state.pageSize)));
 
-watch([() => state.tab, () => state.filterQuery, () => state.sortBy], () => {
-  state.page = 1;
-});
+watch(
+  [() => state.tab, () => state.filters, () => state.sortBy, () => state.pageSize],
+  () => {
+    state.page = 1;
+  },
+  { deep: true }
+);
 
 watch(totalPages, (max) => {
   if (state.page > max) state.page = max;
 });
 
+// Permet de filtrer directement via query URL (ex: clic sur un genre depuis une fiche œuvre -> /collection?genre=BD)
+watch(
+  () => route.query,
+  (q) => {
+    const genreParam = typeof q.genre === 'string' ? q.genre.trim() : '';
+    const authorParam = typeof q.author === 'string' ? q.author.trim() : '';
+    const publisherParam = typeof q.publisher === 'string' ? q.publisher.trim() : '';
+    if (genreParam || authorParam || publisherParam) {
+      const next = createEmptyListFilters();
+      next.genre = genreParam;
+      next.author = authorParam;
+      next.publisher = publisherParam;
+      state.tab = 'books';
+      state.filters = next;
+      state.page = 1;
+    }
+  },
+  { immediate: true }
+);
+
 const paginatedBooks = computed(() => {
-  const start = (state.page - 1) * PAGE_SIZE;
-  return filteredBooks.value.slice(start, start + PAGE_SIZE);
+  const start = (state.page - 1) * state.pageSize;
+  return filteredBooks.value.slice(start, start + state.pageSize);
 });
 
 const paginatedSeries = computed(() => {
-  const start = (state.page - 1) * PAGE_SIZE;
-  return filteredSeries.value.slice(start, start + PAGE_SIZE);
+  const start = (state.page - 1) * state.pageSize;
+  return filteredSeries.value.slice(start, start + state.pageSize);
 });
 
 const selectedBooks = computed(() =>
@@ -233,7 +273,7 @@ function handleAddDefaultGenre(genre: string): void {
 }
 
 onMounted(() => {
-  if (state.scrollY > 0) {
+  if (state.scrollY > 0 && !route.query.genre && !route.query.author) {
     window.scrollTo({ top: state.scrollY, behavior: 'auto' });
   }
 });
@@ -245,19 +285,19 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('dashboard.myCollection') }}</h1>
-      <span class="ds-badge">
+      <span class="ds-badge ds-badge--accent">
         {{ t('collection.booksCount', { count: totalItems }) }}
       </span>
     </div>
 
-    <div class="ds-tabs" role="tablist">
+    <div class="ds-segmented" role="tablist">
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': state.tab === 'books' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': state.tab === 'books' }"
         @click="state.tab = 'books'"
       >
         {{ t('collection.modeBooks') }}
@@ -265,8 +305,8 @@ onBeforeUnmount(() => {
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': state.tab === 'series' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': state.tab === 'series' }"
         @click="state.tab = 'series'"
       >
         {{ t('collection.modeSeries') }}
@@ -274,42 +314,25 @@ onBeforeUnmount(() => {
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': state.tab === 'oneshots' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': state.tab === 'oneshots' }"
         @click="state.tab = 'oneshots'"
       >
         {{ t('collection.modeOneshots') }}
       </button>
     </div>
 
-    <!-- Barre filtres & tris -->
-    <div class="ds-panel ds-row">
-      <input
-        v-model="state.filterQuery"
-        type="search"
-        list="collection-filter-suggestions"
-        class="ds-input collection-filter-input"
-        :placeholder="t('collection.filterPlaceholder')"
-      />
-      <datalist id="collection-filter-suggestions">
-        <option v-for="sug in filterSuggestions" :key="sug" :value="sug" />
-      </datalist>
-
-      <select v-model="state.sortBy" class="ds-input collection-sort-select" :aria-label="t('collection.sortDate')">
-        <option value="date">{{ t('collection.sortDate') }}</option>
-        <option value="alpha">{{ t('collection.sortAlpha') }}</option>
-        <option value="author">{{ t('collection.sortAuthor') }}</option>
-      </select>
-
-      <button
-        v-if="state.tab !== 'series' && paginatedBooks.length > 0"
-        type="button"
-        class="ds-btn ds-btn--sm"
-        @click="toggleSelectAllPage"
-      >
-        {{ t('collection.selectAll') }}
-      </button>
-    </div>
+    <ListControlBar
+      :filters="state.filters"
+      :facets="facets"
+      :enabled-facets="enabledFacets"
+      :sort-value="state.sortBy"
+      :sort-options="sortOptions"
+      :show-select-all="state.tab !== 'series' && paginatedBooks.length > 0"
+      @update:filters="(next) => (state.filters = next)"
+      @update:sort-value="(v) => (state.sortBy = v as 'date' | 'alpha' | 'author')"
+      @select-all="toggleSelectAllPage"
+    />
 
     <!-- Liste Séries -->
     <template v-if="state.tab === 'series'">
@@ -344,7 +367,14 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <PaginationBar :page="state.page" :total-pages="totalPages" @update:page="(p) => (state.page = p)" />
+    <PaginationBar
+      :page="state.page"
+      :total-pages="totalPages"
+      :page-size="state.pageSize"
+      :total-items="totalItems"
+      @update:page="(p) => (state.page = p)"
+      @update:page-size="(s) => (state.pageSize = s)"
+    />
 
     <BatchActionBar
       :selected-books="selectedBooks"
@@ -381,15 +411,3 @@ onBeforeUnmount(() => {
     />
   </section>
 </template>
-
-<style scoped>
-.collection-filter-input {
-  flex: 1;
-  min-width: 220px;
-}
-
-.collection-sort-select {
-  width: auto;
-  min-width: 170px;
-}
-</style>

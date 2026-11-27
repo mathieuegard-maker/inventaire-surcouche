@@ -139,7 +139,7 @@ export class AuthService {
     }
 
     const user = this.userRepo.findById(session.user_id);
-    if (!user) return null;
+    if (!user || user.banned_at) return null;
 
     const lib = this.libraryRepo.findLibraryByUserId(user.id);
     if (!lib) return null;
@@ -288,6 +288,9 @@ export class AuthService {
     if (!user || !verifyPassword(input.password, user.password_hash)) {
       throw new AppError(401, 'INVALID_CREDENTIALS', 'Identifiants incorrects.');
     }
+    if (user.banned_at) {
+      throw new AppError(403, 'ACCOUNT_BANNED', 'Ce compte a été temporairement suspendu par un administrateur.');
+    }
 
     const now = new Date().toISOString();
     if (input.inviteCode) {
@@ -422,6 +425,11 @@ export class AuthService {
     } else if (action === 'remove' && genre?.trim()) {
       this.userRepo.removeDefaultGenre(userId, genre.trim());
     }
+    return this.userRepo.listDefaultGenres(userId);
+  }
+
+  reorderDefaultGenres(userId: string, orderedGenres: string[]): string[] {
+    this.userRepo.reorderDefaultGenres(userId, orderedGenres);
     return this.userRepo.listDefaultGenres(userId);
   }
 

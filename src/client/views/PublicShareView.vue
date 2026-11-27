@@ -82,8 +82,8 @@ function goRegisterAndFollow(): void {
         {{ errorMsg || t('social.sharedNotFound') }}
       </div>
       <div class="ds-row">
-        <router-link :to="authStore.isAuthenticated ? '/social' : '/login'" class="ds-btn">
-          {{ t('app.back') }}
+        <router-link :to="authStore.isAuthenticated ? '/social' : '/login'" class="ds-btn ds-btn--primary">
+          {{ authStore.isAuthenticated ? t('nav.social') : t('auth.loginTab') }}
         </router-link>
       </div>
     </div>

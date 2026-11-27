@@ -138,7 +138,7 @@ export class AdminService {
     pageSize?: number;
   }): { total: number; page: number; pageSize: number; items: AdminCatalogBookItem[] } {
     const page = Math.max(1, input.page ?? 1);
-    const pageSize = Math.min(60, Math.max(12, input.pageSize ?? 24));
+    const pageSize = Math.min(100, Math.max(10, input.pageSize ?? 20));
     const offset = (page - 1) * pageSize;
 
     const searchRaw = input.search?.trim() || undefined;
@@ -276,11 +276,32 @@ export class AdminService {
       username: u.username,
       email: u.email,
       isAdmin: u.is_admin === 1,
+      bannedAt: u.banned_at ?? null,
+      isBanned: Boolean(u.banned_at),
       createdAt: u.created_at,
       libraryName: u.library_name,
       aiMonthUsed: u.month_key === monthKey ? Number(u.month_used ?? 0) : 0,
       aiTotalUsed: Number(u.total_used ?? 0)
     }));
+  }
+
+  setUserBanned(targetUserId: string, actorUserId: string, banned: boolean): { userId: string; bannedAt: string | null } {
+    if (targetUserId === actorUserId && banned) {
+      throw new AppError(400, 'CANNOT_BAN_SELF', 'Impossible de suspendre votre propre compte administrateur.');
+    }
+    const user = this.userRepo.findById(targetUserId);
+    if (!user) {
+      throw new AppError(404, 'USER_NOT_FOUND', 'Utilisateur introuvable.');
+    }
+    const now = new Date().toISOString();
+    const bannedAt = banned ? now : null;
+    this.db.transaction(() => {
+      this.userRepo.updateUser(targetUserId, { bannedAt, updatedAt: now });
+      if (banned) {
+        this.userRepo.deleteAllUserSessions(targetUserId);
+      }
+    });
+    return { userId: targetUserId, bannedAt };
   }
 
   resetUserAiQuota(userId: string): void {

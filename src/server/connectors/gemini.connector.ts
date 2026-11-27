@@ -31,7 +31,7 @@ export interface GeminiConnector {
   extractBooksFromImage(input: {
     imageDataUrl: string;
     mimeType: string;
-    mode: 'shelf' | 'cover';
+    mode?: 'auto' | 'shelf' | 'cover';
   }): Promise<GeminiExtractedBookHint[]>;
 }
 
@@ -93,7 +93,7 @@ function extractBase64Payload(dataUrl: string): { mimeType: string; data: string
   return { mimeType: match[1], data: match[2].replace(/\s+/g, '') };
 }
 
-export function buildGeminiPrompt(mode: 'shelf' | 'cover'): string {
+export function buildGeminiPrompt(mode: 'auto' | 'shelf' | 'cover' = 'auto'): string {
   if (mode === 'cover') {
     return [
       'Tu es un moteur OCR spécialisé dans les livres et bandes dessinées.',
@@ -105,9 +105,12 @@ export function buildGeminiPrompt(mode: 'shelf' | 'cover'): string {
   }
 
   return [
-    'Tu es un moteur OCR expert en étagères et piles de livres, bandes dessinées, comics et mangas.',
+    'Tu es un moteur OCR expert en livres, bandes dessinées, comics et mangas (couverture unique, 4e de couverture, étagère ou pile).',
     '',
-    'MÉTHODE D’ANALYSE OBLIGATOIRE (NE PAS SAUTER D’ÉTAPE) :',
+    'CAS 1 — COUVERTURE UNIQUE (ou 4e de couverture) d’un seul livre :',
+    '- Retourne un tableau JSON contenant 1 seul objet avec `spineIndex: 1`, `tilt: "vertical"`, `topX: 500`, `bottomX: 500`, `spineColor` (couleur dominante de la couverture) et tous les champs texte lisibles (`rawText`, `title`, `series`, `volumeNumber`, `author`, `publisher`, `isbn` si visible).',
+    '',
+    'CAS 2 — ÉTAGÈRE OU PILE DE PLUSIEURS LIVRES (MÉTHODE EN 3 ÉTAPES OBLIGATOIRE) :',
     'Étape 1 — Repérage par contraste et blocs parallèles :',
     '- Repère d’abord les frontières nettes entre les tranches (fort contraste de couleur de fond, liserés d’ombre, arêtes, épaisseurs).',
     '- Identifie les groupes de livres qui partagent le même angle d’inclinaison (bloc vertical, bloc penché à gauche, bloc penché à droite, pile horizontale). Dans un bloc penché, les tranches sont parallèles entre elles : suis cet axe oblique, JAMAIS la verticale pure de la photo.',
@@ -121,10 +124,10 @@ export function buildGeminiPrompt(mode: 'shelf' | 'cover'): string {
     'Pour chaque livre, remplis les champs DANS CET ORDRE EXACT :',
     '1. `spineIndex` (1, 2, 3...)',
     '2. `tilt` ("vertical" | "lean_left" | "lean_right" | "horizontal")',
-    '3. `spineColor` (description courte du fond du dos, ex: "jaune", "noir filet rouge")',
+    '3. `spineColor` (description courte du fond du dos/couverture, ex: "jaune", "noir filet rouge")',
     '4. `topX` (entier 0..1000, position horizontale du haut de la tranche)',
     '5. `bottomX` (entier 0..1000, position horizontale du bas de la tranche)',
-    '6. `rawText` (tout le texte lisible le long de CE segment oblique uniquement, du haut vers le bas)',
+    '6. `rawText` (tout le texte lisible sur ce livre/segment oblique uniquement, du haut vers le bas)',
     '7. `title`, `series`, `volumeNumber` (chiffre de tome uniquement, jamais une année/prix), `author`, `publisher`, `isbn` (si lisible), `confidence` ("high" | "medium" | "low")',
     '',
     'Retourne UNIQUEMENT un tableau JSON strict (sans markdown) :',
@@ -150,7 +153,7 @@ function parseTilt(value: unknown): GeminiSpineTilt | undefined {
   return undefined;
 }
 
-function normalizeHints(raw: unknown, mode: 'shelf' | 'cover'): GeminiExtractedBookHint[] {
+function normalizeHints(raw: unknown, mode: 'auto' | 'shelf' | 'cover'): GeminiExtractedBookHint[] {
   if (!Array.isArray(raw)) return [];
   const out: GeminiExtractedBookHint[] = [];
   for (let i = 0; i < raw.length; i++) {
@@ -209,7 +212,7 @@ function normalizeHints(raw: unknown, mode: 'shelf' | 'cover'): GeminiExtractedB
   const horizontalCount = out.filter((item) => item.tilt === 'horizontal').length;
   const isHorizontalStack = out.length > 0 && horizontalCount >= Math.ceil(out.length / 2);
   const allHaveSpatialX =
-    mode === 'shelf' &&
+    mode !== 'cover' &&
     !isHorizontalStack &&
     out.length >= 2 &&
     out.every((item) => typeof item.bottomX === 'number' || typeof item.topX === 'number');
@@ -263,7 +266,7 @@ function parseGeminiJsonArray(rawText: string): unknown {
 
 function buildRequestBody(params: {
   modelId: string;
-  mode: 'shelf' | 'cover';
+  mode: 'auto' | 'shelf' | 'cover';
   payload: { mimeType: string; data: string };
   enhanced: boolean;
 }): string {
@@ -274,7 +277,7 @@ function buildRequestBody(params: {
 
   if (params.enhanced) {
     generationConfig.mediaResolution = 'MEDIA_RESOLUTION_HIGH';
-    if (params.mode === 'shelf') {
+    if (params.mode !== 'cover') {
       generationConfig.responseSchema = SHELF_RESPONSE_SCHEMA;
       if (isGemini3Model(params.modelId)) {
         generationConfig.thinkingConfig = { thinkingLevel: 'low' };
@@ -333,6 +336,7 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
         throw new Error('Format image data URL invalide.');
       }
 
+      const effectiveMode: 'auto' | 'shelf' | 'cover' = input.mode ?? 'auto';
       let lastStatus = 0;
       let lastErrorText = '';
 
@@ -347,7 +351,7 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
             let res = await fetchImpl(url, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: buildRequestBody({ modelId, mode: input.mode, payload, enhanced: true }),
+              body: buildRequestBody({ modelId, mode: effectiveMode, payload, enhanced: true }),
               signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
             });
 
@@ -356,7 +360,7 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
               res = await fetchImpl(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: buildRequestBody({ modelId, mode: input.mode, payload, enhanced: false }),
+                body: buildRequestBody({ modelId, mode: effectiveMode, payload, enhanced: false }),
                 signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
               });
             }
@@ -367,7 +371,7 @@ export function createGeminiConnector(apiKey: string, fetchImpl: typeof fetch = 
               };
               const rawText = extractResponseJsonText(data);
               const parsed = parseGeminiJsonArray(rawText);
-              return normalizeHints(parsed, input.mode);
+              return normalizeHints(parsed, effectiveMode);
             }
 
             lastStatus = res.status;

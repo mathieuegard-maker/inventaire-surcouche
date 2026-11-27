@@ -1,18 +1,26 @@
-/* src/client/styles/primitives.css */
+/* src/client/styles/primitives.css
+ * Primitives UI standardisées 100 % Design Tokens (facilement adaptables à tout thème).
+ */
 
 .ds-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  padding: var(--space-5);
+  padding: var(--space-4);
   box-shadow: var(--shadow-sm);
+}
+
+@media (min-width: 640px) {
+  .ds-card {
+    padding: var(--space-5);
+  }
 }
 
 .ds-panel {
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
 }
 
 .ds-btn {
@@ -20,18 +28,28 @@
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: 0.6rem 1.05rem;
+  min-block-size: var(--target-size);
+  padding: 0.5rem 0.95rem;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
   color: var(--text-primary);
   font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.2;
+  text-decoration: none;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease, opacity 0.15s ease;
 }
 
 .ds-btn:hover:not(:disabled) {
   background: var(--bg-elevated);
+  text-decoration: none;
+}
+
+.ds-btn:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .ds-btn:disabled {
@@ -50,6 +68,18 @@
   border-color: var(--accent-hover);
 }
 
+.ds-btn--soft {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.ds-btn--soft:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
 .ds-btn--danger {
   background: var(--danger);
   border-color: var(--danger);
@@ -61,20 +91,93 @@
   border-color: var(--danger-hover);
 }
 
+.ds-btn--danger-soft {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+  box-shadow: none;
+}
+
+.ds-btn--danger-soft:hover:not(:disabled) {
+  border-color: var(--danger);
+}
+
 .ds-btn--ghost {
-  background: transparent;
-  border-color: transparent;
+  background: var(--bg-subtle);
+  border-color: var(--border-subtle);
   color: var(--text-secondary);
+  box-shadow: none;
 }
 
 .ds-btn--ghost:hover:not(:disabled) {
   background: var(--bg-elevated);
+  border-color: var(--border-strong);
   color: var(--text-primary);
 }
 
 .ds-btn--sm {
-  padding: 0.35rem 0.7rem;
-  font-size: 0.875rem;
+  min-block-size: 36px;
+  padding: 0.38rem 0.72rem;
+  font-size: 0.85rem;
+}
+
+.ds-btn--lg {
+  min-block-size: 46px;
+  padding: 0.72rem 1.2rem;
+  font-size: 0.98rem;
+}
+
+.ds-btn--icon {
+  min-inline-size: 38px;
+  min-block-size: 38px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+}
+
+/* Contrôle segmenté : rend les filtres/modes immédiatement identifiables comme de vrais boutons cliquables */
+.ds-segmented {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  width: 100%;
+}
+
+.ds-segmented__btn {
+  flex: 1 1 0;
+  min-inline-size: 0;
+  min-block-size: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0.4rem 0.55rem;
+  border-radius: calc(var(--radius-md) - 3px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ds-segmented__btn:hover:not(.ds-segmented__btn--active) {
+  color: var(--text-primary);
+  background: var(--bg-subtle);
+}
+
+.ds-segmented__btn--active {
+  background: var(--bg-surface);
+  color: var(--accent);
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .ds-field {
@@ -92,7 +195,8 @@
 
 .ds-input {
   width: 100%;
-  padding: 0.6rem 0.8rem;
+  min-block-size: var(--target-size);
+  padding: 0.52rem 0.8rem;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-strong);
   background: var(--bg-surface);
@@ -105,42 +209,94 @@
 }
 
 .ds-checkbox {
-  display: flex;
-  align-items: flex-start;
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-2);
+  min-block-size: 36px;
   cursor: pointer;
   font-size: 0.92rem;
   color: var(--text-primary);
 }
 
-.ds-checkbox input[type="checkbox"] {
-  margin-top: 3px;
+.ds-checkbox input[type="checkbox"],
+.ds-radio input[type="radio"] {
   accent-color: var(--accent);
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 0;
 }
 
+/* Ligne radio propre avec le bouton radio aligné tout au début de la ligne */
+.ds-radio-option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.ds-radio-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ds-radio-option input[type="radio"] {
+  accent-color: var(--accent);
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+}
+
+.ds-radio-option__body {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Onglets toujours clairement identifiables comme des boutons */
 .ds-tabs {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  border-bottom: 1px solid var(--border-subtle);
-  margin-bottom: var(--space-5);
-  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
 .ds-tab {
-  padding: 0.5rem 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-block-size: 40px;
+  padding: 0.45rem 0.85rem;
   border-radius: var(--radius-md);
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
   color: var(--text-secondary);
   font-weight: 600;
+  font-size: 0.88rem;
   cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.ds-tab:hover:not(.ds-tab--active) {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .ds-tab--active {
   background: var(--accent-soft);
   color: var(--accent);
-  border-color: var(--border-subtle);
+  border-color: var(--accent);
 }
 
 .ds-badge {
@@ -149,7 +305,7 @@
   gap: var(--space-1);
   padding: 0.2rem 0.6rem;
   border-radius: var(--radius-pill);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 600;
   background: var(--bg-elevated);
   color: var(--text-secondary);
@@ -158,13 +314,26 @@
 
 .ds-badge--accent {
   background: var(--accent-soft);
+  border-color: var(--accent-border);
   color: var(--accent);
+}
+
+.ds-badge--success {
+  background: var(--success-bg);
+  color: var(--success-text);
+  border-color: transparent;
+}
+
+.ds-badge--danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 .ds-banner {
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   margin-bottom: var(--space-4);
 }
 
@@ -193,21 +362,39 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0.35rem 0.75rem;
+  min-block-size: 34px;
+  padding: 0.3rem 0.75rem;
   border-radius: var(--radius-pill);
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.ds-chip--clickable {
+  cursor: pointer;
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
+  font-weight: 600;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.ds-chip--clickable:hover {
+  border-color: var(--accent);
 }
 
 .ds-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 0 2px;
-  font-weight: 700;
+  padding: 2px;
+  border-radius: var(--radius-pill);
 }
 
 .ds-chip__remove:hover {
@@ -222,5 +409,90 @@
 .ds-divider {
   border: none;
   border-top: 1px solid var(--border-subtle);
-  margin: var(--space-5) 0;
+  margin: var(--space-4) 0;
+}
+
+/* Accordéon natif <details> propre et accessible */
+.ds-accordion {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.ds-accordion > summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: 32px;
+}
+
+.ds-accordion > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ds-accordion__body {
+  padding-top: var(--space-2);
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+}
+
+/* Menu déroulant léger pour "Actions" */
+.ds-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.ds-menu-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 140;
+  min-width: 230px;
+  max-width: min(300px, calc(100vw - 24px));
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ds-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: 40px;
+  padding: 0.45rem 0.7rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  font-weight: 500;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ds-menu-item:hover:not(:disabled) {
+  background: var(--bg-elevated);
+}
+
+.ds-menu-item--danger {
+  color: var(--danger);
+}
+
+.ds-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

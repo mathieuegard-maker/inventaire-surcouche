@@ -59,6 +59,7 @@ export function mapJobRowToView(row: BackgroundJobRow): BackgroundJobView {
     targetSeriesId,
     errorMessage: row.error_message,
     result,
+    archivedAt: row.archived_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };

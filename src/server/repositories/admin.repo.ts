@@ -40,6 +40,7 @@ export interface AdminUserRow {
   username: string;
   email: string;
   is_admin: number;
+  banned_at: string | null;
   created_at: string;
   library_name: string | null;
   month_key: string | null;
@@ -211,7 +212,7 @@ export class AdminRepository {
 
   listUsersWithLibraryAndAi(): AdminUserRow[] {
     return this.db.all<AdminUserRow>(
-      `SELECT u.id, u.username, u.email, u.is_admin, u.created_at,
+      `SELECT u.id, u.username, u.email, u.is_admin, u.banned_at, u.created_at,
               l.name AS library_name,
               ai.month_key, ai.month_used, ai.total_used
        FROM users u

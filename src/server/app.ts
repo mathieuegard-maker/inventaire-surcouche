@@ -172,6 +172,17 @@ export function createApp(options: CreateAppOptions) {
     libraryService
   });
 
+  const notificationService = new NotificationService({
+    config: options.config,
+    notifRepo,
+    catalogRepo,
+    libraryRepo,
+    ingestionService,
+    seriesGraphService,
+    mailSender,
+    webPushSender
+  });
+
   const photoAiService = new PhotoAiService({
     config: options.config,
     gemini,
@@ -184,7 +195,10 @@ export function createApp(options: CreateAppOptions) {
     ingestionService,
     libraryService,
     bookIdentifier,
-    onJobChanged: (row) => worker.notifyJobRow(row)
+    onJobChanged: (row) => worker.notifyJobRow(row),
+    onNotifyUser: async ({ userId, title, body, url }) => {
+      await notificationService.sendDirectPushToUser(userId, { title, body, url });
+    }
   });
 
   const searchService = new SearchService({
@@ -220,17 +234,6 @@ export function createApp(options: CreateAppOptions) {
     connectors,
     onJobEnqueued: () => worker.nudge(),
     onJobChanged: (row) => worker.notifyJobRow(row)
-  });
-
-  const notificationService = new NotificationService({
-    config: options.config,
-    notifRepo,
-    catalogRepo,
-    libraryRepo,
-    ingestionService,
-    seriesGraphService,
-    mailSender,
-    webPushSender
   });
 
   const cronScheduler = new CronScheduler({

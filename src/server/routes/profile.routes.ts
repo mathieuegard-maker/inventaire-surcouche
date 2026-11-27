@@ -5,6 +5,7 @@ import {
   collectionImportPreviewRequestSchema,
   collectionImportRequestSchema,
   deleteAccountSchema,
+  reorderDefaultGenresSchema,
   updateDefaultGenresSchema,
   updateProfileSchema
 } from '../../shared/schemas/auth.schema';
@@ -51,6 +52,13 @@ export function createProfileRoutes(
     const auth = c.get('auth')!;
     const { action, genre } = c.req.valid('json');
     const defaultGenres = authService.updateDefaultGenres(auth.userId, action, genre);
+    return c.json({ ok: true, defaultGenres });
+  });
+
+  router.put('/genres/reorder', zValidator('json', reorderDefaultGenresSchema), (c) => {
+    const auth = c.get('auth')!;
+    const { genres } = c.req.valid('json');
+    const defaultGenres = authService.reorderDefaultGenres(auth.userId, genres);
     return c.json({ ok: true, defaultGenres });
   });
 

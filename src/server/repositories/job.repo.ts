@@ -16,6 +16,7 @@ export interface BackgroundJobRow {
   result_json: string | null;
   error_message: string | null;
   attempts: number;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -297,6 +298,42 @@ export class JobRepository {
 
   deleteJob(id: string): void {
     this.db.run('DELETE FROM background_jobs WHERE id = ?', [id]);
+  }
+
+  archiveJob(id: string, now: string): BackgroundJobRow | null {
+    this.db.run('UPDATE background_jobs SET archived_at = ?, updated_at = ? WHERE id = ?', [now, now, id]);
+    return this.findJobById(id);
+  }
+
+  listPhotoHistoryForUser(userId: string, libraryId: string, cutoffIso: string, limit = 100): BackgroundJobRow[] {
+    return this.db.all<BackgroundJobRow>(
+      `SELECT * FROM background_jobs
+       WHERE type = 'photo_ocr'
+         AND (user_id = ? OR library_id = ?)
+         AND created_at >= ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+      [userId, libraryId, cutoffIso, limit]
+    );
+  }
+
+  countActivePhotoJobsForUser(userId: string): number {
+    const row = this.db.get<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM background_jobs
+       WHERE type = 'photo_ocr' AND user_id = ? AND status IN ('pending', 'running')`,
+      [userId]
+    );
+    return Number(row?.cnt ?? 0);
+  }
+
+  purgePhotoJobsOlderThan(cutoffIso: string): number {
+    return this.db.run(
+      `DELETE FROM background_jobs
+       WHERE type IN ('photo_ocr', 'photo_commit', 'photo_retry_item')
+         AND status IN ('done', 'error')
+         AND created_at < ?`,
+      [cutoffIso]
+    ).changes;
   }
 
   // ==================== EXTERNAL CACHE ====================

@@ -1,15 +1,19 @@
 <!-- src/client/views/LoansView.vue -->
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { ChevronDown, ChevronRight } from '@lucide/vue';
 import BookCard from '../components/books/BookCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
+import ListControlBar from '../components/base/ListControlBar.vue';
+import PaginationBar from '../components/base/PaginationBar.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import BatchGenreModal from '../components/modals/BatchGenreModal.vue';
 import { useLibraryStore } from '../stores/library.store';
 import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
+import { applyBookListFilters, extractFilterFacets } from '../../shared/bibliographic/list-filter.util';
 import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type { BookView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
@@ -26,24 +30,48 @@ const deleteModalOpen = ref(false);
 const genreModalOpen = ref(false);
 const modalBusy = ref(false);
 
+const facets = computed(() =>
+  extractFilterFacets(libraryStore.lentBooks, authStore.profile?.defaultGenres ?? [])
+);
+
 const filteredLentBooks = computed(() => {
-  const needle = normalizeTextKey(state.query);
-  const list = libraryStore.lentBooks.filter((b) => {
-    if (!needle) return true;
-    const hay = normalizeTextKey(
-      [b.title, b.seriesName ?? '', b.activeLoan?.borrowerName ?? '', ...b.authors].join(' ')
-    );
-    return hay.includes(needle);
+  const qNorm = normalizeTextKey(state.filters.query);
+  // Permet aussi la recherche par nom d'emprunteur dans la recherche libre
+  const baseByBorrowerOrFields = libraryStore.lentBooks.filter((b) => {
+    if (!qNorm) return true;
+    const borrowerNorm = normalizeTextKey(b.activeLoan?.borrowerName ?? '');
+    if (borrowerNorm.includes(qNorm)) return true;
+    return applyBookListFilters([b], state.filters).length > 0;
   });
+  const list = applyBookListFilters(baseByBorrowerOrFields, { ...state.filters, query: '' });
 
   return [...list].sort((a, b) =>
     (b.activeLoan?.loanedAt ?? '').localeCompare(a.activeLoan?.loanedAt ?? '')
   );
 });
 
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredLentBooks.value.length / state.pageSize)));
+
+watch(
+  [() => state.filters, () => state.mode, () => state.pageSize],
+  () => {
+    state.page = 1;
+  },
+  { deep: true }
+);
+
+watch(totalPages, (max) => {
+  if (state.page > max) state.page = max;
+});
+
+const paginatedLentBooks = computed(() => {
+  const start = (state.page - 1) * state.pageSize;
+  return filteredLentBooks.value.slice(start, start + state.pageSize);
+});
+
 const borrowerGroups = computed(() => {
   const map = new Map<string, BookView[]>();
-  for (const book of filteredLentBooks.value) {
+  for (const book of paginatedLentBooks.value) {
     const borrower = book.activeLoan?.borrowerName ?? '';
     if (!borrower) continue;
     const list = map.get(borrower) ?? [];
@@ -70,6 +98,18 @@ function toggleSelect(bookId: string): void {
   const next = new Set(selectedIds.value);
   if (next.has(bookId)) next.delete(bookId);
   else next.add(bookId);
+  selectedIds.value = next;
+}
+
+function toggleSelectAllPage(): void {
+  const pageIds = paginatedLentBooks.value.map((b) => b.id);
+  const allSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.value.has(id));
+  const next = new Set(selectedIds.value);
+  if (allSelected) {
+    for (const id of pageIds) next.delete(id);
+  } else {
+    for (const id of pageIds) next.add(id);
+  }
   selectedIds.value = next;
 }
 
@@ -150,17 +190,17 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('loans.title') }}</h1>
-      <span class="ds-badge">{{ t('collection.booksCount', { count: filteredLentBooks.length }) }}</span>
+      <span class="ds-badge ds-badge--accent">{{ t('collection.booksCount', { count: filteredLentBooks.length }) }}</span>
     </div>
 
-    <div class="ds-tabs" role="tablist">
+    <div class="ds-segmented" role="tablist">
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': state.mode === 'borrower' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': state.mode === 'borrower' }"
         @click="state.mode = 'borrower'"
       >
         {{ t('loans.modeBorrower') }}
@@ -168,28 +208,29 @@ onBeforeUnmount(() => {
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': state.mode === 'chrono' }"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': state.mode === 'chrono' }"
         @click="state.mode = 'chrono'"
       >
         {{ t('loans.modeChrono') }}
       </button>
     </div>
 
-    <div class="ds-panel">
-      <input
-        v-model="state.query"
-        type="search"
-        class="ds-input"
-        :placeholder="t('loans.searchPlaceholder')"
-      />
-    </div>
+    <ListControlBar
+      :filters="state.filters"
+      :facets="facets"
+      :enabled-facets="['genre', 'author', 'publisher', 'series', 'volumeNumber']"
+      :placeholder="t('loans.searchPlaceholder')"
+      :show-select-all="paginatedLentBooks.length > 0"
+      @update:filters="(next) => (state.filters = next)"
+      @select-all="toggleSelectAllPage"
+    />
 
     <p v-if="filteredLentBooks.length === 0" class="ds-card ds-text-muted">
       {{ t('loans.empty') }}
     </p>
 
-    <!-- Mode Par Emprunteur (accordéons dépliables/repliables) -->
+    <!-- Mode Par Emprunteur -->
     <div v-else-if="state.mode === 'borrower'" class="ds-stack">
       <div v-for="grp in borrowerGroups" :key="grp.borrower" class="ds-card ds-stack">
         <button
@@ -198,7 +239,11 @@ onBeforeUnmount(() => {
           :aria-expanded="!collapsedBorrowers.has(grp.borrower)"
           @click="toggleBorrower(grp.borrower)"
         >
-          <span class="loan-accordion-header__title">{{ grp.borrower }}</span>
+          <span class="loan-accordion-header__left">
+            <ChevronRight v-if="collapsedBorrowers.has(grp.borrower)" :size="18" aria-hidden="true" />
+            <ChevronDown v-else :size="18" aria-hidden="true" />
+            <span class="loan-accordion-header__title">{{ grp.borrower }}</span>
+          </span>
           <span class="ds-badge">
             {{ t('loans.borrowerBooksCount', { count: grp.books.length }) }}
           </span>
@@ -230,7 +275,7 @@ onBeforeUnmount(() => {
     <!-- Mode Chronologique -->
     <div v-else class="ds-grid-2">
       <BookCard
-        v-for="book in filteredLentBooks"
+        v-for="book in paginatedLentBooks"
         :key="book.id"
         :book="book"
         selectable
@@ -248,6 +293,15 @@ onBeforeUnmount(() => {
         </template>
       </BookCard>
     </div>
+
+    <PaginationBar
+      :page="state.page"
+      :total-pages="totalPages"
+      :page-size="state.pageSize"
+      :total-items="filteredLentBooks.length"
+      @update:page="(p) => (state.page = p)"
+      @update:page-size="(s) => (state.pageSize = s)"
+    />
 
     <BatchActionBar
       :selected-books="selectedBooks"
@@ -291,8 +345,14 @@ onBeforeUnmount(() => {
   text-align: left;
 }
 
+.loan-accordion-header__left {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .loan-accordion-header__title {
-  font-size: 1.05rem;
+  font-size: 1.02rem;
   font-weight: 700;
 }
 </style>

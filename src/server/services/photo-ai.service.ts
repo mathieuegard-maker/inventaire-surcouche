@@ -87,12 +87,16 @@ export interface PhotoJobItem {
   isIntegral: boolean;
   includedVolumes: string[];
   committedBookId: string | null;
+  committedAction?: 'owned' | 'wish' | null;
+  approximateMatch?: boolean;
 }
 
 export interface PhotoJobResultPayload {
-  mode: 'shelf' | 'cover';
+  mode: 'auto' | 'shelf' | 'cover';
   previewCoverKey: string | null;
   previewUrl: string | null;
+  notifyOnComplete?: boolean;
+  committedAt?: string | null;
   items: PhotoJobItem[];
 }
 
@@ -273,6 +277,7 @@ export class PhotoAiService {
   private readonly libraryService: LibraryService;
   private readonly bookIdentifier: BookIdentifierService;
   private readonly onJobChanged?: (job: BackgroundJobRow) => void;
+  private readonly onNotifyUser?: (params: { userId: string; title: string; body: string; url?: string }) => Promise<void> | void;
 
   constructor(deps: {
     config: ServerConfig;
@@ -287,6 +292,7 @@ export class PhotoAiService {
     libraryService: LibraryService;
     bookIdentifier?: BookIdentifierService;
     onJobChanged?: (job: BackgroundJobRow) => void;
+    onNotifyUser?: (params: { userId: string; title: string; body: string; url?: string }) => Promise<void> | void;
   }) {
     this.config = deps.config;
     this.gemini = deps.gemini;
@@ -300,6 +306,7 @@ export class PhotoAiService {
     this.libraryService = deps.libraryService;
     this.bookIdentifier = deps.bookIdentifier ?? new BookIdentifierService({ connectors: deps.connectors });
     this.onJobChanged = deps.onJobChanged;
+    this.onNotifyUser = deps.onNotifyUser;
   }
 
   private assertOwnedJob(jobId: string, userId: string, libraryId: string): BackgroundJobRow {
@@ -318,16 +325,18 @@ export class PhotoAiService {
       try {
         const parsed = JSON.parse(row.result_json) as Partial<PhotoJobResultPayload>;
         return {
-          mode: parsed.mode === 'cover' ? 'cover' : 'shelf',
+          mode: parsed.mode === 'cover' ? 'cover' : parsed.mode === 'shelf' ? 'shelf' : 'auto',
           previewCoverKey: parsed.previewCoverKey ?? null,
           previewUrl: parsed.previewCoverKey ? `/api/covers/${parsed.previewCoverKey}` : (parsed.previewUrl ?? null),
+          notifyOnComplete: Boolean(parsed.notifyOnComplete),
+          committedAt: parsed.committedAt ?? null,
           items: Array.isArray(parsed.items) ? parsed.items : []
         };
       } catch {
         // fallback below
       }
     }
-    return { mode: 'shelf', previewCoverKey: null, previewUrl: null, items: [] };
+    return { mode: 'auto', previewCoverKey: null, previewUrl: null, notifyOnComplete: false, committedAt: null, items: [] };
   }
 
   private lookupFoyerOwnershipByIsbn(libraryId: string, isbn13: string): OwnershipStatus {
@@ -600,6 +609,7 @@ export class PhotoAiService {
     author?: string;
     publisher?: string;
     isbn?: string;
+    rawText?: string;
     isIntegral?: boolean;
   }): Promise<PhotoCandidateOption[]> {
     const options: PhotoCandidateOption[] = [];
@@ -1151,6 +1161,65 @@ export class PhotoAiService {
       }
     }
 
+    // Secours F4 (propositions approximatives) : exécuté UNIQUEMENT si 0 candidat n'a survécu aux passes strictes + F1-F3.
+    // Évite de laisser l'utilisateur devant un item "Non identifié" sans aucune suggestion quand l'IA a pourtant lu du texte.
+    if (relevantOptions.length === 0) {
+      const rawHintText = [hint.rawText, hint.series, hint.title].filter(Boolean).join(' ').trim();
+      const distinctiveWords = Array.from(
+        new Set(
+          (stripGenericRelevanceWords(rawHintText) || normalizeTextKey(rawHintText))
+            .split(/\s+/)
+            .filter((w) => w.length >= 4 && !/^\d+$/.test(w))
+        )
+      ).sort((a, b) => b.length - a.length);
+
+      const softCandidates: PhotoCandidateOption[] = [];
+      const pushSoft = (opt: PhotoCandidateOption | null) =>
+        this.mergeOptionIntoAbstractList(softCandidates, opt, mergePref);
+
+      const hasDistinctiveMatch = (opt: PhotoCandidateOption): boolean => {
+        if (distinctiveWords.length === 0) return false;
+        const candNorm = normalizeTextKey(`${opt.seriesName ?? ''} ${opt.title} ${opt.authors.join(' ')}`);
+        if (!candNorm) return false;
+        if (computeRelevanceOverlap(opt) >= 0.15) return true;
+        return distinctiveWords.some((w) => w.length >= 5 && candNorm.includes(w));
+      };
+
+      // F4a : réutiliser les candidats déjà collectés avant le filtre strict s'ils partagent au moins un mot distinctif
+      for (const opt of options) {
+        if (hasDistinctiveMatch(opt)) {
+          pushSoft(opt);
+        }
+      }
+
+      // F4b : si toujours vide, requête relâchée sur les 3 mots les plus distinctifs de rawText/titre (sans auteur)
+      if (softCandidates.length === 0 && distinctiveWords.length > 0) {
+        const relaxedKeywords = distinctiveWords.slice(0, 3).join(' ');
+        if (relaxedKeywords.length >= 4) {
+          const hits: SourceCandidateRecord[] = [];
+          if (this.connectors.bnf.searchAnywhere) {
+            hits.push(...(await this.connectors.bnf.searchAnywhere(relaxedKeywords, 8).catch(() => [])));
+          }
+          if (hits.length === 0) {
+            hits.push(...(await this.connectors.bnf.searchByTitleAndAuthor(relaxedKeywords, undefined, 8).catch(() => [])));
+          }
+          if (hits.length === 0 && this.connectors.googleBooks.searchByText) {
+            hits.push(...(await this.connectors.googleBooks.searchByText(relaxedKeywords, 6).catch(() => [])));
+          }
+          for (const hit of hits) {
+            const opt = toOption(hit);
+            if (opt && hasDistinctiveMatch(opt)) {
+              pushSoft(opt);
+            }
+          }
+        }
+      }
+
+      if (softCandidates.length > 0) {
+        relevantOptions = softCandidates.slice(0, 4);
+      }
+    }
+
     const rawQueryCombined = `${hint.series ?? ''} ${hint.title ?? ''}`.trim();
     const queryAsksForGuide = DERIVATIVE_GUIDE_RE.test(rawQueryCombined);
 
@@ -1540,9 +1609,10 @@ export class PhotoAiService {
     userId: string;
     libraryId: string;
     isAdmin: boolean;
-    mode: 'shelf' | 'cover';
+    mode?: 'auto' | 'shelf' | 'cover';
     imageDataUrl: string;
     mimeType: string;
+    notifyOnComplete?: boolean;
   }): Promise<{ job: BackgroundJobView; quota: { monthKey: string; used: number; limit: number; remaining: number } }> {
     if (!this.gemini.isConfigured()) {
       throw new AppError(503, 'GEMINI_NOT_CONFIGURED', 'Le service Photo IA n’est pas configuré sur le serveur.');
@@ -1571,9 +1641,10 @@ export class PhotoAiService {
       userId: input.userId,
       libraryId: input.libraryId,
       payload: {
-        mode: input.mode,
+        mode: input.mode ?? 'auto',
         mimeType: 'image/webp',
-        previewCoverKey
+        previewCoverKey,
+        notifyOnComplete: Boolean(input.notifyOnComplete)
       },
       progressTotal: 1,
       now
@@ -1596,7 +1667,9 @@ export class PhotoAiService {
    * Exécution serveur dans le BackgroundWorker : OCR Gemini -> Résolution BnF -> Statuts Foyer -> Mise à jour SSE.
    */
   async executePhotoOcrJob(ctx: JobHandlerContext): Promise<{ result: PhotoJobResultPayload; total: number }> {
-    const mode = ctx.payload.mode === 'cover' ? 'cover' : 'shelf';
+    const mode: 'auto' | 'shelf' | 'cover' =
+      ctx.payload.mode === 'cover' ? 'cover' : ctx.payload.mode === 'shelf' ? 'shelf' : 'auto';
+    const notifyOnComplete = Boolean(ctx.payload.notifyOnComplete);
     let imageDataUrl = typeof ctx.payload.imageDataUrl === 'string' ? ctx.payload.imageDataUrl : '';
     let mimeType = typeof ctx.payload.mimeType === 'string' ? ctx.payload.mimeType : 'image/webp';
     const previewCoverKey = typeof ctx.payload.previewCoverKey === 'string' ? ctx.payload.previewCoverKey : null;
@@ -1636,27 +1709,38 @@ export class PhotoAiService {
         mode,
         previewCoverKey,
         previewUrl: previewCoverKey ? `/api/covers/${previewCoverKey}` : null,
+        notifyOnComplete,
+        committedAt: null,
         items: [...items]
       };
     };
 
     ctx.reportProgress(0, total, buildPayload());
 
+    const useShelfGuard = mode !== 'cover' && hints.length > 1;
     for (let i = 0; i < hints.length; i++) {
       const hint = hints[i];
-      const { options, rescuedByNeighborGuard } =
-        mode === 'shelf'
-          ? await this.resolveShelfHintWithNeighborGuard(hints, i)
-          : { options: await this.resolveHintOptions(hint), rescuedByNeighborGuard: false };
+      const { options, rescuedByNeighborGuard } = useShelfGuard
+        ? await this.resolveShelfHintWithNeighborGuard(hints, i)
+        : { options: await this.resolveHintOptions(hint), rescuedByNeighborGuard: false };
       const bestOpt = options[0] ?? null;
       const bestIsbn = bestOpt?.isbn13 ?? null;
       const alreadyStatus = bestIsbn && libraryId ? this.lookupFoyerOwnershipForOption(libraryId, bestOpt, bestIsbn) : 'none';
 
+      // Vérifie la cohérence minimale titre/série pour distinguer une vraie identification d'une suggestion approximative (F4)
+      const hintQuery = stripGenericRelevanceWords(`${hint.series ?? ''} ${hint.title ?? ''}`.trim());
+      const bestCandText = bestOpt ? `${bestOpt.seriesName ?? ''} ${bestOpt.title}`.trim() : '';
+      const bestOverlap = hintQuery && bestCandText ? tokenOverlapRatio(hintQuery, bestCandText) : 1;
+      const isApproximateMatch = Boolean(bestOpt && hintQuery.length >= 4 && bestOverlap < 0.25);
+
       let status: PhotoJobItem['status'] = 'unresolved';
-      if (options.length === 1 && hint.confidence === 'high' && !rescuedByNeighborGuard) {
+      if (options.length === 1 && hint.confidence === 'high' && !rescuedByNeighborGuard && !isApproximateMatch) {
         status = 'identified';
       } else if (options.length >= 1) {
-        status = hint.confidence === 'high' && !rescuedByNeighborGuard ? 'identified' : 'doubt';
+        status =
+          hint.confidence === 'high' && !rescuedByNeighborGuard && !isApproximateMatch
+            ? 'identified'
+            : 'doubt';
       }
 
       // Pour les éléments non identifiés (0 option ISBN), tenter une couverture indicative par titre + auteur
@@ -1687,13 +1771,36 @@ export class PhotoAiService {
         alreadyStatus,
         isIntegral: Boolean(bestOpt?.isIntegral),
         includedVolumes: bestOpt?.isIntegral ? [...(bestOpt.includedVolumes ?? [])] : [],
-        committedBookId: null
+        committedBookId: null,
+        committedAction: null,
+        approximateMatch: isApproximateMatch
       });
 
       ctx.reportProgress(i + 1, total, buildPayload());
     }
 
-    return { result: buildPayload(), total };
+    const finalResult = buildPayload();
+
+    if (notifyOnComplete && ctx.job.user_id && this.onNotifyUser) {
+      const remainingActive = this.jobRepo.countActivePhotoJobsForUser(ctx.job.user_id);
+      // Envoie la notification Push dès que ce lot est terminé (ou qu'il était le dernier actif du lot multi-photos)
+      if (remainingActive <= 1) {
+        const detectedCount = items.length;
+        void Promise.resolve(
+          this.onNotifyUser({
+            userId: ctx.job.user_id,
+            title: 'Analyse Photo IA terminée',
+            body:
+              detectedCount > 0
+                ? `${detectedCount} œuvre(s) détectée(s) — touchez pour vérifier et ajouter.`
+                : 'Votre analyse photo est terminée.',
+            url: '/scan?tab=photo'
+          })
+        ).catch(() => undefined);
+      }
+    }
+
+    return { result: finalResult, total };
   }
 
   /**
@@ -2059,6 +2166,7 @@ export class PhotoAiService {
     targetStatus: 'owned' | 'wish';
     itemIds?: string[];
     async?: boolean;
+    archiveAfterCommit?: boolean;
   }): Promise<{
     committedCount: number;
     queued: boolean;
@@ -2068,6 +2176,7 @@ export class PhotoAiService {
   }> {
     const row = this.assertOwnedJob(input.jobId, input.userId, input.libraryId);
     const result = this.parseResult(row);
+    const shouldArchive = input.archiveAfterCommit !== false;
 
     const targets = result.items.filter((it) => {
       if (it.ignored || !it.selectedOptionIsbn13) return false;
@@ -2078,6 +2187,13 @@ export class PhotoAiService {
     // Pour les lots > 3 livres (ou demande explicite async), confier au BackgroundWorker existant -> réponse immédiate (< 50 ms, zéro timeout)
     if (targets.length > 0 && (input.async || targets.length > 3)) {
       const now = new Date().toISOString();
+      let updatedPhotoRow = row;
+      if (shouldArchive) {
+        result.committedAt = now;
+        this.jobRepo.updateJobProgress(row.id, row.progress_done, row.progress_total, now, result);
+        updatedPhotoRow = this.jobRepo.archiveJob(row.id, now) ?? row;
+        this.onJobChanged?.(updatedPhotoRow);
+      }
       const commitRow = this.jobRepo.createJob({
         id: generateId('pcom'),
         type: 'photo_commit',
@@ -2086,7 +2202,8 @@ export class PhotoAiService {
         payload: {
           photoJobId: row.id,
           targetStatus: input.targetStatus,
-          itemIds: targets.map((t) => t.id)
+          itemIds: targets.map((t) => t.id),
+          archiveAfterCommit: shouldArchive
         },
         progressTotal: targets.length,
         now
@@ -2097,7 +2214,7 @@ export class PhotoAiService {
         queued: true,
         targetCount: targets.length,
         commitJob: mapJobRowToView(commitRow),
-        job: mapJobRowToView(row)
+        job: mapJobRowToView(updatedPhotoRow)
       };
     }
 
@@ -2107,7 +2224,8 @@ export class PhotoAiService {
       targets,
       userId: input.userId,
       libraryId: input.libraryId,
-      targetStatus: input.targetStatus
+      targetStatus: input.targetStatus,
+      archiveAfterCommit: shouldArchive
     });
 
     return {
@@ -2124,6 +2242,7 @@ export class PhotoAiService {
   async executePhotoCommitJob(ctx: JobHandlerContext): Promise<{ result: { photoJobId: string; committedCount: number }; total: number }> {
     const photoJobId = typeof ctx.payload.photoJobId === 'string' ? ctx.payload.photoJobId : '';
     const targetStatus: 'owned' | 'wish' = ctx.payload.targetStatus === 'wish' ? 'wish' : 'owned';
+    const archiveAfterCommit = ctx.payload.archiveAfterCommit !== false;
     const itemIds = Array.isArray(ctx.payload.itemIds)
       ? ctx.payload.itemIds.filter((x): x is string => typeof x === 'string')
       : [];
@@ -2148,6 +2267,7 @@ export class PhotoAiService {
       userId,
       libraryId,
       targetStatus,
+      archiveAfterCommit,
       onItemDone: (done, committed) => {
         ctx.reportProgress(done, total, { photoJobId, committedCount: committed });
       }
@@ -2166,6 +2286,7 @@ export class PhotoAiService {
     userId: string;
     libraryId: string;
     targetStatus: 'owned' | 'wish';
+    archiveAfterCommit?: boolean;
     onItemDone?: (doneCount: number, committedCount: number) => void;
   }): Promise<{ committedCount: number; updatedJob: BackgroundJobView }> {
     let committedCount = 0;
@@ -2270,6 +2391,7 @@ export class PhotoAiService {
                 this.libraryService.updateBookOverrides(params.libraryId, params.userId, book.id, overridePatch);
               }
               item.committedBookId = book.id;
+              item.committedAction = params.targetStatus;
               item.alreadyStatus = params.targetStatus;
               item.selected = false;
               committedCount++;
@@ -2283,11 +2405,32 @@ export class PhotoAiService {
     }
 
     const now = new Date().toISOString();
+    if (params.archiveAfterCommit !== false) {
+      params.result.committedAt = now;
+    }
     this.jobRepo.updateJobProgress(params.row.id, params.row.progress_done, params.row.progress_total, now, params.result);
+    if (params.archiveAfterCommit !== false) {
+      this.jobRepo.archiveJob(params.row.id, now);
+    }
     const updated = this.jobRepo.findJobById(params.row.id)!;
     this.onJobChanged?.(updated);
 
     return { committedCount, updatedJob: mapJobRowToView(updated) };
+  }
+
+  listPhotoHistory(input: { userId: string; libraryId: string; retentionDays?: number }): BackgroundJobView[] {
+    const retentionDays = Math.min(90, Math.max(1, input.retentionDays ?? 30));
+    const cutoffIso = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
+    const rows = this.jobRepo.listPhotoHistoryForUser(input.userId, input.libraryId, cutoffIso, 100);
+    return rows.map(mapJobRowToView);
+  }
+
+  archivePhotoJob(input: { userId: string; libraryId: string; jobId: string }): BackgroundJobView {
+    const row = this.assertOwnedJob(input.jobId, input.userId, input.libraryId);
+    const now = new Date().toISOString();
+    const archived = this.jobRepo.archiveJob(row.id, now) ?? row;
+    this.onJobChanged?.(archived);
+    return mapJobRowToView(archived);
   }
 
   /**

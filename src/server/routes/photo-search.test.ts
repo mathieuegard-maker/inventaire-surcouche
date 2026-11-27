@@ -1341,4 +1341,189 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('V2.6 Photo IA : mode auto unifié, secours F4 suggestions souples, archivage auto au commit et historique 30 jours', async () => {
+    const dbV26 = new SqliteDatabaseAdapter(':memory:');
+    applySqlMigrations(dbV26, path.resolve(process.cwd(), 'migrations'));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'biblio-v26-photo-'));
+    let receivedMode = '';
+
+    try {
+      const mockGeminiAuto: GeminiConnector = {
+        isConfigured: () => true,
+        async extractBooksFromImage(input) {
+          receivedMode = input.mode ?? '';
+          return [
+            {
+              title: 'Le Scorpion',
+              series: 'Le Scorpion',
+              volumeNumber: '1',
+              author: 'Marini',
+              confidence: 'high'
+            },
+            {
+              title: 'Tranche abimee partielle',
+              rawText: 'CHRONIQUES LUNE NOIRE',
+              confidence: 'low'
+            }
+          ];
+        }
+      };
+
+      const mockConnV26: BibliographicConnectors = {
+        bnf: {
+          async lookupByIsbn(isbn13) {
+            if (isbn13 === '9782871293019') {
+              return {
+                source: 'bnf',
+                isbn13,
+                title: 'La Marque du diable',
+                seriesName: 'Le Scorpion',
+                seriesLinkKind: 'marc_ensemble_460',
+                volumeNumber: '1',
+                authors: ['Stephen Desberg', 'Enrico Marini'],
+                scriptwriters: [],
+                illustrators: [],
+                publisher: 'Dargaud',
+                rawSubjects: ['Bandes dessinées']
+              };
+            }
+            return null;
+          },
+          async searchByEnsembleId() { return []; },
+          async sampleByCollectionName() { return []; },
+          async searchByTitleAndAuthor(title) {
+            if (title.toLowerCase().includes('scorpion')) {
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782871293019',
+                  title: 'La Marque du diable',
+                  seriesName: 'Le Scorpion',
+                  volumeNumber: '1',
+                  authors: ['Enrico Marini'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Dargaud',
+                  rawSubjects: ['Bandes dessinées']
+                }
+              ];
+            }
+            return [];
+          },
+          async searchAnywhere(query) {
+            if (query.toLowerCase().includes('chroniques')) {
+              return [
+                {
+                  source: 'bnf',
+                  isbn13: '9782205041231',
+                  title: 'Le Signe des Ténèbres',
+                  seriesName: 'Chroniques de la Lune Noire',
+                  volumeNumber: '1',
+                  authors: ['François Froideval', 'Olivier Ledroit'],
+                  scriptwriters: [],
+                  illustrators: [],
+                  publisher: 'Dargaud',
+                  rawSubjects: ['Bandes dessinées']
+                }
+              ];
+            }
+            return [];
+          }
+        },
+        sudoc: { async lookupByIsbn() { return null; } },
+        inventaire: { async lookupByIsbn() { return null; }, async fetchSeriesWorks() { return []; } },
+        wikidata: { async lookupWorkByQid() { return null; }, async fetchSeriesWorksByQid() { return []; } },
+        googleBooks: { async lookupByIsbn() { return null; } },
+        openLibrary: { async lookupByIsbn() { return null; } }
+      };
+
+      const ctxV26 = createApp({
+        db: dbV26,
+        config: loadServerConfig({ NODE_ENV: 'test', COVERS_DIR: tmpDir, MONTHLY_AI_QUOTA: '5' }),
+        connectors: mockConnV26,
+        geminiConnector: mockGeminiAuto,
+        coverFetchImpl: (async () => new Response('', { status: 404 })) as typeof fetch
+      });
+
+      const reg = await ctxV26.app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          username: 'V26User',
+          email: 'v26@biblio.test',
+          password: 'Password123',
+          gdprAccepted: true
+        })
+      });
+      const cookie = extractCookie(reg);
+      const dataUrl = await makeShelfPhotoDataUrl();
+
+      // 1. Mode omis -> bascule automatiquement sur 'auto'
+      const createRes = await ctxV26.app.request('/api/jobs/photo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ imageDataUrl: dataUrl, mimeType: 'image/png', notifyOnComplete: true })
+      });
+      expect(createRes.status).toBe(201);
+      const jobId = ((await createRes.json()) as { job: { id: string } }).job.id;
+
+      await ctxV26.worker.processNextJob();
+      expect(receivedMode).toBe('auto');
+
+      // 2. Vérifie que le secours F4 a proposé une suggestion souple non pré-cochée sur la tranche abîmée
+      const jobsBefore = (await (await ctxV26.app.request('/api/jobs', { headers: { cookie } })).json()) as {
+        jobs: Array<{
+          id: string;
+          archivedAt?: string | null;
+          result: {
+            items: Array<{
+              id: string;
+              status: string;
+              selected: boolean;
+              approximateMatch?: boolean;
+              options: Array<{ isbn13: string }>;
+            }>;
+          };
+        }>;
+      };
+      const doneJob = jobsBefore.jobs.find((j) => j.id === jobId)!;
+      expect(doneJob.archivedAt ?? null).toBeNull();
+      expect(doneJob.result.items[0].status).toBe('identified');
+      expect(doneJob.result.items[1].status).toBe('doubt');
+      expect(doneJob.result.items[1].selected).toBe(false);
+      expect(doneJob.result.items[1].approximateMatch).toBe(true);
+      expect(doneJob.result.items[1].options[0]?.isbn13).toBe('9782205041231');
+
+      // 3. Commit -> auto-archivage activé par défaut + trace committedAction dans l'historique 30 jours
+      const commitRes = await ctxV26.app.request(`/api/jobs/photo/${jobId}/commit`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ targetStatus: 'owned' })
+      });
+      expect(commitRes.status).toBe(200);
+      const commitBody = (await commitRes.json()) as {
+        committedCount: number;
+        job: { archivedAt: string | null; result: { items: Array<{ committedAction?: string | null }> } };
+      };
+      expect(commitBody.committedCount).toBe(1);
+      expect(commitBody.job.archivedAt).toBeTruthy();
+      expect(commitBody.job.result.items[0].committedAction).toBe('owned');
+
+      // 4. GET /api/jobs/photo/history renvoie bien le lot archivé avec retentionDays = 30
+      const historyRes = await ctxV26.app.request('/api/jobs/photo/history', { headers: { cookie } });
+      expect(historyRes.status).toBe(200);
+      const historyBody = (await historyRes.json()) as {
+        retentionDays: number;
+        jobs: Array<{ id: string; archivedAt: string | null }>;
+      };
+      expect(historyBody.retentionDays).toBe(30);
+      expect(historyBody.jobs.some((j) => j.id === jobId && Boolean(j.archivedAt))).toBe(true);
+
+      ctxV26.worker.stop();
+    } finally {
+      dbV26.close();
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

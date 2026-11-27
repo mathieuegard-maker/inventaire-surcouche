@@ -2,40 +2,26 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRouter } from 'vue-router';
+import { ArrowLeftRight, Library, Sparkles, Star, X } from '@lucide/vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useLibraryStore } from '../stores/library.store';
-import { useUiStore } from '../stores/ui.store';
 import { t } from '../../shared/locales';
 
 const router = useRouter();
 const authStore = useAuthStore();
 const libraryStore = useLibraryStore();
-const uiStore = useUiStore();
-
-const username = computed(() => authStore.profile?.user.username ?? '');
-const libraryName = computed(() => authStore.profile?.library.name ?? '');
-const memberCount = computed(() => authStore.profile?.library.members.length ?? 1);
-const aiRemaining = computed(() => authStore.profile?.aiQuota.remaining ?? 0);
-const aiLimit = computed(() => authStore.profile?.aiQuota.limit ?? 30);
 
 const spaceCards = computed(() => [
-  { to: '/collection', title: t('dashboard.myCollection'), icon: '▤', count: libraryStore.ownedBooks.length },
-  { to: '/wishlist', title: t('dashboard.myWishlist'), icon: '★', count: libraryStore.wishedBooks.length },
-  { to: '/loans', title: t('dashboard.myLoans'), icon: '⇄', count: libraryStore.lentBooks.length },
+  { to: '/collection', title: t('dashboard.myCollection'), icon: Library, count: libraryStore.ownedBooks.length },
+  { to: '/wishlist', title: t('dashboard.myWishlist'), icon: Star, count: libraryStore.wishedBooks.length },
+  { to: '/loans', title: t('dashboard.myLoans'), icon: ArrowLeftRight, count: libraryStore.lentBooks.length },
   {
     to: '/releases',
     title: t('dashboard.myReleases'),
-    icon: '✦',
+    icon: Sparkles,
     count: authStore.profile?.unreadAlertsCount ?? 0
   }
 ]);
-
-async function handleSync(): Promise<void> {
-  const ok = await libraryStore.syncNow({ forceFullPull: true });
-  if (!ok) {
-    uiStore.pushToast(t('app.retry'), 'danger');
-  }
-}
 
 function openBook(bookId: string): void {
   void router.push(`/book/${encodeURIComponent(bookId)}`);
@@ -44,42 +30,20 @@ function openBook(bookId: string): void {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-card ds-stack">
-      <div class="ds-row ds-row--between">
-        <div>
-          <h1>{{ t('dashboard.welcome', { name: username }) }}</h1>
-          <p class="ds-text-muted">
-            {{ t('dashboard.librarySummary', { library: libraryName, count: memberCount }) }}
-          </p>
-        </div>
-
-        <div class="ds-row">
-          <span class="ds-badge ds-badge--accent">
-            {{ t('dashboard.aiQuotaSummary', { remaining: aiRemaining, limit: aiLimit }) }}
-          </span>
-          <button
-            type="button"
-            class="ds-btn ds-btn--sm"
-            :disabled="libraryStore.isSyncing || uiStore.isOffline"
-            @click="handleSync"
-          >
-            {{ libraryStore.isSyncing ? t('dashboard.syncingLabel') : t('dashboard.syncNowBtn') }}
-          </button>
-        </div>
-      </div>
-
-      <div v-if="libraryStore.outboxCount > 0" class="ds-banner ds-banner--warning">
-        {{ t('dashboard.outboxPending', { count: libraryStore.outboxCount }) }}
-      </div>
+    <div v-if="libraryStore.outboxCount > 0" class="ds-banner ds-banner--warning">
+      {{ t('dashboard.outboxPending', { count: libraryStore.outboxCount }) }}
     </div>
 
-    <div class="ds-grid-2">
-      <router-link v-for="card in spaceCards" :key="card.to" :to="card.to" class="ds-card dashboard-card">
-        <span class="dashboard-card__icon" aria-hidden="true">{{ card.icon }}</span>
-        <div class="dashboard-card__meta">
-          <span class="dashboard-card__title">{{ card.title }}</span>
-          <strong class="dashboard-card__count">{{ card.count }}</strong>
+    <!-- 4 tuiles carrées/compactes en grille 2x2 -->
+    <div class="dashboard-kpi-grid">
+      <router-link v-for="card in spaceCards" :key="card.to" :to="card.to" class="ds-card dashboard-kpi">
+        <div class="dashboard-kpi__top">
+          <span class="dashboard-kpi__icon-wrap" aria-hidden="true">
+            <component :is="card.icon" :size="19" :stroke-width="2" />
+          </span>
+          <strong class="dashboard-kpi__count">{{ card.count }}</strong>
         </div>
+        <span class="dashboard-kpi__title">{{ card.title }}</span>
       </router-link>
     </div>
 
@@ -92,7 +56,7 @@ function openBook(bookId: string): void {
         </button>
       </div>
 
-      <div class="ds-stack">
+      <div class="ds-stack--sm">
         <div
           v-for="scan in libraryStore.pendingOfflineScans"
           :key="scan.isbn13"
@@ -118,16 +82,16 @@ function openBook(bookId: string): void {
               :aria-label="t('app.delete')"
               @click="libraryStore.removePendingOfflineScan(scan.isbn13)"
             >
-              ✕
+              <X :size="16" aria-hidden="true" />
             </button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 5 vignettes récentes -->
+    <!-- Mes derniers ajouts -->
     <div v-if="libraryStore.recentOwnedBooks.length > 0" class="ds-card ds-stack">
-      <h2>{{ t('dashboard.recentAddedTitle') }}</h2>
+      <h2 class="recent-heading">{{ t('dashboard.recentAddedTitle') }}</h2>
       <div class="recent-strip">
         <button
           v-for="book in libraryStore.recentOwnedBooks"
@@ -144,56 +108,82 @@ function openBook(bookId: string): void {
         </button>
       </div>
     </div>
-
-    <div class="ds-row dashboard-footer">
-      <router-link to="/debug" class="ds-text-muted">
-        {{ t('dashboard.debugCacheLink') }}
-      </router-link>
-    </div>
   </section>
 </template>
 
 <style scoped>
-.dashboard-card {
+.dashboard-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+@media (min-width: 720px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.dashboard-kpi {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
   color: var(--text-primary);
   text-decoration: none;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
 }
 
-.dashboard-card:hover {
-  border-color: var(--accent);
-  background: var(--bg-elevated);
+.dashboard-kpi:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-subtle);
   text-decoration: none;
 }
 
-.dashboard-card__icon {
-  font-size: 1.6rem;
+.dashboard-kpi:active {
+  transform: scale(0.98);
+}
+
+.dashboard-kpi__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.dashboard-kpi__icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
   color: var(--accent);
 }
 
-.dashboard-card__meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.dashboard-kpi__count {
+  font-size: clamp(1.35rem, 1.15rem + 0.8vw, 1.7rem);
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
 }
 
-.dashboard-card__title {
+.dashboard-kpi__title {
   font-weight: 600;
   color: var(--text-secondary);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
+  line-height: 1.25;
 }
 
-.dashboard-card__count {
-  font-size: 1.5rem;
-  color: var(--text-primary);
+.recent-heading {
+  margin-bottom: 0;
 }
 
 .recent-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
   gap: var(--space-3);
 }
 
@@ -232,15 +222,11 @@ function openBook(bookId: string): void {
 }
 
 .recent-tile__title {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.dashboard-footer {
-  justify-content: flex-end;
 }
 </style>

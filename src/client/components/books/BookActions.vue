@@ -1,6 +1,7 @@
 <!-- src/client/components/books/BookActions.vue -->
 <script setup lang="ts">
 import { ref } from 'vue';
+import { ArrowLeftRight, Check, Plus, Star, Trash2 } from '@lucide/vue';
 import ConfirmDeleteModal from '../modals/ConfirmDeleteModal.vue';
 import LendModal from '../modals/LendModal.vue';
 import { useLibraryStore } from '../../stores/library.store';
@@ -30,7 +31,9 @@ async function setStatus(status: 'owned' | 'wish'): Promise<void> {
       bookIds: [props.book.id],
       status
     });
-    uiStore.pushToast(res.offlineQueued ? t('batch.offlineQueuedToast') : t('batch.statusUpdatedToast'), 'success');
+    if (res.offlineQueued) {
+      uiStore.pushToast(t('batch.offlineQueuedToast'), 'info');
+    }
     emit('updated');
   } finally {
     busy.value = false;
@@ -41,7 +44,9 @@ async function handleReturn(): Promise<void> {
   busy.value = true;
   try {
     const res = await libraryStore.returnBooks([props.book.id]);
-    uiStore.pushToast(res.offlineQueued ? t('batch.offlineQueuedToast') : t('loans.returnedToast'), 'success');
+    if (res.offlineQueued) {
+      uiStore.pushToast(t('batch.offlineQueuedToast'), 'info');
+    }
     emit('updated');
   } finally {
     busy.value = false;
@@ -57,10 +62,9 @@ async function confirmLend(payload: { borrowerName: string; notes?: string }): P
       notes: payload.notes
     });
     lendOpen.value = false;
-    uiStore.pushToast(
-      res.offlineQueued ? t('batch.offlineQueuedToast') : t('loans.lentToast', { name: payload.borrowerName }),
-      'success'
-    );
+    if (res.offlineQueued) {
+      uiStore.pushToast(t('batch.offlineQueuedToast'), 'info');
+    }
     emit('updated');
   } finally {
     busy.value = false;
@@ -79,7 +83,9 @@ async function confirmDelete(payload: {
       lentDecisions: payload.lentDecisions
     });
     deleteOpen.value = false;
-    uiStore.pushToast(res.offlineQueued ? t('batch.offlineQueuedToast') : t('batch.statusUpdatedToast'), 'success');
+    if (res.offlineQueued) {
+      uiStore.pushToast(t('batch.offlineQueuedToast'), 'info');
+    }
     emit('updated');
   } finally {
     busy.value = false;
@@ -88,55 +94,60 @@ async function confirmDelete(payload: {
 </script>
 
 <template>
-  <div class="ds-row">
+  <div class="book-primary-actions">
     <button
       v-if="book.ownershipStatus !== 'owned' && !book.ownedViaIntegral"
       type="button"
-      class="ds-btn ds-btn--primary"
+      class="ds-btn ds-btn--primary ds-btn--lg"
       :disabled="busy"
       @click="setStatus('owned')"
     >
-      {{ t('book.addOwnedBtn') }}
+      <Plus :size="18" aria-hidden="true" />
+      <span>{{ t('book.addOwnedBtn') }}</span>
     </button>
 
     <button
       v-if="book.ownershipStatus === 'none' && !book.ownedViaIntegral"
       type="button"
-      class="ds-btn"
+      class="ds-btn ds-btn--soft ds-btn--lg"
       :disabled="busy"
       @click="setStatus('wish')"
     >
-      {{ t('book.addWishBtn') }}
+      <Star :size="18" aria-hidden="true" />
+      <span>{{ t('book.addWishBtn') }}</span>
     </button>
 
     <button
       v-if="book.ownershipStatus === 'owned' && !book.activeLoan"
       type="button"
-      class="ds-btn"
+      class="ds-btn ds-btn--primary ds-btn--lg"
       :disabled="busy"
       @click="lendOpen = true"
     >
-      {{ t('book.lendBtn') }}
+      <ArrowLeftRight :size="18" aria-hidden="true" />
+      <span>{{ t('book.lendBtn') }}</span>
     </button>
 
     <button
       v-if="book.activeLoan"
       type="button"
-      class="ds-btn ds-btn--primary"
+      class="ds-btn ds-btn--primary ds-btn--lg"
       :disabled="busy"
       @click="handleReturn"
     >
-      {{ t('loans.returnBook') }}
+      <Check :size="18" aria-hidden="true" />
+      <span>{{ t('loans.returnBook') }}</span>
     </button>
 
     <button
       v-if="book.ownershipStatus === 'owned' || book.ownershipStatus === 'wish' || book.activeLoan"
       type="button"
-      class="ds-btn ds-btn--danger"
+      class="ds-btn ds-btn--danger-soft ds-btn--lg"
       :disabled="busy"
       @click="deleteOpen = true"
     >
-      {{ t('app.delete') }}
+      <Trash2 :size="18" aria-hidden="true" />
+      <span>{{ t('app.delete') }}</span>
     </button>
 
     <LendModal
@@ -157,3 +168,11 @@ async function confirmDelete(payload: {
     />
   </div>
 </template>
+
+<style scoped>
+.book-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(155px, 100%), 1fr));
+  gap: var(--space-2);
+}
+</style>

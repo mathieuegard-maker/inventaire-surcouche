@@ -44,14 +44,14 @@ const volumeBadge = computed(() => {
     class="book-card"
     :class="{ 'book-card--selected': selected }"
   >
-    <div v-if="selectable" class="book-card__select">
+    <label v-if="selectable" class="book-card__select" @click.stop>
       <input
         type="checkbox"
         :checked="selected"
         :aria-label="t('collection.selectItem', { title: book.title })"
         @change="emit('toggle-select', book.id)"
       />
-    </div>
+    </label>
 
     <div class="book-card__main" @click="emit('open', book.id)">
       <div class="book-card__cover">
@@ -121,14 +121,20 @@ const volumeBadge = computed(() => {
 
 .book-card__select {
   position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
+  top: 0;
+  right: 0;
   z-index: 2;
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
 }
 
 .book-card__select input[type='checkbox'] {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   accent-color: var(--accent);
   cursor: pointer;
 }

@@ -49,6 +49,10 @@ export const updateDefaultGenresSchema = z.object({
   genre: z.string().trim().min(1).max(60).optional()
 });
 
+export const reorderDefaultGenresSchema = z.object({
+  genres: z.array(z.string().trim().min(1).max(60)).min(1).max(100)
+});
+
 export const importFieldKeySchema = z.enum([
   'isbn',
   'title',

@@ -1,11 +1,20 @@
 <!-- src/client/components/social/SharedLibraryBrowser.vue -->
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { Gift } from '@lucide/vue';
 import BaseModal from '../base/BaseModal.vue';
+import ListControlBar from '../base/ListControlBar.vue';
+import PaginationBar from '../base/PaginationBar.vue';
 import { useSocialStore, type SharedBookItem, type SharedLibraryData } from '../../stores/social.store';
 import { useUiStore } from '../../stores/ui.store';
 import { ApiClientError } from '../../api/client';
+import {
+  createEmptyListFilters,
+  type CompositeListFilters,
+  type ExtractedFilterFacets
+} from '../../../shared/bibliographic/list-filter.util';
+import { normalizeSeriesNumber, normalizeTextKey } from '../../../shared/bibliographic/text-normalize.util';
 import { t } from '../../../shared/locales';
 
 const props = defineProps<{
@@ -24,8 +33,9 @@ const uiStore = useUiStore();
 type StatusFilter = 'all' | 'owned' | 'wish' | 'lent';
 
 const statusFilter = ref<StatusFilter>('all');
-const categoryFilter = ref('');
-const searchQuery = ref('');
+const filters = ref<CompositeListFilters>(createEmptyListFilters());
+const page = ref(1);
+const pageSize = ref(20);
 const busyBookId = ref<string | null>(null);
 const loginPromptOpen = ref(false);
 
@@ -39,29 +49,60 @@ const counts = computed(() => {
   };
 });
 
-const categories = computed(() => {
-  const set = new Set<string>();
+const facets = computed<ExtractedFilterFacets>(() => {
+  const genres = new Set<string>();
+  const authors = new Set<string>();
+  const seriesNames = new Set<string>();
   for (const b of props.shared.books) {
-    if (b.mainCategory) set.add(b.mainCategory);
+    if (b.mainCategory) genres.add(b.mainCategory);
+    for (const g of b.genres) genres.add(g);
+    for (const a of b.authors) authors.add(a);
+    if (b.seriesName) seriesNames.add(b.seriesName);
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, 'fr'));
+  return {
+    genres: Array.from(genres).sort((a, b) => a.localeCompare(b, 'fr')),
+    authors: Array.from(authors).sort((a, b) => a.localeCompare(b, 'fr')),
+    publishers: [],
+    seriesNames: Array.from(seriesNames).sort((a, b) => a.localeCompare(b, 'fr'))
+  };
 });
 
 const filteredBooks = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
+  const qNorm = normalizeTextKey(filters.value.query);
+  const gNorm = normalizeTextKey(filters.value.genre);
+  const aNorm = normalizeTextKey(filters.value.author);
+  const sNorm = normalizeTextKey(filters.value.series);
+  const vNorm = normalizeSeriesNumber(filters.value.volumeNumber);
+
   return props.shared.books.filter((b) => {
     if (statusFilter.value === 'owned' && b.ownershipStatus !== 'owned') return false;
     if (statusFilter.value === 'wish' && b.ownershipStatus !== 'wish') return false;
     if (statusFilter.value === 'lent' && !b.isLent) return false;
-    if (categoryFilter.value && b.mainCategory !== categoryFilter.value) return false;
-    if (!q) return true;
-    return (
-      b.title.toLowerCase().includes(q) ||
-      (b.seriesName ?? '').toLowerCase().includes(q) ||
-      b.authors.some((a) => a.toLowerCase().includes(q)) ||
-      b.genres.some((g) => g.toLowerCase().includes(q))
-    );
+
+    if (gNorm) {
+      const hasGenre =
+        normalizeTextKey(b.mainCategory) === gNorm || b.genres.some((g) => normalizeTextKey(g) === gNorm);
+      if (!hasGenre) return false;
+    }
+    if (aNorm && !b.authors.some((a) => normalizeTextKey(a).includes(aNorm))) return false;
+    if (sNorm && !normalizeTextKey(b.seriesName ?? '').includes(sNorm)) return false;
+    if (vNorm && normalizeSeriesNumber(b.volumeLabel) !== vNorm) return false;
+
+    if (!qNorm) return true;
+    const hay = normalizeTextKey([b.title, b.seriesName ?? '', ...b.authors, b.mainCategory, ...b.genres].join(' '));
+    return hay.includes(qNorm);
   });
+});
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredBooks.value.length / pageSize.value)));
+
+watch([statusFilter, filters, pageSize], () => {
+  page.value = 1;
+}, { deep: true });
+
+const paginatedBooks = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  return filteredBooks.value.slice(start, start + pageSize.value);
 });
 
 async function handleReserve(book: SharedBookItem): Promise<void> {
@@ -105,78 +146,67 @@ function goLoginToReserve(): void {
 
 <template>
   <div class="ds-stack">
-    <div v-if="shared.isOwnLibrary" class="ds-banner ds-banner--info" role="status">
+    <div v-if="shared.isOwnLibrary" class="ds-banner ds-banner--warning" role="status">
       {{ t('social.ownLibraryPreviewBanner') }}
     </div>
 
-    <div class="ds-card ds-stack">
-      <div class="ds-row shared-filters-row">
-        <input
-          v-model="searchQuery"
-          type="search"
-          class="ds-input shared-search-input"
-          :placeholder="t('social.searchPlaceholder')"
-        />
-
-        <select v-model="categoryFilter" class="ds-input shared-category-select">
-          <option value="">{{ t('social.allCategories') }}</option>
-          <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
-        </select>
-      </div>
-
-      <div class="ds-tabs" role="tablist">
-        <button
-          type="button"
-          class="ds-tab"
-          :class="{ 'ds-tab--active': statusFilter === 'all' }"
-          @click="statusFilter = 'all'"
-        >
-          {{ t('social.filterAll', { count: counts.all }) }}
-        </button>
-        <button
-          type="button"
-          class="ds-tab"
-          :class="{ 'ds-tab--active': statusFilter === 'owned' }"
-          @click="statusFilter = 'owned'"
-        >
-          {{ t('social.filterOwned', { count: counts.owned }) }}
-        </button>
-        <button
-          type="button"
-          class="ds-tab"
-          :class="{ 'ds-tab--active': statusFilter === 'wish' }"
-          @click="statusFilter = 'wish'"
-        >
-          {{ t('social.filterWish', { count: counts.wish }) }}
-        </button>
-        <button
-          type="button"
-          class="ds-tab"
-          :class="{ 'ds-tab--active': statusFilter === 'lent' }"
-          @click="statusFilter = 'lent'"
-        >
-          {{ t('social.filterLent', { count: counts.lent }) }}
-        </button>
-      </div>
+    <div class="ds-segmented shared-segmented" role="tablist">
+      <button
+        type="button"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': statusFilter === 'all' }"
+        @click="statusFilter = 'all'"
+      >
+        {{ t('social.filterAll', { count: counts.all }) }}
+      </button>
+      <button
+        type="button"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': statusFilter === 'owned' }"
+        @click="statusFilter = 'owned'"
+      >
+        {{ t('social.filterOwned', { count: counts.owned }) }}
+      </button>
+      <button
+        type="button"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': statusFilter === 'wish' }"
+        @click="statusFilter = 'wish'"
+      >
+        {{ t('social.filterWish', { count: counts.wish }) }}
+      </button>
+      <button
+        type="button"
+        class="ds-segmented__btn"
+        :class="{ 'ds-segmented__btn--active': statusFilter === 'lent' }"
+        @click="statusFilter = 'lent'"
+      >
+        {{ t('social.filterLent', { count: counts.lent }) }}
+      </button>
     </div>
+
+    <ListControlBar
+      :filters="filters"
+      :facets="facets"
+      :enabled-facets="['genre', 'author', 'series', 'volumeNumber']"
+      :placeholder="t('social.searchPlaceholder')"
+      @update:filters="(next) => (filters = next)"
+    />
 
     <p v-if="filteredBooks.length === 0" class="ds-card ds-text-muted">
       {{ t('social.sharedEmpty') }}
     </p>
 
     <div v-else class="shared-grid">
-      <article v-for="book in filteredBooks" :key="book.id" class="ds-card shared-book-card">
+      <article v-for="book in paginatedBooks" :key="book.id" class="ds-card shared-book-card">
         <div class="shared-book-card__cover">
           <img v-if="book.coverUrl" :src="book.coverUrl" :alt="book.title" loading="lazy" />
           <div v-else class="shared-book-card__placeholder">{{ book.title.slice(0, 2).toUpperCase() }}</div>
         </div>
 
-        <div class="shared-book-card__body ds-stack">
+        <div class="shared-book-card__body ds-stack--sm">
           <div class="ds-row ds-row--between">
-            <span
-              class="ds-badge"
-              :class="book.ownershipStatus === 'owned' ? 'ds-badge--accent' : ''"
-            >
+            <span class="ds-badge" :class="book.ownershipStatus === 'owned' ? 'ds-badge--accent' : ''">
               {{ book.ownershipStatus === 'owned' ? t('book.statusOwned') : t('book.statusWished') }}
             </span>
 
@@ -196,7 +226,7 @@ function goLoginToReserve(): void {
             {{ book.authors.length > 0 ? book.authors.join(', ') : t('app.unknownAuthor') }}
           </p>
 
-          <!-- Réservation Cadeau anti-spoiler (strictement absente si isOwnLibrary) -->
+          <!-- Réservation Cadeau anti-spoiler -->
           <div v-if="book.ownershipStatus === 'wish' && !shared.isOwnLibrary" class="shared-gift-box">
             <template v-if="shared.canReserveGifts">
               <button
@@ -206,10 +236,11 @@ function goLoginToReserve(): void {
                 :disabled="busyBookId === book.id"
                 @click="handleReserve(book)"
               >
-                {{ t('social.giftReserveBtn') }}
+                <Gift :size="15" aria-hidden="true" />
+                <span>{{ t('social.giftReserveBtn') }}</span>
               </button>
 
-              <div v-else-if="book.giftReservation === 'reserved_by_me'" class="ds-stack">
+              <div v-else-if="book.giftReservation === 'reserved_by_me'" class="ds-stack--sm">
                 <span class="ds-badge ds-badge--accent">{{ t('social.giftReservedByMe') }}</span>
                 <button
                   type="button"
@@ -226,19 +257,28 @@ function goLoginToReserve(): void {
               </span>
             </template>
 
-            <!-- Visiteur non connecté : précise qu'il faut être inscrit et connecté -->
             <button
               v-else
               type="button"
               class="ds-btn ds-btn--sm"
               @click="loginPromptOpen = true"
             >
-              {{ t('social.giftReserveBtn') }}
+              <Gift :size="15" aria-hidden="true" />
+              <span>{{ t('social.giftReserveBtn') }}</span>
             </button>
           </div>
         </div>
       </article>
     </div>
+
+    <PaginationBar
+      :page="page"
+      :total-pages="totalPages"
+      :page-size="pageSize"
+      :total-items="filteredBooks.length"
+      @update:page="(p) => (page = p)"
+      @update:page-size="(s) => (pageSize = s)"
+    />
 
     <BaseModal
       :open="loginPromptOpen"
@@ -259,24 +299,14 @@ function goLoginToReserve(): void {
 </template>
 
 <style scoped>
-.shared-filters-row {
-  flex-wrap: wrap;
-}
-
-.shared-search-input {
-  flex: 1;
-  min-width: 220px;
-}
-
-.shared-category-select {
-  width: auto;
-  min-width: 180px;
+.shared-segmented {
+  overflow-x: auto;
 }
 
 .shared-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-3);
 }
 
 .shared-book-card {
@@ -315,21 +345,20 @@ function goLoginToReserve(): void {
 .shared-book-card__body {
   flex: 1;
   min-width: 0;
-  gap: var(--space-2);
 }
 
 .shared-book-card__title {
-  font-size: 1rem;
+  font-size: 0.96rem;
   line-height: 1.3;
   margin: 0;
 }
 
 .shared-book-card__meta {
-  font-size: 0.85rem;
+  font-size: 0.84rem;
   margin: 0;
 }
 
 .shared-gift-box {
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
 }
 </style>

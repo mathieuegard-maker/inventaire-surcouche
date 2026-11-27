@@ -2,6 +2,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
+import { BookOpen, Home, Library, Search, User, Users } from '@lucide/vue';
 import { useAuthStore } from '../../stores/auth.store';
 import { t } from '../../../shared/locales';
 
@@ -22,11 +23,11 @@ const desktopLinks = computed(() => [
 ]);
 
 const mobileTabs = computed(() => [
-  { to: '/dashboard', label: t('nav.dashboard'), icon: '⌂' },
-  { to: '/collection', label: t('nav.collection'), icon: '▤' },
-  { to: '/scan', label: t('nav.scanShort'), icon: '⌕' },
-  { to: '/social', label: t('nav.socialShort'), icon: '⇄' },
-  { to: '/profile', label: t('nav.profileShort'), icon: '◉' }
+  { to: '/dashboard', label: t('nav.dashboard'), icon: Home },
+  { to: '/collection', label: t('nav.collection'), icon: Library },
+  { to: '/scan', label: t('nav.scanShort'), icon: Search },
+  { to: '/social', label: t('nav.socialShort'), icon: Users },
+  { to: '/profile', label: t('nav.profileShort'), icon: User }
 ]);
 
 function isLinkActive(to: string): boolean {
@@ -37,7 +38,8 @@ function isLinkActive(to: string): boolean {
 <template>
   <header class="app-header">
     <router-link to="/dashboard" class="app-header__brand">
-      {{ t('app.title') }}
+      <BookOpen :size="20" :stroke-width="2.1" class="app-header__brand-icon" aria-hidden="true" />
+      <span>{{ t('app.title') }}</span>
     </router-link>
 
     <nav class="app-header__nav" :aria-label="t('nav.menuOpen')">
@@ -62,13 +64,18 @@ function isLinkActive(to: string): boolean {
       class="app-tabbar__item"
       :class="{ 'app-tabbar__item--active': isLinkActive(tab.to) }"
     >
-      <span class="app-tabbar__icon" aria-hidden="true">{{ tab.icon }}</span>
+      <component :is="tab.icon" :size="21" :stroke-width="isLinkActive(tab.to) ? 2.2 : 1.8" aria-hidden="true" />
       <span>{{ tab.label }}</span>
     </router-link>
   </nav>
 </template>
 
 <style scoped>
+.app-header__brand-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
 .app-header__badge {
   display: inline-flex;
   align-items: center;
@@ -82,10 +89,5 @@ function isLinkActive(to: string): boolean {
   color: var(--accent-contrast);
   font-size: 0.72rem;
   font-weight: 700;
-}
-
-.app-tabbar__icon {
-  font-size: 1.1rem;
-  line-height: 1;
 }
 </style>

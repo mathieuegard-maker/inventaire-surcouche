@@ -2,9 +2,10 @@
 import { z } from 'zod';
 
 export const createPhotoJobSchema = z.object({
-  mode: z.enum(['shelf', 'cover']).default('shelf'),
+  mode: z.enum(['auto', 'shelf', 'cover']).default('auto'),
   imageDataUrl: z.string().startsWith('data:image/'),
-  mimeType: z.string().trim().default('image/webp')
+  mimeType: z.string().trim().default('image/webp'),
+  notifyOnComplete: z.boolean().optional().default(false)
 });
 
 export const updatePhotoJobItemSchema = z.object({
@@ -29,5 +30,6 @@ export const retryPhotoItemBnfSchema = z.object({
 export const commitPhotoJobSchema = z.object({
   targetStatus: z.enum(['owned', 'wish']).default('owned'),
   itemIds: z.array(z.string().trim().min(1)).optional(),
-  async: z.boolean().optional()
+  async: z.boolean().optional(),
+  archiveAfterCommit: z.boolean().optional().default(true)
 });

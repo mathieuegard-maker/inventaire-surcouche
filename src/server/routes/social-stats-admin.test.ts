@@ -359,5 +359,51 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
       headers: { cookie: admin.cookie }
     });
     expect(maintRes.status).toBe(200);
+
+    // Pagination Catalogue Maître jusqu'à 100 entrées/page
+    const catRes = await ctx.app.request('/api/admin/catalog?page=1&pageSize=100', {
+      headers: { cookie: admin.cookie }
+    });
+    expect(catRes.status).toBe(200);
+    const catBody = (await catRes.json()) as { pageSize: number; items: Array<{ id: string }> };
+    expect(catBody.pageSize).toBe(100);
+    expect(catBody.items.some((b) => b.id === book.id)).toBe(true);
+
+    // Bannissement réversible (soft delete) d'un utilisateur : interdit l'auto-ban, révoque la session et bloque la reconnexion
+    const selfBanRes = await ctx.app.request(`/api/admin/users/${admin.profile.user.id}/ban`, {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(selfBanRes.status).toBe(400);
+
+    const banRes = await ctx.app.request(`/api/admin/users/${regular.profile.user.id}/ban`, {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(banRes.status).toBe(200);
+
+    const regularMeAfterBan = await ctx.app.request('/api/me', { headers: { cookie: regular.cookie } });
+    expect(regularMeAfterBan.status).toBe(401);
+
+    const regularLoginBanned = await ctx.app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier: 'normal@biblio.test', password: 'Password123!' })
+    });
+    expect(regularLoginBanned.status).toBe(403);
+
+    // Réactivation du compte -> connexion de nouveau autorisée
+    const unbanRes = await ctx.app.request(`/api/admin/users/${regular.profile.user.id}/unban`, {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(unbanRes.status).toBe(200);
+
+    const regularLoginRestored = await ctx.app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ identifier: 'normal@biblio.test', password: 'Password123!' })
+    });
+    expect(regularLoginRestored.status).toBe(200);
   });
 });

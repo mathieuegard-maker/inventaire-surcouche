@@ -145,6 +145,31 @@ export class NotificationService {
   }
 
   /**
+   * Envoie une notification Web Push immédiate à tous les appareils abonnés d'un utilisateur
+   * (utilisée notamment à la fin d'un lot Photo IA lorsque l'utilisateur a coché « Me notifier »).
+   */
+  async sendDirectPushToUser(
+    userId: string,
+    payload: { title: string; body: string; url?: string }
+  ): Promise<{ sentCount: number }> {
+    const subs = this.notifRepo.listPushSubscriptions(userId);
+    if (subs.length === 0) return { sentCount: 0 };
+    let sentCount = 0;
+    for (const sub of subs) {
+      const res = await this.webPushSender.sendNotification(
+        { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
+        payload
+      );
+      if (res.sent) {
+        sentCount++;
+      } else if (res.gone) {
+        this.notifRepo.deletePushSubscription(userId, sub.endpoint);
+      }
+    }
+    return { sentCount };
+  }
+
+  /**
    * Liste les alertes nouveautés actives d'un foyer, en filtrant automatiquement tout tome déjà possédé
    * (directement OU couvert par une intégrale possédée).
    */

@@ -1,16 +1,34 @@
 <!-- src/client/views/ScanView.vue -->
+<!-- Hub d'acquisition unifié (V2.6 mobile-first) : Photo IA (multi-photos, notification push & historique 30j),
+     Mode Rafale (sélection persistante), Scan simple, Recherche multi-critères, Importer et Création manuelle. -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import {
+  Bell,
+  Camera,
+  Clock,
+  Image as ImageIcon,
+  PlusCircle,
+  QrCode,
+  RefreshCw,
+  ScanBarcode,
+  Search,
+  Sparkles,
+  Trash2,
+  Upload,
+  X
+} from '@lucide/vue';
 import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
-import PhotoLightboxModal from '../components/base/PhotoLightboxModal.vue';
+import BaseModal from '../components/base/BaseModal.vue';
 import CameraBarcodeModal from '../components/modals/CameraBarcodeModal.vue';
 import PhotoItemModal from '../components/modals/PhotoItemModal.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
 import LendModal from '../components/modals/LendModal.vue';
 import BatchGenreModal from '../components/modals/BatchGenreModal.vue';
+import CollectionImportPanel from '../components/import/CollectionImportPanel.vue';
 import { useScanStore, type PhotoJobItem, type PhotoJobResultPayload, type ScanTab } from '../stores/scan.store';
 import { useJobsStore } from '../stores/jobs.store';
 import { useLibraryStore } from '../stores/library.store';
@@ -18,7 +36,8 @@ import { useAuthStore } from '../stores/auth.store';
 import { useUiStore } from '../stores/ui.store';
 import { filterEligibleBooksForBatchAction, type BatchActionType } from '../../shared/bibliographic/batch-actions.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
-import { ApiClientError } from '../api/client';
+import { apiRequest, ApiClientError } from '../api/client';
+import type { BackgroundJobView } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
 const route = useRoute();
@@ -29,16 +48,16 @@ const libraryStore = useLibraryStore();
 const authStore = useAuthStore();
 const uiStore = useUiStore();
 
-const validTabs: ScanTab[] = ['photo', 'burst', 'simple', 'search'];
+const validTabs: ScanTab[] = ['photo', 'burst', 'simple', 'search', 'import'];
 
-// Modales caméra déclarées avant le watcher d'onglets pour ouverture directe au clic sur Rafale / Scan simple
 const burstCameraOpen = ref(false);
 const simpleCameraOpen = ref(false);
 
-function openCameraForTab(tab: ScanTab): void {
+function openCameraForTab(tab: ScanTab, explicitClick = false): void {
   if (tab === 'burst') {
     simpleCameraOpen.value = false;
-    burstCameraOpen.value = true;
+    // N'ouvre pas automatiquement la caméra au retour arrière si la liste Rafale contient déjà des livres
+    burstCameraOpen.value = explicitClick || scanStore.burstItems.length === 0;
   } else if (tab === 'simple') {
     burstCameraOpen.value = false;
     simpleCameraOpen.value = true;
@@ -53,28 +72,108 @@ watch(
   (raw) => {
     if (typeof raw === 'string' && validTabs.includes(raw as ScanTab)) {
       const nextTab = raw as ScanTab;
+      const changed = scanStore.activeTab !== nextTab;
       scanStore.activeTab = nextTab;
-      openCameraForTab(nextTab);
+      if (changed || nextTab === 'simple') {
+        openCameraForTab(nextTab, false);
+      }
+      if (nextTab === 'photo') {
+        void jobsStore.refreshPhotoHistory();
+      }
     }
   },
   { immediate: true }
 );
 
+onMounted(() => {
+  if (scanStore.activeTab === 'photo') {
+    void jobsStore.refreshPhotoHistory();
+  }
+});
+
 function selectTab(tab: ScanTab): void {
   scanStore.activeTab = tab;
-  openCameraForTab(tab);
+  openCameraForTab(tab, true);
+  if (tab === 'photo') {
+    void jobsStore.refreshPhotoHistory();
+  }
   void router.replace({ path: '/scan', query: { tab } });
 }
 
 // ==================== ONGLET 1 : PHOTO IA 100 % SERVEUR ====================
-const photoMode = ref<'shelf' | 'cover'>('shelf');
+interface QueuedPhoto {
+  id: string;
+  dataUrl: string;
+}
+
 const cameraPhotoInputRef = ref<HTMLInputElement | null>(null);
 const galleryPhotoInputRef = ref<HTMLInputElement | null>(null);
+const queuedPhotos = ref<QueuedPhoto[]>([]);
+const notifyOnComplete = ref(false);
+const notifyModalOpen = ref(false);
+const notifyEnabling = ref(false);
+const notifyPermissionError = ref('');
 const photoUploading = ref(false);
+const photoSentBanner = ref(false);
 const photoRetryingOcr = ref(false);
 const photoCommitting = ref(false);
 const activePhotoItemId = ref<string | null>(null);
-const previewLightboxOpen = ref(false);
+
+// Navigation entre plusieurs photos actives ou consultation d'une photo de l'historique 30j
+const selectedActiveJobId = ref<string | null>(null);
+const viewingHistoryJobId = ref<string | null>(null);
+
+const displayedPhotoJob = computed<BackgroundJobView | null>(() => {
+  if (viewingHistoryJobId.value) {
+    return (
+      jobsStore.photoHistory.find((j) => j.id === viewingHistoryJobId.value) ??
+      jobsStore.jobs.find((j) => j.id === viewingHistoryJobId.value) ??
+      null
+    );
+  }
+  if (selectedActiveJobId.value) {
+    const found = jobsStore.activePhotoJobs.find((j) => j.id === selectedActiveJobId.value);
+    if (found) return found;
+  }
+  return jobsStore.latestPhotoJob;
+});
+
+const isViewingHistory = computed(() => Boolean(viewingHistoryJobId.value && displayedPhotoJob.value));
+
+function parsePhotoResult(job: BackgroundJobView | null): PhotoJobResultPayload | null {
+  const raw = job?.result;
+  if (!raw || typeof raw !== 'object') return null;
+  const obj = raw as Partial<PhotoJobResultPayload>;
+  return {
+    mode: obj.mode === 'cover' ? 'cover' : obj.mode === 'shelf' ? 'shelf' : 'auto',
+    previewCoverKey: obj.previewCoverKey ?? null,
+    previewUrl: obj.previewUrl ?? (obj.previewCoverKey ? `/api/covers/${obj.previewCoverKey}` : null),
+    notifyOnComplete: obj.notifyOnComplete,
+    committedAt: obj.committedAt ?? null,
+    items: Array.isArray(obj.items) ? obj.items : []
+  };
+}
+
+const photoResult = computed<PhotoJobResultPayload | null>(() => parsePhotoResult(displayedPhotoJob.value));
+
+const identifiedItems = computed(() =>
+  (photoResult.value?.items ?? []).filter((it) => it.status === 'identified')
+);
+const doubtItems = computed(() =>
+  (photoResult.value?.items ?? []).filter((it) => it.status === 'doubt')
+);
+const unresolvedItems = computed(() =>
+  (photoResult.value?.items ?? []).filter((it) => it.status === 'unresolved')
+);
+
+const selectedPhotoCount = computed(() =>
+  (photoResult.value?.items ?? []).filter((it) => it.selected && !it.ignored && Boolean(it.selectedOptionIsbn13)).length
+);
+
+const activePhotoItem = computed<PhotoJobItem | null>(() => {
+  if (!activePhotoItemId.value || !photoResult.value) return null;
+  return photoResult.value.items.find((it) => it.id === activePhotoItemId.value) ?? null;
+});
 
 function findSelectedPhotoOption(item: PhotoJobItem) {
   return (
@@ -98,14 +197,6 @@ function getPhotoItemDisplayTitle(item: PhotoJobItem): string {
   return chosen?.title || item.hint.title;
 }
 
-function getPhotoItemPositionShort(item: PhotoJobItem): string {
-  const idx = item.spineIndex ?? item.hint.spineIndex;
-  const total = item.totalSpines ?? photoResult.value?.items.length ?? 0;
-  if (!idx || total <= 1) return '';
-  const fromRight = Math.max(1, total - idx + 1);
-  return t('scan.photoPositionShort', { left: idx, right: fromRight });
-}
-
 function getPhotoItemSubtitle(item: PhotoJobItem): string {
   const chosen = findSelectedPhotoOption(item);
   const parts: string[] = [];
@@ -126,37 +217,39 @@ function getPhotoItemSubtitle(item: PhotoJobItem): string {
   return parts.join(' · ') || '—';
 }
 
-const latestPhotoJob = computed(() => jobsStore.latestPhotoJob);
-const photoResult = computed<PhotoJobResultPayload | null>(() => {
-  const raw = latestPhotoJob.value?.result;
-  if (!raw || typeof raw !== 'object') return null;
-  const obj = raw as Partial<PhotoJobResultPayload>;
+function formatPhotoDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function summarizeHistoryJob(job: BackgroundJobView): {
+  previewUrl: string | null;
+  total: number;
+  owned: number;
+  wish: number;
+  ignored: number;
+} {
+  const parsed = parsePhotoResult(job);
+  const items = parsed?.items ?? [];
+  const owned = items.filter((it) => it.committedAction === 'owned' || (!it.committedAction && it.committedBookId)).length;
+  const wish = items.filter((it) => it.committedAction === 'wish').length;
+  const ignored = items.filter((it) => it.ignored).length;
   return {
-    mode: obj.mode === 'cover' ? 'cover' : 'shelf',
-    previewCoverKey: obj.previewCoverKey ?? null,
-    previewUrl: obj.previewUrl ?? (obj.previewCoverKey ? `/api/covers/${obj.previewCoverKey}` : null),
-    items: Array.isArray(obj.items) ? obj.items : []
+    previewUrl: parsed?.previewUrl ?? null,
+    total: items.length,
+    owned,
+    wish,
+    ignored
   };
-});
-
-const identifiedItems = computed(() =>
-  (photoResult.value?.items ?? []).filter((it) => it.status === 'identified')
-);
-const doubtItems = computed(() =>
-  (photoResult.value?.items ?? []).filter((it) => it.status === 'doubt')
-);
-const unresolvedItems = computed(() =>
-  (photoResult.value?.items ?? []).filter((it) => it.status === 'unresolved')
-);
-
-const selectedPhotoCount = computed(() =>
-  (photoResult.value?.items ?? []).filter((it) => it.selected && !it.ignored && Boolean(it.selectedOptionIsbn13)).length
-);
-
-const activePhotoItem = computed<PhotoJobItem | null>(() => {
-  if (!activePhotoItemId.value || !photoResult.value) return null;
-  return photoResult.value.items.find((it) => it.id === activePhotoItemId.value) ?? null;
-});
+}
 
 async function compressPhotoForUpload(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -165,7 +258,7 @@ async function compressPhotoForUpload(file: File): Promise<string> {
       const dataUrl = String(reader.result || '');
       const img = new Image();
       img.onload = () => {
-        const maxDim = photoMode.value === 'shelf' ? 2048 : 1400;
+        const maxDim = 2048;
         const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(img.width * scale));
@@ -186,41 +279,172 @@ async function compressPhotoForUpload(file: File): Promise<string> {
   });
 }
 
-async function handlePhotoSelected(event: Event): Promise<void> {
+async function handlePhotoFilesAdded(event: Event): Promise<void> {
   const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
+  const files = Array.from(input.files ?? []);
+  if (files.length === 0) return;
 
-  photoUploading.value = true;
+  photoSentBanner.value = false;
+  viewingHistoryJobId.value = null;
+
+  for (const file of files) {
+    try {
+      const dataUrl = await compressPhotoForUpload(file);
+      queuedPhotos.value.push({
+        id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        dataUrl
+      });
+    } catch {
+      uiStore.pushToast(t('app.retry'), 'danger');
+    }
+  }
+  input.value = '';
+}
+
+function removeQueuedPhoto(photoId: string): void {
+  queuedPhotos.value = queuedPhotos.value.filter((p) => p.id !== photoId);
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const out = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) out[i] = rawData.charCodeAt(i);
+  return out;
+}
+
+async function handleToggleNotify(event: Event): Promise<void> {
+  const checked = (event.target as HTMLInputElement).checked;
+  if (!checked) {
+    notifyOnComplete.value = false;
+    return;
+  }
+
+  // Vérifie si le Push Web est déjà autorisé et abonné côté serveur
   try {
-    const imageDataUrl = await compressPhotoForUpload(file);
-    await scanStore.submitPhotoJob({
-      mode: photoMode.value,
-      imageDataUrl,
-      mimeType: 'image/webp'
+    const res = await apiRequest<{
+      ok: true;
+      prefs: { vapidPublicKey: string; hasPushSubscription: boolean };
+    }>('/api/notifications/prefs');
+
+    const browserGranted = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    if (browserGranted && res.prefs.hasPushSubscription) {
+      notifyOnComplete.value = true;
+      return;
+    }
+
+    if (!res.prefs.vapidPublicKey || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      notifyOnComplete.value = false;
+      uiStore.pushToast(t('profile.notifPushNotSupported'), 'warning');
+      return;
+    }
+
+    notifyPermissionError.value = '';
+    notifyModalOpen.value = true;
+  } catch {
+    notifyOnComplete.value = true;
+  }
+}
+
+async function authorizePushForPhoto(): Promise<void> {
+  notifyEnabling.value = true;
+  notifyPermissionError.value = '';
+  try {
+    const res = await apiRequest<{
+      ok: true;
+      prefs: { vapidPublicKey: string };
+    }>('/api/notifications/prefs');
+
+    if (!res.prefs.vapidPublicKey || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      notifyPermissionError.value = t('profile.notifPushNotSupported');
+      return;
+    }
+
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        notifyPermissionError.value = t('scan.photoNotifyPermissionDenied');
+        notifyOnComplete.value = false;
+        return;
+      }
+    } else if (typeof Notification !== 'undefined' && Notification.permission === 'denied') {
+      notifyPermissionError.value = t('scan.photoNotifyPermissionDenied');
+      notifyOnComplete.value = false;
+      return;
+    }
+
+    const reg = await navigator.serviceWorker.ready;
+    const keyBytes = urlBase64ToUint8Array(res.prefs.vapidPublicKey);
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes.buffer as ArrayBuffer
     });
-    uiStore.pushToast(t('scan.photoJobCreatedToast'), 'info');
+    const json = sub.toJSON();
+    if (json.endpoint && json.keys?.p256dh && json.keys?.auth) {
+      await apiRequest('/api/notifications/push', {
+        method: 'POST',
+        body: {
+          endpoint: json.endpoint,
+          keys: { p256dh: json.keys.p256dh, auth: json.keys.auth }
+        }
+      });
+      notifyOnComplete.value = true;
+      notifyModalOpen.value = false;
+      uiStore.pushToast(t('profile.notifPushEnabledToast'), 'success');
+    }
+  } catch {
+    notifyPermissionError.value = t('profile.notifPushNotSupported');
+    notifyOnComplete.value = false;
+  } finally {
+    notifyEnabling.value = false;
+  }
+}
+
+async function handleLaunchPhotoBatch(): Promise<void> {
+  if (queuedPhotos.value.length === 0 || photoUploading.value) return;
+  photoUploading.value = true;
+  const photosToSend = [...queuedPhotos.value];
+  const wantsNotify = notifyOnComplete.value;
+  let lastJob: BackgroundJobView | null = null;
+
+  try {
+    for (let i = 0; i < photosToSend.length; i++) {
+      const isLast = i === photosToSend.length - 1;
+      lastJob = await scanStore.submitPhotoJob({
+        mode: 'auto',
+        imageDataUrl: photosToSend[i].dataUrl,
+        mimeType: 'image/webp',
+        notifyOnComplete: wantsNotify && isLast
+      });
+    }
+    queuedPhotos.value = [];
+    photoSentBanner.value = true;
+    viewingHistoryJobId.value = null;
+    if (lastJob) {
+      selectedActiveJobId.value = lastJob.id;
+    }
+    void jobsStore.refreshPhotoHistory();
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
     photoUploading.value = false;
-    input.value = '';
   }
 }
 
 async function togglePhotoItemSelected(item: PhotoJobItem): Promise<void> {
-  if (!latestPhotoJob.value) return;
+  if (!displayedPhotoJob.value) return;
   try {
-    await scanStore.updatePhotoItem(latestPhotoJob.value.id, item.id, { selected: !item.selected });
+    await scanStore.updatePhotoItem(displayedPhotoJob.value.id, item.id, { selected: !item.selected });
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   }
 }
 
 async function handleRetryFailed(): Promise<void> {
-  if (!latestPhotoJob.value) return;
+  if (!displayedPhotoJob.value) return;
   try {
-    await scanStore.retryPhotoJobFailed(latestPhotoJob.value.id);
+    await scanStore.retryPhotoJobFailed(displayedPhotoJob.value.id);
     uiStore.pushToast(t('scan.photoRetryBnfSuccess'), 'success');
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
@@ -228,10 +452,10 @@ async function handleRetryFailed(): Promise<void> {
 }
 
 async function handleRetryOcr(): Promise<void> {
-  if (!latestPhotoJob.value) return;
+  if (!displayedPhotoJob.value) return;
   photoRetryingOcr.value = true;
   try {
-    await scanStore.retryPhotoJobOcr(latestPhotoJob.value.id);
+    await scanStore.retryPhotoJobOcr(displayedPhotoJob.value.id);
     uiStore.pushToast(t('scan.photoRetryOcrToast'), 'info');
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
@@ -241,15 +465,23 @@ async function handleRetryOcr(): Promise<void> {
 }
 
 async function handleCommitPhoto(target: 'owned' | 'wish'): Promise<void> {
-  if (!latestPhotoJob.value || selectedPhotoCount.value === 0) return;
+  if (!displayedPhotoJob.value || selectedPhotoCount.value === 0) return;
   photoCommitting.value = true;
+  const wasHistory = isViewingHistory.value;
   try {
-    const outcome = await scanStore.commitPhotoJob(latestPhotoJob.value.id, target);
+    const outcome = await scanStore.commitPhotoJob(displayedPhotoJob.value.id, target, {
+      archiveAfterCommit: true
+    });
     if (outcome.queued) {
       uiStore.pushToast(t('scan.photoCommitStartedToast', { count: outcome.targetCount }), 'info');
     } else {
       uiStore.pushToast(t('scan.photoCommittedToast', { count: outcome.committedCount }), 'success');
     }
+    if (!wasHistory) {
+      selectedActiveJobId.value = null;
+      photoSentBanner.value = false;
+    }
+    void jobsStore.refreshPhotoHistory();
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -257,21 +489,42 @@ async function handleCommitPhoto(target: 'owned' | 'wish'): Promise<void> {
   }
 }
 
-async function handleDeletePhotoJob(): Promise<void> {
-  if (!latestPhotoJob.value) return;
+async function handleClearActivePhotoJob(): Promise<void> {
+  if (!displayedPhotoJob.value) return;
   try {
-    await scanStore.deletePhotoJob(latestPhotoJob.value.id);
+    if (isViewingHistory.value) {
+      await scanStore.deletePhotoJob(displayedPhotoJob.value.id);
+      viewingHistoryJobId.value = null;
+    } else {
+      // Archive dans l'historique 30j et retire immédiatement de la zone active et du bandeau
+      await scanStore.archivePhotoJob(displayedPhotoJob.value.id);
+      selectedActiveJobId.value = null;
+    }
     activePhotoItemId.value = null;
     uiStore.pushToast(t('scan.photoDeletedToast'), 'info');
+    void jobsStore.refreshPhotoHistory();
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   }
 }
 
+function openHistoryJob(jobId: string): void {
+  viewingHistoryJobId.value = jobId;
+  activePhotoItemId.value = null;
+  if (typeof window !== 'undefined') {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}
+
+function closeHistoryJob(): void {
+  viewingHistoryJobId.value = null;
+  activePhotoItemId.value = null;
+}
+
 // ==================== ONGLET 2 : MODE RAFALE ====================
 const burstFlash = ref<'none' | 'added' | 'duplicate'>('none');
+const lastBurstLabel = ref('');
 const burstManualInput = ref('');
-const burstSelectedIds = ref<Set<string>>(new Set());
 const burstDeleteOpen = ref(false);
 const burstLendOpen = ref(false);
 const burstGenreOpen = ref(false);
@@ -283,25 +536,27 @@ const burstFoundBooks = computed(() =>
     .filter((b): b is NonNullable<typeof b> => Boolean(b))
 );
 
+const burstSelectedSet = computed(() => new Set(scanStore.burstSelectedBookIds));
+
 const burstSelectedBooks = computed(() =>
-  burstFoundBooks.value.filter((b) => burstSelectedIds.value.has(b.id))
+  burstFoundBooks.value.filter((b) => burstSelectedSet.value.has(b.id))
 );
 
 function triggerBurstFlash(state: 'added' | 'duplicate'): void {
   burstFlash.value = state;
   window.setTimeout(() => {
     burstFlash.value = 'none';
-  }, 450);
+  }, 550);
 }
 
 function handleBurstCapture(rawIsbn: string): void {
   const res = scanStore.captureBurstIsbn(rawIsbn);
   if (res.status === 'added') {
     triggerBurstFlash('added');
-    uiStore.pushToast(t('scan.burstCapturedToast', { isbn: res.isbn13 }), 'success', 2000);
+    lastBurstLabel.value = t('scan.burstModalLastScanned', { label: res.isbn13 });
   } else if (res.status === 'duplicate') {
     triggerBurstFlash('duplicate');
-    uiStore.pushToast(t('scan.burstDuplicateToast', { isbn: res.isbn13 }), 'warning', 2000);
+    lastBurstLabel.value = t('scan.burstDuplicateToast', { isbn: res.isbn13 });
   }
 }
 
@@ -309,13 +564,6 @@ function submitBurstManual(): void {
   if (!burstManualInput.value.trim()) return;
   handleBurstCapture(burstManualInput.value.trim());
   burstManualInput.value = '';
-}
-
-function toggleBurstSelect(bookId: string): void {
-  const next = new Set(burstSelectedIds.value);
-  if (next.has(bookId)) next.delete(bookId);
-  else next.add(bookId);
-  burstSelectedIds.value = next;
 }
 
 async function handleBurstBatchAction(action: BatchActionType): Promise<void> {
@@ -332,13 +580,13 @@ async function handleBurstBatchAction(action: BatchActionType): Promise<void> {
   }
   if (action === 'RETURN') {
     await libraryStore.returnBooks(eligible.map((b) => b.id));
-    burstSelectedIds.value = new Set();
+    scanStore.clearBurstSelection();
     uiStore.pushToast(t('loans.returnedToast'), 'success');
     return;
   }
   const target = action === 'ADD_OWNED' ? 'owned' : 'wish';
   await libraryStore.applyBatchStatus({ bookIds: eligible.map((b) => b.id), status: target });
-  burstSelectedIds.value = new Set();
+  scanStore.clearBurstSelection();
   uiStore.pushToast(t('batch.statusUpdatedToast'), 'success');
 }
 
@@ -354,7 +602,7 @@ async function confirmBurstDelete(payload: {
       lentDecisions: payload.lentDecisions
     });
     burstDeleteOpen.value = false;
-    burstSelectedIds.value = new Set();
+    scanStore.clearBurstSelection();
     uiStore.pushToast(t('batch.statusUpdatedToast'), 'success');
   } finally {
     burstBusy.value = false;
@@ -372,7 +620,7 @@ async function confirmBurstLend(payload: { borrowerName: string; notes?: string 
       notes: payload.notes
     });
     burstLendOpen.value = false;
-    burstSelectedIds.value = new Set();
+    scanStore.clearBurstSelection();
     uiStore.pushToast(t('loans.lentToast', { name: payload.borrowerName }), 'success');
   } finally {
     burstBusy.value = false;
@@ -386,7 +634,7 @@ async function confirmBurstGenres(genres: string[]): Promise<void> {
   try {
     await libraryStore.applyBatchGenres(ids, genres);
     burstGenreOpen.value = false;
-    burstSelectedIds.value = new Set();
+    scanStore.clearBurstSelection();
     uiStore.pushToast(t('batch.genresAppliedToast'), 'success');
   } finally {
     burstBusy.value = false;
@@ -442,55 +690,82 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('nav.scan') }}</h1>
-      <router-link to="/book/create" class="ds-btn ds-btn--sm">
-        {{ t('book.manualCreateBtn') }}
+    </div>
+
+    <!-- Modes d'acquisition homogènes (boutons tactiles uniformes incluant Importer & Créer manuellement) -->
+    <div class="scan-modes-grid" role="tablist">
+      <button
+        type="button"
+        role="tab"
+        class="scan-mode-btn"
+        :class="{ 'scan-mode-btn--active': scanStore.activeTab === 'photo' }"
+        :aria-selected="scanStore.activeTab === 'photo'"
+        @click="selectTab('photo')"
+      >
+        <Sparkles :size="17" aria-hidden="true" />
+        <span>{{ t('scan.tabPhoto') }}</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="scan-mode-btn"
+        :class="{ 'scan-mode-btn--active': scanStore.activeTab === 'burst' }"
+        :aria-selected="scanStore.activeTab === 'burst'"
+        @click="selectTab('burst')"
+      >
+        <ScanBarcode :size="17" aria-hidden="true" />
+        <span>{{ t('scan.tabBurst') }}</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="scan-mode-btn"
+        :class="{ 'scan-mode-btn--active': scanStore.activeTab === 'simple' }"
+        :aria-selected="scanStore.activeTab === 'simple'"
+        @click="selectTab('simple')"
+      >
+        <QrCode :size="17" aria-hidden="true" />
+        <span>{{ t('scan.tabSimple') }}</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="scan-mode-btn"
+        :class="{ 'scan-mode-btn--active': scanStore.activeTab === 'search' }"
+        :aria-selected="scanStore.activeTab === 'search'"
+        @click="selectTab('search')"
+      >
+        <Search :size="17" aria-hidden="true" />
+        <span>{{ t('scan.tabSearch') }}</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="scan-mode-btn"
+        :class="{ 'scan-mode-btn--active': scanStore.activeTab === 'import' }"
+        :aria-selected="scanStore.activeTab === 'import'"
+        @click="selectTab('import')"
+      >
+        <Upload :size="17" aria-hidden="true" />
+        <span>{{ t('scan.tabImport') }}</span>
+      </button>
+
+      <router-link to="/book/create" class="scan-mode-btn">
+        <PlusCircle :size="17" aria-hidden="true" />
+        <span>{{ t('book.manualCreateBtn') }}</span>
       </router-link>
     </div>
 
-    <div class="ds-tabs" role="tablist">
-      <button
-        type="button"
-        role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': scanStore.activeTab === 'photo' }"
-        @click="selectTab('photo')"
-      >
-        {{ t('scan.tabPhoto') }}
-      </button>
-      <button
-        type="button"
-        role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': scanStore.activeTab === 'burst' }"
-        @click="selectTab('burst')"
-      >
-        {{ t('scan.tabBurst') }}
-      </button>
-      <button
-        type="button"
-        role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': scanStore.activeTab === 'simple' }"
-        @click="selectTab('simple')"
-      >
-        {{ t('scan.tabSimple') }}
-      </button>
-      <button
-        type="button"
-        role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': scanStore.activeTab === 'search' }"
-        @click="selectTab('search')"
-      >
-        {{ t('scan.tabSearch') }}
-      </button>
-    </div>
-
-    <!-- ONGLET 1 : PHOTO IA 100 % SERVEUR -->
+    <!-- ==================== ONGLET 1 : PHOTO IA 100 % SERVEUR ==================== -->
     <div v-if="scanStore.activeTab === 'photo'" class="ds-stack">
-      <div class="ds-card ds-stack">
+      <!-- Zone de capture (masquée uniquement quand on consulte un lot historique pour garder la page épurée) -->
+      <div v-if="!isViewingHistory" class="ds-card ds-stack">
         <div class="ds-row ds-row--between">
           <span class="ds-badge ds-badge--accent">
             {{
@@ -500,25 +775,6 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
               })
             }}
           </span>
-
-          <div class="ds-row">
-            <button
-              type="button"
-              class="ds-btn ds-btn--sm"
-              :class="{ 'ds-btn--primary': photoMode === 'shelf' }"
-              @click="photoMode = 'shelf'"
-            >
-              {{ t('scan.photoModeShelf') }}
-            </button>
-            <button
-              type="button"
-              class="ds-btn ds-btn--sm"
-              :class="{ 'ds-btn--primary': photoMode === 'cover' }"
-              @click="photoMode = 'cover'"
-            >
-              {{ t('scan.photoModeCover') }}
-            </button>
-          </div>
         </div>
 
         <input
@@ -527,66 +783,146 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           accept="image/*"
           capture="environment"
           class="scan-hidden-input"
-          @change="handlePhotoSelected"
+          @change="handlePhotoFilesAdded"
         />
         <input
           ref="galleryPhotoInputRef"
           type="file"
           accept="image/*"
+          multiple
           class="scan-hidden-input"
-          @change="handlePhotoSelected"
+          @change="handlePhotoFilesAdded"
         />
 
-        <div class="ds-row">
+        <!-- Boutons côte à côte façon V1 -->
+        <div class="photo-capture-grid">
           <button
             type="button"
-            class="ds-btn ds-btn--primary"
+            class="photo-capture-tile photo-capture-tile--primary"
             :disabled="photoUploading"
             @click="cameraPhotoInputRef?.click()"
           >
-            {{ photoUploading ? t('app.loading') : t('scan.takePhoto') }}
+            <Camera :size="24" :stroke-width="1.9" aria-hidden="true" />
+            <span>{{ queuedPhotos.length > 0 ? t('scan.photoAddAnotherCamera') : t('scan.takePhoto') }}</span>
           </button>
+
           <button
             type="button"
-            class="ds-btn"
+            class="photo-capture-tile"
             :disabled="photoUploading"
             @click="galleryPhotoInputRef?.click()"
           >
-            {{ t('scan.pickGallery') }}
+            <ImageIcon :size="24" :stroke-width="1.9" aria-hidden="true" />
+            <span>{{ queuedPhotos.length > 0 ? t('scan.photoAddAnotherGallery') : t('scan.pickGallery') }}</span>
           </button>
         </div>
+
+        <!-- File d'attente multi-photos avant lancement -->
+        <div v-if="queuedPhotos.length > 0" class="photo-staging ds-panel ds-stack--sm">
+          <strong>{{ t('scan.photoQueuedTitle', { count: queuedPhotos.length }) }}</strong>
+
+          <div class="photo-staging__grid">
+            <div v-for="photo in queuedPhotos" :key="photo.id" class="photo-staging__thumb">
+              <img :src="photo.dataUrl" :alt="t('scan.tabPhoto')" />
+              <button
+                type="button"
+                class="photo-staging__remove"
+                :aria-label="t('scan.photoRemoveQueued')"
+                @click="removeQueuedPhoto(photo.id)"
+              >
+                <X :size="14" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+
+          <label class="ds-checkbox photo-notify-toggle">
+            <input
+              type="checkbox"
+              :checked="notifyOnComplete"
+              @change="handleToggleNotify"
+            />
+            <Bell :size="15" aria-hidden="true" />
+            <span>{{ t('scan.photoNotifyToggle') }}</span>
+          </label>
+
+          <button
+            type="button"
+            class="ds-btn ds-btn--primary ds-btn--lg photo-launch-btn"
+            :disabled="photoUploading"
+            @click="handleLaunchPhotoBatch"
+          >
+            <Sparkles :size="18" aria-hidden="true" />
+            {{
+              photoUploading
+                ? t('scan.photoLaunchingBtn')
+                : t('scan.photoLaunchBatchBtn', { count: queuedPhotos.length })
+            }}
+          </button>
+        </div>
+
+        <div v-if="photoSentBanner" class="ds-banner ds-banner--info" role="status">
+          {{ t('scan.photoSentBackgroundHint') }}
+        </div>
+
+        <!-- Aide discrète dépliable -->
+        <details class="ds-accordion">
+          <summary>{{ t('scan.photoHelpSummary') }}</summary>
+          <p class="ds-text-muted photo-help-details">{{ t('scan.photoHelpDetails') }}</p>
+        </details>
       </div>
 
-      <div v-if="!latestPhotoJob" class="ds-card ds-text-muted">
-        {{ t('scan.photoNoActiveJob') }}
+      <!-- Bandeau de retour si on consulte un lot historique -->
+      <div v-if="isViewingHistory && displayedPhotoJob" class="ds-banner ds-banner--info ds-row ds-row--between">
+        <span>
+          {{ t('scan.photoHistoryViewingBanner', { date: formatPhotoDate(displayedPhotoJob.createdAt) }) }}
+        </span>
+        <button type="button" class="ds-btn ds-btn--sm" @click="closeHistoryJob">
+          {{ t('scan.photoHistoryBackBtn') }}
+        </button>
       </div>
 
-      <template v-else>
-        <div class="ds-panel ds-row ds-row--between">
+      <!-- Sélecteur de photo si plusieurs lots Photo IA actifs non archivés en parallèle -->
+      <div v-if="!isViewingHistory && jobsStore.activePhotoJobs.length > 1" class="ds-row photo-batch-switcher">
+        <button
+          v-for="(job, idx) in jobsStore.activePhotoJobs"
+          :key="job.id"
+          type="button"
+          class="ds-btn ds-btn--sm"
+          :class="{ 'ds-btn--primary': displayedPhotoJob?.id === job.id }"
+          @click="selectedActiveJobId = job.id"
+        >
+          {{ t('scan.tabPhoto') }} #{{ jobsStore.activePhotoJobs.length - idx }}
+        </button>
+      </div>
+
+      <!-- Résultats du lot Photo IA actif ou historique -->
+      <template v-if="displayedPhotoJob">
+        <div class="ds-panel ds-row ds-row--between photo-status-bar">
           <strong>
             {{
-              latestPhotoJob.status === 'error'
+              displayedPhotoJob.status === 'error'
                 ? t('scan.photoBannerError')
-                : latestPhotoJob.status === 'done'
+                : displayedPhotoJob.status === 'done'
                   ? t('scan.photoBannerDone', {
-                      done: latestPhotoJob.progressDone,
-                      total: latestPhotoJob.progressTotal
+                      done: displayedPhotoJob.progressDone,
+                      total: Math.max(1, displayedPhotoJob.progressTotal)
                     })
                   : t('scan.photoBannerRunning', {
-                      done: latestPhotoJob.progressDone,
-                      total: latestPhotoJob.progressTotal
+                      done: displayedPhotoJob.progressDone,
+                      total: Math.max(1, displayedPhotoJob.progressTotal)
                     })
             }}
           </strong>
 
           <div class="ds-row">
             <button
-              v-if="latestPhotoJob.status === 'error'"
+              v-if="displayedPhotoJob.status === 'error'"
               type="button"
               class="ds-btn ds-btn--primary ds-btn--sm"
               :disabled="photoRetryingOcr"
               @click="handleRetryOcr"
             >
+              <RefreshCw :size="14" aria-hidden="true" />
               {{ photoRetryingOcr ? t('app.loading') : t('scan.photoRetryOcrBtn') }}
             </button>
             <button
@@ -595,18 +931,24 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
               class="ds-btn ds-btn--sm"
               @click="handleRetryFailed"
             >
+              <RefreshCw :size="14" aria-hidden="true" />
               {{ t('scan.retryAllFailed', { count: unresolvedItems.length }) }}
             </button>
-            <button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" @click="handleDeletePhotoJob">
-              {{ t('scan.clearBatch') }}
+            <button
+              type="button"
+              class="ds-btn ds-btn--ghost ds-btn--sm"
+              @click="handleClearActivePhotoJob"
+            >
+              <Trash2 :size="14" aria-hidden="true" />
+              {{ isViewingHistory ? t('app.delete') : t('scan.clearBatch') }}
             </button>
           </div>
         </div>
 
-        <div v-if="latestPhotoJob.errorMessage" class="ds-banner ds-banner--danger ds-row ds-row--between" role="alert">
-          <span>{{ latestPhotoJob.errorMessage }}</span>
+        <div v-if="displayedPhotoJob.errorMessage" class="ds-banner ds-banner--danger ds-row ds-row--between" role="alert">
+          <span>{{ displayedPhotoJob.errorMessage }}</span>
           <button
-            v-if="latestPhotoJob.status === 'error'"
+            v-if="displayedPhotoJob.status === 'error'"
             type="button"
             class="ds-btn ds-btn--sm"
             :disabled="photoRetryingOcr"
@@ -616,47 +958,19 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           </button>
         </div>
 
-        <div v-if="jobsStore.activePhotoCommitJob" class="ds-banner ds-banner--info" role="status">
-          {{
-            t('scan.photoCommitBannerRunning', {
-              done: jobsStore.activePhotoCommitJob.progressDone,
-              total: jobsStore.activePhotoCommitJob.progressTotal
-            })
-          }}
-        </div>
-
-        <!-- Aperçu cliquable de la photo analysée (ouvre la visionneuse plein écran zoom 2 doigts) -->
-        <div v-if="photoResult?.previewUrl" class="ds-card ds-row ds-row--between photo-analyzed-bar">
-          <div class="ds-row">
-            <button
-              type="button"
-              class="photo-analyzed-thumb"
-              :aria-label="t('scan.photoOpenFullscreenBtn')"
-              @click="previewLightboxOpen = true"
-            >
-              <img :src="photoResult.previewUrl" :alt="t('scan.photoAnalyzedPreviewTitle')" />
-            </button>
-            <div class="ds-stack photo-analyzed-meta">
-              <strong>{{ t('scan.photoAnalyzedPreviewTitle') }}</strong>
-              <span class="ds-text-muted">{{ t('scan.photoTapToExpandHint') }}</span>
-            </div>
-          </div>
-          <button type="button" class="ds-btn ds-btn--sm" @click="previewLightboxOpen = true">
-            {{ t('scan.photoOpenFullscreenBtn') }}
-          </button>
-        </div>
-
         <!-- Identifiés -->
         <div v-if="identifiedItems.length > 0" class="ds-card ds-stack">
           <h2>{{ t('scan.identifiedSection', { count: identifiedItems.length }) }}</h2>
-          <div class="ds-stack">
+          <div class="ds-stack--sm">
             <div v-for="item in identifiedItems" :key="item.id" class="ds-panel photo-item-row">
-              <input
-                type="checkbox"
-                :checked="item.selected"
-                :disabled="item.ignored || !item.selectedOptionIsbn13"
-                @change="togglePhotoItemSelected(item)"
-              />
+              <label class="photo-item-check" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="item.selected"
+                  :disabled="item.ignored || !item.selectedOptionIsbn13"
+                  @change="togglePhotoItemSelected(item)"
+                />
+              </label>
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
                 <span class="photo-item-cover">
                   <img
@@ -670,13 +984,18 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
-                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
-                    {{ getPhotoItemPositionShort(item) }}
-                  </span>
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
-                  <span class="ds-text-muted">
-                    {{ getPhotoItemSubtitle(item) }}
-                    <template v-if="item.ignored"> · {{ t('scan.photoIgnoredBadge') }}</template>
+                  <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
+                  <span class="ds-chips">
+                    <span v-if="item.committedAction === 'owned'" class="ds-badge ds-badge--success">
+                      {{ t('scan.photoActionBadgeOwned') }}
+                    </span>
+                    <span v-else-if="item.committedAction === 'wish'" class="ds-badge ds-badge--accent">
+                      {{ t('scan.photoActionBadgeWish') }}
+                    </span>
+                    <span v-if="item.ignored" class="ds-badge">
+                      {{ t('scan.photoIgnoredBadge') }}
+                    </span>
                   </span>
                 </span>
               </button>
@@ -687,14 +1006,16 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         <!-- À vérifier -->
         <div v-if="doubtItems.length > 0" class="ds-card ds-stack">
           <h2>{{ t('scan.doubtSection', { count: doubtItems.length }) }}</h2>
-          <div class="ds-stack">
+          <div class="ds-stack--sm">
             <div v-for="item in doubtItems" :key="item.id" class="ds-panel photo-item-row">
-              <input
-                type="checkbox"
-                :checked="item.selected"
-                :disabled="item.ignored || !item.selectedOptionIsbn13"
-                @change="togglePhotoItemSelected(item)"
-              />
+              <label class="photo-item-check" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="item.selected"
+                  :disabled="item.ignored || !item.selectedOptionIsbn13"
+                  @change="togglePhotoItemSelected(item)"
+                />
+              </label>
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
                 <span class="photo-item-cover">
                   <img
@@ -708,11 +1029,19 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
-                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
-                    {{ getPhotoItemPositionShort(item) }}
-                  </span>
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
                   <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
+                  <span v-if="item.committedAction || item.ignored" class="ds-chips">
+                    <span v-if="item.committedAction === 'owned'" class="ds-badge ds-badge--success">
+                      {{ t('scan.photoActionBadgeOwned') }}
+                    </span>
+                    <span v-else-if="item.committedAction === 'wish'" class="ds-badge ds-badge--accent">
+                      {{ t('scan.photoActionBadgeWish') }}
+                    </span>
+                    <span v-if="item.ignored" class="ds-badge">
+                      {{ t('scan.photoIgnoredBadge') }}
+                    </span>
+                  </span>
                 </span>
               </button>
             </div>
@@ -722,7 +1051,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         <!-- Non identifiés -->
         <div v-if="unresolvedItems.length > 0" class="ds-card ds-stack">
           <h2>{{ t('scan.unresolvedSection', { count: unresolvedItems.length }) }}</h2>
-          <div class="ds-stack">
+          <div class="ds-stack--sm">
             <div v-for="item in unresolvedItems" :key="item.id" class="ds-panel photo-item-row">
               <button type="button" class="photo-item-btn" @click="activePhotoItemId = item.id">
                 <span class="photo-item-cover">
@@ -737,13 +1066,9 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   </span>
                 </span>
                 <span class="photo-item-text">
-                  <span v-if="getPhotoItemPositionShort(item)" class="ds-badge photo-item-pos">
-                    {{ getPhotoItemPositionShort(item) }}
-                  </span>
                   <strong>{{ item.hint.title }}</strong>
                   <span class="ds-text-muted">
                     {{ getPhotoItemSubtitle(item) !== '—' ? getPhotoItemSubtitle(item) : t('scan.wrongReferenceBtn') }}
-                    <template v-if="item.fallbackCoverUrl"> · {{ t('scan.photoFallbackCoverHint') }}</template>
                   </span>
                 </span>
               </button>
@@ -751,47 +1076,146 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
           </div>
         </div>
 
-        <PhotoLightboxModal
-          :open="previewLightboxOpen"
-          :src="photoResult?.previewUrl ?? null"
-          :alt="t('scan.photoAnalyzedPreviewTitle')"
-          @close="previewLightboxOpen = false"
-        />
-
-        <div v-if="selectedPhotoCount > 0" class="ds-row">
-          <button
-            type="button"
-            class="ds-btn ds-btn--primary"
-            :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
-            @click="handleCommitPhoto('owned')"
-          >
-            {{ t('scan.photoCommitOwnedBtn', { count: selectedPhotoCount }) }}
-          </button>
-          <button
-            type="button"
-            class="ds-btn"
-            :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
-            @click="handleCommitPhoto('wish')"
-          >
-            {{ t('scan.photoCommitWishBtn', { count: selectedPhotoCount }) }}
-          </button>
-        </div>
+        <!-- Barre d'action flottante pour valider la sélection Photo IA (accessible même en scrollant) -->
+        <BatchActionBar
+          :custom-count="selectedPhotoCount"
+          @clear="
+            photoResult?.items.forEach((it) => {
+              if (it.selected) void togglePhotoItemSelected(it);
+            })
+          "
+        >
+          <template #actions>
+            <button
+              type="button"
+              class="ds-btn ds-btn--primary ds-btn--sm"
+              :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
+              @click="handleCommitPhoto('owned')"
+            >
+              {{ t('scan.photoCommitOwnedBtn', { count: selectedPhotoCount }) }}
+            </button>
+            <button
+              type="button"
+              class="ds-btn ds-btn--sm"
+              :disabled="photoCommitting || Boolean(jobsStore.activePhotoCommitJob)"
+              @click="handleCommitPhoto('wish')"
+            >
+              {{ t('scan.photoCommitWishBtn', { count: selectedPhotoCount }) }}
+            </button>
+          </template>
+        </BatchActionBar>
 
         <PhotoItemModal
           :open="Boolean(activePhotoItem)"
-          :job-id="latestPhotoJob.id"
+          :job-id="displayedPhotoJob.id"
           :item="activePhotoItem"
           :preview-url="photoResult?.previewUrl ?? null"
           @close="activePhotoItemId = null"
         />
       </template>
+
+      <!-- Historique Photo IA (30 jours glissants) -->
+      <div v-if="!isViewingHistory" class="ds-card ds-stack">
+        <div class="ds-row ds-row--between">
+          <div class="ds-row">
+            <Clock :size="17" aria-hidden="true" />
+            <h2>{{ t('scan.photoHistoryTitle') }}</h2>
+          </div>
+          <span class="ds-text-muted photo-history-retention">
+            {{ t('scan.photoHistoryRetentionHint', { days: jobsStore.photoHistoryRetentionDays }) }}
+          </span>
+        </div>
+
+        <p v-if="jobsStore.photoHistory.length === 0" class="ds-text-muted">
+          {{ t('scan.photoHistoryEmpty') }}
+        </p>
+
+        <div v-else class="photo-history-list">
+          <button
+            v-for="job in jobsStore.photoHistory"
+            :key="job.id"
+            type="button"
+            class="ds-panel photo-history-card"
+            @click="openHistoryJob(job.id)"
+          >
+            <span class="photo-history-card__thumb">
+              <img
+                v-if="summarizeHistoryJob(job).previewUrl"
+                :src="summarizeHistoryJob(job).previewUrl!"
+                :alt="t('scan.tabPhoto')"
+                loading="lazy"
+              />
+              <Camera v-else :size="20" aria-hidden="true" />
+            </span>
+
+            <span class="photo-history-card__info">
+              <span class="ds-row ds-row--between">
+                <strong>{{ formatPhotoDate(job.createdAt) }}</strong>
+                <span
+                  v-if="job.status === 'running' || job.status === 'pending'"
+                  class="ds-badge ds-badge--accent"
+                >
+                  {{ job.progressDone }}/{{ Math.max(1, job.progressTotal) }}
+                </span>
+                <span v-else-if="job.status === 'error'" class="ds-badge ds-badge--danger">
+                  {{ t('scan.photoBannerError') }}
+                </span>
+              </span>
+              <span class="ds-text-muted photo-history-card__summary">
+                {{
+                  t('scan.photoHistorySummary', {
+                    owned: summarizeHistoryJob(job).owned,
+                    wish: summarizeHistoryJob(job).wish,
+                    ignored: summarizeHistoryJob(job).ignored,
+                    total: summarizeHistoryJob(job).total
+                  })
+                }}
+              </span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Modale d'autorisation Web Push pour « Me notifier » -->
+      <BaseModal
+        :open="notifyModalOpen"
+        :title="t('scan.photoNotifyPermissionTitle')"
+        max-width="440px"
+        @close="notifyModalOpen = false; notifyOnComplete = false"
+      >
+        <div class="ds-stack">
+          <p>{{ t('scan.photoNotifyPermissionDesc') }}</p>
+          <div v-if="notifyPermissionError" class="ds-banner ds-banner--warning" role="alert">
+            {{ notifyPermissionError }}
+          </div>
+        </div>
+        <template #footer>
+          <button
+            type="button"
+            class="ds-btn"
+            :disabled="notifyEnabling"
+            @click="notifyModalOpen = false; notifyOnComplete = false"
+          >
+            {{ t('app.cancel') }}
+          </button>
+          <button
+            type="button"
+            class="ds-btn ds-btn--primary"
+            :disabled="notifyEnabling"
+            @click="authorizePushForPhoto"
+          >
+            {{ notifyEnabling ? t('app.loading') : t('scan.photoNotifyPermissionBtn') }}
+          </button>
+        </template>
+      </BaseModal>
     </div>
 
-    <!-- ONGLET 2 : MODE RAFALE -->
+    <!-- ==================== ONGLET 2 : MODE RAFALE ==================== -->
     <div v-else-if="scanStore.activeTab === 'burst'" class="ds-stack">
       <div class="ds-card ds-stack">
         <div class="ds-row ds-row--between">
           <button type="button" class="ds-btn ds-btn--primary" @click="burstCameraOpen = true">
+            <ScanBarcode :size="17" aria-hidden="true" />
             {{ t('scan.burstOpenCameraBtn') }}
           </button>
           <button
@@ -821,57 +1245,57 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         {{ t('scan.burstEmpty') }}
       </p>
 
-      <div v-else class="ds-stack">
-        <div class="ds-grid-2">
-          <template v-for="entry in scanStore.burstItems" :key="entry.isbn13">
-            <BookCard
-              v-if="entry.book"
-              :book="entry.book"
-              selectable
-              :selected="burstSelectedIds.has(entry.book.id)"
-              @toggle-select="toggleBurstSelect"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
-            />
-            <div v-else class="ds-panel ds-row ds-row--between">
-              <div>
-                <strong>{{ entry.isbn13 }}</strong>
-                <p class="ds-text-muted">
-                  {{ entry.status === 'resolving' ? t('app.loading') : t('scan.burstNotFoundLabel') }}
-                </p>
-              </div>
-              <div class="ds-row">
-                <router-link
-                  v-if="entry.status === 'not_found'"
-                  :to="{ path: '/book/create', query: { isbn: entry.isbn13 } }"
-                  class="ds-btn ds-btn--sm"
-                >
-                  {{ t('book.manualCreateBtn') }}
-                </router-link>
-                <button
-                  type="button"
-                  class="ds-btn ds-btn--ghost ds-btn--sm"
-                  :aria-label="t('app.delete')"
-                  @click="scanStore.removeBurstItem(entry.isbn13)"
-                >
-                  ✕
-                </button>
-              </div>
+      <div v-else class="ds-media-grid">
+        <template v-for="entry in scanStore.burstItems" :key="entry.isbn13">
+          <BookCard
+            v-if="entry.book"
+            :book="entry.book"
+            selectable
+            :selected="burstSelectedSet.has(entry.book.id)"
+            @toggle-select="(id) => scanStore.toggleBurstBookSelection(id)"
+            @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+          />
+          <div v-else class="ds-panel ds-row ds-row--between">
+            <div>
+              <strong>{{ entry.isbn13 }}</strong>
+              <p class="ds-text-muted">
+                {{ entry.status === 'resolving' ? t('app.loading') : t('scan.burstNotFoundLabel') }}
+              </p>
             </div>
-          </template>
-        </div>
+            <div class="ds-row">
+              <router-link
+                v-if="entry.status === 'not_found'"
+                :to="{ path: '/book/create', query: { isbn: entry.isbn13 } }"
+                class="ds-btn ds-btn--sm"
+              >
+                {{ t('book.manualCreateBtn') }}
+              </router-link>
+              <button
+                type="button"
+                class="ds-btn ds-btn--ghost ds-btn--sm"
+                :aria-label="t('app.delete')"
+                @click="scanStore.removeBurstItem(entry.isbn13)"
+              >
+                <X :size="15" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        </template>
       </div>
 
       <BatchActionBar
         :selected-books="burstSelectedBooks"
         @action="handleBurstBatchAction"
         @open-genres="burstGenreOpen = true"
-        @clear="burstSelectedIds = new Set()"
+        @clear="scanStore.clearBurstSelection()"
       />
 
       <CameraBarcodeModal
         :open="burstCameraOpen"
         mode="burst"
         :flash-state="burstFlash"
+        :scanned-count="scanStore.burstItems.length"
+        :last-scanned-label="lastBurstLabel"
         @close="burstCameraOpen = false"
         @detected="handleBurstCapture"
       />
@@ -904,9 +1328,10 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
       />
     </div>
 
-    <!-- ONGLET 3 : SCAN SIMPLE -->
+    <!-- ==================== ONGLET 3 : SCAN SIMPLE ==================== -->
     <div v-else-if="scanStore.activeTab === 'simple'" class="ds-card ds-stack">
-      <button type="button" class="ds-btn ds-btn--primary" @click="simpleCameraOpen = true">
+      <button type="button" class="ds-btn ds-btn--primary ds-btn--lg" @click="simpleCameraOpen = true">
+        <Camera :size="18" aria-hidden="true" />
         {{ t('scan.openSimpleCamera') }}
       </button>
 
@@ -930,8 +1355,8 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
       />
     </div>
 
-    <!-- ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CRITÈRES (7 CHAMPS PERSISTANTS) -->
-    <div v-else class="ds-stack">
+    <!-- ==================== ONGLET 4 : RECHERCHE TEXTUELLE MULTI-CRITÈRES ==================== -->
+    <div v-else-if="scanStore.activeTab === 'search'" class="ds-stack">
       <form class="ds-card ds-stack" @submit.prevent="scanStore.runCatalogSearch()">
         <div class="ds-grid-2">
           <div class="ds-field">
@@ -975,6 +1400,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
             {{ t('app.clear') }}
           </button>
           <button type="submit" class="ds-btn ds-btn--primary" :disabled="scanStore.searchLoading">
+            <Search :size="16" aria-hidden="true" />
             {{ scanStore.searchLoading ? t('app.loading') : t('app.search') }}
           </button>
         </div>
@@ -994,7 +1420,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
         <div v-if="scanStore.searchSeries.length > 0" class="ds-stack">
           <h2>{{ t('scan.searchSeriesHeader', { count: scanStore.searchSeries.length }) }}</h2>
-          <div class="ds-grid-2">
+          <div class="ds-media-grid">
             <SeriesCard
               v-for="ser in scanStore.searchSeries"
               :key="ser.id"
@@ -1006,7 +1432,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
         <div v-if="scanStore.searchBooks.length > 0" class="ds-stack">
           <h2>{{ t('scan.searchBooksHeader', { count: scanStore.searchBooks.length }) }}</h2>
-          <div class="ds-grid-2">
+          <div class="ds-media-grid">
             <BookCard
               v-for="book in scanStore.searchBooks"
               :key="book.id"
@@ -1018,7 +1444,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
         <div v-if="scanStore.searchExternalBooks.length > 0" class="ds-stack">
           <h2>{{ t('scan.searchExternalHeader', { count: scanStore.searchExternalBooks.length }) }}</h2>
-          <div class="ds-stack">
+          <div class="ds-stack--sm">
             <div
               v-for="hit in scanStore.searchExternalBooks"
               :key="hit.isbn13"
@@ -1059,10 +1485,65 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         </div>
       </template>
     </div>
+
+    <!-- ==================== ONGLET 5 : IMPORTER (CSV / JSON / XLSX) ==================== -->
+    <div v-else class="ds-stack">
+      <CollectionImportPanel id-prefix="scan-import" />
+    </div>
   </section>
 </template>
 
 <style scoped>
+.scan-modes-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+@media (min-width: 640px) {
+  .scan-modes-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.scan-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-block-size: var(--target-size);
+  padding: 0.55rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.scan-mode-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.scan-mode-btn--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.scan-mode-btn--active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--text-on-accent);
+}
+
 .scan-hidden-input {
   display: none;
 }
@@ -1072,38 +1553,134 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
   min-width: 180px;
 }
 
-.photo-analyzed-bar {
-  flex-wrap: wrap;
+.photo-capture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
 }
 
-.photo-analyzed-thumb {
-  width: 64px;
-  height: 64px;
-  padding: 0;
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
-  cursor: zoom-in;
-  flex-shrink: 0;
+.photo-capture-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-3);
+  min-block-size: 96px;
+  border-radius: var(--radius-lg);
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.88rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.12s ease;
 }
 
-.photo-analyzed-thumb img {
+.photo-capture-tile:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.photo-capture-tile--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.photo-capture-tile--primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--text-on-accent);
+}
+
+.photo-staging__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: var(--space-2);
+}
+
+.photo-staging__thumb {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+}
+
+.photo-staging__thumb img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.photo-analyzed-meta {
-  gap: 2px;
+.photo-staging__remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  border: none;
+  background: var(--bg-backdrop);
+  color: var(--text-on-accent);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.photo-notify-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.photo-launch-btn {
+  width: 100%;
+}
+
+.photo-help-details {
+  margin: var(--space-2) 0 0;
+  font-size: 0.86rem;
+}
+
+.photo-batch-switcher {
+  flex-wrap: wrap;
+}
+
+.photo-status-bar {
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .photo-item-row {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+}
+
+.photo-item-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 40px;
+  min-block-size: 40px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.photo-item-check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
 }
 
 .photo-item-btn {
@@ -1121,8 +1698,8 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 }
 
 .photo-item-cover {
-  width: 44px;
-  min-width: 44px;
+  width: 46px;
+  min-width: 46px;
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -1151,11 +1728,66 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 3px;
   min-width: 0;
 }
 
-.photo-item-pos {
-  font-size: 0.72rem;
+.photo-history-retention {
+  font-size: 0.8rem;
+}
+
+.photo-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.photo-history-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.photo-history-card:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.photo-history-card__thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.photo-history-card__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.photo-history-card__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.photo-history-card__summary {
+  font-size: 0.82rem;
 }
 </style>

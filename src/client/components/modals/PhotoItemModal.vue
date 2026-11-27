@@ -1,6 +1,7 @@
 <!-- src/client/components/modals/PhotoItemModal.vue -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { Ban, Expand, Search } from '@lucide/vue';
 import BaseModal from '../base/BaseModal.vue';
 import PhotoLightboxModal from '../base/PhotoLightboxModal.vue';
 import BookLookupModal, { type BookLookupHints } from './BookLookupModal.vue';
@@ -29,13 +30,11 @@ const emit = defineEmits<{
 const scanStore = useScanStore();
 const uiStore = useUiStore();
 
-const zoomPercent = ref(100);
 const lightboxOpen = ref(false);
 const saving = ref(false);
 const loadingCovers = ref(false);
 const loadedCoverSignature = ref<string | null>(null);
 
-// Sous-modale partagée 6 champs vides pour relance BnF serveur
 const manualModalOpen = ref(false);
 const retryingBnf = ref(false);
 
@@ -46,22 +45,27 @@ const confidenceLabel = computed(() => {
   return t('scan.photoConfidenceMedium');
 });
 
-const positionLabel = computed(() => {
-  const idx = props.item?.spineIndex ?? props.item?.hint.spineIndex;
-  const total = props.item?.totalSpines;
-  if (!idx || !total || total <= 1) return '';
-  const fromRight = Math.max(1, total - idx + 1);
-  return t('scan.photoPositionLabel', { left: idx, right: fromRight, total });
+const compactReadSummary = computed(() => {
+  if (!props.item) return '';
+  const h = props.item.hint;
+  const parts: string[] = [];
+  if (h.series && h.series.toLowerCase() !== h.title.toLowerCase()) parts.push(h.series);
+  if (h.volumeNumber) parts.push(`T.${h.volumeNumber}`);
+  if (h.author) parts.push(h.author);
+  if (h.publisher) parts.push(h.publisher);
+  if (h.isbn) parts.push(h.isbn);
+  return parts.join(' · ');
 });
 
 function isOptionSelected(opt: PhotoCandidateOption): boolean {
-  const sel = props.item?.selectedOptionIsbn13;
+  if (!props.item || props.item.ignored) return false;
+  const sel = props.item.selectedOptionIsbn13;
   if (!sel) return false;
   return opt.isbn13 === sel || (opt.siblingIsbns ?? []).includes(sel);
 }
 
 const activeOption = computed<PhotoCandidateOption | null>(() => {
-  if (!props.item || props.item.options.length === 0) return null;
+  if (!props.item || props.item.ignored || props.item.options.length === 0) return null;
   return props.item.options.find((o) => isOptionSelected(o)) ?? props.item.options[0];
 });
 
@@ -124,7 +128,7 @@ async function loadItemCovers(refresh = false): Promise<void> {
       refresh
     });
   } catch {
-    // non bloquant : la couverture principale reste affichée
+    // non bloquant
   } finally {
     loadingCovers.value = false;
   }
@@ -135,7 +139,6 @@ watch(
   ([isOpen, itemId, optIsbn], [, prevItemId]) => {
     if (isOpen) {
       if (itemId !== prevItemId) {
-        zoomPercent.value = 100;
         lightboxOpen.value = false;
         loadedCoverSignature.value = null;
       }
@@ -147,16 +150,6 @@ watch(
   { immediate: true }
 );
 
-function adjustZoom(delta: number): void {
-  zoomPercent.value = Math.min(450, Math.max(100, zoomPercent.value + delta));
-}
-
-function handleWheelZoom(event: WheelEvent): void {
-  if (!props.previewUrl) return;
-  event.preventDefault();
-  adjustZoom(event.deltaY < 0 ? 25 : -25);
-}
-
 async function patchItem(
   patch: {
     selected?: boolean;
@@ -166,18 +159,12 @@ async function patchItem(
     selectedCoverUrl?: string | null;
     isIntegral?: boolean;
     includedVolumes?: string[];
-  },
-  toastKind: 'none' | 'option' | 'cover' = 'none'
+  }
 ): Promise<void> {
   if (!props.item) return;
   saving.value = true;
   try {
     await scanStore.updatePhotoItem(props.jobId, props.item.id, patch);
-    if (toastKind === 'option') {
-      uiStore.pushToast(t('scan.photoOptionSavedToast'), 'success', 1800);
-    } else if (toastKind === 'cover') {
-      uiStore.pushToast(t('scan.photoCoverSavedToast'), 'success', 1800);
-    }
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -186,19 +173,12 @@ async function patchItem(
 }
 
 function selectCover(cov: PhotoCoverOption): void {
-  void patchItem(
-    {
-      selectedCoverKey: cov.coverKey,
-      selectedCoverUrl: cov.coverUrl,
-      selected: true,
-      ignored: false
-    },
-    'cover'
-  );
-}
-
-function openManualBnfModal(): void {
-  manualModalOpen.value = true;
+  void patchItem({
+    selectedCoverKey: cov.coverKey,
+    selectedCoverUrl: cov.coverUrl,
+    selected: true,
+    ignored: false
+  });
 }
 
 async function submitManualBnf(hints: BookLookupHints): Promise<void> {
@@ -208,10 +188,9 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
     const res = await scanStore.retryPhotoItemBnf(props.jobId, props.item.id, hints);
     manualModalOpen.value = false;
     loadedCoverSignature.value = null;
-    uiStore.pushToast(
-      res.item.options.length > 0 ? t('scan.photoRetryBnfSuccess') : t('scan.photoRetryBnfNone'),
-      res.item.options.length > 0 ? 'success' : 'warning'
-    );
+    if (res.item.options.length === 0) {
+      uiStore.pushToast(t('scan.photoRetryBnfNone'), 'warning');
+    }
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
   } finally {
@@ -224,116 +203,81 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   <BaseModal
     :open="open && Boolean(item)"
     :title="item?.hint.title || t('app.untitled')"
-    max-width="680px"
+    max-width="640px"
     @close="emit('close')"
   >
     <div v-if="item" class="ds-stack">
-      <!-- Retour brut de l'analyse IA (pour comparer avec la photo et les éditions proposées) -->
-      <div class="ds-panel ds-stack ai-hint-panel">
-        <div class="ds-row ds-row--between">
-          <strong>{{ t('scan.photoAiReadTitle') }}</strong>
-          <span class="ds-badge ds-badge--accent">
-            {{ t('scan.photoConfidenceLabel') }} : {{ confidenceLabel }}
-          </span>
-        </div>
-
-        <div v-if="positionLabel" class="ds-badge">
-          {{ positionLabel }}
-        </div>
-
-        <dl class="ai-hint-grid">
-          <div v-if="item.hint.rawText" class="ai-hint-field ai-hint-field--full">
-            <dt class="ds-text-muted">{{ t('scan.photoRawTextLabel') }}</dt>
-            <dd>{{ item.hint.rawText }}</dd>
-          </div>
-          <div v-if="item.hint.title" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldTitle') }}</dt>
-            <dd>{{ item.hint.title }}</dd>
-          </div>
-          <div v-if="item.hint.series" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldSeries') }}</dt>
-            <dd>{{ item.hint.series }}</dd>
-          </div>
-          <div v-if="item.hint.volumeNumber" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldVolume') }}</dt>
-            <dd>{{ item.hint.volumeNumber }}</dd>
-          </div>
-          <div v-if="item.hint.author" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldAuthor') }}</dt>
-            <dd>{{ item.hint.author }}</dd>
-          </div>
-          <div v-if="item.hint.publisher" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldPublisher') }}</dt>
-            <dd>{{ item.hint.publisher }}</dd>
-          </div>
-          <div v-if="item.hint.isbn" class="ai-hint-field">
-            <dt class="ds-text-muted">{{ t('scan.fieldIsbn') }}</dt>
-            <dd>{{ item.hint.isbn }}</dd>
-          </div>
-        </dl>
-      </div>
-
-      <!-- Aperçu photo cliquable -> plein écran tactile (zoom 2 doigts + déplacement) -->
-      <div v-if="previewUrl" class="ds-stack">
-        <div class="ds-row ds-row--between photo-controls-bar">
-          <div class="ds-row">
-            <button type="button" class="ds-btn ds-btn--sm" @click="adjustZoom(-50)">−</button>
-            <button type="button" class="ds-btn ds-btn--sm" @click="zoomPercent = 100">
-              {{ zoomPercent }} %
-            </button>
-            <button type="button" class="ds-btn ds-btn--sm" @click="adjustZoom(50)">+</button>
-            <button type="button" class="ds-btn ds-btn--primary ds-btn--sm" @click="lightboxOpen = true">
-              {{ t('scan.photoOpenFullscreenBtn') }}
-            </button>
+      <!-- Bloc « Ce que l'IA a lu » condensé avec miniature photo cliquable intégrée -->
+      <div class="ds-panel ai-read-compact">
+        <div class="ai-read-compact__body">
+          <div class="ds-row ds-row--between">
+            <strong class="ai-read-compact__heading">{{ t('scan.photoAiReadTitle') }}</strong>
+            <span class="ds-badge ds-badge--accent">
+              {{ t('scan.photoConfidenceLabel') }} : {{ confidenceLabel }}
+            </span>
           </div>
 
-          <label class="ds-checkbox">
-            <input
-              type="checkbox"
-              :checked="item.ignored"
-              :disabled="saving"
-              @change="patchItem({ ignored: ($event.target as HTMLInputElement).checked })"
-            />
-            <span>{{ t('scan.photoIgnoreToggle') }}</span>
-          </label>
+          <p v-if="item.hint.rawText" class="ai-read-compact__raw">
+            « {{ item.hint.rawText }} »
+          </p>
+          <p v-if="compactReadSummary" class="ds-text-muted ai-read-compact__meta">
+            {{ compactReadSummary }}
+          </p>
         </div>
 
         <button
+          v-if="previewUrl"
           type="button"
-          class="photo-zoom-box"
+          class="ai-read-compact__thumb"
           :aria-label="t('scan.photoOpenFullscreenBtn')"
           @click="lightboxOpen = true"
-          @wheel="handleWheelZoom"
         >
-          <img
-            :src="previewUrl"
-            :alt="item.hint.title"
-            class="photo-zoom-img"
-            :style="{ width: `${zoomPercent}%` }"
-          />
+          <img :src="previewUrl" :alt="item.hint.title" />
+          <span class="ai-read-compact__thumb-badge" aria-hidden="true">
+            <Expand :size="13" />
+          </span>
         </button>
-        <p class="ds-text-muted photo-tap-hint">{{ t('scan.photoTapToExpandHint') }}</p>
       </div>
 
-      <!-- Œuvre abstraite reconnue (ou choix entre plusieurs œuvres distinctes) -->
-      <div v-if="item.options.length > 0" class="ds-stack">
+      <!-- Œuvres candidates : 1re ligne = « Ignorer cette œuvre » -->
+      <div class="ds-stack--sm">
         <strong class="ds-label">
-          {{ item.options.length === 1 ? t('scan.photoWorkRecognizedLabel') : t('scan.photoSelectWorkLabel') }}
+          {{ item.options.length <= 1 ? t('scan.photoWorkRecognizedLabel') : t('scan.photoSelectWorkLabel') }}
         </strong>
+
+        <label
+          class="ds-radio-option photo-ignore-option"
+          :class="{ 'photo-ignore-option--active': item.ignored }"
+        >
+          <input
+            type="radio"
+            :name="`photo-opt-${item.id}`"
+            value="__ignore__"
+            :checked="item.ignored"
+            :disabled="saving"
+            @change="patchItem({ ignored: true, selected: false })"
+          />
+          <span class="ds-radio-option__body">
+            <span class="ds-row">
+              <Ban :size="15" aria-hidden="true" />
+              <strong>{{ t('scan.photoIgnoreToggle') }}</strong>
+            </span>
+          </span>
+        </label>
+
         <label
           v-for="opt in item.options"
           :key="opt.isbn13"
-          class="ds-panel photo-option-row"
+          class="ds-radio-option photo-option-row"
           :class="{ 'photo-option-row--active': isOptionSelected(opt) }"
         >
           <input
-            v-if="item.options.length > 1"
             type="radio"
             :name="`photo-opt-${item.id}`"
             :value="opt.isbn13"
             :checked="isOptionSelected(opt)"
             :disabled="saving"
-            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false }, 'option')"
+            @change="patchItem({ selectedOptionIsbn13: opt.isbn13, selected: true, ignored: false })"
           />
 
           <div class="photo-option-cover">
@@ -359,7 +303,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
                 {{ t('scan.photoEditionsGroupedBadge', { count: opt.editionCount! }) }}
               </span>
             </div>
-            <p class="ds-text-muted">
+            <p class="ds-text-muted photo-option-row__sub">
               <span v-if="opt.seriesName">{{ opt.seriesName }}</span>
               <span v-if="opt.volumeNumber"> T.{{ opt.volumeNumber }}</span>
               <span v-if="opt.authors.length > 0"> · {{ opt.authors.join(', ') }}</span>
@@ -370,13 +314,10 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
         </label>
       </div>
 
-      <!-- Sélecteur visuel de couvertures multi-éditions (Couche 3 Foyer) -->
-      <div v-if="activeOption" class="ds-panel ds-stack photo-cover-picker">
-        <div class="ds-row ds-row--between photo-cover-picker__header">
-          <div class="ds-stack photo-cover-picker__title">
-            <strong>{{ t('scan.photoCoverPickerTitle') }}</strong>
-            <span class="ds-text-muted photo-cover-picker__hint">{{ t('scan.photoCoverPickerHint') }}</span>
-          </div>
+      <!-- Choisir la couverture (sans jargon foyer) -->
+      <div v-if="activeOption" class="ds-panel ds-stack--sm photo-cover-picker">
+        <div class="ds-row ds-row--between">
+          <strong>{{ t('scan.photoCoverPickerTitle') }}</strong>
           <button
             type="button"
             class="ds-btn ds-btn--sm"
@@ -411,17 +352,19 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
         </div>
       </div>
 
-      <!-- Intégrale optionnelle -->
+      <!-- Format de l'ouvrage (Tome / Intégrale) -->
       <IntegralFields
+        v-if="!item.ignored"
         :is-integral="item.isIntegral"
         :included-volumes="item.includedVolumes"
         @update:is-integral="(val) => patchItem({ isIntegral: val })"
         @update:included-volumes="(vols) => patchItem({ includedVolumes: vols })"
       />
 
-      <!-- Bouton explicite de relance manuelle BnF serveur -->
-      <button type="button" class="ds-btn" @click="openManualBnfModal">
-        {{ t('scan.wrongReferenceBtn') }}
+      <!-- Ce n'est pas le bon livre -->
+      <button type="button" class="ds-btn" @click="manualModalOpen = true">
+        <Search :size="16" aria-hidden="true" />
+        <span>{{ t('scan.wrongReferenceBtn') }}</span>
       </button>
     </div>
 
@@ -432,7 +375,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
     </template>
   </BaseModal>
 
-  <!-- Visionneuse photo plein écran tactile (pinch-to-zoom 2 doigts + pan) -->
+  <!-- Visionneuse photo plein écran dédiée (zoom, pourcentage et consignes ici uniquement) -->
   <PhotoLightboxModal
     :open="lightboxOpen"
     :src="previewUrl"
@@ -440,7 +383,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
     @close="lightboxOpen = false"
   />
 
-  <!-- Sous-modale partagée 6 champs + caméra ISBN -->
+  <!-- Sous-modale recherche manuelle -->
   <BookLookupModal
     :open="manualModalOpen"
     mode="retry"
@@ -451,72 +394,84 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
 </template>
 
 <style scoped>
-.ai-hint-panel {
-  gap: var(--space-2);
+.ai-read-compact {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 
-.ai-hint-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: var(--space-2);
+.ai-read-compact__body {
+  flex: 1;
+  min-inline-size: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-read-compact__heading {
+  font-size: 0.88rem;
+}
+
+.ai-read-compact__raw {
   margin: 0;
-}
-
-.ai-hint-field dt {
-  font-size: 0.75rem;
-}
-
-.ai-hint-field dd {
-  margin: 0;
+  font-size: 0.88rem;
   font-weight: 600;
+  color: var(--text-primary);
 }
 
-.ai-hint-field--full {
-  grid-column: 1 / -1;
+.ai-read-compact__meta {
+  margin: 0;
+  font-size: 0.8rem;
 }
 
-.photo-controls-bar {
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.photo-zoom-box {
-  display: block;
-  width: 100%;
+.ai-read-compact__thumb {
+  position: relative;
+  width: 68px;
+  height: 88px;
+  flex-shrink: 0;
   padding: 0;
-  max-height: 260px;
-  overflow: auto;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
   cursor: zoom-in;
 }
 
-.photo-zoom-img {
+.ai-read-compact__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
-  height: auto;
 }
 
-.photo-tap-hint {
-  font-size: 0.8rem;
-  margin: 0;
+.ai-read-compact__thumb-badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-backdrop);
+  color: var(--accent-contrast);
+}
+
+.photo-ignore-option--active {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .photo-option-row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-  cursor: pointer;
-}
-
-.photo-option-row--active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  align-items: center;
 }
 
 .photo-option-cover {
-  width: 48px;
-  min-width: 48px;
+  width: 44px;
+  min-width: 44px;
   aspect-ratio: 2 / 3;
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -535,7 +490,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
 }
 
 .photo-option-cover__empty {
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 700;
   color: var(--text-muted);
 }
@@ -545,25 +500,14 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   min-width: 0;
 }
 
+.photo-option-row__sub {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+}
+
 .photo-option-badges {
   flex-wrap: wrap;
   gap: var(--space-1);
-}
-
-.photo-cover-picker {
-  gap: var(--space-2);
-}
-
-.photo-cover-picker__header {
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: flex-start;
-}
-
-.photo-cover-picker__title {
-  gap: 2px;
-  flex: 1;
-  min-width: 180px;
 }
 
 .photo-cover-picker__hint {
@@ -573,7 +517,7 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
 
 .photo-cover-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
   gap: var(--space-2);
 }
 
@@ -585,10 +529,10 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   padding: 4px;
   border-radius: var(--radius-md);
   border: 2px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  background: var(--bg-surface);
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .photo-cover-tile:hover {
@@ -628,20 +572,5 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.manual-field-row {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-1);
-}
-
-.manual-field-grow {
-  flex: 1;
-  margin-bottom: 0;
-}
-
-.manual-clear-btn {
-  margin-bottom: 2px;
 }
 </style>

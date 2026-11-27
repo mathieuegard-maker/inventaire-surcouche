@@ -1,5 +1,6 @@
 /* src/client/styles/tokens.css
  * Design System 100 % Design Tokens — Multi-thèmes natif ([data-theme="..."]).
+ * Direction V2.6 : UI plus douce, aérée, mobile-first (360px -> 440px+), 100 % thémable.
  * Zéro couleur ou police écrite en dur dans les composants Vue.
  */
 
@@ -9,21 +10,23 @@
   --font-heading: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
-  --bg-page: #f8fafc;
+  --bg-page: #f6f8fb;
   --bg-surface: #ffffff;
   --bg-elevated: #f1f5f9;
-  --bg-backdrop: rgba(15, 23, 42, 0.55);
+  --bg-subtle: #f8fafc;
+  --bg-backdrop: rgba(15, 23, 42, 0.48);
 
-  --text-primary: #0f172a;
+  --text-primary: #111827;
   --text-secondary: #475569;
   --text-muted: #64748b;
 
-  --border-subtle: #e2e8f0;
+  --border-subtle: #e5eaf1;
   --border-strong: #cbd5e1;
 
   --accent: #2563eb;
   --accent-hover: #1d4ed8;
   --accent-soft: #eff6ff;
+  --accent-border: #bfdbfe;
   --accent-contrast: #ffffff;
 
   --status-owned-bg: #dcfce7;
@@ -38,6 +41,7 @@
   --danger: #dc2626;
   --danger-hover: #b91c1c;
   --danger-soft: #fef2f2;
+  --danger-border: #fecaca;
   --danger-contrast: #ffffff;
 
   --warning-bg: #fef9c3;
@@ -45,14 +49,14 @@
   --success-bg: #dcfce7;
   --success-text: #166534;
 
-  --radius-sm: 6px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
   --radius-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.1);
-  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.18);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04), 0 1px 2px rgba(15, 23, 42, 0.03);
+  --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 16px 36px rgba(15, 23, 42, 0.14);
 
   --space-1: 4px;
   --space-2: 8px;
@@ -61,15 +65,27 @@
   --space-5: 24px;
   --space-6: 32px;
 
-  --header-height: 60px;
-  --tabbar-height: 64px;
+  --target-size: 36px;
+  --header-height: 54px;
+  --tabbar-height: 62px;
   --container-max: 1120px;
+
+  --text-h1: clamp(1.25rem, 1.05rem + 1vw, 1.65rem);
+  --text-h2: clamp(1.05rem, 0.96rem + 0.5vw, 1.25rem);
+  --text-h3: clamp(0.95rem, 0.9rem + 0.3vw, 1.08rem);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --target-size: 44px;
+  }
 }
 
 [data-theme="dark"] {
   --bg-page: #0b1120;
   --bg-surface: #111827;
   --bg-elevated: #1e293b;
+  --bg-subtle: #162032;
   --bg-backdrop: rgba(2, 6, 23, 0.72);
 
   --text-primary: #f1f5f9;
@@ -81,7 +97,8 @@
 
   --accent: #60a5fa;
   --accent-hover: #3b82f6;
-  --accent-soft: rgba(59, 130, 246, 0.18);
+  --accent-soft: rgba(59, 130, 246, 0.16);
+  --accent-border: rgba(96, 165, 250, 0.35);
   --accent-contrast: #0b1120;
 
   --status-owned-bg: rgba(34, 197, 94, 0.18);
@@ -96,6 +113,7 @@
   --danger: #ef4444;
   --danger-hover: #dc2626;
   --danger-soft: rgba(239, 68, 68, 0.18);
+  --danger-border: rgba(239, 68, 68, 0.4);
   --danger-contrast: #ffffff;
 
   --warning-bg: rgba(234, 179, 8, 0.2);
@@ -103,9 +121,9 @@
   --success-bg: rgba(34, 197, 94, 0.2);
   --success-text: #86efac;
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 20px 44px rgba(0, 0, 0, 0.65);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --shadow-lg: 0 20px 44px rgba(0, 0, 0, 0.62);
 }
 
 [data-theme="warm"] {
@@ -114,7 +132,8 @@
   --bg-page: #f7f3eb;
   --bg-surface: #fffdf8;
   --bg-elevated: #efe8da;
-  --bg-backdrop: rgba(41, 31, 20, 0.55);
+  --bg-subtle: #faf6ee;
+  --bg-backdrop: rgba(41, 31, 20, 0.5);
 
   --text-primary: #2c2117;
   --text-secondary: #5c4b3a;
@@ -126,6 +145,7 @@
   --accent: #9a3412;
   --accent-hover: #7c2d12;
   --accent-soft: #ffedd5;
+  --accent-border: #fed7aa;
   --accent-contrast: #fffdf8;
 
   --status-owned-bg: #dcfce7;
@@ -140,6 +160,7 @@
   --danger: #b91c1c;
   --danger-hover: #991b1b;
   --danger-soft: #fee2e2;
+  --danger-border: #fecaca;
   --danger-contrast: #ffffff;
 
   --warning-bg: #fef3c7;

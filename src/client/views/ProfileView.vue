@@ -1,31 +1,43 @@
 <!-- src/client/views/ProfileView.vue -->
+<!-- Mon Profil (V2.6 mobile-first) : Déconnexion en haut à côté du titre, onglets séparés
+     (Identité & Sécurité, Apparence, Mes genres avec tri tactile SortableJS, Statistiques, Notifications). -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import Sortable from 'sortablejs';
+import {
+  BarChart3,
+  Bell,
+  Download,
+  GripVertical,
+  LogOut,
+  Palette,
+  RotateCcw,
+  Shield,
+  Tags,
+  Trash2,
+  User
+} from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
-import ImportMappingModal from '../components/modals/ImportMappingModal.vue';
+import CollectionImportPanel from '../components/import/CollectionImportPanel.vue';
 import { useAuthStore } from '../stores/auth.store';
-import { useJobsStore } from '../stores/jobs.store';
 import { useUiStore } from '../stores/ui.store';
 import { apiRequest, ApiClientError } from '../api/client';
 import { t } from '../../shared/locales';
-import type { ImportColumnMapping, ImportFilePreview } from '../../shared/bibliographic/collection-import.util';
 import type {
-  BackgroundJobView,
   NotificationChannel,
   NotificationFrequency,
   ThemeId
 } from '../../shared/types/domain.types';
 
-type ProfileTab = 'account' | 'stats' | 'genres' | 'notifications';
+type ProfileTab = 'account' | 'appearance' | 'genres' | 'stats' | 'notifications';
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
-const jobsStore = useJobsStore();
 const uiStore = useUiStore();
 
-const validTabs: ProfileTab[] = ['account', 'stats', 'genres', 'notifications'];
+const validTabs: ProfileTab[] = ['account', 'appearance', 'genres', 'stats', 'notifications'];
 
 function resolveInitialTab(): ProfileTab {
   const raw = typeof route.query.tab === 'string' ? route.query.tab : 'account';
@@ -46,7 +58,7 @@ function selectTab(tab: ProfileTab): void {
   void router.replace({ path: '/profile', query: tab === 'account' ? {} : { tab } });
 }
 
-// Formulaire identité
+// ==================== IDENTITÉ & SÉCURITÉ ====================
 const username = ref(authStore.profile?.user.username ?? '');
 const email = ref(authStore.profile?.user.email ?? '');
 const currentPassword = ref('');
@@ -65,23 +77,6 @@ watch(
   },
   { immediate: true }
 );
-
-// Thèmes
-const themeOptions = computed<Array<{ id: ThemeId; label: string }>>(() => [
-  { id: 'editorial-light', label: t('profile.themeLight') },
-  { id: 'dark', label: t('profile.themeDark') },
-  { id: 'warm', label: t('profile.themeWarm') }
-]);
-
-async function handleSelectTheme(theme: ThemeId): Promise<void> {
-  authStore.applyTheme(theme);
-  try {
-    await authStore.updateProfile({ theme });
-    uiStore.pushToast(t('profile.themeUpdated'), 'success');
-  } catch (err) {
-    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
-  }
-}
 
 async function handleSaveProfile(): Promise<void> {
   profileError.value = '';
@@ -109,9 +104,93 @@ async function handleSaveProfile(): Promise<void> {
   }
 }
 
-// Genres par défaut
+// ==================== APPARENCE (THÈMES) ====================
+const themeOptions = computed<Array<{ id: ThemeId; label: string }>>(() => [
+  { id: 'editorial-light', label: t('profile.themeLight') },
+  { id: 'dark', label: t('profile.themeDark') },
+  { id: 'warm', label: t('profile.themeWarm') }
+]);
+
+async function handleSelectTheme(theme: ThemeId): Promise<void> {
+  authStore.applyTheme(theme);
+  try {
+    await authStore.updateProfile({ theme });
+    uiStore.pushToast(t('profile.themeUpdated'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  }
+}
+
+// ==================== MES GENRES (AVEC RÉORDONNANCEMENT TACTILE SORTABLEJS) ====================
 const newGenreInput = ref('');
 const genresBusy = ref(false);
+const genresListRef = ref<HTMLElement | null>(null);
+let genresSortable: Sortable | null = null;
+
+function destroyGenresSortable(): void {
+  if (genresSortable) {
+    genresSortable.destroy();
+    genresSortable = null;
+  }
+}
+
+function initGenresSortable(): void {
+  destroyGenresSortable();
+  if (activeTab.value !== 'genres' || !genresListRef.value) return;
+
+  genresSortable = Sortable.create(genresListRef.value, {
+    animation: 180,
+    delay: 220,
+    delayOnTouchOnly: true,
+    touchStartThreshold: 6,
+    ghostClass: 'genre-chip--ghost',
+    chosenClass: 'genre-chip--chosen',
+    filter: '.ds-chip__remove',
+    preventOnFilter: false,
+    onEnd: (evt) => {
+      const oldIdx = evt.oldIndex;
+      const newIdx = evt.newIndex;
+      if (oldIdx === undefined || newIdx === undefined || oldIdx === newIdx) return;
+      const current = [...(authStore.profile?.defaultGenres ?? [])];
+      if (oldIdx < 0 || oldIdx >= current.length || newIdx < 0 || newIdx >= current.length) return;
+      const [moved] = current.splice(oldIdx, 1);
+      current.splice(newIdx, 0, moved);
+      void persistGenresOrder(current);
+    }
+  });
+}
+
+async function persistGenresOrder(nextOrder: string[]): Promise<void> {
+  if (authStore.profile) {
+    authStore.profile = { ...authStore.profile, defaultGenres: nextOrder };
+  }
+  genresBusy.value = true;
+  try {
+    await authStore.reorderDefaultGenres(nextOrder);
+    uiStore.pushToast(t('profile.genresReorderedToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    genresBusy.value = false;
+  }
+}
+
+watch(
+  [activeTab, genresListRef],
+  async ([tab]) => {
+    if (tab === 'genres') {
+      await nextTick();
+      initGenresSortable();
+    } else {
+      destroyGenresSortable();
+    }
+  },
+  { immediate: true }
+);
+
+onBeforeUnmount(() => {
+  destroyGenresSortable();
+});
 
 async function handleAddGenre(): Promise<void> {
   const clean = newGenreInput.value.trim();
@@ -152,7 +231,7 @@ async function handleResetGenres(): Promise<void> {
   }
 }
 
-// Déconnexion & Suppression de compte
+// ==================== DÉCONNEXION & SUPPRESSION DE COMPTE ====================
 const deleteModalOpen = ref(false);
 const deletePassword = ref('');
 const deleteError = ref('');
@@ -188,7 +267,7 @@ function handleAdminClick(): void {
   void router.push('/admin');
 }
 
-// Statistiques & Export CSV/JSON (Jalon 7)
+// ==================== STATISTIQUES & EXPORT CSV/JSON ====================
 interface RankedStatItem {
   label: string;
   count: number;
@@ -248,180 +327,19 @@ function triggerExport(format: 'csv' | 'json'): void {
   window.location.href = `/api/me/export?format=${format}`;
 }
 
-// Import utilisateur CSV / JSON / Excel (.xlsx) — pivot ISBN-13 strict côté serveur
-interface CollectionImportResultView {
-  filename: string;
-  totalRows: number;
-  importedCount: number;
-  resolvedByIsbnCount: number;
-  resolvedBySearchCount: number;
-  skippedCount: number;
-  unmatchedCount: number;
-  unmatched: Array<{
-    rowNumber: number;
-    isbn: string | null;
-    title: string | null;
-    series: string | null;
-    author: string | null;
-    reason: string;
-  }>;
-}
-
-const importFileInput = ref<HTMLInputElement | null>(null);
-const importSelectedFile = ref<File | null>(null);
-const importSelectedBase64 = ref<string>('');
-const importDefaultStatus = ref<'owned' | 'wish'>('owned');
-const importUploading = ref(false);
-const importPreviewLoading = ref(false);
-const importMappingModalOpen = ref(false);
-const importPreviewData = ref<ImportFilePreview | null>(null);
-const importError = ref('');
-
-const latestImportJob = computed(() => jobsStore.latestCollectionImportJob);
-const importIsRunning = computed(
-  () => latestImportJob.value?.status === 'pending' || latestImportJob.value?.status === 'running'
-);
-const importResult = computed<CollectionImportResultView | null>(() => {
-  const res = latestImportJob.value?.result;
-  return res && typeof res === 'object' ? (res as CollectionImportResultView) : null;
-});
-
-async function fetchImportPreview(hasHeaderRow?: boolean): Promise<void> {
-  if (!importSelectedFile.value || !importSelectedBase64.value) return;
-  importError.value = '';
-  importPreviewLoading.value = true;
-  try {
-    const res = await apiRequest<{ ok: true; preview: ImportFilePreview }>('/api/me/import/preview', {
-      method: 'POST',
-      body: {
-        filename: importSelectedFile.value.name,
-        contentBase64: importSelectedBase64.value,
-        ...(hasHeaderRow !== undefined ? { hasHeaderRow } : {})
-      }
-    });
-    importPreviewData.value = res.preview;
-    importMappingModalOpen.value = true;
-  } catch (err) {
-    importMappingModalOpen.value = false;
-    importPreviewData.value = null;
-    importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
-  } finally {
-    importPreviewLoading.value = false;
-  }
-}
-
-async function handleImportFileChange(event: Event): Promise<void> {
-  importError.value = '';
-  importPreviewData.value = null;
-  importSelectedBase64.value = '';
-  const target = event.target as HTMLInputElement;
-  const file = target.files?.[0] ?? null;
-  if (!file) {
-    importSelectedFile.value = null;
-    return;
-  }
-  const lower = file.name.toLowerCase();
-  if (!lower.endsWith('.csv') && !lower.endsWith('.json') && !lower.endsWith('.xlsx')) {
-    importSelectedFile.value = null;
-    importError.value = t('profile.importUnsupportedExt');
-    return;
-  }
-  if (file.size > 5 * 1024 * 1024) {
-    importSelectedFile.value = null;
-    importError.value = t('profile.importFileTooLarge');
-    return;
-  }
-  importSelectedFile.value = file;
-  try {
-    importSelectedBase64.value = await readFileAsBase64(file);
-    // Ouverture systématique de la modale de vérification des colonnes (CSV, JSON et Excel)
-    await fetchImportPreview();
-  } catch {
-    importError.value = t('app.retry');
-  }
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
-      const idx = dataUrl.indexOf(',');
-      resolve(idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl);
-    };
-    reader.onerror = () => reject(new Error('read_failed'));
-    reader.readAsDataURL(file);
-  });
-}
-
-async function handleOpenImportMapping(): Promise<void> {
-  if (!importSelectedFile.value || importUploading.value || importIsRunning.value || importPreviewLoading.value) return;
-  if (!importSelectedBase64.value) {
-    try {
-      importSelectedBase64.value = await readFileAsBase64(importSelectedFile.value);
-    } catch {
-      importError.value = t('app.retry');
-      return;
-    }
-  }
-  if (importPreviewData.value) {
-    importMappingModalOpen.value = true;
-    return;
-  }
-  await fetchImportPreview();
-}
-
-async function handleToggleImportHeader(hasHeaderRow: boolean): Promise<void> {
-  await fetchImportPreview(hasHeaderRow);
-}
-
-async function handleConfirmMappedImport(payload: {
-  hasHeaderRow: boolean;
-  columnMapping: ImportColumnMapping;
-}): Promise<void> {
-  if (!importSelectedFile.value || !importSelectedBase64.value || importUploading.value || importIsRunning.value) return;
-  importError.value = '';
-  importUploading.value = true;
-  try {
-    const res = await apiRequest<{ ok: true; job: BackgroundJobView; totalRows: number }>('/api/me/import', {
-      method: 'POST',
-      body: {
-        filename: importSelectedFile.value.name,
-        contentBase64: importSelectedBase64.value,
-        defaultStatus: importDefaultStatus.value,
-        hasHeaderRow: payload.hasHeaderRow,
-        columnMapping: payload.columnMapping
-      }
-    });
-    jobsStore.upsertJob(res.job);
-    uiStore.pushToast(t('profile.importStartedToast', { count: res.totalRows }), 'info');
-    importMappingModalOpen.value = false;
-    importPreviewData.value = null;
-    importSelectedFile.value = null;
-    importSelectedBase64.value = '';
-    if (importFileInput.value) importFileInput.value.value = '';
-  } catch (err) {
-    importMappingModalOpen.value = false;
-    importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
-  } finally {
-    importUploading.value = false;
-  }
-}
-
-function formatUnmatchedLabel(item: CollectionImportResultView['unmatched'][number]): string {
-  const parts = [item.title || item.series, item.author, item.isbn].filter(Boolean);
-  return parts.length > 0 ? parts.join(' — ') : '—';
-}
-
 function navigateToCollectionFilter(q: string): void {
   void router.push({ path: '/collection', query: { q } });
+}
+
+function navigateToCollectionGenre(genre: string): void {
+  void router.push({ path: '/collection', query: { genre } });
 }
 
 function navigateToAuthor(authorName: string): void {
   void router.push(`/author/${encodeURIComponent(authorName)}`);
 }
 
-// Notifications & Web Push VAPID
+// ==================== NOTIFICATIONS & WEB PUSH VAPID ====================
 const notifLoaded = ref(false);
 const notifBusy = ref(false);
 const notifFreq = ref<NotificationFrequency>('weekly');
@@ -580,86 +498,95 @@ async function disableWebPush(): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-row ds-row--between">
+    <div class="ds-page-head">
       <h1>{{ t('profile.title') }}</h1>
-      <div v-if="authStore.isAdmin" class="ds-row">
-        <span class="ds-badge ds-badge--accent">{{ t('profile.adminBadge') }}</span>
-        <button type="button" class="ds-btn ds-btn--sm" @click="handleAdminClick">
+      <div class="ds-row">
+        <button v-if="authStore.isAdmin" type="button" class="ds-btn ds-btn--soft ds-btn--sm" @click="handleAdminClick">
+          <Shield :size="15" aria-hidden="true" />
           {{ t('nav.admin') }}
+        </button>
+        <button type="button" class="ds-btn ds-btn--sm" @click="handleLogout">
+          <LogOut :size="15" aria-hidden="true" />
+          {{ t('auth.logoutBtn') }}
         </button>
       </div>
     </div>
 
-    <div class="ds-tabs" role="tablist">
+    <div class="profile-tabs-grid" role="tablist">
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'account' }"
+        class="profile-tab-btn"
+        :class="{ 'profile-tab-btn--active': activeTab === 'account' }"
         :aria-selected="activeTab === 'account'"
         @click="selectTab('account')"
       >
-        {{ t('profile.tabAccount') }}
+        <User :size="16" aria-hidden="true" />
+        <span>{{ t('profile.tabAccount') }}</span>
       </button>
+
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'genres' }"
+        class="profile-tab-btn"
+        :class="{ 'profile-tab-btn--active': activeTab === 'appearance' }"
+        :aria-selected="activeTab === 'appearance'"
+        @click="selectTab('appearance')"
+      >
+        <Palette :size="16" aria-hidden="true" />
+        <span>{{ t('profile.tabAppearance') }}</span>
+      </button>
+
+      <button
+        type="button"
+        role="tab"
+        class="profile-tab-btn"
+        :class="{ 'profile-tab-btn--active': activeTab === 'genres' }"
         :aria-selected="activeTab === 'genres'"
         @click="selectTab('genres')"
       >
-        {{ t('profile.tabGenres') }}
+        <Tags :size="16" aria-hidden="true" />
+        <span>{{ t('profile.tabGenres') }}</span>
       </button>
+
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'stats' }"
+        class="profile-tab-btn"
+        :class="{ 'profile-tab-btn--active': activeTab === 'stats' }"
         :aria-selected="activeTab === 'stats'"
         @click="selectTab('stats')"
       >
-        {{ t('profile.tabStats') }}
+        <BarChart3 :size="16" aria-hidden="true" />
+        <span>{{ t('profile.tabStats') }}</span>
       </button>
+
       <button
         type="button"
         role="tab"
-        class="ds-tab"
-        :class="{ 'ds-tab--active': activeTab === 'notifications' }"
+        class="profile-tab-btn"
+        :class="{ 'profile-tab-btn--active': activeTab === 'notifications' }"
         :aria-selected="activeTab === 'notifications'"
         @click="selectTab('notifications')"
       >
-        {{ t('profile.tabNotifications') }}
+        <Bell :size="16" aria-hidden="true" />
+        <span>{{ t('profile.tabNotifications') }}</span>
       </button>
     </div>
 
-    <!-- Onglet Compte & Thème -->
+    <!-- ==================== ONGLET 1 : IDENTITÉ & SÉCURITÉ ==================== -->
     <div v-if="activeTab === 'account'" class="ds-stack">
       <div class="ds-card ds-stack">
-        <h2>{{ t('profile.themeLabel') }}</h2>
-        <div class="ds-grid-3">
-          <button
-            v-for="themeOpt in themeOptions"
-            :key="themeOpt.id"
-            type="button"
-            class="theme-card"
-            :class="{ 'theme-card--active': authStore.activeTheme === themeOpt.id }"
-            @click="handleSelectTheme(themeOpt.id)"
-          >
-            <span>{{ themeOpt.label }}</span>
-          </button>
+        <div>
+          <h2 class="profile-section-title">{{ t('profile.identitySectionTitle') }}</h2>
+          <p class="ds-text-muted">{{ t('profile.identityHint') }}</p>
         </div>
-      </div>
-
-      <div class="ds-card">
-        <h2 class="profile-section-title">{{ t('profile.identitySectionTitle') }}</h2>
-        <p class="ds-text-muted profile-hint">{{ t('profile.identityHint') }}</p>
 
         <div v-if="profileError" class="ds-banner ds-banner--danger" role="alert">
           {{ profileError }}
         </div>
 
-        <form @submit.prevent="handleSaveProfile">
+        <form class="ds-stack--sm" @submit.prevent="handleSaveProfile">
           <div class="ds-grid-2">
             <div class="ds-field">
               <label class="ds-label" for="prof-username">{{ t('auth.usernameLabel') }}</label>
@@ -722,133 +649,56 @@ async function disableWebPush(): Promise<void> {
         <p class="ds-text-muted">{{ t('profile.exportDesc') }}</p>
         <div class="ds-row">
           <button type="button" class="ds-btn" @click="triggerExport('csv')">
+            <Download :size="15" aria-hidden="true" />
             {{ t('profile.exportCsvBtn') }}
           </button>
           <button type="button" class="ds-btn" @click="triggerExport('json')">
+            <Download :size="15" aria-hidden="true" />
             {{ t('profile.exportJsonBtn') }}
           </button>
         </div>
       </div>
 
-      <div class="ds-card ds-stack">
-        <h2>{{ t('profile.importTitle') }}</h2>
-        <p class="ds-text-muted">{{ t('profile.importDesc') }}</p>
-
-        <div v-if="importError" class="ds-banner ds-banner--danger" role="alert">
-          {{ importError }}
-        </div>
-
-        <form class="ds-stack" @submit.prevent="handleOpenImportMapping">
-          <div class="ds-grid-2">
-            <div class="ds-field">
-              <label class="ds-label" for="prof-import-file">{{ t('profile.importFileLabel') }}</label>
-              <input
-                id="prof-import-file"
-                ref="importFileInput"
-                type="file"
-                class="ds-input"
-                accept=".csv,.json,.xlsx,text/csv,application/json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                :disabled="importUploading || importIsRunning || importPreviewLoading"
-                @change="handleImportFileChange"
-              />
-            </div>
-
-            <div class="ds-field">
-              <label class="ds-label" for="prof-import-status">{{ t('profile.importDefaultStatusLabel') }}</label>
-              <select
-                id="prof-import-status"
-                v-model="importDefaultStatus"
-                class="ds-input"
-                :disabled="importUploading || importIsRunning || importPreviewLoading"
-              >
-                <option value="owned">{{ t('profile.importStatusOwned') }}</option>
-                <option value="wish">{{ t('profile.importStatusWish') }}</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="ds-row">
-            <button
-              type="submit"
-              class="ds-btn ds-btn--primary"
-              :disabled="!importSelectedFile || importUploading || importIsRunning || importPreviewLoading"
-            >
-              {{
-                importPreviewLoading
-                  ? t('profile.importAnalyzing')
-                  : importUploading
-                    ? t('app.loading')
-                    : t('profile.importBtn')
-              }}
-            </button>
-          </div>
-        </form>
-
-        <div v-if="latestImportJob && importIsRunning" class="ds-banner ds-banner--warning" role="status">
-          {{
-            t('profile.importRunning', {
-              done: latestImportJob.progressDone,
-              total: latestImportJob.progressTotal || 1
-            })
-          }}
-        </div>
-
-        <div v-else-if="latestImportJob?.status === 'error'" class="ds-banner ds-banner--danger" role="alert">
-          {{
-            t('profile.importErrorPrefix', {
-              message: latestImportJob.errorMessage || t('app.retry')
-            })
-          }}
-        </div>
-
-        <div v-else-if="latestImportJob?.status === 'done' && importResult" class="ds-stack">
-          <div class="ds-banner ds-banner--success" role="status">
-            {{
-              t('profile.importDoneSummary', {
-                imported: importResult.importedCount,
-                byIsbn: importResult.resolvedByIsbnCount,
-                bySearch: importResult.resolvedBySearchCount,
-                unmatched: importResult.unmatchedCount
-              })
-            }}
-          </div>
-
-          <details v-if="importResult.unmatched.length > 0" class="ds-panel">
-            <summary class="ds-label">
-              {{ t('profile.importUnmatchedTitle', { count: importResult.unmatched.length }) }}
-            </summary>
-            <ul class="import-unmatched-list">
-              <li v-for="item in importResult.unmatched" :key="`${item.rowNumber}-${item.isbn ?? item.title}`">
-                {{
-                  t('profile.importUnmatchedRow', {
-                    row: item.rowNumber,
-                    label: formatUnmatchedLabel(item)
-                  })
-                }}
-              </li>
-            </ul>
-          </details>
-        </div>
-      </div>
+      <CollectionImportPanel id-prefix="prof-import" />
 
       <div class="ds-card ds-stack">
         <h2>{{ t('profile.dangerZoneTitle') }}</h2>
-        <div class="ds-row ds-row--between">
-          <button type="button" class="ds-btn" @click="handleLogout">
-            {{ t('auth.logoutBtn') }}
-          </button>
+        <div class="ds-row">
           <button type="button" class="ds-btn ds-btn--danger" @click="openDeleteModal">
+            <Trash2 :size="15" aria-hidden="true" />
             {{ t('auth.deleteAccountBtn') }}
           </button>
         </div>
       </div>
     </div>
 
-    <!-- Onglet Genres par défaut -->
+    <!-- ==================== ONGLET 2 : APPARENCE ==================== -->
+    <div v-else-if="activeTab === 'appearance'" class="ds-card ds-stack">
+      <h2>{{ t('profile.themeLabel') }}</h2>
+      <div class="ds-grid-3">
+        <button
+          v-for="themeOpt in themeOptions"
+          :key="themeOpt.id"
+          type="button"
+          class="theme-card"
+          :class="{ 'theme-card--active': authStore.activeTheme === themeOpt.id }"
+          @click="handleSelectTheme(themeOpt.id)"
+        >
+          <span class="theme-card__preview" :data-theme="themeOpt.id" aria-hidden="true">
+            <span class="theme-card__dot" />
+            <span class="theme-card__line" />
+          </span>
+          <span>{{ themeOpt.label }}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ==================== ONGLET 3 : MES GENRES (SORTABLEJS) ==================== -->
     <div v-else-if="activeTab === 'genres'" class="ds-card ds-stack">
       <div class="ds-row ds-row--between">
         <h2>{{ t('profile.tabGenres') }}</h2>
         <button type="button" class="ds-btn ds-btn--sm" :disabled="genresBusy" @click="handleResetGenres">
+          <RotateCcw :size="14" aria-hidden="true" />
           {{ t('profile.resetDefaultGenresBtn') }}
         </button>
       </div>
@@ -865,15 +715,22 @@ async function disableWebPush(): Promise<void> {
         </button>
       </form>
 
-      <div class="ds-chips">
-        <span v-for="genre in authStore.profile?.defaultGenres ?? []" :key="genre" class="ds-chip">
+      <p class="ds-text-muted genres-hint">{{ t('profile.genresReorderHint') }}</p>
+
+      <div ref="genresListRef" class="ds-chips genres-sortable-list">
+        <span
+          v-for="genre in authStore.profile?.defaultGenres ?? []"
+          :key="genre"
+          class="ds-chip genre-chip"
+        >
+          <GripVertical :size="14" class="genre-chip__grip" aria-hidden="true" />
           <span>{{ genre }}</span>
           <button
             type="button"
             class="ds-chip__remove"
             :aria-label="t('app.delete')"
             :disabled="genresBusy"
-            @click="handleRemoveGenre(genre)"
+            @click.stop="handleRemoveGenre(genre)"
           >
             ×
           </button>
@@ -881,7 +738,7 @@ async function disableWebPush(): Promise<void> {
       </div>
     </div>
 
-    <!-- Onglet Statistiques (Jalon 7) -->
+    <!-- ==================== ONGLET 4 : STATISTIQUES ==================== -->
     <div v-else-if="activeTab === 'stats'" class="ds-stack">
       <div class="ds-card ds-row ds-row--between stats-toolbar">
         <h2>{{ t('profile.tabStats') }}</h2>
@@ -958,13 +815,13 @@ async function disableWebPush(): Promise<void> {
           <div class="ds-card ds-stack">
             <h3>{{ t('profile.statsTopGenres') }}</h3>
             <p v-if="statsData.tops.genres.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
-            <div v-else class="ds-stack stats-rank-list">
+            <div v-else class="ds-stack--sm">
               <button
                 v-for="item in statsData.tops.genres"
                 :key="item.label"
                 type="button"
                 class="ds-panel ds-row ds-row--between stats-rank-btn"
-                @click="navigateToCollectionFilter(item.label)"
+                @click="navigateToCollectionGenre(item.label)"
               >
                 <span>{{ item.label }}</span>
                 <span class="ds-badge">{{ item.count }}</span>
@@ -975,7 +832,7 @@ async function disableWebPush(): Promise<void> {
           <div class="ds-card ds-stack">
             <h3>{{ t('profile.statsTopAuthors') }}</h3>
             <p v-if="statsData.tops.authors.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
-            <div v-else class="ds-stack stats-rank-list">
+            <div v-else class="ds-stack--sm">
               <button
                 v-for="item in statsData.tops.authors"
                 :key="item.label"
@@ -992,7 +849,7 @@ async function disableWebPush(): Promise<void> {
           <div class="ds-card ds-stack">
             <h3>{{ t('profile.statsTopSeries') }}</h3>
             <p v-if="statsData.tops.series.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
-            <div v-else class="ds-stack stats-rank-list">
+            <div v-else class="ds-stack--sm">
               <button
                 v-for="item in statsData.tops.series"
                 :key="item.label"
@@ -1009,7 +866,7 @@ async function disableWebPush(): Promise<void> {
           <div class="ds-card ds-stack">
             <h3>{{ t('profile.statsTopPublishers') }}</h3>
             <p v-if="statsData.tops.publishers.length === 0" class="ds-text-muted">{{ t('profile.statsEmptySection') }}</p>
-            <div v-else class="ds-stack stats-rank-list">
+            <div v-else class="ds-stack--sm">
               <button
                 v-for="item in statsData.tops.publishers"
                 :key="item.label"
@@ -1026,7 +883,7 @@ async function disableWebPush(): Promise<void> {
 
         <div v-if="statsData.activeLoans.length > 0" class="ds-card ds-stack">
           <h3>{{ t('profile.statsActiveLoansTitle', { count: statsData.activeLoans.length }) }}</h3>
-          <div class="ds-stack stats-rank-list">
+          <div class="ds-stack--sm">
             <router-link
               v-for="loan in statsData.activeLoans"
               :key="loan.bookId"
@@ -1041,7 +898,7 @@ async function disableWebPush(): Promise<void> {
       </template>
     </div>
 
-    <!-- Onglet Notifications -->
+    <!-- ==================== ONGLET 5 : NOTIFICATIONS ==================== -->
     <div v-else class="ds-card ds-stack">
       <h2>{{ t('profile.tabNotifications') }}</h2>
 
@@ -1127,6 +984,7 @@ async function disableWebPush(): Promise<void> {
     <BaseModal
       :open="deleteModalOpen"
       :title="t('auth.deleteAccountConfirmTitle')"
+      max-width="460px"
       @close="deleteModalOpen = false"
     >
       <div class="ds-stack">
@@ -1161,30 +1019,54 @@ async function disableWebPush(): Promise<void> {
         </button>
       </template>
     </BaseModal>
-
-    <!-- Modale systématique de vérification & correspondance des colonnes d'import (CSV / JSON / Excel) -->
-    <ImportMappingModal
-      :open="importMappingModalOpen"
-      :filename="importSelectedFile?.name ?? ''"
-      :preview="importPreviewData"
-      :default-status="importDefaultStatus"
-      :loading-preview="importPreviewLoading"
-      :submitting="importUploading"
-      @close="importMappingModalOpen = false"
-      @toggle-header="handleToggleImportHeader"
-      @update:default-status="importDefaultStatus = $event"
-      @confirm="handleConfirmMappedImport"
-    />
   </section>
 </template>
 
 <style scoped>
-.profile-section-title {
-  margin-bottom: var(--space-1);
+.profile-tabs-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
-.profile-hint {
-  margin-bottom: var(--space-4);
+.profile-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-block-size: 40px;
+  padding: 0.45rem 0.85rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 0.86rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.profile-tab-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.profile-tab-btn--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.profile-tab-btn--active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--text-on-accent);
+}
+
+.profile-section-title {
+  margin-bottom: var(--space-1);
 }
 
 .profile-actions-end {
@@ -1192,10 +1074,14 @@ async function disableWebPush(): Promise<void> {
 }
 
 .theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-4);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   border: 2px solid var(--border-subtle);
-  background: var(--bg-elevated);
+  background: var(--bg-subtle);
   color: var(--text-primary);
   font-weight: 600;
   cursor: pointer;
@@ -1209,9 +1095,82 @@ async function disableWebPush(): Promise<void> {
   color: var(--accent);
 }
 
+.theme-card__preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  border: 1px solid var(--border-subtle);
+}
+
+.theme-card__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.theme-card__line {
+  flex: 1;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
 .genres-input {
   flex: 1;
-  min-width: 200px;
+  min-width: 180px;
+}
+
+.genres-hint {
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.genres-sortable-list {
+  gap: var(--space-2);
+}
+
+.genre-chip {
+  cursor: grab;
+  user-select: none;
+  padding: 0.4rem 0.65rem;
+  min-block-size: 38px;
+}
+
+.genre-chip__grip {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.genre-chip--ghost {
+  opacity: 0.45;
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.genre-chip--chosen {
+  cursor: grabbing;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: var(--shadow-md);
+  animation: genre-wiggle 0.24s ease-in-out infinite alternate;
+}
+
+@keyframes genre-wiggle {
+  from {
+    transform: rotate(-1.5deg) scale(1.03);
+  }
+  to {
+    transform: rotate(1.5deg) scale(1.03);
+  }
 }
 
 .stats-toolbar {
@@ -1225,8 +1184,14 @@ async function disableWebPush(): Promise<void> {
 
 .stats-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
+}
+
+@media (min-width: 640px) {
+  .stats-kpi-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 .stats-kpi-card {
@@ -1247,25 +1212,11 @@ async function disableWebPush(): Promise<void> {
   gap: var(--space-2);
 }
 
-.stats-rank-list {
-  gap: var(--space-2);
-}
-
 .stats-rank-btn {
   width: 100%;
   cursor: pointer;
   color: var(--text-primary);
   text-decoration: none;
   text-align: left;
-}
-
-.import-unmatched-list {
-  margin: var(--space-2) 0 0;
-  padding-left: var(--space-5);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  color: var(--text-secondary);
-  font-size: 0.875rem;
 }
 </style>

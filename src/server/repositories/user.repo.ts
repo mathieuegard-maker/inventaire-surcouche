@@ -10,6 +10,7 @@ export interface UserRow {
   email: string;
   password_hash: string;
   is_admin: number;
+  banned_at: string | null;
   theme: ThemeId;
   locale: LocaleId;
   gdpr_accepted_at: string;
@@ -100,11 +101,12 @@ export class UserRepository {
       theme: ThemeId;
       locale: LocaleId;
       onboardingNotifSeen: boolean;
+      bannedAt: string | null;
       updatedAt: string;
     }>
   ): void {
     const sets: string[] = [];
-    const values: Array<string | number> = [];
+    const values: Array<string | number | null> = [];
 
     if (patch.username !== undefined) {
       sets.push('username = ?');
@@ -129,6 +131,10 @@ export class UserRepository {
     if (patch.onboardingNotifSeen !== undefined) {
       sets.push('onboarding_notif_seen = ?');
       values.push(patch.onboardingNotifSeen ? 1 : 0);
+    }
+    if (patch.bannedAt !== undefined) {
+      sets.push('banned_at = ?');
+      values.push(patch.bannedAt);
     }
     if (sets.length === 0) return;
 
@@ -183,7 +189,7 @@ export class UserRepository {
 
   listDefaultGenres(userId: string): string[] {
     const rows = this.db.all<{ genre_label: string }>(
-      'SELECT genre_label FROM user_default_genres WHERE user_id = ? ORDER BY created_at ASC, genre_label ASC',
+      'SELECT genre_label FROM user_default_genres WHERE user_id = ? ORDER BY sort_order ASC, created_at ASC, genre_label ASC',
       [userId]
     );
     return rows.map((r) => r.genre_label);
@@ -191,23 +197,61 @@ export class UserRepository {
 
   replaceDefaultGenres(userId: string, genres: readonly string[], now: string): void {
     this.db.run('DELETE FROM user_default_genres WHERE user_id = ?', [userId]);
-    for (const g of genres) {
+    for (let i = 0; i < genres.length; i++) {
+      const g = genres[i];
       this.db.run(
-        `INSERT INTO user_default_genres (user_id, genre_label, created_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT (user_id, genre_label) DO NOTHING`,
-        [userId, g, now]
+        `INSERT INTO user_default_genres (user_id, genre_label, sort_order, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT (user_id, genre_label) DO UPDATE SET sort_order = excluded.sort_order`,
+        [userId, g, i, now]
       );
     }
   }
 
   addDefaultGenre(userId: string, genre: string, now: string): void {
-    this.db.run(
-      `INSERT INTO user_default_genres (user_id, genre_label, created_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT (user_id, genre_label) DO NOTHING`,
-      [userId, genre, now]
+    const maxRow = this.db.get<{ max_order: number | null }>(
+      'SELECT MAX(sort_order) AS max_order FROM user_default_genres WHERE user_id = ?',
+      [userId]
     );
+    const nextOrder = (maxRow?.max_order ?? -1) + 1;
+    this.db.run(
+      `INSERT INTO user_default_genres (user_id, genre_label, sort_order, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT (user_id, genre_label) DO NOTHING`,
+      [userId, genre, nextOrder, now]
+    );
+  }
+
+  reorderDefaultGenres(userId: string, orderedGenres: readonly string[]): void {
+    const existing = this.listDefaultGenres(userId);
+    const existingByLower = new Map(existing.map((g) => [g.toLowerCase(), g]));
+    const finalOrder: string[] = [];
+    const seen = new Set<string>();
+
+    for (const raw of orderedGenres) {
+      const key = raw.trim().toLowerCase();
+      const canonical = existingByLower.get(key);
+      if (canonical && !seen.has(key)) {
+        seen.add(key);
+        finalOrder.push(canonical);
+      }
+    }
+    for (const g of existing) {
+      const key = g.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        finalOrder.push(g);
+      }
+    }
+
+    this.db.transaction(() => {
+      for (let i = 0; i < finalOrder.length; i++) {
+        this.db.run(
+          'UPDATE user_default_genres SET sort_order = ? WHERE user_id = ? AND genre_label = ?',
+          [i, userId, finalOrder[i]]
+        );
+      }
+    });
   }
 
   removeDefaultGenre(userId: string, genre: string): void {
