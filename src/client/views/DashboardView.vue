@@ -1,15 +1,39 @@
 <!-- src/client/views/DashboardView.vue -->
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useRouter } from 'vue-router';
-import { ArrowLeftRight, Library, Sparkles, Star, X } from '@lucide/vue';
+import { computed, defineAsyncComponent, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { ArrowLeftRight, Library, ScanBarcode, Sparkles, Star, X } from '@lucide/vue';
 import { useAuthStore } from '../stores/auth.store';
 import { useLibraryStore } from '../stores/library.store';
 import { t } from '../../shared/locales';
 
+const QuickCheckModal = defineAsyncComponent(
+  () => import('../components/modals/QuickCheckModal.vue')
+);
+
+const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
 const libraryStore = useLibraryStore();
+
+const quickCheckOpen = ref(false);
+
+watch(
+  () => [route.name, route.query.quickCheck],
+  ([name, q]) => {
+    if (name === 'quick-check' || q === '1') {
+      quickCheckOpen.value = true;
+    }
+  },
+  { immediate: true }
+);
+
+function closeQuickCheck(): void {
+  quickCheckOpen.value = false;
+  if (route.name === 'quick-check' || route.query.quickCheck === '1') {
+    void router.replace('/dashboard');
+  }
+}
 
 const spaceCards = computed(() => [
   { to: '/collection', title: t('dashboard.myCollection'), icon: Library, count: libraryStore.ownedBooks.length },
@@ -24,6 +48,7 @@ const spaceCards = computed(() => [
 ]);
 
 function openBook(bookId: string): void {
+  libraryStore.setNavigationList(libraryStore.recentOwnedBooks.map((b) => b.id));
   void router.push(`/book/${encodeURIComponent(bookId)}`);
 }
 </script>
@@ -33,6 +58,17 @@ function openBook(bookId: string): void {
     <div v-if="libraryStore.outboxCount > 0" class="ds-banner ds-banner--warning">
       {{ t('dashboard.outboxPending', { count: libraryStore.outboxCount }) }}
     </div>
+
+    <!-- Raccourci immédiat : vérifier si l'on possède déjà une œuvre en librairie -->
+    <button type="button" class="ds-card dashboard-quick-check" @click="quickCheckOpen = true">
+      <span class="dashboard-quick-check__icon" aria-hidden="true">
+        <ScanBarcode :size="24" :stroke-width="2" />
+      </span>
+      <span class="dashboard-quick-check__text">
+        <strong>{{ t('dashboard.quickCheckBtn') }}</strong>
+        <span class="ds-text-muted">{{ t('dashboard.quickCheckSubtitle') }}</span>
+      </span>
+    </button>
 
     <!-- 4 tuiles carrées/compactes en grille 2x2 -->
     <div class="dashboard-kpi-grid">
@@ -108,10 +144,63 @@ function openBook(bookId: string): void {
         </button>
       </div>
     </div>
+
+    <QuickCheckModal v-if="quickCheckOpen" :open="quickCheckOpen" @close="closeQuickCheck" />
   </section>
 </template>
 
 <style scoped>
+.dashboard-quick-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+  cursor: pointer;
+  border-color: var(--accent-border);
+  background: var(--bg-surface);
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.1s ease;
+}
+
+.dashboard-quick-check:hover {
+  background: var(--bg-subtle);
+  border-color: var(--accent);
+}
+
+.dashboard-quick-check:active {
+  transform: scale(0.99);
+}
+
+.dashboard-quick-check__icon {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dashboard-quick-check__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.dashboard-quick-check__text strong {
+  font-size: 0.98rem;
+  color: var(--text-primary);
+}
+
+.dashboard-quick-check__text .ds-text-muted {
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
 .dashboard-kpi-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

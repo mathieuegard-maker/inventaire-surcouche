@@ -11,12 +11,14 @@ const props = withDefaults(
   defineProps<{
     open: boolean;
     mode?: 'simple' | 'burst' | 'picker';
+    title?: string;
     flashState?: 'none' | 'added' | 'duplicate';
     scannedCount?: number;
     lastScannedLabel?: string;
   }>(),
   {
     mode: 'simple',
+    title: '',
     flashState: 'none',
     scannedCount: 0,
     lastScannedLabel: ''
@@ -36,6 +38,16 @@ let scanner: Html5Qrcode | null = null;
 let isRunning = false;
 let isStarting = false;
 
+function triggerHaptic(pattern: number | number[]): void {
+  try {
+    if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+      navigator.vibrate(pattern);
+    }
+  } catch {
+    // non bloquant (ex. Safari iOS ou mode silencieux strict)
+  }
+}
+
 async function waitForReaderElement(maxAttempts = 12): Promise<HTMLElement | null> {
   for (let i = 0; i < maxAttempts; i++) {
     await nextTick();
@@ -47,6 +59,7 @@ async function waitForReaderElement(maxAttempts = 12): Promise<HTMLElement | nul
 }
 
 const modalTitle = computed(() => {
+  if (props.title) return props.title;
   if (props.mode === 'burst') return t('scan.cameraTitleBurst');
   if (props.mode === 'picker') return t('scan.cameraTitlePicker');
   return t('scan.cameraTitleSimple');
@@ -106,9 +119,8 @@ async function startScanner(): Promise<void> {
         if (now - prev < 1500) return;
         lastDetectedAt.set(isbn13, now);
 
-        if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
-          navigator.vibrate(55);
-        }
+        // Retour haptique franc sur Android (100 ms), zéro bip sonore
+        triggerHaptic([100]);
 
         emit('detected', isbn13);
 
@@ -129,11 +141,23 @@ async function startScanner(): Promise<void> {
   }
 }
 
+// Double impulsion distincte si le parent signale un doublon en mode Rafale
+watch(
+  () => props.flashState,
+  (state) => {
+    if (state === 'duplicate') {
+      triggerHaptic([50, 60, 50]);
+    }
+  }
+);
+
 watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
       lastDetectedAt.clear();
+      // Micro-amorce silencieuse (1 ms) à l'ouverture si activée par geste utilisateur (fiabilise Chrome Android)
+      triggerHaptic(1);
       void startScanner();
     } else {
       void stopScanner();
@@ -149,7 +173,7 @@ onBeforeUnmount(() => {
 
 <template>
   <BaseModal :open="open" :title="modalTitle" max-width="540px" @close="emit('close')">
-    <div class="ds-stack--sm">
+    <div class="ds-stack--sm" @pointerdown.once="triggerHaptic(1)">
       <p class="ds-text-muted camera-help">
         {{ mode === 'burst' ? t('scan.burstHelpText') : t('scan.cameraHint') }}
       </p>
@@ -168,7 +192,7 @@ onBeforeUnmount(() => {
         <div :id="readerElementId" class="camera-reader" />
       </div>
 
-      <!-- Feedback de scan intégré DANS la modale (remplace le bandeau vert flottant gênant) -->
+      <!-- Feedback de scan intégré DANS la modale -->
       <div
         v-if="mode === 'burst' && (lastScannedLabel || scannedCount > 0)"
         class="camera-burst-status"

@@ -500,12 +500,13 @@ onMounted(() => {
       </div>
     </div>
 
-    <div class="ds-segmented admin-tabs" role="tablist">
+    <div class="admin-tabs-grid" role="tablist">
       <button
         type="button"
         role="tab"
-        class="ds-segmented__btn"
-        :class="{ 'ds-segmented__btn--active': activeTab === 'stats' }"
+        class="admin-tab-btn"
+        :class="{ 'admin-tab-btn--active': activeTab === 'stats' }"
+        :aria-selected="activeTab === 'stats'"
         @click="activeTab = 'stats'"
       >
         {{ t('admin.tabStats') }}
@@ -513,8 +514,9 @@ onMounted(() => {
       <button
         type="button"
         role="tab"
-        class="ds-segmented__btn"
-        :class="{ 'ds-segmented__btn--active': activeTab === 'catalog' }"
+        class="admin-tab-btn"
+        :class="{ 'admin-tab-btn--active': activeTab === 'catalog' }"
+        :aria-selected="activeTab === 'catalog'"
         @click="activeTab = 'catalog'"
       >
         {{ t('admin.tabCatalog') }}
@@ -522,8 +524,9 @@ onMounted(() => {
       <button
         type="button"
         role="tab"
-        class="ds-segmented__btn"
-        :class="{ 'ds-segmented__btn--active': activeTab === 'users' }"
+        class="admin-tab-btn"
+        :class="{ 'admin-tab-btn--active': activeTab === 'users' }"
+        :aria-selected="activeTab === 'users'"
         @click="activeTab = 'users'"
       >
         {{ t('admin.tabUsers') }}
@@ -531,8 +534,9 @@ onMounted(() => {
       <button
         type="button"
         role="tab"
-        class="ds-segmented__btn"
-        :class="{ 'ds-segmented__btn--active': activeTab === 'logs' }"
+        class="admin-tab-btn"
+        :class="{ 'admin-tab-btn--active': activeTab === 'logs' }"
+        :aria-selected="activeTab === 'logs'"
         @click="activeTab = 'logs'"
       >
         {{ t('admin.tabLogs') }}
@@ -976,8 +980,54 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.admin-tabs {
-  flex-wrap: wrap;
+.admin-tabs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+@media (min-width: 640px) {
+  .admin-tabs-grid {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}
+
+.admin-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-block-size: 40px;
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.25;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.admin-tab-btn:hover {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.admin-tab-btn--active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.admin-tab-btn--active:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--text-on-accent);
 }
 
 .admin-kpi-grid {

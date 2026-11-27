@@ -34,6 +34,12 @@ export const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/check',
+      name: 'quick-check',
+      component: DashboardView,
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/collection',
       name: 'collection',
       component: CollectionView,

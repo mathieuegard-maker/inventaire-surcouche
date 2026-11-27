@@ -9,6 +9,7 @@ export interface FriendConnectionDetailRow {
   owner_username: string;
   friend_share_token: string;
   connected_at: string;
+  deleted_at: string | null;
   owned_count: number;
   wish_count: number;
 }
@@ -51,20 +52,49 @@ export class SocialRepository {
          u.username AS owner_username,
          l.friend_share_token,
          fc.created_at AS connected_at,
+         fc.deleted_at,
          (SELECT COUNT(*) FROM library_books lb WHERE lb.library_id = l.id AND lb.status = 'owned' AND lb.deleted_at IS NULL) AS owned_count,
          (SELECT COUNT(*) FROM library_books lb WHERE lb.library_id = l.id AND lb.status = 'wish' AND lb.deleted_at IS NULL) AS wish_count
        FROM friend_connections fc
        JOIN libraries l ON l.id = fc.target_library_id
        JOIN users u ON u.id = l.owner_user_id
-       WHERE fc.user_id = ?
+       WHERE fc.user_id = ? AND fc.deleted_at IS NULL
        ORDER BY u.username ASC`,
       [userId]
     );
   }
 
-  removeFriendConnection(userId: string, targetLibraryId: string): boolean {
+  listRemovedFriendsForUser(userId: string): FriendConnectionDetailRow[] {
+    return this.db.all<FriendConnectionDetailRow>(
+      `SELECT
+         fc.target_library_id,
+         l.name AS library_name,
+         u.username AS owner_username,
+         l.friend_share_token,
+         fc.created_at AS connected_at,
+         fc.deleted_at,
+         (SELECT COUNT(*) FROM library_books lb WHERE lb.library_id = l.id AND lb.status = 'owned' AND lb.deleted_at IS NULL) AS owned_count,
+         (SELECT COUNT(*) FROM library_books lb WHERE lb.library_id = l.id AND lb.status = 'wish' AND lb.deleted_at IS NULL) AS wish_count
+       FROM friend_connections fc
+       JOIN libraries l ON l.id = fc.target_library_id
+       JOIN users u ON u.id = l.owner_user_id
+       WHERE fc.user_id = ? AND fc.deleted_at IS NOT NULL
+       ORDER BY fc.deleted_at DESC`,
+      [userId]
+    );
+  }
+
+  removeFriendConnection(userId: string, targetLibraryId: string, now: string): boolean {
     const res = this.db.run(
-      'DELETE FROM friend_connections WHERE user_id = ? AND target_library_id = ?',
+      'UPDATE friend_connections SET deleted_at = ? WHERE user_id = ? AND target_library_id = ? AND deleted_at IS NULL',
+      [now, userId, targetLibraryId]
+    );
+    return res.changes > 0;
+  }
+
+  restoreFriendConnection(userId: string, targetLibraryId: string): boolean {
+    const res = this.db.run(
+      'UPDATE friend_connections SET deleted_at = NULL WHERE user_id = ? AND target_library_id = ?',
       [userId, targetLibraryId]
     );
     return res.changes > 0;

@@ -23,6 +23,7 @@ import BookCard from '../components/books/BookCard.vue';
 import SeriesCard from '../components/books/SeriesCard.vue';
 import BatchActionBar from '../components/books/BatchActionBar.vue';
 import BaseModal from '../components/base/BaseModal.vue';
+import HelpTooltip from '../components/base/HelpTooltip.vue';
 import CameraBarcodeModal from '../components/modals/CameraBarcodeModal.vue';
 import PhotoItemModal from '../components/modals/PhotoItemModal.vue';
 import ConfirmDeleteModal from '../components/modals/ConfirmDeleteModal.vue';
@@ -524,7 +525,6 @@ function closeHistoryJob(): void {
 // ==================== ONGLET 2 : MODE RAFALE ====================
 const burstFlash = ref<'none' | 'added' | 'duplicate'>('none');
 const lastBurstLabel = ref('');
-const burstManualInput = ref('');
 const burstDeleteOpen = ref(false);
 const burstLendOpen = ref(false);
 const burstGenreOpen = ref(false);
@@ -542,6 +542,11 @@ const burstSelectedBooks = computed(() =>
   burstFoundBooks.value.filter((b) => burstSelectedSet.value.has(b.id))
 );
 
+function openBurstBook(bookId: string): void {
+  libraryStore.setNavigationList(burstFoundBooks.value.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 function triggerBurstFlash(state: 'added' | 'duplicate'): void {
   burstFlash.value = state;
   window.setTimeout(() => {
@@ -558,12 +563,6 @@ function handleBurstCapture(rawIsbn: string): void {
     triggerBurstFlash('duplicate');
     lastBurstLabel.value = t('scan.burstDuplicateToast', { isbn: res.isbn13 });
   }
-}
-
-function submitBurstManual(): void {
-  if (!burstManualInput.value.trim()) return;
-  handleBurstCapture(burstManualInput.value.trim());
-  burstManualInput.value = '';
 }
 
 async function handleBurstBatchAction(action: BatchActionType): Promise<void> {
@@ -642,7 +641,6 @@ async function confirmBurstGenres(genres: string[]): Promise<void> {
 }
 
 // ==================== ONGLET 3 : SCAN SIMPLE ====================
-const simpleIsbnInput = ref('');
 const simpleLoading = ref(false);
 
 async function resolveAndOpenSimple(raw: string): Promise<void> {
@@ -652,14 +650,12 @@ async function resolveAndOpenSimple(raw: string): Promise<void> {
   if (uiStore.isOffline) {
     await libraryStore.addPendingOfflineScan(isbn13);
     uiStore.pushToast(t('scan.simpleOfflineSaved', { isbn: isbn13 }), 'warning');
-    simpleIsbnInput.value = '';
     return;
   }
 
   simpleLoading.value = true;
   try {
     const book = await libraryStore.resolveIsbnPreview(isbn13);
-    simpleIsbnInput.value = '';
     if (book) {
       await router.push(`/book/${encodeURIComponent(book.id)}`);
     } else {
@@ -668,6 +664,11 @@ async function resolveAndOpenSimple(raw: string): Promise<void> {
   } finally {
     simpleLoading.value = false;
   }
+}
+
+function openSearchBook(bookId: string): void {
+  libraryStore.setNavigationList(scanStore.searchBooks.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
 }
 
 // ==================== ONGLET 4 : RECHERCHE TEXTUELLE ====================
@@ -766,7 +767,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
     <div v-if="scanStore.activeTab === 'photo'" class="ds-stack">
       <!-- Zone de capture (masquée uniquement quand on consulte un lot historique pour garder la page épurée) -->
       <div v-if="!isViewingHistory" class="ds-card ds-stack">
-        <div class="ds-row ds-row--between">
+        <div class="ds-row photo-quota-row">
           <span class="ds-badge ds-badge--accent">
             {{
               t('scan.quotaBanner', {
@@ -775,6 +776,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
               })
             }}
           </span>
+          <HelpTooltip :title="t('scan.quotaHelpTitle')" :text="t('scan.quotaHelpText')" />
         </div>
 
         <input
@@ -986,12 +988,21 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                 <span class="photo-item-text">
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
                   <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
-                  <span class="ds-chips">
+                  <span
+                    v-if="item.committedAction || item.alreadyStatus !== 'none' || item.ignored"
+                    class="ds-chips"
+                  >
                     <span v-if="item.committedAction === 'owned'" class="ds-badge ds-badge--success">
                       {{ t('scan.photoActionBadgeOwned') }}
                     </span>
                     <span v-else-if="item.committedAction === 'wish'" class="ds-badge ds-badge--accent">
                       {{ t('scan.photoActionBadgeWish') }}
+                    </span>
+                    <span v-else-if="item.alreadyStatus === 'owned'" class="ds-badge ds-badge--success">
+                      {{ t('book.statusOwned') }}
+                    </span>
+                    <span v-else-if="item.alreadyStatus === 'wish'" class="ds-badge ds-badge--accent">
+                      {{ t('book.statusWished') }}
                     </span>
                     <span v-if="item.ignored" class="ds-badge">
                       {{ t('scan.photoIgnoredBadge') }}
@@ -1031,12 +1042,21 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                 <span class="photo-item-text">
                   <strong>{{ getPhotoItemDisplayTitle(item) }}</strong>
                   <span class="ds-text-muted">{{ getPhotoItemSubtitle(item) }}</span>
-                  <span v-if="item.committedAction || item.ignored" class="ds-chips">
+                  <span
+                    v-if="item.committedAction || item.alreadyStatus !== 'none' || item.ignored"
+                    class="ds-chips"
+                  >
                     <span v-if="item.committedAction === 'owned'" class="ds-badge ds-badge--success">
                       {{ t('scan.photoActionBadgeOwned') }}
                     </span>
                     <span v-else-if="item.committedAction === 'wish'" class="ds-badge ds-badge--accent">
                       {{ t('scan.photoActionBadgeWish') }}
+                    </span>
+                    <span v-else-if="item.alreadyStatus === 'owned'" class="ds-badge ds-badge--success">
+                      {{ t('book.statusOwned') }}
+                    </span>
+                    <span v-else-if="item.alreadyStatus === 'wish'" class="ds-badge ds-badge--accent">
+                      {{ t('book.statusWished') }}
                     </span>
                     <span v-if="item.ignored" class="ds-badge">
                       {{ t('scan.photoIgnoredBadge') }}
@@ -1069,6 +1089,9 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
                   <strong>{{ item.hint.title }}</strong>
                   <span class="ds-text-muted">
                     {{ getPhotoItemSubtitle(item) !== '—' ? getPhotoItemSubtitle(item) : t('scan.wrongReferenceBtn') }}
+                  </span>
+                  <span v-if="item.ignored" class="ds-chips">
+                    <span class="ds-badge">{{ t('scan.photoIgnoredBadge') }}</span>
                   </span>
                 </span>
               </button>
@@ -1114,67 +1137,69 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
         />
       </template>
 
-      <!-- Historique Photo IA (30 jours glissants) -->
-      <div v-if="!isViewingHistory" class="ds-card ds-stack">
-        <div class="ds-row ds-row--between">
-          <div class="ds-row">
+      <!-- Historique Photo IA replié par défaut (30 jours glissants) -->
+      <details v-if="!isViewingHistory" class="ds-card ds-accordion photo-history-accordion">
+        <summary class="photo-history-accordion__summary">
+          <span class="ds-row">
             <Clock :size="17" aria-hidden="true" />
-            <h2>{{ t('scan.photoHistoryTitle') }}</h2>
-          </div>
+            <strong>{{ t('scan.photoHistoryTitle') }} ({{ jobsStore.photoHistory.length }})</strong>
+          </span>
           <span class="ds-text-muted photo-history-retention">
             {{ t('scan.photoHistoryRetentionHint', { days: jobsStore.photoHistoryRetentionDays }) }}
           </span>
-        </div>
+        </summary>
 
-        <p v-if="jobsStore.photoHistory.length === 0" class="ds-text-muted">
-          {{ t('scan.photoHistoryEmpty') }}
-        </p>
+        <div class="photo-history-accordion__body">
+          <p v-if="jobsStore.photoHistory.length === 0" class="ds-text-muted">
+            {{ t('scan.photoHistoryEmpty') }}
+          </p>
 
-        <div v-else class="photo-history-list">
-          <button
-            v-for="job in jobsStore.photoHistory"
-            :key="job.id"
-            type="button"
-            class="ds-panel photo-history-card"
-            @click="openHistoryJob(job.id)"
-          >
-            <span class="photo-history-card__thumb">
-              <img
-                v-if="summarizeHistoryJob(job).previewUrl"
-                :src="summarizeHistoryJob(job).previewUrl!"
-                :alt="t('scan.tabPhoto')"
-                loading="lazy"
-              />
-              <Camera v-else :size="20" aria-hidden="true" />
-            </span>
+          <div v-else class="photo-history-list">
+            <button
+              v-for="job in jobsStore.photoHistory"
+              :key="job.id"
+              type="button"
+              class="ds-panel photo-history-card"
+              @click="openHistoryJob(job.id)"
+            >
+              <span class="photo-history-card__thumb">
+                <img
+                  v-if="summarizeHistoryJob(job).previewUrl"
+                  :src="summarizeHistoryJob(job).previewUrl!"
+                  :alt="t('scan.tabPhoto')"
+                  loading="lazy"
+                />
+                <Camera v-else :size="20" aria-hidden="true" />
+              </span>
 
-            <span class="photo-history-card__info">
-              <span class="ds-row ds-row--between">
-                <strong>{{ formatPhotoDate(job.createdAt) }}</strong>
-                <span
-                  v-if="job.status === 'running' || job.status === 'pending'"
-                  class="ds-badge ds-badge--accent"
-                >
-                  {{ job.progressDone }}/{{ Math.max(1, job.progressTotal) }}
+              <span class="photo-history-card__info">
+                <span class="ds-row ds-row--between">
+                  <strong>{{ formatPhotoDate(job.createdAt) }}</strong>
+                  <span
+                    v-if="job.status === 'running' || job.status === 'pending'"
+                    class="ds-badge ds-badge--accent"
+                  >
+                    {{ job.progressDone }}/{{ Math.max(1, job.progressTotal) }}
+                  </span>
+                  <span v-else-if="job.status === 'error'" class="ds-badge ds-badge--danger">
+                    {{ t('scan.photoBannerError') }}
+                  </span>
                 </span>
-                <span v-else-if="job.status === 'error'" class="ds-badge ds-badge--danger">
-                  {{ t('scan.photoBannerError') }}
+                <span class="ds-text-muted photo-history-card__summary">
+                  {{
+                    t('scan.photoHistorySummary', {
+                      owned: summarizeHistoryJob(job).owned,
+                      wish: summarizeHistoryJob(job).wish,
+                      ignored: summarizeHistoryJob(job).ignored,
+                      total: summarizeHistoryJob(job).total
+                    })
+                  }}
                 </span>
               </span>
-              <span class="ds-text-muted photo-history-card__summary">
-                {{
-                  t('scan.photoHistorySummary', {
-                    owned: summarizeHistoryJob(job).owned,
-                    wish: summarizeHistoryJob(job).wish,
-                    ignored: summarizeHistoryJob(job).ignored,
-                    total: summarizeHistoryJob(job).total
-                  })
-                }}
-              </span>
-            </span>
-          </button>
+            </button>
+          </div>
         </div>
-      </div>
+      </details>
 
       <!-- Modale d'autorisation Web Push pour « Me notifier » -->
       <BaseModal
@@ -1212,33 +1237,19 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
     <!-- ==================== ONGLET 2 : MODE RAFALE ==================== -->
     <div v-else-if="scanStore.activeTab === 'burst'" class="ds-stack">
-      <div class="ds-card ds-stack">
-        <div class="ds-row ds-row--between">
-          <button type="button" class="ds-btn ds-btn--primary" @click="burstCameraOpen = true">
-            <ScanBarcode :size="17" aria-hidden="true" />
-            {{ t('scan.burstOpenCameraBtn') }}
-          </button>
-          <button
-            v-if="scanStore.burstItems.length > 0"
-            type="button"
-            class="ds-btn ds-btn--ghost ds-btn--sm"
-            @click="scanStore.clearBurstItems()"
-          >
-            {{ t('scan.burstClearBtn') }}
-          </button>
-        </div>
-
-        <form class="ds-row" @submit.prevent="submitBurstManual">
-          <input
-            v-model="burstManualInput"
-            type="text"
-            class="ds-input scan-grow-input"
-            :placeholder="t('scan.burstManualInputPlaceholder')"
-          />
-          <button type="submit" class="ds-btn" :disabled="!burstManualInput.trim()">
-            {{ t('scan.burstAddBtn') }}
-          </button>
-        </form>
+      <div class="ds-card ds-row ds-row--between">
+        <button type="button" class="ds-btn ds-btn--primary" @click="burstCameraOpen = true">
+          <ScanBarcode :size="17" aria-hidden="true" />
+          {{ t('scan.burstOpenCameraBtn') }}
+        </button>
+        <button
+          v-if="scanStore.burstItems.length > 0"
+          type="button"
+          class="ds-btn ds-btn--ghost ds-btn--sm"
+          @click="scanStore.clearBurstItems()"
+        >
+          {{ t('scan.burstClearBtn') }}
+        </button>
       </div>
 
       <p v-if="scanStore.burstItems.length === 0" class="ds-card ds-text-muted">
@@ -1253,7 +1264,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
             selectable
             :selected="burstSelectedSet.has(entry.book.id)"
             @toggle-select="(id) => scanStore.toggleBurstBookSelection(id)"
-            @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+            @open="openBurstBook"
           />
           <div v-else class="ds-panel ds-row ds-row--between">
             <div>
@@ -1330,22 +1341,15 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
 
     <!-- ==================== ONGLET 3 : SCAN SIMPLE ==================== -->
     <div v-else-if="scanStore.activeTab === 'simple'" class="ds-card ds-stack">
-      <button type="button" class="ds-btn ds-btn--primary ds-btn--lg" @click="simpleCameraOpen = true">
+      <button
+        type="button"
+        class="ds-btn ds-btn--primary ds-btn--lg"
+        :disabled="simpleLoading"
+        @click="simpleCameraOpen = true"
+      >
         <Camera :size="18" aria-hidden="true" />
-        {{ t('scan.openSimpleCamera') }}
+        {{ simpleLoading ? t('app.loading') : t('scan.openSimpleCamera') }}
       </button>
-
-      <form class="ds-row" @submit.prevent="resolveAndOpenSimple(simpleIsbnInput)">
-        <input
-          v-model="simpleIsbnInput"
-          type="text"
-          class="ds-input scan-grow-input"
-          :placeholder="t('scan.simpleIsbnPlaceholder')"
-        />
-        <button type="submit" class="ds-btn ds-btn--primary" :disabled="simpleLoading || !simpleIsbnInput.trim()">
-          {{ simpleLoading ? t('app.loading') : t('scan.simpleLookupBtn') }}
-        </button>
-      </form>
 
       <CameraBarcodeModal
         :open="simpleCameraOpen"
@@ -1437,7 +1441,7 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
               v-for="book in scanStore.searchBooks"
               :key="book.id"
               :book="book"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+              @open="openSearchBook"
             />
           </div>
         </div>
@@ -1730,6 +1734,28 @@ async function importExternalAndOpen(isbn13: string): Promise<void> {
   align-items: flex-start;
   gap: 3px;
   min-width: 0;
+}
+
+.photo-quota-row {
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.photo-history-accordion {
+  padding: var(--space-3) var(--space-4);
+}
+
+.photo-history-accordion__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.photo-history-accordion__body {
+  margin-top: var(--space-3);
 }
 
 .photo-history-retention {

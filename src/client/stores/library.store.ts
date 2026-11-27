@@ -81,6 +81,17 @@ export const useLibraryStore = defineStore('library', () => {
   const isSyncing = ref(false);
   const isHydrated = ref(false);
 
+  // Contexte de navigation ordonné des livres (Collection, Wishlist, Prêts, Série, Auteur, Rafale) pour les flèches ‹ / ›
+  const navBookIds = ref<string[]>([]);
+
+  function setNavigationList(bookIds: string[]): void {
+    navBookIds.value = [...bookIds];
+  }
+
+  function clearNavigationList(): void {
+    navBookIds.value = [];
+  }
+
   // Mémoire d'état par vue (filtres composites, tris, pagination 20/50/100, scroll)
   const collectionState = ref<CollectionViewMemory>({
     tab: 'books',
@@ -560,6 +571,9 @@ export const useLibraryStore = defineStore('library', () => {
     lastSyncAt,
     isSyncing,
     isHydrated,
+    navBookIds,
+    setNavigationList,
+    clearNavigationList,
     collectionState,
     wishlistState,
     loansState,

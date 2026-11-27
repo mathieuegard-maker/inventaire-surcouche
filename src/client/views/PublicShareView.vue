@@ -95,24 +95,18 @@ function goRegisterAndFollow(): void {
             <h1>{{ t('social.sharedByTitle', { name: shared.ownerUsername || shared.libraryName }) }}</h1>
             <span class="ds-badge ds-badge--accent">{{ t('social.readonlyBadge') }}</span>
           </div>
-          <p class="ds-text-muted">{{ t('auth.iosInstallTip') }}</p>
         </div>
 
-        <div class="ds-row">
-          <template v-if="authStore.isAuthenticated">
-            <span v-if="shared.alreadyFriend" class="ds-badge ds-badge--accent">
-              {{ t('social.alreadyFriendBadge') }}
-            </span>
-            <button
-              v-else-if="!shared.isOwnLibrary"
-              type="button"
-              class="ds-btn ds-btn--primary"
-              :disabled="addingFriend"
-              @click="handleFollowFriend"
-            >
-              {{ addingFriend ? t('app.loading') : t('social.addToMyFriendsBtn') }}
-            </button>
-          </template>
+        <div v-if="!authStore.isAuthenticated || (!shared.alreadyFriend && !shared.isOwnLibrary)" class="ds-row">
+          <button
+            v-if="authStore.isAuthenticated"
+            type="button"
+            class="ds-btn ds-btn--primary"
+            :disabled="addingFriend"
+            @click="handleFollowFriend"
+          >
+            {{ addingFriend ? t('app.loading') : t('social.addToMyFriendsBtn') }}
+          </button>
 
           <button v-else type="button" class="ds-btn ds-btn--primary" @click="goRegisterAndFollow">
             {{ t('social.createAccountAndFollowBtn') }}

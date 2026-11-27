@@ -3,7 +3,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Upload } from '@lucide/vue';
-import ImportMappingModal from '../modals/ImportMappingModal.vue';
+import ImportMappingView from './ImportMappingView.vue';
 import { useJobsStore } from '../../stores/jobs.store';
 import { useUiStore } from '../../stores/ui.store';
 import { apiRequest, ApiClientError } from '../../api/client';
@@ -47,7 +47,6 @@ const importSelectedBase64 = ref<string>('');
 const importDefaultStatus = ref<'owned' | 'wish'>('owned');
 const importUploading = ref(false);
 const importPreviewLoading = ref(false);
-const importMappingModalOpen = ref(false);
 const importPreviewData = ref<ImportFilePreview | null>(null);
 const importError = ref('');
 
@@ -87,14 +86,19 @@ async function fetchImportPreview(hasHeaderRow?: boolean): Promise<void> {
       }
     });
     importPreviewData.value = res.preview;
-    importMappingModalOpen.value = true;
   } catch (err) {
-    importMappingModalOpen.value = false;
     importPreviewData.value = null;
     importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
   } finally {
     importPreviewLoading.value = false;
   }
+}
+
+function handleCancelMapping(): void {
+  importPreviewData.value = null;
+  importSelectedFile.value = null;
+  importSelectedBase64.value = '';
+  if (importFileInput.value) importFileInput.value.value = '';
 }
 
 async function handleImportFileChange(event: Event): Promise<void> {
@@ -138,7 +142,6 @@ async function handleOpenImportMapping(): Promise<void> {
     }
   }
   if (importPreviewData.value) {
-    importMappingModalOpen.value = true;
     return;
   }
   await fetchImportPreview();
@@ -168,13 +171,11 @@ async function handleConfirmMappedImport(payload: {
     });
     jobsStore.upsertJob(res.job);
     uiStore.pushToast(t('profile.importStartedToast', { count: res.totalRows }), 'info');
-    importMappingModalOpen.value = false;
     importPreviewData.value = null;
     importSelectedFile.value = null;
     importSelectedBase64.value = '';
     if (importFileInput.value) importFileInput.value.value = '';
   } catch (err) {
-    importMappingModalOpen.value = false;
     importError.value = err instanceof ApiClientError ? err.message : t('app.retry');
   } finally {
     importUploading.value = false;
@@ -196,7 +197,20 @@ function formatUnmatchedLabel(item: CollectionImportResultView['unmatched'][numb
       {{ importError }}
     </div>
 
-    <form class="ds-stack" @submit.prevent="handleOpenImportMapping">
+    <ImportMappingView
+      v-if="importPreviewData"
+      :filename="importSelectedFile?.name ?? ''"
+      :preview="importPreviewData"
+      :default-status="importDefaultStatus"
+      :loading-preview="importPreviewLoading"
+      :submitting="importUploading"
+      @cancel="handleCancelMapping"
+      @toggle-header="handleToggleImportHeader"
+      @update:default-status="importDefaultStatus = $event"
+      @confirm="handleConfirmMappedImport"
+    />
+
+    <form v-else class="ds-stack" @submit.prevent="handleOpenImportMapping">
       <div class="ds-grid-2">
         <div class="ds-field">
           <label class="ds-label" :for="`${props.idPrefix}-file`">{{ t('profile.importFileLabel') }}</label>
@@ -288,19 +302,6 @@ function formatUnmatchedLabel(item: CollectionImportResultView['unmatched'][numb
         </ul>
       </details>
     </div>
-
-    <ImportMappingModal
-      :open="importMappingModalOpen"
-      :filename="importSelectedFile?.name ?? ''"
-      :preview="importPreviewData"
-      :default-status="importDefaultStatus"
-      :loading-preview="importPreviewLoading"
-      :submitting="importUploading"
-      @close="importMappingModalOpen = false"
-      @toggle-header="handleToggleImportHeader"
-      @update:default-status="importDefaultStatus = $event"
-      @confirm="handleConfirmMappedImport"
-    />
   </div>
 </template>
 

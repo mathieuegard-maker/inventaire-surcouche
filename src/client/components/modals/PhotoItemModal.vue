@@ -158,6 +158,7 @@ async function patchItem(
     selectedCoverKey?: string | null;
     selectedCoverUrl?: string | null;
     isIntegral?: boolean;
+    integralMode?: 'create_separate' | 'convert_self';
     includedVolumes?: string[];
   }
 ): Promise<void> {
@@ -170,6 +171,15 @@ async function patchItem(
   } finally {
     saving.value = false;
   }
+}
+
+function toggleIgnored(): void {
+  if (!props.item) return;
+  const nextIgnored = !props.item.ignored;
+  void patchItem({
+    ignored: nextIgnored,
+    selected: nextIgnored ? false : Boolean(props.item.selectedOptionIsbn13)
+  });
 }
 
 function selectCover(cov: PhotoCoverOption): void {
@@ -212,9 +222,17 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
         <div class="ai-read-compact__body">
           <div class="ds-row ds-row--between">
             <strong class="ai-read-compact__heading">{{ t('scan.photoAiReadTitle') }}</strong>
-            <span class="ds-badge ds-badge--accent">
-              {{ t('scan.photoConfidenceLabel') }} : {{ confidenceLabel }}
-            </span>
+            <div class="ds-row">
+              <span v-if="item.alreadyStatus === 'owned'" class="ds-badge ds-badge--success">
+                {{ t('book.statusOwned') }}
+              </span>
+              <span v-else-if="item.alreadyStatus === 'wish'" class="ds-badge ds-badge--accent">
+                {{ t('book.statusWished') }}
+              </span>
+              <span class="ds-badge ds-badge--accent">
+                {{ t('scan.photoConfidenceLabel') }} : {{ confidenceLabel }}
+              </span>
+            </div>
           </div>
 
           <p v-if="item.hint.rawText" class="ai-read-compact__raw">
@@ -250,12 +268,10 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
           :class="{ 'photo-ignore-option--active': item.ignored }"
         >
           <input
-            type="radio"
-            :name="`photo-opt-${item.id}`"
-            value="__ignore__"
+            type="checkbox"
             :checked="item.ignored"
             :disabled="saving"
-            @change="patchItem({ ignored: true, selected: false })"
+            @change="toggleIgnored"
           />
           <span class="ds-radio-option__body">
             <span class="ds-row">
@@ -352,14 +368,58 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
         </div>
       </div>
 
-      <!-- Format de l'ouvrage (Tome / Intégrale) -->
-      <IntegralFields
-        v-if="!item.ignored"
-        :is-integral="item.isIntegral"
-        :included-volumes="item.includedVolumes"
-        @update:is-integral="(val) => patchItem({ isIntegral: val })"
-        @update:included-volumes="(vols) => patchItem({ includedVolumes: vols })"
-      />
+      <!-- Format de l'ouvrage (Tome / Intégrale + mode non destructif par défaut) -->
+      <div v-if="!item.ignored" class="ds-stack--sm">
+        <IntegralFields
+          :is-integral="item.isIntegral"
+          :included-volumes="item.includedVolumes"
+          @update:is-integral="
+            (val) =>
+              patchItem({
+                isIntegral: val,
+                ...(val && !activeOption?.isIntegral
+                  ? { integralMode: item.integralMode ?? 'create_separate' }
+                  : {})
+              })
+          "
+          @update:included-volumes="(vols) => patchItem({ includedVolumes: vols })"
+        />
+
+        <div v-if="item.isIntegral && !activeOption?.isIntegral" class="ds-panel ds-stack--sm">
+          <label class="ds-radio-option">
+            <input
+              type="radio"
+              :name="`photo-int-mode-${item.id}`"
+              value="create_separate"
+              :checked="(item.integralMode ?? 'create_separate') === 'create_separate'"
+              :disabled="saving"
+              @change="patchItem({ integralMode: 'create_separate' })"
+            />
+            <span class="ds-radio-option__body">
+              <span>{{ t('book.integralCreateSeparateMode') }}</span>
+            </span>
+          </label>
+          <label class="ds-radio-option">
+            <input
+              type="radio"
+              :name="`photo-int-mode-${item.id}`"
+              value="convert_self"
+              :checked="item.integralMode === 'convert_self'"
+              :disabled="saving"
+              @change="patchItem({ integralMode: 'convert_self' })"
+            />
+            <span class="ds-radio-option__body">
+              <span>{{ t('book.integralConvertSelfMode') }}</span>
+            </span>
+          </label>
+          <p
+            v-if="(item.integralMode ?? 'create_separate') === 'create_separate'"
+            class="ds-text-muted photo-integral-hint"
+          >
+            {{ t('book.integralSeparateHint') }}
+          </p>
+        </div>
+      </div>
 
       <!-- Ce n'est pas le bon livre -->
       <button type="button" class="ds-btn" @click="manualModalOpen = true">
@@ -572,5 +632,10 @@ async function submitManualBnf(hints: BookLookupHints): Promise<void> {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.photo-integral-hint {
+  margin: 0;
+  font-size: 0.8rem;
 }
 </style>

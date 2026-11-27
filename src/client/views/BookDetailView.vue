@@ -37,6 +37,8 @@ const loading = ref(true);
 const book = ref<BookView | null>(null);
 const seriesContext = ref<BookSeriesContext | null>(null);
 const moreActionsOpen = ref(false);
+const descExpanded = ref(false);
+let loadSeq = 0;
 
 // Bloc Lecture individuelle (strictement user_id)
 const readingStatus = ref<ReadingStatus>('none');
@@ -83,10 +85,37 @@ const displayGenres = computed(() => {
   return out;
 });
 
-// Masque totalement les ISBN inconnus / factices
-const validKnownIsbns = computed(() =>
-  (book.value?.knownIsbns ?? []).filter((isbn) => /^(97[89]\d{10}|\d{9}[\dX])$/i.test(isbn.replace(/[-\s]/g, '')))
-);
+// Navigation contextuelle ‹ / › : suit l'ordre de la liste d'origine si présente, sinon les tomes de la série
+const contextualNav = computed<{
+  prevBookId: string | null;
+  nextBookId: string | null;
+  active: boolean;
+}>(() => {
+  const currentId = book.value?.id;
+  if (!currentId) return { prevBookId: null, nextBookId: null, active: false };
+  const list = libraryStore.navBookIds;
+  const idx = list.indexOf(currentId);
+  if (idx >= 0 && list.length > 1) {
+    return {
+      prevBookId: idx > 0 ? list[idx - 1] : null,
+      nextBookId: idx < list.length - 1 ? list[idx + 1] : null,
+      active: true
+    };
+  }
+  if (seriesContext.value && seriesContext.value.totalVolumes > 1) {
+    return {
+      prevBookId: seriesContext.value.prevBookId,
+      nextBookId: seriesContext.value.nextBookId,
+      active: true
+    };
+  }
+  return { prevBookId: null, nextBookId: null, active: false };
+});
+
+const isLongDescription = computed(() => {
+  const desc = book.value?.description ?? '';
+  return desc.length > 200 || desc.split('\n').length > 4;
+});
 
 function syncReadingForm(b: BookView | null): void {
   readingStatus.value = b?.readingState?.status ?? 'none';
@@ -97,15 +126,26 @@ function syncReadingForm(b: BookView | null): void {
 async function loadBook(): Promise<void> {
   const rawId = typeof route.params.bookId === 'string' ? route.params.bookId : '';
   if (!rawId) return;
+  const seq = ++loadSeq;
   loading.value = true;
   moreActionsOpen.value = false;
+  descExpanded.value = false;
+  // Pré-affiche immédiatement la version en cache local si elle existe pour éviter tout clignotement
+  const cachedImmediate = libraryStore.books.find((b) => b.id === rawId);
+  if (cachedImmediate && book.value?.id !== rawId) {
+    book.value = cachedImmediate;
+    syncReadingForm(cachedImmediate);
+  }
   try {
     const res = await libraryStore.fetchBookDetail(rawId);
+    if (seq !== loadSeq) return;
     book.value = res?.book ?? null;
     seriesContext.value = res?.seriesContext ?? null;
     syncReadingForm(book.value);
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) {
+      loading.value = false;
+    }
   }
 }
 
@@ -228,7 +268,7 @@ async function confirmResetOverrides(): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div v-if="loading" class="ds-card ds-text-muted">
+    <div v-if="loading && !book" class="ds-card ds-text-muted">
       {{ t('app.loading') }}
     </div>
 
@@ -237,16 +277,16 @@ async function confirmResetOverrides(): Promise<void> {
     </div>
 
     <template v-else>
-      <article class="ds-card book-hero">
+      <article class="ds-card book-hero" :class="{ 'book-hero--refreshing': loading }">
         <!-- Couverture centrée + flèches latérales œuvre précédente / suivante -->
         <div class="book-cover-stage">
           <button
-            v-if="seriesContext"
+            v-if="contextualNav.active"
             type="button"
             class="ds-btn ds-btn--icon book-cover-stage__arrow"
-            :disabled="!seriesContext.prevBookId"
+            :disabled="!contextualNav.prevBookId"
             :aria-label="t('book.prevBook')"
-            @click="navigateAdjacent(seriesContext.prevBookId)"
+            @click="navigateAdjacent(contextualNav.prevBookId)"
           >
             <ChevronLeft :size="22" aria-hidden="true" />
           </button>
@@ -259,12 +299,12 @@ async function confirmResetOverrides(): Promise<void> {
           </div>
 
           <button
-            v-if="seriesContext"
+            v-if="contextualNav.active"
             type="button"
             class="ds-btn ds-btn--icon book-cover-stage__arrow"
-            :disabled="!seriesContext.nextBookId"
+            :disabled="!contextualNav.nextBookId"
             :aria-label="t('book.nextBook')"
-            @click="navigateAdjacent(seriesContext.nextBookId)"
+            @click="navigateAdjacent(contextualNav.nextBookId)"
           >
             <ChevronRight :size="22" aria-hidden="true" />
           </button>
@@ -426,15 +466,28 @@ async function confirmResetOverrides(): Promise<void> {
         </div>
       </article>
 
-      <!-- Résumé & ISBN connus uniquement (jamais « ISBN inconnu ») -->
-      <div v-if="book.description || validKnownIsbns.length > 0" class="ds-card ds-stack">
-        <div v-if="book.description" class="ds-stack--sm">
+      <!-- Résumé pliable sur 4 lignes avec flèche intégrée sur la ligne du titre -->
+      <div v-if="book.description" class="ds-card ds-stack--sm">
+        <div class="book-desc-header">
           <h2>{{ t('book.descriptionLabel') }}</h2>
-          <p class="book-desc-text">{{ book.description }}</p>
+          <button
+            v-if="isLongDescription"
+            type="button"
+            class="ds-btn ds-btn--ghost ds-btn--sm book-desc-toggle"
+            :aria-expanded="descExpanded"
+            :aria-label="descExpanded ? t('book.descriptionCollapse') : t('book.descriptionExpand')"
+            @click="descExpanded = !descExpanded"
+          >
+            <ChevronUp v-if="descExpanded" :size="18" aria-hidden="true" />
+            <ChevronDown v-else :size="18" aria-hidden="true" />
+          </button>
         </div>
-        <div v-if="validKnownIsbns.length > 0" class="ds-text-muted">
-          <strong>{{ t('book.editionsLabel') }} :</strong> {{ validKnownIsbns.join(', ') }}
-        </div>
+        <p
+          class="book-desc-text"
+          :class="{ 'book-desc-text--clamped': isLongDescription && !descExpanded }"
+        >
+          {{ book.description }}
+        </p>
       </div>
 
       <!-- Bloc Lecture, Note & Notes personnelles (conservé tel quel) -->
@@ -540,7 +593,7 @@ async function confirmResetOverrides(): Promise<void> {
       <BaseModal
         :open="excludeModalOpen"
         :title="t('book.excludeFromSeriesConfirmTitle')"
-        size="sm"
+        max-width="420px"
         @close="excludeModalOpen = false"
       >
         <p>{{ t('book.excludeFromSeriesConfirmDesc', { series: book.seriesName ?? '' }) }}</p>
@@ -558,7 +611,7 @@ async function confirmResetOverrides(): Promise<void> {
       <BaseModal
         :open="resetModalOpen"
         :title="t('book.resetOverridesConfirmTitle')"
-        size="sm"
+        max-width="420px"
         @close="resetModalOpen = false"
       >
         <p>{{ t('book.resetOverridesConfirmDesc') }}</p>
@@ -594,6 +647,11 @@ async function confirmResetOverrides(): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  transition: opacity 0.14s ease;
+}
+
+.book-hero--refreshing {
+  opacity: 0.88;
 }
 
 @media (min-width: 760px) {
@@ -712,9 +770,34 @@ async function confirmResetOverrides(): Promise<void> {
   justify-content: flex-start;
 }
 
+.book-desc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.book-desc-header h2 {
+  margin: 0;
+}
+
+.book-desc-toggle {
+  min-inline-size: 36px;
+  min-block-size: 36px;
+  padding: 4px 8px;
+}
+
 .book-desc-text {
   margin: 0;
   white-space: pre-line;
+}
+
+.book-desc-text--clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  overflow: hidden;
 }
 
 .detail-badge {

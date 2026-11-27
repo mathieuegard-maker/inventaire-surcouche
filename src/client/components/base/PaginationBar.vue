@@ -1,9 +1,11 @@
 <!-- src/client/components/base/PaginationBar.vue -->
-<!-- Pagination standardisée pour TOUTES les listes : choix 20 / 50 / 100 par page,
-     saut direct compact « ‹ [3 / 17 ▾] › » et retour automatique en haut de page. -->
+<!-- Pagination flottante fixe en bas de l'écran (juste au-dessus de la barre de navigation mobile) :
+     toujours sous le pouce pour changer de page ou de taille (20 / 50 / 100), s'efface automatiquement
+     dès qu'une sélection active affiche BatchActionBar ou qu'une modale s'ouvre. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { ChevronDown, ChevronLeft, ChevronRight } from '@lucide/vue';
+import { useUiStore } from '../../stores/ui.store';
 import { t } from '../../../shared/locales';
 
 const props = withDefaults(
@@ -26,17 +28,21 @@ const emit = defineEmits<{
   (e: 'update:pageSize', next: number): void;
 }>();
 
+const uiStore = useUiStore();
+
 const pagesList = computed(() =>
   Array.from({ length: Math.max(1, props.totalPages) }, (_, idx) => idx + 1)
 );
 
 const shouldRender = computed(() => {
   if (props.totalPages > 1) return true;
-  if (props.pageSize !== undefined && (props.totalItems ?? 0) > (props.pageSizeOptions[0] ?? 20)) {
-    return true;
-  }
-  return props.pageSize !== undefined && (props.totalItems ?? 0) > 0;
+  if (props.pageSize !== undefined && (props.totalItems ?? 0) > 0) return true;
+  return false;
 });
+
+const isVisibleFloating = computed(
+  () => shouldRender.value && uiStore.batchBarActiveCount === 0 && uiStore.modalStack.length === 0
+);
 
 function scrollToTop(): void {
   if (!props.autoScrollTop || typeof window === 'undefined') return;
@@ -67,109 +73,136 @@ function onSelectPageSize(event: Event): void {
 </script>
 
 <template>
-  <nav
-    v-if="shouldRender"
-    class="pagination-bar"
-    :aria-label="t('collection.pageInfo', { page, total: Math.max(1, totalPages) })"
-  >
-    <div v-if="totalPages > 1" class="pagination-bar__nav">
-      <button
-        type="button"
-        class="ds-btn ds-btn--sm pagination-bar__arrow"
-        :disabled="page <= 1"
-        :aria-label="t('collection.prevPage')"
-        @click="goToPage(page - 1)"
-      >
-        <ChevronLeft :size="18" aria-hidden="true" />
-      </button>
+  <!-- Espace de respiration en fin de liste pour ne jamais masquer la dernière carte sous la barre fixe -->
+  <div v-if="shouldRender" class="pagination-spacer" aria-hidden="true" />
 
-      <label class="pagination-bar__jump">
-        <span class="pagination-bar__jump-label">
-          {{ page }} / {{ totalPages }}
-        </span>
-        <ChevronDown :size="14" class="pagination-bar__jump-caret" aria-hidden="true" />
-        <select
-          class="pagination-bar__jump-select"
-          :value="page"
-          :aria-label="t('collection.jumpToPage')"
-          @change="onSelectPage"
-        >
-          <option v-for="p in pagesList" :key="p" :value="p">
-            {{ t('collection.pageOption', { page: p, total: totalPages }) }}
-          </option>
-        </select>
-      </label>
+  <Teleport to="body">
+    <nav
+      v-if="isVisibleFloating"
+      class="pagination-dock"
+      :aria-label="t('collection.pageInfo', { page, total: Math.max(1, totalPages) })"
+    >
+      <div class="pagination-dock__inner">
+        <div class="pagination-dock__nav">
+          <button
+            type="button"
+            class="ds-btn ds-btn--sm pagination-dock__arrow"
+            :disabled="page <= 1"
+            :aria-label="t('collection.prevPage')"
+            @click="goToPage(page - 1)"
+          >
+            <ChevronLeft :size="17" aria-hidden="true" />
+          </button>
 
-      <button
-        type="button"
-        class="ds-btn ds-btn--sm pagination-bar__arrow"
-        :disabled="page >= totalPages"
-        :aria-label="t('collection.nextPage')"
-        @click="goToPage(page + 1)"
-      >
-        <ChevronRight :size="18" aria-hidden="true" />
-      </button>
-    </div>
+          <label class="pagination-dock__jump">
+            <span class="pagination-dock__jump-label">
+              {{ page }} / {{ Math.max(1, totalPages) }}
+            </span>
+            <ChevronDown :size="13" class="pagination-dock__jump-caret" aria-hidden="true" />
+            <select
+              class="pagination-dock__jump-select"
+              :value="page"
+              :disabled="totalPages <= 1"
+              :aria-label="t('collection.jumpToPage')"
+              @change="onSelectPage"
+            >
+              <option v-for="p in pagesList" :key="p" :value="p">
+                {{ t('collection.pageOption', { page: p, total: Math.max(1, totalPages) }) }}
+              </option>
+            </select>
+          </label>
 
-    <label v-if="pageSize !== undefined" class="pagination-bar__size">
-      <select
-        class="ds-input pagination-bar__size-select"
-        :value="pageSize"
-        :aria-label="t('collection.pageSizeLabel')"
-        @change="onSelectPageSize"
-      >
-        <option v-for="size in pageSizeOptions" :key="size" :value="size">
-          {{ t('collection.pageSizeOption', { size }) }}
-        </option>
-      </select>
-    </label>
-  </nav>
+          <button
+            type="button"
+            class="ds-btn ds-btn--sm pagination-dock__arrow"
+            :disabled="page >= totalPages"
+            :aria-label="t('collection.nextPage')"
+            @click="goToPage(page + 1)"
+          >
+            <ChevronRight :size="17" aria-hidden="true" />
+          </button>
+        </div>
+
+        <label v-if="pageSize !== undefined" class="pagination-dock__size">
+          <select
+            class="ds-input pagination-dock__size-select"
+            :value="pageSize"
+            :aria-label="t('collection.pageSizeLabel')"
+            @change="onSelectPageSize"
+          >
+            <option v-for="size in pageSizeOptions" :key="size" :value="size">
+              {{ t('collection.pageSizeOption', { size }) }}
+            </option>
+          </select>
+        </label>
+      </div>
+    </nav>
+  </Teleport>
 </template>
 
 <style scoped>
-.pagination-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-3);
-  padding: var(--space-4) 0 var(--space-2);
+.pagination-spacer {
+  height: 64px;
 }
 
-.pagination-bar__nav {
+.pagination-dock {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: var(--space-3);
+  z-index: 120;
+  width: min(calc(100vw - 1.25rem), 460px);
+  pointer-events: auto;
+}
+
+.pagination-dock__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+
+.pagination-dock__nav {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: 6px;
 }
 
-.pagination-bar__arrow {
-  min-inline-size: 40px;
-  padding: 0 var(--space-2);
+.pagination-dock__arrow {
+  min-inline-size: 36px;
+  min-block-size: 36px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  box-shadow: none;
 }
 
-.pagination-bar__jump {
+.pagination-dock__jump {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-block-size: 38px;
-  padding: 0 0.85rem;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-strong);
-  background: var(--bg-surface);
+  gap: 4px;
+  min-block-size: 36px;
+  padding: 0 0.7rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-subtle);
   color: var(--text-primary);
-  font-weight: 600;
-  font-size: 0.88rem;
-  box-shadow: var(--shadow-sm);
+  font-weight: 700;
+  font-size: 0.84rem;
   cursor: pointer;
 }
 
-.pagination-bar__jump-caret {
+.pagination-dock__jump-caret {
   color: var(--text-muted);
 }
 
-.pagination-bar__jump-select {
+.pagination-dock__jump-select {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -178,16 +211,23 @@ function onSelectPageSize(event: Event): void {
   cursor: pointer;
 }
 
-.pagination-bar__size {
+.pagination-dock__size {
   display: inline-flex;
   align-items: center;
 }
 
-.pagination-bar__size-select {
+.pagination-dock__size-select {
   width: auto;
-  min-block-size: 38px;
-  padding: 0.3rem 0.7rem;
-  font-size: 0.85rem;
+  min-block-size: 36px;
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.82rem;
   font-weight: 600;
+}
+
+@media (max-width: 820px) {
+  .pagination-dock {
+    bottom: calc(var(--tabbar-height) + env(safe-area-inset-bottom, 0px) + 8px);
+  }
 }
 </style>

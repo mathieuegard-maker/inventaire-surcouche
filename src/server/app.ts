@@ -183,6 +183,20 @@ export function createApp(options: CreateAppOptions) {
     webPushSender
   });
 
+  const seriesManagementService = new SeriesManagementService({
+    db: options.db,
+    catalogRepo,
+    libraryRepo,
+    loanRepo,
+    readingRepo,
+    ingestionService,
+    seriesGraphService,
+    connectors,
+    jobRepo,
+    onJobEnqueued: () => worker.nudge(),
+    onJobChanged: (row) => worker.notifyJobRow(row)
+  });
+
   const photoAiService = new PhotoAiService({
     config: options.config,
     gemini,
@@ -198,6 +212,9 @@ export function createApp(options: CreateAppOptions) {
     onJobChanged: (row) => worker.notifyJobRow(row),
     onNotifyUser: async ({ userId, title, body, url }) => {
       await notificationService.sendDirectPushToUser(userId, { title, body, url });
+    },
+    onCreateSeparateIntegral: async (input) => {
+      return seriesManagementService.createOrLinkIntegralForSeries(input);
     }
   });
 
@@ -207,20 +224,6 @@ export function createApp(options: CreateAppOptions) {
     connectors,
     ingestionService,
     bookIdentifier
-  });
-
-  const seriesManagementService = new SeriesManagementService({
-    db: options.db,
-    catalogRepo,
-    libraryRepo,
-    loanRepo,
-    readingRepo,
-    ingestionService,
-    seriesGraphService,
-    connectors,
-    jobRepo,
-    onJobEnqueued: () => worker.nudge(),
-    onJobChanged: (row) => worker.notifyJobRow(row)
   });
 
   const seriesCoverEditionService = new SeriesCoverEditionService({

@@ -66,6 +66,7 @@ export interface PhotoJobItem {
   ignored: boolean;
   alreadyStatus: OwnershipStatus;
   isIntegral: boolean;
+  integralMode?: 'create_separate' | 'convert_self';
   includedVolumes: string[];
   committedBookId: string | null;
   committedAction?: 'owned' | 'wish' | null;
@@ -180,6 +181,7 @@ export const useScanStore = defineStore('scan', () => {
       selectedCoverKey?: string | null;
       selectedCoverUrl?: string | null;
       isIntegral?: boolean;
+      integralMode?: 'create_separate' | 'convert_self';
       includedVolumes?: string[];
     }
   ): Promise<BackgroundJobView> {

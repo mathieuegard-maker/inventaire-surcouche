@@ -368,8 +368,17 @@ export class CatalogRepository {
   }
 
   recountSeriesVolumes(seriesId: string, now: string): number {
-    const row = this.db.get<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM books WHERE series_id = ?', [seriesId]);
-    const cnt = Number(row?.cnt ?? 0);
+    // Exclut les intégrales du nombre total de tomes unitaires de la série (repli sur total uniquement si la série ne contient que des intégrales)
+    const unitaryRow = this.db.get<{ cnt: number }>(
+      'SELECT COUNT(*) AS cnt FROM books WHERE series_id = ? AND is_integral = 0',
+      [seriesId]
+    );
+    const unitaryCnt = Number(unitaryRow?.cnt ?? 0);
+    let cnt = unitaryCnt;
+    if (cnt === 0) {
+      const totalRow = this.db.get<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM books WHERE series_id = ?', [seriesId]);
+      cnt = Number(totalRow?.cnt ?? 0);
+    }
     this.db.run('UPDATE series SET known_volumes_count = ?, updated_at = ? WHERE id = ?', [cnt, now, seriesId]);
     return cnt;
   }

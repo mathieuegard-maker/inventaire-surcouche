@@ -134,6 +134,20 @@ export class SocialService {
       ownerUsername: row.owner_username,
       shareToken: row.friend_share_token,
       connectedAt: row.connected_at,
+      deletedAt: row.deleted_at,
+      ownedCount: Number(row.owned_count ?? 0),
+      wishCount: Number(row.wish_count ?? 0)
+    }));
+  }
+
+  listRemovedFriends(userId: string) {
+    return this.socialRepo.listRemovedFriendsForUser(userId).map((row) => ({
+      libraryId: row.target_library_id,
+      libraryName: row.library_name,
+      ownerUsername: row.owner_username,
+      shareToken: row.friend_share_token,
+      connectedAt: row.connected_at,
+      deletedAt: row.deleted_at,
       ownedCount: Number(row.owned_count ?? 0),
       wishCount: Number(row.wish_count ?? 0)
     }));
@@ -156,7 +170,14 @@ export class SocialService {
   }
 
   removeFriend(userId: string, targetLibraryId: string): void {
-    this.socialRepo.removeFriendConnection(userId, targetLibraryId);
+    this.socialRepo.removeFriendConnection(userId, targetLibraryId, new Date().toISOString());
+  }
+
+  restoreFriend(userId: string, targetLibraryId: string): void {
+    const restored = this.socialRepo.restoreFriendConnection(userId, targetLibraryId);
+    if (!restored) {
+      throw new AppError(404, 'FRIEND_NOT_FOUND', 'Ami retiré introuvable.');
+    }
   }
 
   /**

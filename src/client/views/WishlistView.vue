@@ -175,6 +175,16 @@ async function confirmGenres(genres: string[]): Promise<void> {
   }
 }
 
+function openBook(bookId: string): void {
+  const orderedIds = [
+    ...seriesGroups.value.flatMap((g) => g.books.map((b) => b.id)),
+    ...standaloneBooks.value.map((b) => b.id)
+  ];
+  const fullIds = filteredWished.value.map((b) => b.id);
+  libraryStore.setNavigationList(fullIds.length > orderedIds.length ? fullIds : orderedIds);
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 onMounted(() => {
   if (state.scrollY > 0) window.scrollTo({ top: state.scrollY, behavior: 'auto' });
 });
@@ -222,7 +232,7 @@ onBeforeUnmount(() => {
               show-wished-by
               :selected="selectedIds.has(book.id)"
               @toggle-select="toggleSelect"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+              @open="openBook"
             />
           </div>
         </div>
@@ -239,7 +249,7 @@ onBeforeUnmount(() => {
             show-wished-by
             :selected="selectedIds.has(book.id)"
             @toggle-select="toggleSelect"
-            @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+            @open="openBook"
           />
         </div>
       </div>

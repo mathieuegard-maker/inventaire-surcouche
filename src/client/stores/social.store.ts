@@ -15,6 +15,7 @@ export interface FriendItem {
   ownerUsername: string;
   shareToken: string;
   connectedAt: string;
+  deletedAt?: string | null;
   ownedCount: number;
   wishCount: number;
 }
@@ -49,13 +50,15 @@ export interface SharedLibraryData {
 
 export const useSocialStore = defineStore('social', () => {
   const friends = ref<FriendItem[]>([]);
+  const removedFriends = ref<FriendItem[]>([]);
   const loading = ref(false);
 
   async function fetchFriends(): Promise<FriendItem[]> {
     loading.value = true;
     try {
-      const res = await apiRequest<{ ok: true; friends: FriendItem[] }>('/api/social/friends');
+      const res = await apiRequest<{ ok: true; friends: FriendItem[]; removedFriends?: FriendItem[] }>('/api/social/friends');
       friends.value = res.friends;
+      removedFriends.value = res.removedFriends ?? [];
       return res.friends;
     } finally {
       loading.value = false;
@@ -68,20 +71,32 @@ export const useSocialStore = defineStore('social', () => {
       libraryId: string;
       ownerUsername: string;
       friends: FriendItem[];
+      removedFriends?: FriendItem[];
     }>('/api/social/friends', {
       method: 'POST',
       body: { shareToken }
     });
     friends.value = res.friends;
+    removedFriends.value = res.removedFriends ?? [];
     return { libraryId: res.libraryId, ownerUsername: res.ownerUsername };
   }
 
   async function removeFriend(targetLibraryId: string): Promise<void> {
-    const res = await apiRequest<{ ok: true; friends: FriendItem[] }>(
+    const res = await apiRequest<{ ok: true; friends: FriendItem[]; removedFriends?: FriendItem[] }>(
       `/api/social/friends/${encodeURIComponent(targetLibraryId)}`,
       { method: 'DELETE' }
     );
     friends.value = res.friends;
+    removedFriends.value = res.removedFriends ?? [];
+  }
+
+  async function restoreFriend(targetLibraryId: string): Promise<void> {
+    const res = await apiRequest<{ ok: true; friends: FriendItem[]; removedFriends?: FriendItem[] }>(
+      `/api/social/friends/${encodeURIComponent(targetLibraryId)}/restore`,
+      { method: 'POST' }
+    );
+    friends.value = res.friends;
+    removedFriends.value = res.removedFriends ?? [];
   }
 
   async function joinFamily(inviteCode: string): Promise<{ targetLibraryName: string }> {
@@ -140,10 +155,12 @@ export const useSocialStore = defineStore('social', () => {
 
   return {
     friends,
+    removedFriends,
     loading,
     fetchFriends,
     addFriend,
     removeFriend,
+    restoreFriend,
     joinFamily,
     regenerateToken,
     fetchSharedLibrary,

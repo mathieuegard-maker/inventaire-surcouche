@@ -187,4 +187,29 @@ describe('collection-import.util — Parseur pur CSV / JSON / matrice Excel', ()
       rating: 5
     });
   });
+
+  it('cumule proprement plusieurs colonnes personnalisées dans Notes personnelles (v2.6.1 Option A)', () => {
+    const csv = [
+      'Titre;ISBN;Notes;État du livre;Étagère',
+      'Astérix le Gaulois;9782012101333;Dédicacé en salon;Très bon état;Salon haut',
+      'La Serpe d’or;9782012101340;;Bon état;'
+    ].join('\n');
+
+    const matrix = parseCsvToMatrix(csv);
+    const rows = parseImportRowsFromMatrix(matrix, {
+      hasHeaderRow: true,
+      columnMapping: { '0': 'title', '1': 'isbn', '2': 'notes', '3': 'notes', '4': 'notes' }
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows[0].notes).toBe('Dédicacé en salon\nÉtat du livre : Très bon état\nÉtagère : Salon haut');
+    expect(rows[1].notes).toBe('État du livre : Bon état');
+
+    // Même règle sur JSON
+    const jsonRows = parseImportJson(
+      JSON.stringify([{ titre: 'Dune', isbn: '9782266320481', etat: 'Neuf', remarque: 'Édition collector' }]),
+      { columnMapping: { titre: 'title', isbn: 'isbn', etat: 'notes', remarque: 'notes' } }
+    );
+    expect(jsonRows[0].notes).toBe('etat : Neuf\nÉdition collector');
+  });
 });

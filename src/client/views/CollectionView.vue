@@ -268,6 +268,11 @@ async function confirmGenres(genres: string[]): Promise<void> {
   }
 }
 
+function openBook(bookId: string): void {
+  libraryStore.setNavigationList(filteredBooks.value.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 function handleAddDefaultGenre(genre: string): void {
   void authStore.updateDefaultGenres('add', genre);
 }
@@ -362,7 +367,7 @@ onBeforeUnmount(() => {
           selectable
           :selected="selectedIds.has(book.id)"
           @toggle-select="toggleSelect"
-          @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+          @open="openBook"
         />
       </div>
     </template>

@@ -67,6 +67,21 @@ export default defineConfig({
             type: 'image/png',
             purpose: 'maskable'
           }
+        ],
+        shortcuts: [
+          {
+            name: 'Vérifier un livre (Scan)',
+            short_name: 'Scan rapide',
+            description: 'Flashez un code-barres pour savoir aussitôt si vous possédez cet ouvrage',
+            url: '/check',
+            icons: [
+              {
+                src: '/icon-scan-192.png',
+                sizes: '192x192',
+                type: 'image/png'
+              }
+            ]
+          }
         ]
       }
     })

@@ -434,6 +434,16 @@ async function confirmLend(payload: { borrowerName: string; notes?: string }): P
   }
 }
 
+function openSeriesBook(bookId: string): void {
+  libraryStore.setNavigationList(visibleBooks.value.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
+function openIntegralBook(bookId: string): void {
+  libraryStore.setNavigationList(integralBooks.value.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 async function confirmGenres(genres: string[]): Promise<void> {
   const ids = selectedBooks.value.map((b) => b.id);
   if (ids.length === 0) return;
@@ -622,7 +632,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
           selectable
           :selected="selectedIds.has(book.id)"
           @toggle-select="toggleSelect"
-          @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+          @open="openSeriesBook"
         />
       </div>
 
@@ -637,7 +647,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
 
       <!-- Section Intégrales placée en bas, juste après la dernière BD de la série -->
       <div class="ds-card ds-stack--sm series-integrals-card">
-        <div class="ds-row ds-row--between">
+        <div class="series-integrals-header">
           <button
             type="button"
             class="series-integrals-trigger"
@@ -651,14 +661,14 @@ async function confirmGenres(genres: string[]): Promise<void> {
                 {{ integralBooks.length > 0 ? t('series.integralsCardHint') : t('series.integralsCardEmpty') }}
               </span>
             </span>
-            <span v-if="ownedIntegralsCount > 0" class="ds-badge ds-badge--accent">
+            <span v-if="ownedIntegralsCount > 0" class="ds-badge ds-badge--accent series-integrals-trigger__badge">
               {{ t('series.integralsOwnedBadge', { owned: ownedIntegralsCount }) }}
             </span>
-            <ChevronUp v-if="integralsExpanded" :size="18" aria-hidden="true" />
-            <ChevronDown v-else :size="18" aria-hidden="true" />
+            <ChevronUp v-if="integralsExpanded" :size="18" class="series-integrals-trigger__chev" aria-hidden="true" />
+            <ChevronDown v-else :size="18" class="series-integrals-trigger__chev" aria-hidden="true" />
           </button>
 
-          <button type="button" class="ds-btn ds-btn--soft ds-btn--sm" @click="openAddIntegralModal">
+          <button type="button" class="ds-btn ds-btn--soft ds-btn--sm series-integrals-add-btn" @click="openAddIntegralModal">
             <Plus :size="15" aria-hidden="true" />
             <span>{{ t('series.addIntegralBtn') }}</span>
           </button>
@@ -674,7 +684,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
               selectable
               :selected="selectedIds.has(intBook.id)"
               @toggle-select="toggleSelect"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+              @open="openIntegralBook"
             />
           </div>
         </template>
@@ -693,7 +703,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
       <BaseModal
         :open="siblingCutsModalOpen"
         :title="t('series.otherEditionsModalTitle')"
-        size="md"
+        max-width="520px"
         @close="siblingCutsModalOpen = false"
       >
         <div class="ds-stack--sm">
@@ -710,7 +720,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
       <BaseModal
         :open="excludeConfirmOpen"
         :title="t('book.excludeFromSeriesConfirmTitle')"
-        size="sm"
+        max-width="420px"
         @close="excludeConfirmOpen = false"
       >
         <p>{{ t('book.excludeFromSeriesConfirmDesc', { series: series.canonicalName }) }}</p>
@@ -869,9 +879,25 @@ async function confirmGenres(genres: string[]): Promise<void> {
   border-style: dashed;
 }
 
+.series-integrals-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+@media (min-width: 640px) {
+  .series-integrals-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
 .series-integrals-trigger {
   flex: 1;
   min-inline-size: 0;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -883,9 +909,14 @@ async function confirmGenres(genres: string[]): Promise<void> {
   text-align: left;
 }
 
+.series-integrals-trigger__icon,
+.series-integrals-trigger__badge,
+.series-integrals-trigger__chev {
+  flex-shrink: 0;
+}
+
 .series-integrals-trigger__icon {
   color: var(--accent);
-  flex-shrink: 0;
 }
 
 .series-integrals-trigger__text {
@@ -894,5 +925,17 @@ async function confirmGenres(genres: string[]): Promise<void> {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-wrap: break-word;
+}
+
+.series-integrals-add-btn {
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
+@media (min-width: 640px) {
+  .series-integrals-add-btn {
+    align-self: center;
+  }
 }
 </style>

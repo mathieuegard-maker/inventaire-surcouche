@@ -171,6 +171,11 @@ async function handleBatchAction(action: BatchActionType): Promise<void> {
   }
 }
 
+function openBook(bookId: string): void {
+  libraryStore.setNavigationList(filteredAlerts.value.map((a) => a.book.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 onMounted(() => {
   void loadAlerts();
 });
@@ -220,7 +225,7 @@ onMounted(() => {
         selectable
         :selected="selectedBookIds.has(alert.book.id)"
         @toggle-select="toggleSelect"
-        @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+        @open="openBook"
       >
         <template #actions>
           <button type="button" class="ds-btn ds-btn--ghost ds-btn--sm" @click="dismissOne(alert.alertId)">

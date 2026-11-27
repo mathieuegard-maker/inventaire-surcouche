@@ -4,12 +4,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Copy, ExternalLink, Link2, RefreshCw, Share2, Trash2, UserPlus, Users } from '@lucide/vue';
+import { Copy, ExternalLink, Link2, RefreshCw, RotateCcw, Share2, Trash2, UserPlus, Users } from '@lucide/vue';
 import BaseModal from '../components/base/BaseModal.vue';
 import HelpTooltip from '../components/base/HelpTooltip.vue';
 import QrCodeDisplay from '../components/base/QrCodeDisplay.vue';
 import { useAuthStore } from '../stores/auth.store';
-import { useSocialStore } from '../stores/social.store';
+import { useSocialStore, type FriendContact } from '../stores/social.store';
 import { useUiStore } from '../stores/ui.store';
 import { ApiClientError } from '../api/client';
 import { t } from '../../shared/locales';
@@ -52,8 +52,12 @@ const friendUrl = computed(() =>
 
 const joinCodeInput = ref('');
 const joiningFamily = ref(false);
+const addFriendModalOpen = ref(false);
 const addFriendInput = ref('');
 const addingFriend = ref(false);
+const removeConfirmFriend = ref<FriendContact | null>(null);
+const removingFriend = ref(false);
+const restoringLibraryId = ref<string | null>(null);
 
 const regenTarget = ref<'family' | 'friend' | null>(null);
 const regenBusy = ref(false);
@@ -127,6 +131,7 @@ async function handleAddFriend(): Promise<void> {
   try {
     await socialStore.addFriend(token);
     addFriendInput.value = '';
+    addFriendModalOpen.value = false;
     uiStore.pushToast(t('social.friendAddedToast'), 'success');
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
@@ -135,20 +140,46 @@ async function handleAddFriend(): Promise<void> {
   }
 }
 
-async function handleRemoveFriend(libraryId: string): Promise<void> {
+async function confirmRemoveFriend(): Promise<void> {
+  if (!removeConfirmFriend.value) return;
+  removingFriend.value = true;
   try {
-    await socialStore.removeFriend(libraryId);
+    await socialStore.removeFriend(removeConfirmFriend.value.libraryId);
+    removeConfirmFriend.value = null;
     uiStore.pushToast(t('social.friendRemovedToast'), 'info');
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    removingFriend.value = false;
+  }
+}
+
+async function handleRestoreFriend(libraryId: string): Promise<void> {
+  restoringLibraryId.value = libraryId;
+  try {
+    await socialStore.restoreFriend(libraryId);
+    uiStore.pushToast(t('social.friendRestoredToast'), 'success');
+  } catch (err) {
+    uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
+  } finally {
+    restoringLibraryId.value = null;
   }
 }
 </script>
 
 <template>
   <section class="ds-stack">
-    <div class="ds-page-head">
+    <div class="ds-page-head social-page-head">
       <h1>{{ t('social.title') }}</h1>
+      <button
+        v-if="activeTab === 'friends'"
+        type="button"
+        class="ds-btn ds-btn--primary ds-btn--sm"
+        @click="addFriendModalOpen = true"
+      >
+        <UserPlus :size="15" aria-hidden="true" />
+        {{ t('social.addFriendOpenBtn') }}
+      </button>
     </div>
 
     <div class="ds-segmented" role="tablist">
@@ -365,26 +396,6 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 
     <!-- ==================== ONGLET MES AMIS ==================== -->
     <div v-else class="ds-stack">
-      <div class="ds-card ds-stack">
-        <h2>{{ t('social.followFriendTitle') }}</h2>
-        <form class="ds-row" @submit.prevent="handleAddFriend">
-          <input
-            v-model="addFriendInput"
-            type="text"
-            class="ds-input social-flex-input"
-            :placeholder="t('social.addFriendPlaceholder')"
-          />
-          <button
-            type="submit"
-            class="ds-btn ds-btn--primary"
-            :disabled="addingFriend || !addFriendInput.trim()"
-          >
-            <UserPlus :size="16" aria-hidden="true" />
-            {{ addingFriend ? t('app.loading') : t('social.addFriendBtn') }}
-          </button>
-        </form>
-      </div>
-
       <p v-if="socialStore.loading" class="ds-card ds-text-muted">{{ t('app.loading') }}</p>
       <p v-else-if="socialStore.friends.length === 0" class="ds-card ds-text-muted">
         {{ t('social.friendsEmpty') }}
@@ -410,7 +421,7 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
             <button
               type="button"
               class="ds-btn ds-btn--danger-soft ds-btn--sm"
-              @click="handleRemoveFriend(friend.libraryId)"
+              @click="removeConfirmFriend = friend"
             >
               <Trash2 :size="14" aria-hidden="true" />
               {{ t('social.removeFriendBtn') }}
@@ -418,7 +429,88 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
           </div>
         </article>
       </div>
+
+      <!-- Amis retirés (repliés par défaut, restauration en 1 clic) -->
+      <details v-if="socialStore.removedFriends.length > 0" class="ds-card ds-accordion social-removed-accordion">
+        <summary>
+          {{ t('social.removedFriendsTitle', { count: socialStore.removedFriends.length }) }}
+        </summary>
+        <div class="ds-stack--sm social-removed-list">
+          <div
+            v-for="removed in socialStore.removedFriends"
+            :key="removed.libraryId"
+            class="ds-panel ds-row ds-row--between"
+          >
+            <div>
+              <strong>{{ removed.ownerUsername || removed.libraryName }}</strong>
+              <p class="ds-text-muted social-removed-meta">
+                {{ t('social.booksSummary', { owned: removed.ownedCount, wish: removed.wishCount }) }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="ds-btn ds-btn--sm"
+              :disabled="restoringLibraryId === removed.libraryId"
+              @click="handleRestoreFriend(removed.libraryId)"
+            >
+              <RotateCcw :size="14" aria-hidden="true" />
+              {{ restoringLibraryId === removed.libraryId ? t('app.loading') : t('social.restoreFriendBtn') }}
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
+
+    <!-- Modale Ajouter un ami -->
+    <BaseModal
+      :open="addFriendModalOpen"
+      :title="t('social.addFriendModalTitle')"
+      max-width="440px"
+      @close="addFriendModalOpen = false"
+    >
+      <form id="add-friend-modal-form" class="ds-stack" @submit.prevent="handleAddFriend">
+        <p class="ds-text-muted">{{ t('social.addFriendModalDesc') }}</p>
+        <input
+          v-model="addFriendInput"
+          type="text"
+          class="ds-input"
+          :placeholder="t('social.addFriendPlaceholder')"
+          required
+        />
+      </form>
+      <template #footer>
+        <button type="button" class="ds-btn" :disabled="addingFriend" @click="addFriendModalOpen = false">
+          {{ t('app.cancel') }}
+        </button>
+        <button
+          type="submit"
+          form="add-friend-modal-form"
+          class="ds-btn ds-btn--primary"
+          :disabled="addingFriend || !addFriendInput.trim()"
+        >
+          <UserPlus :size="15" aria-hidden="true" />
+          {{ addingFriend ? t('app.loading') : t('social.addFriendBtn') }}
+        </button>
+      </template>
+    </BaseModal>
+
+    <!-- Modale Confirmation Retirer un ami -->
+    <BaseModal
+      :open="removeConfirmFriend !== null"
+      :title="t('social.removeFriendConfirmTitle', { name: removeConfirmFriend?.ownerUsername || removeConfirmFriend?.libraryName || '' })"
+      max-width="440px"
+      @close="removeConfirmFriend = null"
+    >
+      <p>{{ t('social.removeFriendConfirmDesc') }}</p>
+      <template #footer>
+        <button type="button" class="ds-btn" :disabled="removingFriend" @click="removeConfirmFriend = null">
+          {{ t('app.cancel') }}
+        </button>
+        <button type="button" class="ds-btn ds-btn--danger" :disabled="removingFriend" @click="confirmRemoveFriend">
+          {{ removingFriend ? t('app.loading') : t('social.removeFriendBtn') }}
+        </button>
+      </template>
+    </BaseModal>
 
     <BaseModal
       :open="regenTarget !== null"
@@ -492,5 +584,23 @@ async function handleRemoveFriend(libraryId: string): Promise<void> {
 .social-flex-input {
   flex: 1;
   min-width: 180px;
+}
+
+.social-page-head {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.social-removed-accordion {
+  padding: var(--space-3) var(--space-4);
+}
+
+.social-removed-list {
+  margin-top: var(--space-3);
+}
+
+.social-removed-meta {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
 }
 </style>

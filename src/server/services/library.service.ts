@@ -229,17 +229,52 @@ export class LibraryService {
     const annotatedActiveViews = annotateIntegralCoverage(rawActiveViews, rawActiveViews);
 
     // 5. Construction des SeriesView pour les séries présentes dans le foyer
+    // Règle stricte : les intégrales sont exclues du total de tomes unitaires et comptent par les tomes unitaires qu'elles couvrent (ex. Int. 1-3 -> 3 / 6).
     const seriesViews: SeriesView[] = [];
     for (const sId of seriesIds) {
       const sRow = this.catalogRepo.findSeriesById(sId);
       if (!sRow) continue;
-      const seriesBooksInLibrary = annotatedActiveViews.filter((b) => b.seriesId === sId);
-      const ownedCount = seriesBooksInLibrary.filter(
+
+      const catalogSeriesBooks = this.catalogRepo.listBooksBySeriesId(sId);
+      const seenBookIds = new Set(catalogSeriesBooks.map((b) => b.id));
+      for (const libBook of annotatedActiveViews) {
+        if (libBook.seriesId === sId && !seenBookIds.has(libBook.id)) {
+          const extraRow = this.catalogRepo.findBookById(libBook.id);
+          if (extraRow) {
+            catalogSeriesBooks.push(extraRow);
+            seenBookIds.add(extraRow.id);
+          }
+        }
+      }
+
+      const visibleSeriesViews: BookView[] = [];
+      for (const bRow of catalogSeriesBooks) {
+        const lr = libRowByBookId.get(bRow.id) ?? this.libraryRepo.findLibraryBook(libraryId, bRow.id);
+        const ov = parseOverrides(lr?.overrides_json);
+        if (ov.oneShotForced) continue;
+        if (ov.seriesId && ov.seriesId !== sId) continue;
+        if ((ov.hiddenSeriesIds ?? []).includes(sId)) continue;
+        visibleSeriesViews.push(
+          this.ingestionService.buildMergedBookView(bRow, lr, {
+            coherentCoverKey: getCoherentCoverKey(sId, bRow.id)
+          })
+        );
+      }
+
+      const annotatedSeriesViews = annotateIntegralCoverage(visibleSeriesViews, visibleSeriesViews);
+      const unitaryViews = annotatedSeriesViews.filter((b) => !b.isIntegral);
+      const progressPool = unitaryViews.length > 0 ? unitaryViews : annotatedSeriesViews;
+      const ownedCount = progressPool.filter(
         (b) => b.ownershipStatus === 'owned' || Boolean(b.ownedViaIntegral)
       ).length;
+      const knownVolumesCount =
+        unitaryViews.length > 0 ? unitaryViews.length : Math.max(sRow.known_volumes_count, annotatedSeriesViews.length);
+
       const coverBook =
-        seriesBooksInLibrary.find((b) => b.ownershipStatus === 'owned' && b.coverUrl) ??
-        seriesBooksInLibrary.find((b) => b.coverUrl);
+        unitaryViews.find((b) => b.ownershipStatus === 'owned' && b.coverUrl) ??
+        annotatedSeriesViews.find((b) => b.ownershipStatus === 'owned' && b.coverUrl) ??
+        unitaryViews.find((b) => b.coverUrl) ??
+        annotatedSeriesViews.find((b) => b.coverUrl);
 
       seriesViews.push({
         id: sRow.id,
@@ -250,7 +285,7 @@ export class LibraryService {
         primaryAuthors: parseJsonStringArray(sRow.primary_authors_json),
         wikidataQid: sRow.wikidata_qid,
         isCompleteExpanded: sRow.is_complete_expanded === 1,
-        knownVolumesCount: Math.max(sRow.known_volumes_count, seriesBooksInLibrary.length),
+        knownVolumesCount,
         ownedCount,
         coverUrl: coverBook?.coverUrl ?? null,
         updatedAt: sRow.updated_at
@@ -470,26 +505,41 @@ export class LibraryService {
       const seriesRow = this.catalogRepo.findSeriesById(book.seriesId);
       if (seriesRow) {
         const seriesBooks = this.catalogRepo.listBooksBySeriesId(seriesRow.id);
-        const visibleInSeries = seriesBooks.filter((sb) => {
+        const rawVisibleViews: BookView[] = [];
+        for (const sb of seriesBooks) {
           const lr = this.libraryRepo.findLibraryBook(libraryId, sb.id);
           const ov = parseOverrides(lr?.overrides_json);
-          return !ov.oneShotForced && !(ov.hiddenSeriesIds ?? []).includes(seriesRow.id);
+          if (ov.oneShotForced) continue;
+          if (ov.seriesId && ov.seriesId !== seriesRow.id) continue;
+          if ((ov.hiddenSeriesIds ?? []).includes(seriesRow.id)) continue;
+          rawVisibleViews.push(this.ingestionService.buildMergedBookView(sb, lr));
+        }
+
+        const annotatedSeries = annotateIntegralCoverage(rawVisibleViews, rawVisibleViews).sort((a, b) => {
+          const sa = a.sortOrder ?? a.volumeNumber ?? 999999;
+          const sb = b.sortOrder ?? b.volumeNumber ?? 999999;
+          if (sa !== sb) return sa - sb;
+          return a.title.localeCompare(b.title, 'fr');
         });
 
-        const idx = visibleInSeries.findIndex((sb) => sb.id === book.id);
-        const prevBookId = idx > 0 ? visibleInSeries[idx - 1].id : null;
-        const nextBookId = idx >= 0 && idx < visibleInSeries.length - 1 ? visibleInSeries[idx + 1].id : null;
+        const unitaryInSeries = annotatedSeries.filter((sb) => !sb.isIntegral);
+        const progressPool = unitaryInSeries.length > 0 ? unitaryInSeries : annotatedSeries;
+        const navPool = book.isIntegral
+          ? annotatedSeries.filter((sb) => sb.isIntegral)
+          : progressPool;
 
-        let ownedCount = 0;
-        for (const sb of visibleInSeries) {
-          const lr = this.libraryRepo.findLibraryBook(libraryId, sb.id);
-          if (lr && !lr.deleted_at && lr.status === 'owned') ownedCount++;
-        }
+        const idx = navPool.findIndex((sb) => sb.id === book.id);
+        const prevBookId = idx > 0 ? navPool[idx - 1].id : null;
+        const nextBookId = idx >= 0 && idx < navPool.length - 1 ? navPool[idx + 1].id : null;
+
+        const ownedCount = progressPool.filter(
+          (sb) => sb.ownershipStatus === 'owned' || Boolean(sb.ownedViaIntegral)
+        ).length;
 
         seriesContext = {
           seriesId: seriesRow.id,
           seriesName: seriesRow.canonical_name,
-          totalVolumes: visibleInSeries.length,
+          totalVolumes: progressPool.length,
           ownedCount,
           prevBookId,
           nextBookId

@@ -85,6 +85,8 @@ export interface PhotoJobItem {
   ignored: boolean;
   alreadyStatus: OwnershipStatus;
   isIntegral: boolean;
+  /** 'create_separate' préserve le tome unitaire intact et crée une intégrale distincte dans la série ; 'convert_self' convertit l'ouvrage sélectionné lui-même. */
+  integralMode?: 'create_separate' | 'convert_self';
   includedVolumes: string[];
   committedBookId: string | null;
   committedAction?: 'owned' | 'wish' | null;
@@ -278,6 +280,13 @@ export class PhotoAiService {
   private readonly bookIdentifier: BookIdentifierService;
   private readonly onJobChanged?: (job: BackgroundJobRow) => void;
   private readonly onNotifyUser?: (params: { userId: string; title: string; body: string; url?: string }) => Promise<void> | void;
+  private readonly onCreateSeparateIntegral?: (input: {
+    libraryId: string;
+    userId: string;
+    seriesId: string;
+    includedVolumes: string[];
+    ownershipStatus: 'owned' | 'wish';
+  }) => Promise<{ book: { id: string } }>;
 
   constructor(deps: {
     config: ServerConfig;
@@ -293,6 +302,13 @@ export class PhotoAiService {
     bookIdentifier?: BookIdentifierService;
     onJobChanged?: (job: BackgroundJobRow) => void;
     onNotifyUser?: (params: { userId: string; title: string; body: string; url?: string }) => Promise<void> | void;
+    onCreateSeparateIntegral?: (input: {
+      libraryId: string;
+      userId: string;
+      seriesId: string;
+      includedVolumes: string[];
+      ownershipStatus: 'owned' | 'wish';
+    }) => Promise<{ book: { id: string } }>;
   }) {
     this.config = deps.config;
     this.gemini = deps.gemini;
@@ -307,6 +323,7 @@ export class PhotoAiService {
     this.bookIdentifier = deps.bookIdentifier ?? new BookIdentifierService({ connectors: deps.connectors });
     this.onJobChanged = deps.onJobChanged;
     this.onNotifyUser = deps.onNotifyUser;
+    this.onCreateSeparateIntegral = deps.onCreateSeparateIntegral;
   }
 
   private assertOwnedJob(jobId: string, userId: string, libraryId: string): BackgroundJobRow {
@@ -1977,6 +1994,7 @@ export class PhotoAiService {
       selectedCoverKey?: string | null;
       selectedCoverUrl?: string | null;
       isIntegral?: boolean;
+      integralMode?: 'create_separate' | 'convert_self';
       includedVolumes?: string[];
     };
   }): BackgroundJobView {
@@ -1996,6 +2014,10 @@ export class PhotoAiService {
       const prevIsbn = item.selectedOptionIsbn13;
       item.selectedOptionIsbn13 = input.patch.selectedOptionIsbn13;
       if (item.selectedOptionIsbn13) {
+        // Choix manuel explicite de l'utilisateur -> confirmé en 'identified'
+        if (!item.ignored) {
+          item.status = 'identified';
+        }
         const matchedOpt = item.options.find(
           (o) =>
             o.isbn13 === item.selectedOptionIsbn13 ||
@@ -2025,6 +2047,7 @@ export class PhotoAiService {
         }
         if (matchedOpt?.isIntegral && input.patch.isIntegral === undefined) {
           item.isIntegral = true;
+          item.integralMode = 'convert_self';
           item.includedVolumes = [...(matchedOpt.includedVolumes ?? [])];
         }
       }
@@ -2049,7 +2072,19 @@ export class PhotoAiService {
     }
     if (input.patch.isIntegral !== undefined) {
       item.isIntegral = input.patch.isIntegral;
-      if (!item.isIntegral) item.includedVolumes = [];
+      if (!item.isIntegral) {
+        item.includedVolumes = [];
+        item.integralMode = undefined;
+      } else if (!item.integralMode && input.patch.integralMode === undefined) {
+        const chosenOpt = item.options.find(
+          (o) => o.isbn13 === item.selectedOptionIsbn13 || (o.siblingIsbns ?? []).includes(item.selectedOptionIsbn13 ?? '')
+        );
+        // Par défaut, si l'œuvre reconnue est un tome unitaire, préserver le tome 1 intact et créer une intégrale séparée !
+        item.integralMode = chosenOpt?.isIntegral ? 'convert_self' : 'create_separate';
+      }
+    }
+    if (input.patch.integralMode !== undefined) {
+      item.integralMode = input.patch.integralMode;
     }
     if (input.patch.includedVolumes !== undefined) {
       item.includedVolumes = parseIncludedVolumeNumbers(input.patch.includedVolumes);
@@ -2092,13 +2127,15 @@ export class PhotoAiService {
     item.selectedOptionIsbn13 = bestOpt?.isbn13 ?? null;
     item.selectedCoverKey = null;
     item.selectedCoverUrl = null;
-    item.status = options.length === 1 ? 'identified' : options.length > 1 ? 'doubt' : 'unresolved';
+    // Recherche manuelle par l'utilisateur -> reste / passe directement en 'identified' (jamais rétrogradé en 'doubt')
+    item.status = options.length > 0 ? 'identified' : 'unresolved';
     item.ignored = false;
     item.alreadyStatus = item.selectedOptionIsbn13
       ? this.lookupFoyerOwnershipForOption(input.libraryId, bestOpt, item.selectedOptionIsbn13)
       : 'none';
     item.selected = options.length > 0 && item.alreadyStatus === 'none';
     item.isIntegral = Boolean(bestOpt?.isIntegral);
+    item.integralMode = bestOpt?.isIntegral ? 'convert_self' : undefined;
     item.includedVolumes = bestOpt?.isIntegral ? [...(bestOpt.includedVolumes ?? [])] : [];
 
     const now = new Date().toISOString();
@@ -2306,16 +2343,54 @@ export class PhotoAiService {
                   (o.siblingIsbns ?? []).includes(item.selectedOptionIsbn13!)
               ) ?? null;
 
+            const shouldCreateSeparateIntegral =
+              item.isIntegral &&
+              item.includedVolumes.length > 0 &&
+              item.integralMode !== 'convert_self' &&
+              !chosenOption?.isIntegral &&
+              Boolean(this.onCreateSeparateIntegral);
+
             const resolved = await this.ingestionService.resolveIsbns({
               rawIsbns: [item.selectedOptionIsbn13],
               channel: 'photo_ai',
-              action: params.targetStatus,
+              action: shouldCreateSeparateIntegral ? 'preview' : params.targetStatus,
               userId: params.userId,
               libraryId: params.libraryId
             });
 
             const book = resolved.results[0]?.book;
             if (book) {
+              // Mode Intégrale non-destructif : crée/associe une œuvre Intégrale distincte dans la série SANS écraser le Tome 1 unitaire !
+              if (shouldCreateSeparateIntegral && book.seriesId && this.onCreateSeparateIntegral) {
+                const separate = await this.onCreateSeparateIntegral({
+                  libraryId: params.libraryId,
+                  userId: params.userId,
+                  seriesId: book.seriesId,
+                  includedVolumes: item.includedVolumes,
+                  ownershipStatus: params.targetStatus
+                });
+                if (item.selectedCoverKey) {
+                  this.libraryService.updateBookOverrides(params.libraryId, params.userId, separate.book.id, {
+                    coverKey: item.selectedCoverKey
+                  });
+                }
+                item.committedBookId = separate.book.id;
+                item.committedAction = params.targetStatus;
+                item.alreadyStatus = params.targetStatus;
+                item.selected = false;
+                committedCount++;
+                return;
+              }
+              // Si le livre n'avait pas de série connue pour créer une intégrale séparée, appliquer le statut normalement
+              if (shouldCreateSeparateIntegral && !book.seriesId) {
+                this.libraryRepo.upsertLibraryBookStatus({
+                  libraryId: params.libraryId,
+                  bookId: book.id,
+                  status: params.targetStatus,
+                  wishedByUserId: params.targetStatus === 'wish' ? params.userId : null,
+                  now: new Date().toISOString()
+                });
+              }
               // Enregistre les ISBN frères découverts lors du regroupement d'Œuvre abstraite dans le Catalogue Central
               const nowIso = new Date().toISOString();
               for (const sibIsbn of chosenOption?.siblingIsbns ?? []) {

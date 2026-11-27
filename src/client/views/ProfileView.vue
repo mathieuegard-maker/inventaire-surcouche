@@ -8,11 +8,13 @@ import Sortable from 'sortablejs';
 import {
   BarChart3,
   Bell,
+  Copy,
   Download,
   GripVertical,
   LogOut,
   Palette,
   RotateCcw,
+  ScanBarcode,
   Shield,
   Tags,
   Trash2,
@@ -140,11 +142,16 @@ function initGenresSortable(): void {
 
   genresSortable = Sortable.create(genresListRef.value, {
     animation: 180,
-    delay: 220,
+    delay: 200,
     delayOnTouchOnly: true,
     touchStartThreshold: 6,
+    forceFallback: true,
+    fallbackOnBody: true,
+    fallbackTolerance: 4,
+    swapThreshold: 0.65,
     ghostClass: 'genre-chip--ghost',
     chosenClass: 'genre-chip--chosen',
+    fallbackClass: 'genre-chip--dragging',
     filter: '.ds-chip__remove',
     preventOnFilter: false,
     onEnd: (evt) => {
@@ -265,6 +272,21 @@ async function confirmDeleteAccount(): Promise<void> {
 
 function handleAdminClick(): void {
   void router.push('/admin');
+}
+
+function handleOpenQuickCheck(): void {
+  void router.push('/check');
+}
+
+async function copyQuickCheckUrl(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  const url = `${window.location.origin}/check`;
+  try {
+    await navigator.clipboard.writeText(url);
+    uiStore.pushToast(t('profile.quickShortcutUrlCopied'), 'success');
+  } catch {
+    uiStore.pushToast(t('app.retry'), 'warning');
+  }
 }
 
 // ==================== STATISTIQUES & EXPORT CSV/JSON ====================
@@ -498,18 +520,12 @@ async function disableWebPush(): Promise<void> {
 
 <template>
   <section class="ds-stack">
-    <div class="ds-page-head">
+    <div class="ds-page-head profile-page-head">
       <h1>{{ t('profile.title') }}</h1>
-      <div class="ds-row">
-        <button v-if="authStore.isAdmin" type="button" class="ds-btn ds-btn--soft ds-btn--sm" @click="handleAdminClick">
-          <Shield :size="15" aria-hidden="true" />
-          {{ t('nav.admin') }}
-        </button>
-        <button type="button" class="ds-btn ds-btn--sm" @click="handleLogout">
-          <LogOut :size="15" aria-hidden="true" />
-          {{ t('auth.logoutBtn') }}
-        </button>
-      </div>
+      <button type="button" class="ds-btn ds-btn--sm profile-logout-btn" @click="handleLogout">
+        <LogOut :size="15" aria-hidden="true" />
+        {{ t('auth.logoutBtn') }}
+      </button>
     </div>
 
     <div class="profile-tabs-grid" role="tablist">
@@ -642,6 +658,34 @@ async function disableWebPush(): Promise<void> {
             </button>
           </div>
         </form>
+      </div>
+
+      <div v-if="authStore.isAdmin" class="ds-card ds-row ds-row--between">
+        <div class="ds-row">
+          <Shield :size="18" aria-hidden="true" />
+          <strong>{{ t('nav.admin') }}</strong>
+        </div>
+        <button type="button" class="ds-btn ds-btn--soft ds-btn--sm" @click="handleAdminClick">
+          {{ t('nav.admin') }}
+        </button>
+      </div>
+
+      <div class="ds-card ds-stack">
+        <div class="ds-row">
+          <ScanBarcode :size="18" aria-hidden="true" />
+          <h2>{{ t('profile.quickShortcutTitle') }}</h2>
+        </div>
+        <p class="ds-text-muted">{{ t('profile.quickShortcutDesc') }}</p>
+        <div class="ds-row">
+          <button type="button" class="ds-btn ds-btn--primary ds-btn--sm" @click="handleOpenQuickCheck">
+            <ScanBarcode :size="15" aria-hidden="true" />
+            {{ t('profile.quickShortcutTestBtn') }}
+          </button>
+          <button type="button" class="ds-btn ds-btn--sm" @click="copyQuickCheckUrl">
+            <Copy :size="15" aria-hidden="true" />
+            {{ t('profile.quickShortcutCopyUrlBtn') }}
+          </button>
+        </div>
       </div>
 
       <div class="ds-card ds-stack">
@@ -1023,6 +1067,17 @@ async function disableWebPush(): Promise<void> {
 </template>
 
 <style scoped>
+.profile-page-head {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.profile-logout-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .profile-tabs-grid {
   display: flex;
   flex-wrap: wrap;
@@ -1140,6 +1195,7 @@ async function disableWebPush(): Promise<void> {
 .genre-chip {
   cursor: grab;
   user-select: none;
+  touch-action: manipulation;
   padding: 0.4rem 0.65rem;
   min-block-size: 38px;
 }
@@ -1150,7 +1206,7 @@ async function disableWebPush(): Promise<void> {
 }
 
 .genre-chip--ghost {
-  opacity: 0.45;
+  opacity: 0.35;
   border-style: dashed;
   border-color: var(--accent);
 }
@@ -1161,16 +1217,15 @@ async function disableWebPush(): Promise<void> {
   background: var(--accent-soft);
   color: var(--accent);
   box-shadow: var(--shadow-md);
-  animation: genre-wiggle 0.24s ease-in-out infinite alternate;
 }
 
-@keyframes genre-wiggle {
-  from {
-    transform: rotate(-1.5deg) scale(1.03);
-  }
-  to {
-    transform: rotate(1.5deg) scale(1.03);
-  }
+.genre-chip--dragging {
+  opacity: 0.96;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: var(--shadow-lg);
+  transform: scale(1.04);
 }
 
 .stats-toolbar {

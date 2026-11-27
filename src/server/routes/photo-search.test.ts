@@ -267,15 +267,20 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
     const item1Id = job.result.items[0].id;
     const item2Id = job.result.items[1].id;
 
-    // 3. Arbitrage persisté sur le serveur (intégrale sur item 1 -> survit au changement d'appareil)
+    // 3. Arbitrage persisté sur le serveur (intégrale non destructive par défaut sur item 1 : conserve le Tome 1 intact)
     const patchRes = await appCtx.app.request(`/api/jobs/photo/${job.id}/items/${item1Id}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json', cookie },
       body: JSON.stringify({ isIntegral: true, includedVolumes: ['1', '2', '3'] })
     });
     expect(patchRes.status).toBe(200);
+    const patchBody = (await patchRes.json()) as {
+      job: { result: { items: Array<{ id: string; integralMode?: string }> } };
+    };
+    const patchedItem1 = patchBody.job.result.items.find((it) => it.id === item1Id)!;
+    expect(patchedItem1.integralMode).toBe('create_separate');
 
-    // 4. Relance BnF ciblée 100 % côté serveur sur l'item 2 non identifié
+    // 4. Relance BnF ciblée 100 % côté serveur sur l'item 2 non identifié -> passe directement en 'identified'
     const retryRes = await appCtx.app.request(`/api/jobs/photo/${job.id}/items/${item2Id}/retry-bnf`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
@@ -299,16 +304,29 @@ describe('Jalon 5 — Photo IA 100 % Serveur & Recherche Catalogue Exhaustive', 
     const commitBody = (await commitRes.json()) as { committedCount: number };
     expect(commitBody.committedCount).toBe(2);
 
-    // Vérification dans /api/sync/pull : les 2 livres sont possédés et Le Scorpion porte son intégrale T.1-3 !
+    // Vérification dans /api/sync/pull : l'intégrale séparée est possédée (T.1-3), Blacksad est possédé,
+    // le Tome 1 « La Marque du diable » n'a PAS été écrasé en intégrale et la série compte 1 tome unitaire possédé / 1 total !
     const pull = await appCtx.app.request('/api/sync/pull', { headers: { cookie } });
     const pullBody = (await pull.json()) as {
-      books: Array<{ title: string; ownershipStatus: string; isIntegral: boolean; includedVolumes: string[] }>;
+      books: Array<{
+        id: string;
+        title: string;
+        ownershipStatus: string;
+        isIntegral: boolean;
+        includedVolumes: string[];
+      }>;
+      series: Array<{ canonicalName: string; knownVolumesCount: number; ownedCount: number }>;
     };
     expect(pullBody.books).toHaveLength(2);
-    const scorpion = pullBody.books.find((b) => b.title.includes('diable'))!;
-    expect(scorpion.ownershipStatus).toBe('owned');
-    expect(scorpion.isIntegral).toBe(true);
-    expect(scorpion.includedVolumes).toEqual(['1', '2', '3']);
+    const integralBook = pullBody.books.find((b) => b.isIntegral)!;
+    expect(integralBook).toBeDefined();
+    expect(integralBook.ownershipStatus).toBe('owned');
+    expect(integralBook.includedVolumes).toEqual(['1', '2', '3']);
+    const scorpionSeries = pullBody.series.find((s) => s.canonicalName === 'Le Scorpion')!;
+    expect(scorpionSeries).toBeDefined();
+    // Les intégrales ne gonflent plus le total de tomes unitaires de la série (1 tome unitaire connu, couvert par l'intégrale -> 1/1)
+    expect(scorpionSeries.knownVolumesCount).toBe(1);
+    expect(scorpionSeries.ownedCount).toBe(1);
 
     // 6. Contrôle du quota mensuel : photo #2 OK, photo #3 -> 429 AI_QUOTA_EXCEEDED
     const secondRes = await appCtx.app.request('/api/jobs/photo', {

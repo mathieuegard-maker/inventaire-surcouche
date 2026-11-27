@@ -42,15 +42,18 @@ describe('SQLite V2 Migrator & Schema Integrity', () => {
       const firstRun = applySqlMigrations(db, migrationsDir);
       expect(firstRun.applied).toContain('0001_v2_initial.sql');
       expect(firstRun.applied).toContain('0002_ui_v2_6.sql');
+      expect(firstRun.applied).toContain('0003_v2_6_1_ux.sql');
       expect(firstRun.skipped).toBe(0);
 
-      // Vérifie les colonnes ajoutées par la migration 0002 (ordre genres, soft-ban, historique Photo IA 30j)
+      // Vérifie les colonnes ajoutées par les migrations 0002 et 0003
       const genreCols = db.all<{ name: string }>('PRAGMA table_info(user_default_genres)').map((c) => c.name);
       expect(genreCols).toContain('sort_order');
       const userCols = db.all<{ name: string }>('PRAGMA table_info(users)').map((c) => c.name);
       expect(userCols).toContain('banned_at');
       const jobCols = db.all<{ name: string }>('PRAGMA table_info(background_jobs)').map((c) => c.name);
       expect(jobCols).toContain('archived_at');
+      const friendCols = db.all<{ name: string }>('PRAGMA table_info(friend_connections)').map((c) => c.name);
+      expect(friendCols).toContain('deleted_at');
 
       const secondRun = applySqlMigrations(db, migrationsDir);
       expect(secondRun.applied).toEqual([]);

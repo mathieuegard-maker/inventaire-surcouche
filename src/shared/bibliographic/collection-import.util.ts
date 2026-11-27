@@ -86,8 +86,8 @@ export const USER_MAPPABLE_IMPORT_FIELDS: readonly ImportFieldKey[] = [
   'notes'
 ] as const;
 
-/** Champs qui peuvent accepter plusieurs colonnes sources fusionnées (ex. Scénariste + Dessinateur). */
-export const MULTI_COLUMN_IMPORT_FIELDS = new Set<ImportFieldKey>(['author']);
+/** Champs qui peuvent accepter plusieurs colonnes sources fusionnées (ex. Scénariste + Dessinateur, ou plusieurs colonnes vers Notes personnelles). */
+export const MULTI_COLUMN_IMPORT_FIELDS = new Set<ImportFieldKey>(['author', 'notes']);
 
 /** Champs pivots : au moins un d'entre eux est requis pour identifier chaque livre. */
 export const PIVOT_IMPORT_FIELDS = new Set<ImportFieldKey>(['isbn', 'title', 'series']);
@@ -960,6 +960,31 @@ function mergeAuthorValues(parts: Array<{ label: string; value: string }>): stri
   return valid.map((p) => p.value.trim()).join(', ');
 }
 
+function isPlainNotesHeaderLabel(label: string): boolean {
+  const key = normalizeHeaderKey(label);
+  if (!key) return true;
+  if (key === 'note' || key === 'noteperso' || key === 'manote') return true;
+  return HEADER_ALIASES[key] === 'notes';
+}
+
+function mergeNotesValues(parts: Array<{ label: string; value: string }>): string | null {
+  const valid = parts.filter((p) => p.value.trim().length > 0);
+  if (valid.length === 0) return null;
+  if (valid.length === 1 && isPlainNotesHeaderLabel(valid[0].label)) {
+    return valid[0].value.trim();
+  }
+  return valid
+    .map((p) => {
+      const cleanLabel = p.label.trim();
+      const cleanVal = p.value.trim();
+      if (!cleanLabel || isPlainNotesHeaderLabel(cleanLabel)) {
+        return cleanVal;
+      }
+      return `${cleanLabel} : ${cleanVal}`;
+    })
+    .join('\n');
+}
+
 function buildRowFromRecord(record: Partial<Record<ImportFieldKey, unknown>>, rowNumber: number): ImportedBookRow | null {
   const isbn = cleanString(record.isbn);
   const title = cleanString(record.title);
@@ -1217,12 +1242,16 @@ export function parseImportRowsFromMatrix(
     const cells = nonEmpty[i];
     const rec: Partial<Record<ImportFieldKey, unknown>> = {};
     const authorParts: Array<{ label: string; value: string }> = [];
+    const notesParts: Array<{ label: string; value: string }> = [];
 
     for (const entry of columnEntries) {
       const rawVal = cells[entry.colIdx];
       if (entry.field === 'author') {
         const cleaned = cleanString(rawVal);
         if (cleaned) authorParts.push({ label: entry.label, value: cleaned });
+      } else if (entry.field === 'notes') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) notesParts.push({ label: entry.label, value: cleaned });
       } else if (rec[entry.field] === undefined || cleanString(rec[entry.field]) === null) {
         rec[entry.field] = rawVal;
       }
@@ -1230,6 +1259,9 @@ export function parseImportRowsFromMatrix(
 
     if (authorParts.length > 0) {
       rec.author = mergeAuthorValues(authorParts);
+    }
+    if (notesParts.length > 0) {
+      rec.notes = mergeNotesValues(notesParts);
     }
 
     const built = buildRowFromRecord(rec, i + 1);
@@ -1269,12 +1301,16 @@ export function parseImportJson(
   records.forEach((entry, idx) => {
     const rec: Partial<Record<ImportFieldKey, unknown>> = {};
     const authorParts: Array<{ label: string; value: string }> = [];
+    const notesParts: Array<{ label: string; value: string }> = [];
 
     for (const { key, field } of keyEntries) {
       const rawVal = entry[key];
       if (field === 'author') {
         const cleaned = cleanString(rawVal);
         if (cleaned) authorParts.push({ label: key, value: cleaned });
+      } else if (field === 'notes') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) notesParts.push({ label: key, value: cleaned });
       } else if (rec[field] === undefined || cleanString(rec[field]) === null) {
         rec[field] = rawVal;
       }
@@ -1282,6 +1318,9 @@ export function parseImportJson(
 
     if (authorParts.length > 0) {
       rec.author = mergeAuthorValues(authorParts);
+    }
+    if (notesParts.length > 0) {
+      rec.notes = mergeNotesValues(notesParts);
     }
 
     const built = buildRowFromRecord(rec, idx + 1);

@@ -69,24 +69,51 @@ export function createSocialRoutes(deps: {
     return c.json({ ok: true, ...res, profile });
   });
 
-  // Amis suivis
+  // Amis suivis (avec soft delete & restauration)
   router.get('/friends', deps.requireAuth, (c) => {
     const auth = c.get('auth')!;
-    return c.json({ ok: true, friends: deps.socialService.listFriends(auth.userId) });
+    return c.json({
+      ok: true,
+      friends: deps.socialService.listFriends(auth.userId),
+      removedFriends: deps.socialService.listRemovedFriends(auth.userId)
+    });
   });
 
   router.post('/friends', deps.requireAuth, zValidator('json', addFriendSchema), (c) => {
     const auth = c.get('auth')!;
     const { shareToken } = c.req.valid('json');
     const added = deps.socialService.addFriend(auth.userId, auth.libraryId, shareToken);
-    return c.json({ ok: true, ...added, friends: deps.socialService.listFriends(auth.userId) }, 201);
+    return c.json(
+      {
+        ok: true,
+        ...added,
+        friends: deps.socialService.listFriends(auth.userId),
+        removedFriends: deps.socialService.listRemovedFriends(auth.userId)
+      },
+      201
+    );
   });
 
   router.delete('/friends/:targetLibraryId', deps.requireAuth, (c) => {
     const auth = c.get('auth')!;
     const targetLibraryId = c.req.param('targetLibraryId');
     deps.socialService.removeFriend(auth.userId, targetLibraryId);
-    return c.json({ ok: true, friends: deps.socialService.listFriends(auth.userId) });
+    return c.json({
+      ok: true,
+      friends: deps.socialService.listFriends(auth.userId),
+      removedFriends: deps.socialService.listRemovedFriends(auth.userId)
+    });
+  });
+
+  router.post('/friends/:targetLibraryId/restore', deps.requireAuth, (c) => {
+    const auth = c.get('auth')!;
+    const targetLibraryId = c.req.param('targetLibraryId');
+    deps.socialService.restoreFriend(auth.userId, targetLibraryId);
+    return c.json({
+      ok: true,
+      friends: deps.socialService.listFriends(auth.userId),
+      removedFriends: deps.socialService.listRemovedFriends(auth.userId)
+    });
   });
 
   return router;

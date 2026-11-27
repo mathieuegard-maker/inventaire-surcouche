@@ -260,6 +260,11 @@ async function confirmLend(payload: { borrowerName: string; notes?: string }): P
   }
 }
 
+function openAuthorBook(bookId: string, list: BookView[]): void {
+  libraryStore.setNavigationList(list.map((b) => b.id));
+  void router.push(`/book/${encodeURIComponent(bookId)}`);
+}
+
 async function confirmGenres(genres: string[]): Promise<void> {
   const ids = selectedBooks.value.map((b) => b.id);
   if (ids.length === 0) return;
@@ -318,7 +323,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
               selectable
               :selected="selectedIds.has(book.id)"
               @toggle-select="toggleSelect"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+              @open="(id) => openAuthorBook(id, ownedStandaloneBooks)"
             />
           </div>
         </div>
@@ -374,7 +379,7 @@ async function confirmGenres(genres: string[]): Promise<void> {
               selectable
               :selected="selectedIds.has(book.id)"
               @toggle-select="toggleSelect"
-              @open="(id) => router.push(`/book/${encodeURIComponent(id)}`)"
+              @open="(id) => openAuthorBook(id, otherLocalStandaloneBooks)"
             />
           </div>
           <div v-if="filteredExternalBooks.length > 0" class="ds-grid-2">

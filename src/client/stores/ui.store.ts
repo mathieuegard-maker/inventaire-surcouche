@@ -18,6 +18,7 @@ interface BeforeInstallPromptEvent extends Event {
 export const useUiStore = defineStore('ui', () => {
   const toasts = ref<ToastItem[]>([]);
   const modalStack = ref<string[]>([]);
+  const batchBarActiveCount = ref(0);
   const isOffline = ref<boolean>(typeof navigator !== 'undefined' ? !navigator.onLine : false);
   const canInstallPwa = ref(false);
   const isIosStandaloneNeeded = ref(false);
@@ -124,9 +125,14 @@ export const useUiStore = defineStore('ui', () => {
     return false;
   }
 
+  function setBatchBarActive(active: boolean): void {
+    batchBarActiveCount.value = Math.max(0, batchBarActiveCount.value + (active ? 1 : -1));
+  }
+
   return {
     toasts,
     modalStack,
+    batchBarActiveCount,
     isOffline,
     canInstallPwa,
     isIosStandaloneNeeded,
@@ -135,6 +141,7 @@ export const useUiStore = defineStore('ui', () => {
     registerModal,
     unregisterModal,
     isTopModal,
+    setBatchBarActive,
     checkServerReachable,
     initGlobalListeners,
     triggerPwaInstall

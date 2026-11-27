@@ -142,9 +142,11 @@ export class LibraryRepository {
 
   addFriendConnection(userId: string, targetLibraryId: string, now: string): void {
     this.db.run(
-      `INSERT INTO friend_connections (user_id, target_library_id, created_at)
-       VALUES (?, ?, ?)
-       ON CONFLICT (user_id, target_library_id) DO NOTHING`,
+      `INSERT INTO friend_connections (user_id, target_library_id, created_at, deleted_at)
+       VALUES (?, ?, ?, NULL)
+       ON CONFLICT (user_id, target_library_id) DO UPDATE SET
+         deleted_at = NULL,
+         created_at = excluded.created_at`,
       [userId, targetLibraryId, now]
     );
   }
@@ -331,7 +333,7 @@ export class LibraryRepository {
        FROM friend_connections fc
        JOIN libraries l ON l.id = fc.target_library_id
        JOIN users u ON u.id = l.owner_user_id
-       WHERE fc.user_id = ?
+       WHERE fc.user_id = ? AND fc.deleted_at IS NULL
        ORDER BY u.username ASC`,
       [userId]
     );

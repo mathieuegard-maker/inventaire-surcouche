@@ -176,6 +176,31 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
     });
     expect(ownRes.status).toBe(200);
     expect(ctx.repos.socialRepo.findReservation(owner.profile.library.id, wishBook.id)).toBeNull();
+
+    // 6. v2.6.1 : Suppression douce (soft delete) d'un ami puis restauration via POST /api/social/friends/:id/restore
+    const delFriendRes = await ctx.app.request(`/api/social/friends/${owner.profile.library.id}`, {
+      method: 'DELETE',
+      headers: { cookie: friend1.cookie }
+    });
+    expect(delFriendRes.status).toBe(200);
+    const afterDel = (await delFriendRes.json()) as {
+      friends: Array<{ libraryId: string }>;
+      removedFriends: Array<{ libraryId: string }>;
+    };
+    expect(afterDel.friends).toHaveLength(0);
+    expect(afterDel.removedFriends.map((f) => f.libraryId)).toContain(owner.profile.library.id);
+
+    const restoreRes = await ctx.app.request(`/api/social/friends/${owner.profile.library.id}/restore`, {
+      method: 'POST',
+      headers: { cookie: friend1.cookie }
+    });
+    expect(restoreRes.status).toBe(200);
+    const afterRestore = (await restoreRes.json()) as {
+      friends: Array<{ libraryId: string }>;
+      removedFriends: Array<{ libraryId: string }>;
+    };
+    expect(afterRestore.friends.map((f) => f.libraryId)).toContain(owner.profile.library.id);
+    expect(afterRestore.removedFriends).toHaveLength(0);
   });
 
   it('gère la jonction de foyer (FAM-...) et la révocation immédiate par régénération de code (PUB-...)', async () => {

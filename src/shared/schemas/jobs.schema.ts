@@ -15,6 +15,7 @@ export const updatePhotoJobItemSchema = z.object({
   selectedCoverKey: z.string().trim().nullable().optional(),
   selectedCoverUrl: z.string().trim().nullable().optional(),
   isIntegral: z.boolean().optional(),
+  integralMode: z.enum(['create_separate', 'convert_self']).optional(),
   includedVolumes: z.array(z.string().trim()).optional()
 });
 
