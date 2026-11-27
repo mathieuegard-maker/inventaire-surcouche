@@ -90,7 +90,7 @@ Ce document s'applique à **toute session de travail** sur ce dépôt. Son but e
 ---
 
 ## 6. Infrastructure, Migrations SQL & Exploitation Serveur (Debian + Docker)
-* **Production :** serveur personnel Debian 13 Trixie (Dell OptiPlex 3060 Micro), dossier `/srv/docker/inventaire-surcouche`, URL publique `https://biblio.mathieuegardtest.fr`.
+* **Production :** serveur personnel Debian 13 Trixie (Dell OptiPlex 3060 Micro), dossier `/srv/docker/inventaire-surcouche`, URL publique `https://mabibliocloud.fr`.
 * **Réseau impératif :** trafic public via **Cloudflare Tunnel (`cloudflared`)** vers `127.0.0.1:8082` → port `3000` du conteneur `biblio-collection-app` (non-root `node`, `cap_drop: [ALL]`, `no-new-privileges`, `mem_limit: 512m`).
   * **Ne jamais** utiliser `docker-compose.yml` (Caddy) ni toucher aux ports `80`, `443` ou `8081` (`effectif_MAR`). Toujours utiliser `docker-compose.tunnel.yml`.
 * **Données & Sauvegardes :** `/srv/docker/inventaire-surcouche/data/` (`biblio.sqlite` + `covers/`) monté sur `/data` (ignoré par Git). Sauvegarde quotidienne à 03h00 vers Google Drive (`/srv/backups/backup-serveur.sh`) + sauvegarde automatique avant migration dans `deploy.sh`.

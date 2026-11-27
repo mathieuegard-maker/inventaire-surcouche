@@ -35,7 +35,7 @@ const RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000; // 10 min uniquement sur HTTP 429
 const BURST_RETRY_BACKOFF_MS = 3000; // Pause courte 3 s sur HTTP 429 ponctuel (Inventaire / Wikidata / BnF)
 const FAILURE_TRIP_THRESHOLD = 6;
 const FAILURE_COOLDOWN_MS = 30 * 1000; // 30 s sur pannes 5xx/réseau répétées (ne bloque pas les jobs suivants)
-const API_USER_AGENT = 'BiblioCollection/2.0 (+https://biblio.mathieuegardtest.fr)';
+const API_USER_AGENT = 'BiblioCollection/2.0 (+https://mabibliocloud.fr)';
 const BROWSER_USER_AGENT =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) BiblioCollection/2.0 Safari/537.36';
 
