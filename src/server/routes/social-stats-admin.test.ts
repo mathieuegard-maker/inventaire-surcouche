@@ -57,7 +57,14 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
 
   async function createManualBook(
     cookie: string,
-    input: { title: string; authors?: string[]; ownershipStatus: 'owned' | 'wish'; pageCount?: number }
+    input: {
+      title: string;
+      authors?: string[];
+      scriptwriters?: string[];
+      mainCategory?: string;
+      ownershipStatus: 'owned' | 'wish';
+      pageCount?: number;
+    }
   ) {
     const res = await ctx.app.request('/api/books/manual', {
       method: 'POST',
@@ -65,9 +72,10 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
       body: JSON.stringify({
         title: input.title,
         authors: input.authors ?? ['Auteur Test'],
+        scriptwriters: input.scriptwriters ?? [],
         publisher: 'Éditeur Test',
         pageCount: input.pageCount ?? 120,
-        mainCategory: 'BD',
+        mainCategory: input.mainCategory ?? 'BD',
         genres: ['Aventure'],
         ownershipStatus: input.ownershipStatus
       })
@@ -673,5 +681,120 @@ describe('Jalon 7 — Social anti-spoiler, Statistiques/Export & Administration 
     const leoMe = (await leoMeRes.json()) as { profile: { library: { id: string; role: string } } };
     expect(leoMe.profile.library.id).toBe(householdLibraryId);
     expect(leoMe.profile.library.role).toBe('owner');
+  });
+
+  it('enrichit rétroactivement les rôles créateurs via POST /api/admin/maintenance/backfill_creator_roles (dryRun + cache BnF + respect Couche 2 + nettoyage Romans)', async () => {
+    const admin = await registerUser('backfillAdmin', 'admin@biblio.test');
+    const now = new Date().toISOString();
+
+    // 1. BD en base sans coloriste, dont la notice BnF XML est dans external_cache avec 245$g couleur
+    const bd = await createManualBook(admin.cookie, {
+      title: 'Histoire de Jérusalem',
+      authors: ['Vincent Lemire', 'Christophe Gaultier'],
+      mainCategory: 'BD',
+      ownershipStatus: 'owned'
+    });
+    ctx.repos.catalogRepo.upsertBookEdition({
+      isbn13: '9782205089998',
+      bookId: bd.id,
+      publisher: 'Les Arènes',
+      collectionName: null,
+      publishYear: '2022',
+      pageCount: 260,
+      coverKey: null,
+      source: 'bnf',
+      now
+    });
+
+    const cachedBnfXml = `
+      <srw:searchRetrieveResponse xmlns:srw="http://www.loc.gov/zing/srw/">
+        <srw:records><srw:record><srw:recordData>
+          <mxc:record xmlns:mxc="info:lc/xmlns/marcxchange-v2">
+            <mxc:datafield tag="020"><mxc:subfield code="a">9782205089998</mxc:subfield></mxc:datafield>
+            <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+            <mxc:datafield tag="245">
+              <mxc:subfield code="a">Histoire de Jérusalem</mxc:subfield>
+              <mxc:subfield code="f">texte et scénario, Vincent Lemire</mxc:subfield>
+              <mxc:subfield code="g">dessin, Christophe Gaultier</mxc:subfield>
+              <mxc:subfield code="g">couleur, Marie Galopin</mxc:subfield>
+            </mxc:datafield>
+            <mxc:datafield tag="100"><mxc:subfield code="a">Lemire</mxc:subfield><mxc:subfield code="m">Vincent</mxc:subfield><mxc:subfield code="4">0070</mxc:subfield></mxc:datafield>
+            <mxc:datafield tag="700"><mxc:subfield code="a">Gaultier</mxc:subfield><mxc:subfield code="m">Christophe</mxc:subfield><mxc:subfield code="4">0440</mxc:subfield></mxc:datafield>
+          </mxc:record>
+        </srw:recordData></srw:record></srw:records>
+      </srw:searchRetrieveResponse>
+    `;
+    ctx.repos.jobRepo.setExternalCache(
+      'bnf:isbn:9782205089998',
+      'bnf',
+      { text: cachedBnfXml },
+      new Date(Date.now() + 86400_000).toISOString()
+    );
+
+    // 2. Roman pur ayant hérité à tort d'un scriptwriter via ancien code 0070 -> doit être nettoyé
+    const novel = await createManualBook(admin.cookie, {
+      title: 'L’Étranger',
+      authors: ['Albert Camus'],
+      scriptwriters: ['Albert Camus'],
+      mainCategory: 'Roman',
+      ownershipStatus: 'owned'
+    });
+
+    // 3. Livre verrouillé Couche 2 (scriptwriters/illustrators/colorists dans locked_fields_json) -> intouchable
+    const lockedBook = await createManualBook(admin.cookie, {
+      title: 'Fiche Verrouillée Admin',
+      authors: ['Auteur Verrouillé'],
+      scriptwriters: ['Auteur Verrouillé'],
+      mainCategory: 'Roman',
+      ownershipStatus: 'owned'
+    });
+    db.run('UPDATE books SET locked_fields_json = ? WHERE id = ?', [
+      JSON.stringify(['scriptwriters', 'illustrators', 'colorists']),
+      lockedBook.id
+    ]);
+
+    // A. Dry-run (ne doit rien écrire en base)
+    const dryRes = await ctx.app.request('/api/admin/maintenance/backfill_creator_roles?dryRun=1&cacheOnly=1', {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(dryRes.status).toBe(200);
+    const dryBody = (await dryRes.json()) as {
+      result: {
+        dryRun: boolean;
+        updatedBooks: number;
+        skippedLocked: number;
+        cleanedProseScriptwriters: number;
+        after: { withColorists: number };
+      };
+    };
+    expect(dryBody.result.dryRun).toBe(true);
+    expect(dryBody.result.updatedBooks).toBe(2);
+    expect(dryBody.result.skippedLocked).toBe(1);
+    expect(dryBody.result.cleanedProseScriptwriters).toBe(1);
+    expect(dryBody.result.after.withColorists).toBe(1);
+
+    // Vérifie qu'en dry-run la base n'a PAS bougé
+    const bdBeforeReal = ctx.repos.catalogRepo.findBookById(bd.id)!;
+    expect(JSON.parse(bdBeforeReal.colorists_json ?? '[]')).toEqual([]);
+
+    // B. Exécution réelle (cacheOnly=1)
+    const realRes = await ctx.app.request('/api/admin/maintenance/backfill_creator_roles?cacheOnly=1', {
+      method: 'POST',
+      headers: { cookie: admin.cookie }
+    });
+    expect(realRes.status).toBe(200);
+
+    const bdAfter = ctx.repos.catalogRepo.findBookById(bd.id)!;
+    expect(JSON.parse(bdAfter.scriptwriters_json)).toEqual(['Vincent Lemire']);
+    expect(JSON.parse(bdAfter.illustrators_json)).toEqual(['Christophe Gaultier']);
+    expect(JSON.parse(bdAfter.colorists_json ?? '[]')).toEqual(['Marie Galopin']);
+    expect(bdAfter.title).toBe('Histoire de Jérusalem');
+
+    const novelAfter = ctx.repos.catalogRepo.findBookById(novel.id)!;
+    expect(JSON.parse(novelAfter.scriptwriters_json)).toEqual([]);
+
+    const lockedAfter = ctx.repos.catalogRepo.findBookById(lockedBook.id)!;
+    expect(JSON.parse(lockedAfter.scriptwriters_json)).toEqual(['Auteur Verrouillé']);
   });
 });

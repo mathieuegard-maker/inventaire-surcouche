@@ -143,9 +143,18 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
 
     const seriesQids = getWdClaimQids(work, 'P179');
     const authorQids = getWdClaimQids(work, 'P50');
+    const scriptwriterQids = getWdClaimQids(work, 'P58');
+    const illustratorQids = getWdClaimQids(work, 'P110');
+    const coloristQids = getWdClaimQids(work, 'P6338');
     const seriesQid = seriesQids[0];
     const seriesName = seriesQid ? cleanSeriesName(getWdLabel(related[seriesQid])) : undefined;
-    const authors = authorQids.map((id) => getWdLabel(related[id])).filter(Boolean);
+    const dedupLabels = (qids: string[]): string[] =>
+      Array.from(new Set(qids.map((id) => getWdLabel(related[id])).filter(Boolean)));
+    const scriptwriters = dedupLabels(scriptwriterQids);
+    const illustrators = dedupLabels(illustratorQids);
+    const colorists = dedupLabels(coloristQids);
+    const rawAuthors = dedupLabels(authorQids);
+    const authors = rawAuthors.length > 0 ? rawAuthors : Array.from(new Set([...scriptwriters, ...illustrators]));
 
     // Numéro de tome dans le qualificateur P1545 sur P179 ou directement P1545
     const p179Stmt = work.claims?.P179?.[0];
@@ -208,8 +217,9 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       wikidataSeriesQid: seriesQid,
       wikidataWorkQid: qid,
       authors,
-      scriptwriters: [],
-      illustrators: [],
+      scriptwriters,
+      illustrators,
+      colorists,
       publishYear: publishYear || undefined,
       description: work.descriptions?.fr?.value || work.descriptions?.en?.value,
       originalLanguage,
@@ -228,8 +238,15 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
       if (!work) return null;
 
       const seriesQids = getWdClaimQids(work, 'P179');
-      const authorQids = getWdClaimQids(work, 'P50');
-      const relatedIds = [...seriesQids.slice(0, 1), ...authorQids.slice(0, 5)];
+      const relatedIds = Array.from(
+        new Set([
+          ...seriesQids.slice(0, 1),
+          ...getWdClaimQids(work, 'P50').slice(0, 5),
+          ...getWdClaimQids(work, 'P58').slice(0, 5),
+          ...getWdClaimQids(work, 'P110').slice(0, 5),
+          ...getWdClaimQids(work, 'P6338').slice(0, 5)
+        ])
+      );
       const related = relatedIds.length > 0 ? await getEntities(relatedIds) : {};
 
       return buildWorkCandidate(qid, work, related, fallbackIsbn13);
@@ -304,6 +321,7 @@ export function createWikidataConnector(http: HttpClient): WikidataConnector {
         eligible.push({ qid, work, seriesQids, creatorQids });
         relatedIdsToFetch.add(seriesQids[0]);
         for (const cid of creatorQids) relatedIdsToFetch.add(cid);
+        for (const colId of getWdClaimQids(work, 'P6338').slice(0, 4)) relatedIdsToFetch.add(colId);
       }
 
       if (eligible.length === 0) return null;

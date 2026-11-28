@@ -1,7 +1,11 @@
 // src/server/connectors/bnf.connector.ts
 // Connecteur BnF SRU en HTTPS (`https://catalogue.bnf.fr/api/SRU`) via node:https IPv4 forcé + User-Agent navigateur.
 
-import { parseMarcRecord, type ParsedMarcRecord } from '../../shared/bibliographic/intermarc-parser';
+import {
+  parseMarcRecord,
+  splitMarcSruRecords,
+  type ParsedMarcRecord
+} from '../../shared/bibliographic/intermarc-parser';
 import {
   extractIncludedVolumesFromEditorialText,
   parseIncludedVolumeNumbers
@@ -24,16 +28,6 @@ import type {
 } from './types';
 
 const BNF_SRU_BASE = 'https://catalogue.bnf.fr/api/SRU';
-
-function splitSruRecords(xml: string): string[] {
-  const records: string[] = [];
-  const regex = /<srw:recordData>([\s\S]*?)<\/srw:recordData>/gi;
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(xml)) !== null) {
-    records.push(match[1]);
-  }
-  return records;
-}
 
 function toCandidate(parsed: ParsedMarcRecord, fallbackIsbn13: string): SourceCandidateRecord {
   const hasEnsemble = Boolean(parsed.ensembleSeriesName);
@@ -141,7 +135,7 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
     if (!xml) return [];
 
     const out: ParsedMarcRecord[] = [];
-    for (const recXml of splitSruRecords(xml)) {
+    for (const recXml of splitMarcSruRecords(xml)) {
       const parsed = parseMarcRecord(recXml);
       if (parsed && !parsed.isNonBook) {
         out.push(parsed);

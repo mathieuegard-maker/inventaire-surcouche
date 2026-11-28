@@ -8,6 +8,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { SUGGESTED_GENRE_CHIPS } from '../../shared/bibliographic/category-classifier';
 import {
+  parseMarcRecord,
+  splitMarcSruRecords,
+  type ParsedMarcRecord
+} from '../../shared/bibliographic/intermarc-parser';
+import {
   alignGroundTruthToItems,
   buildBenchmarkGradedReport,
   buildSeriesAuditEntries,
@@ -40,6 +45,7 @@ import type {
   LibraryBookOverrides
 } from '../../shared/types/domain.types';
 import type { DatabaseAdapter } from '../db/database.adapter';
+import type { BibliographicConnectors, SourceCandidateRecord } from '../connectors/types';
 import { AppError } from '../middleware/error.middleware';
 import type { AdminRepository } from '../repositories/admin.repo';
 import type { CatalogRepository } from '../repositories/catalog.repo';
@@ -98,6 +104,7 @@ export class AdminService {
   private readonly logRepo: LogRepository;
   private readonly coverService: CoverService;
   private readonly cronScheduler: CronScheduler;
+  private readonly connectors?: BibliographicConnectors;
   private readonly reportsDir: string;
   private readonly onCatalogReset?: () => void;
 
@@ -111,6 +118,7 @@ export class AdminService {
     logRepo: LogRepository;
     coverService: CoverService;
     cronScheduler: CronScheduler;
+    connectors?: BibliographicConnectors;
     reportsDir?: string;
     onCatalogReset?: () => void;
   }) {
@@ -123,6 +131,7 @@ export class AdminService {
     this.logRepo = deps.logRepo;
     this.coverService = deps.coverService;
     this.cronScheduler = deps.cronScheduler;
+    this.connectors = deps.connectors;
     this.reportsDir = path.resolve(deps.reportsDir ?? path.join(process.cwd(), 'data', 'benchmark-reports'));
     this.onCatalogReset = deps.onCatalogReset;
   }
@@ -343,7 +352,8 @@ export class AdminService {
   }
 
   async runMaintenanceTask(
-    task: 'release_sweep' | 'sister_editions' | 'purge_orphan_covers' | 'purge_logs'
+    task: 'release_sweep' | 'sister_editions' | 'purge_orphan_covers' | 'purge_logs' | 'backfill_creator_roles',
+    options?: { dryRun?: boolean; allowNetworkFetch?: boolean }
   ): Promise<unknown> {
     if (task === 'release_sweep') {
       return this.cronScheduler.runNightlyPass(new Date(), { force: true });
@@ -354,8 +364,315 @@ export class AdminService {
     if (task === 'purge_logs') {
       return this.purgeLogs(30);
     }
+    if (task === 'backfill_creator_roles') {
+      return this.backfillCreatorRoles({
+        dryRun: options?.dryRun,
+        allowNetworkFetch: options?.allowNetworkFetch
+      });
+    }
     // sister_editions : rapport synthétique d'état des éditions sœurs
     return { editionsIndexed: this.adminRepo.countEditions() };
+  }
+
+  /**
+   * Enrichissement rétroactif des rôles créateurs (Scénaristes / Dessinateurs / Coloristes) sur le Catalogue Central :
+   * - Exploite en priorité les notices BnF déjà présentes dans `external_cache` (0 appel réseau) ;
+   * - Interroge BnF / SUDOC / Wikidata avec limiteur de débit pour les ISBN absents du cache (sauf `allowNetworkFetch: false`) ;
+   * - Respecte strictement `locked_fields_json` (Couche 2 Admin) et ne touche jamais aux `overrides_json` (Couche 3 Foyer) ;
+   * - Ne modifie QUE `scriptwriters_json`, `illustrators_json`, `colorists_json` et `updated_at` (propage le delta aux PWA) ;
+   * - Nettoie les `scriptwriters` indus sur les œuvres textuelles pures (Romans / Essais sans illustrateur ni coloriste).
+   */
+  async backfillCreatorRoles(options?: {
+    dryRun?: boolean;
+    allowNetworkFetch?: boolean;
+    sampleLimit?: number;
+  }): Promise<{
+    dryRun: boolean;
+    totalBooks: number;
+    inspectedWithIsbn: number;
+    cacheHits: number;
+    networkLookups: number;
+    updatedBooks: number;
+    skippedLocked: number;
+    cleanedProseScriptwriters: number;
+    before: { withScriptwriters: number; withIllustrators: number; withColorists: number };
+    after: { withScriptwriters: number; withIllustrators: number; withColorists: number };
+    samples: Array<{
+      bookId: string;
+      title: string;
+      category: BookMainCategory;
+      before: { scriptwriters: string[]; illustrators: string[]; colorists: string[] };
+      after: { scriptwriters: string[]; illustrators: string[]; colorists: string[] };
+    }>;
+  }> {
+    const dryRun = Boolean(options?.dryRun);
+    const allowNetworkFetch = options?.allowNetworkFetch !== false;
+    const sampleLimit = Math.max(0, Math.min(200, options?.sampleLimit ?? 30));
+    const startedAt = Date.now();
+    const nowIso = new Date().toISOString();
+
+    const PURE_PROSE_CATEGORIES = new Set<BookMainCategory>([
+      'Roman',
+      'Essai',
+      'Pratique',
+      'Poésie / Théâtre',
+      'Autre'
+    ]);
+
+    const roleRichnessScore = (r: { scriptwriters: string[]; illustrators: string[]; colorists: string[] }): number =>
+      r.colorists.length * 4 + r.illustrators.length * 2 + r.scriptwriters.length;
+
+    const mergeUniqueRoles = (lists: string[][]): string[] => {
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const list of lists) {
+        for (const raw of list) {
+          const clean = raw.trim();
+          const key = normalizeTextKey(clean);
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          out.push(clean);
+        }
+      }
+      return out;
+    };
+
+    const sameRoleList = (a: string[], b: string[]): boolean =>
+      a.length === b.length && a.every((v, idx) => v === b[idx]);
+
+    // 1. Indexer en mémoire toutes les notices BnF déjà présentes dans `external_cache` (ISBN direct + ensembles 460)
+    const cachedBnfByIsbn = new Map<string, ParsedMarcRecord>();
+    for (const row of this.adminRepo.listExternalCacheBySource('bnf')) {
+      let xml = '';
+      try {
+        const parsed = JSON.parse(row.response_json) as unknown;
+        xml =
+          typeof parsed === 'string'
+            ? parsed
+            : parsed && typeof parsed === 'object' && typeof (parsed as { text?: unknown }).text === 'string'
+              ? (parsed as { text: string }).text
+              : '';
+      } catch {
+        xml = '';
+      }
+      if (!xml) continue;
+      for (const recXml of splitMarcSruRecords(xml)) {
+        const rec = parseMarcRecord(recXml);
+        if (!rec || rec.isNonBook || !rec.isbn13) continue;
+        const prev = cachedBnfByIsbn.get(rec.isbn13);
+        if (!prev || roleRichnessScore(rec) > roleRichnessScore(prev)) {
+          cachedBnfByIsbn.set(rec.isbn13, rec);
+        }
+      }
+    }
+
+    const books = this.adminRepo.listBooksForCreatorRolesBackfill();
+    const before = { withScriptwriters: 0, withIllustrators: 0, withColorists: 0 };
+    const after = { withScriptwriters: 0, withIllustrators: 0, withColorists: 0 };
+    let inspectedWithIsbn = 0;
+    let cacheHits = 0;
+    let networkLookups = 0;
+    let updatedBooks = 0;
+    let skippedLocked = 0;
+    let cleanedProseScriptwriters = 0;
+
+    const samples: Array<{
+      bookId: string;
+      title: string;
+      category: BookMainCategory;
+      before: { scriptwriters: string[]; illustrators: string[]; colorists: string[] };
+      after: { scriptwriters: string[]; illustrators: string[]; colorists: string[] };
+    }> = [];
+
+    for (const book of books) {
+      const existingSc = parseJsonArray(book.scriptwriters_json);
+      const existingIl = parseJsonArray(book.illustrators_json);
+      const existingCo = parseJsonArray(book.colorists_json);
+      const locked = new Set(parseJsonArray(book.locked_fields_json));
+
+      if (existingSc.length > 0) before.withScriptwriters++;
+      if (existingIl.length > 0) before.withIllustrators++;
+      if (existingCo.length > 0) before.withColorists++;
+
+      const allRolesLocked = locked.has('scriptwriters') && locked.has('illustrators') && locked.has('colorists');
+      if (allRolesLocked) {
+        skippedLocked++;
+        if (existingSc.length > 0) after.withScriptwriters++;
+        if (existingIl.length > 0) after.withIllustrators++;
+        if (existingCo.length > 0) after.withColorists++;
+        continue;
+      }
+
+      const isbns = (book.isbns_csv ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+
+      const roleCandidates: Array<{
+        scriptwriters: string[];
+        illustrators: string[];
+        colorists: string[];
+        contentKind?: 'illustrated' | 'text_only';
+      }> = [];
+
+      if (isbns.length > 0) {
+        inspectedWithIsbn++;
+        let matchedCache = false;
+        for (const isbn of isbns) {
+          const cached = cachedBnfByIsbn.get(isbn);
+          if (cached) {
+            matchedCache = true;
+            roleCandidates.push({
+              scriptwriters: cached.scriptwriters,
+              illustrators: cached.illustrators,
+              colorists: cached.colorists,
+              contentKind: cached.contentKind
+            });
+          }
+        }
+        if (matchedCache) {
+          cacheHits++;
+        } else if (allowNetworkFetch && this.connectors) {
+          networkLookups++;
+          try {
+            const bnfCand: SourceCandidateRecord | null = await this.connectors.bnf.lookupByIsbn(isbns[0]);
+            if (bnfCand && !bnfCand.isNonBook) {
+              roleCandidates.push({
+                scriptwriters: bnfCand.scriptwriters,
+                illustrators: bnfCand.illustrators,
+                colorists: bnfCand.colorists ?? [],
+                contentKind: bnfCand.contentKind
+              });
+            }
+          } catch {
+            // BnF optionnel si erreur transitoire
+          }
+
+          const hasAnyFromBnf = roleCandidates.some(
+            (c) => c.scriptwriters.length > 0 || c.illustrators.length > 0 || c.colorists.length > 0
+          );
+          if (!hasAnyFromBnf) {
+            try {
+              const sudocCand = await this.connectors.sudoc.lookupByIsbn(isbns[0]);
+              if (sudocCand && !sudocCand.isNonBook) {
+                roleCandidates.push({
+                  scriptwriters: sudocCand.scriptwriters,
+                  illustrators: sudocCand.illustrators,
+                  colorists: sudocCand.colorists ?? [],
+                  contentKind: sudocCand.contentKind
+                });
+              }
+            } catch {
+              // SUDOC optionnel
+            }
+          }
+        }
+      }
+
+      if (book.wikidata_qid && allowNetworkFetch && this.connectors) {
+        try {
+          const wdCand = await this.connectors.wikidata.lookupWorkByQid(book.wikidata_qid, isbns[0] ?? '');
+          if (wdCand) {
+            roleCandidates.push({
+              scriptwriters: wdCand.scriptwriters,
+              illustrators: wdCand.illustrators,
+              colorists: wdCand.colorists ?? []
+            });
+          }
+        } catch {
+          // Wikidata optionnel
+        }
+      }
+
+      const candSc = mergeUniqueRoles(roleCandidates.map((c) => c.scriptwriters));
+      const candIl = mergeUniqueRoles(roleCandidates.map((c) => c.illustrators));
+      const candCo = mergeUniqueRoles(roleCandidates.map((c) => c.colorists));
+      const hasAnyCandRoles = candSc.length > 0 || candIl.length > 0 || candCo.length > 0;
+      const candIsIllustrated = roleCandidates.some((c) => c.contentKind === 'illustrated');
+      const isPureProseBook = PURE_PROSE_CATEGORIES.has(book.main_category) && !candIsIllustrated;
+
+      let nextIl = locked.has('illustrators') ? existingIl : hasAnyCandRoles ? candIl : existingIl;
+      let nextCo = locked.has('colorists') ? existingCo : hasAnyCandRoles ? candCo : existingCo;
+      let nextSc: string[];
+
+      if (locked.has('scriptwriters')) {
+        nextSc = existingSc;
+      } else if (isPureProseBook && nextIl.length === 0 && nextCo.length === 0 && candSc.length === 0) {
+        nextSc = [];
+        if (existingSc.length > 0) cleanedProseScriptwriters++;
+      } else if (hasAnyCandRoles) {
+        nextSc = candSc;
+      } else {
+        nextSc = existingSc;
+      }
+
+      if (nextSc.length > 0) after.withScriptwriters++;
+      if (nextIl.length > 0) after.withIllustrators++;
+      if (nextCo.length > 0) after.withColorists++;
+
+      const changed =
+        !sameRoleList(existingSc, nextSc) || !sameRoleList(existingIl, nextIl) || !sameRoleList(existingCo, nextCo);
+
+      if (changed) {
+        updatedBooks++;
+        if (!dryRun) {
+          this.adminRepo.updateBookCreatorRoles(book.id, {
+            scriptwritersJson: JSON.stringify(nextSc),
+            illustratorsJson: JSON.stringify(nextIl),
+            coloristsJson: JSON.stringify(nextCo),
+            updatedAt: nowIso
+          });
+        }
+        if (samples.length < sampleLimit) {
+          samples.push({
+            bookId: book.id,
+            title: book.title,
+            category: book.main_category,
+            before: { scriptwriters: existingSc, illustrators: existingIl, colorists: existingCo },
+            after: { scriptwriters: nextSc, illustrators: nextIl, colorists: nextCo }
+          });
+        }
+      }
+    }
+
+    const report = {
+      dryRun,
+      totalBooks: books.length,
+      inspectedWithIsbn,
+      cacheHits,
+      networkLookups,
+      updatedBooks,
+      skippedLocked,
+      cleanedProseScriptwriters,
+      before,
+      after,
+      samples
+    };
+
+    if (!dryRun) {
+      this.logRepo.append({
+        traceId: `maint_${crypto.randomBytes(4).toString('hex')}`,
+        channel: 'admin',
+        stage: 'admin_maintenance',
+        step: 'backfill_creator_roles',
+        status: 'ok',
+        durationMs: Date.now() - startedAt,
+        summary: `Rattrapage rôles créateurs : ${updatedBooks}/${books.length} œuvres mises à jour (coloristes ${before.withColorists}→${after.withColorists}, dessinateurs ${before.withIllustrators}→${after.withIllustrators}, scénaristes ${before.withScriptwriters}→${after.withScriptwriters}).`,
+        payload: {
+          totalBooks: report.totalBooks,
+          inspectedWithIsbn: report.inspectedWithIsbn,
+          cacheHits: report.cacheHits,
+          networkLookups: report.networkLookups,
+          updatedBooks: report.updatedBooks,
+          skippedLocked: report.skippedLocked,
+          cleanedProseScriptwriters: report.cleanedProseScriptwriters,
+          before: report.before,
+          after: report.after
+        }
+      });
+    }
+
+    return report;
   }
 
   /**

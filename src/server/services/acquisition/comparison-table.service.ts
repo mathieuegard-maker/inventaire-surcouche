@@ -394,6 +394,17 @@ export class ComparisonTableService {
       )
     );
 
+    const isPureProseCategory =
+      classification.mainCategory === 'Roman' ||
+      classification.mainCategory === 'Essai' ||
+      classification.mainCategory === 'Pratique' ||
+      classification.mainCategory === 'Poésie / Théâtre' ||
+      classification.mainCategory === 'Autre';
+    const effectiveScriptwriters =
+      isPureProseCategory && illustrators.length === 0 && colorists.length === 0 && contentKind !== 'illustrated'
+        ? []
+        : scriptwriters;
+
     return {
       isbn13,
       title,
@@ -410,7 +421,7 @@ export class ComparisonTableService {
       isIntegral,
       includedVolumes,
       authors,
-      scriptwriters,
+      scriptwriters: effectiveScriptwriters,
       illustrators,
       colorists,
       publisher,

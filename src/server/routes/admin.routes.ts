@@ -105,7 +105,12 @@ export function createAdminRoutes(deps: {
     if (!parsed.success) {
       throw new AppError(400, 'INVALID_MAINTENANCE_TASK', 'Tâche de maintenance inconnue.');
     }
-    const result = await deps.adminService.runMaintenanceTask(parsed.data);
+    const dryRun = c.req.query('dryRun') === '1' || c.req.query('dryRun') === 'true';
+    const cacheOnly = c.req.query('cacheOnly') === '1' || c.req.query('cacheOnly') === 'true';
+    const result = await deps.adminService.runMaintenanceTask(parsed.data, {
+      dryRun,
+      allowNetworkFetch: !cacheOnly
+    });
     return c.json({ ok: true, task: parsed.data, result });
   });
 

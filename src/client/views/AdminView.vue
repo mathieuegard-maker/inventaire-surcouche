@@ -545,11 +545,33 @@ async function handleUnbanUser(user: AdminUserItem): Promise<void> {
   }
 }
 
-async function runMaintenance(task: 'release_sweep' | 'purge_orphan_covers' | 'purge_logs'): Promise<void> {
+async function runMaintenance(
+  task: 'release_sweep' | 'purge_orphan_covers' | 'purge_logs' | 'backfill_creator_roles'
+): Promise<void> {
   maintenanceBusy.value = true;
   try {
-    await apiRequest(`/api/admin/maintenance/${task}`, { method: 'POST' });
-    uiStore.pushToast(t('admin.maintenanceDoneToast'), 'success');
+    const res = await apiRequest<{
+      ok: true;
+      result?: {
+        updatedBooks?: number;
+        after?: { withColorists?: number; withIllustrators?: number };
+      };
+    }>(`/api/admin/maintenance/${task}`, {
+      method: 'POST',
+      timeoutMs: task === 'backfill_creator_roles' ? 180000 : 45000
+    });
+    if (task === 'backfill_creator_roles' && res.result) {
+      uiStore.pushToast(
+        t('admin.backfillRolesDoneToast', {
+          updated: res.result.updatedBooks ?? 0,
+          colorists: res.result.after?.withColorists ?? 0,
+          illustrators: res.result.after?.withIllustrators ?? 0
+        }),
+        'success'
+      );
+    } else {
+      uiStore.pushToast(t('admin.maintenanceDoneToast'), 'success');
+    }
     await loadOverview();
   } catch (err) {
     uiStore.pushToast(err instanceof ApiClientError ? err.message : t('app.retry'), 'danger');
@@ -987,6 +1009,18 @@ onMounted(() => {
               {{ t('admin.purgeLogsBtn') }}
             </button>
             <HelpTooltip :title="t('admin.purgeLogsBtn')" :text="t('admin.purgeLogsHelp')" />
+          </div>
+
+          <div class="admin-maintenance-item">
+            <button
+              type="button"
+              class="ds-btn"
+              :disabled="maintenanceBusy"
+              @click="runMaintenance('backfill_creator_roles')"
+            >
+              {{ t('admin.backfillRolesBtn') }}
+            </button>
+            <HelpTooltip :title="t('admin.backfillRolesBtn')" :text="t('admin.backfillRolesHelp')" />
           </div>
         </div>
       </div>

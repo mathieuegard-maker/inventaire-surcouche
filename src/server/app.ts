@@ -282,6 +282,7 @@ export function createApp(options: CreateAppOptions) {
     logRepo,
     coverService,
     cronScheduler,
+    connectors,
     reportsDir: path.resolve(path.dirname(options.config.coversDir), 'benchmark-reports'),
     onCatalogReset: () => worker.cancelActiveJobs()
   });

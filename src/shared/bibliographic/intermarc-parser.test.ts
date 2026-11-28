@@ -108,4 +108,81 @@ describe('parseMarcRecord (InterMarc BnF + UNIMARC SUDOC)', () => {
     const parsed = parseMarcRecord(mangaIsbdXml);
     expect(parsed?.originalLanguage).toBe('jpn');
   });
+
+  it('extrait les rôles scénariste/dessinateur/coloriste depuis 245$f/$g et multi-$4 sans polluer authors ni étiqueter un roman', () => {
+    // 1. Cas réel BnF : coloriste absent de 700, uniquement dans 245$g ; d'après ignoré
+    const bdColoristIn245 = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782205089998</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245">
+          <mxc:subfield code="a">Histoire de Jérusalem</mxc:subfield>
+          <mxc:subfield code="f">texte et scénario, Vincent Lemire</mxc:subfield>
+          <mxc:subfield code="g">dessin, Christophe Gaultier</mxc:subfield>
+          <mxc:subfield code="g">couleur, Marie Galopin</mxc:subfield>
+          <mxc:subfield code="g">d'après le roman de Pascal Ruter</mxc:subfield>
+        </mxc:datafield>
+        <mxc:datafield tag="100"><mxc:subfield code="a">Lemire</mxc:subfield><mxc:subfield code="m">Vincent</mxc:subfield><mxc:subfield code="4">0070</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="700"><mxc:subfield code="a">Gaultier</mxc:subfield><mxc:subfield code="m">Christophe</mxc:subfield><mxc:subfield code="4">0440</mxc:subfield></mxc:datafield>
+      </mxc:record>
+    `;
+    const parsedBd = parseMarcRecord(bdColoristIn245);
+    expect(parsedBd?.authors).toEqual(['Vincent Lemire', 'Christophe Gaultier']);
+    expect(parsedBd?.scriptwriters).toEqual(['Vincent Lemire']);
+    expect(parsedBd?.illustrators).toEqual(['Christophe Gaultier']);
+    expect(parsedBd?.colorists).toEqual(['Marie Galopin']);
+
+    // 2. Cas réel BnF : coloriste classé 0440 à tort par la BnF -> basculé en coloriste uniquement
+    const bdColoristAs0440 = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782205088168</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245">
+          <mxc:subfield code="a">Le monde sans fin</mxc:subfield>
+          <mxc:subfield code="f">Jancovici, Blain</mxc:subfield>
+          <mxc:subfield code="g">couleur, Clémence Sapin et Christophe Blain</mxc:subfield>
+        </mxc:datafield>
+        <mxc:datafield tag="100"><mxc:subfield code="a">Jancovici</mxc:subfield><mxc:subfield code="m">Jean-Marc</mxc:subfield><mxc:subfield code="4">0070</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="700"><mxc:subfield code="a">Blain</mxc:subfield><mxc:subfield code="m">Christophe</mxc:subfield><mxc:subfield code="4">0070</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="700"><mxc:subfield code="a">Sapin</mxc:subfield><mxc:subfield code="m">Clémence</mxc:subfield><mxc:subfield code="4">0440</mxc:subfield></mxc:datafield>
+      </mxc:record>
+    `;
+    const parsed0440 = parseMarcRecord(bdColoristAs0440);
+    expect(parsed0440?.colorists).toEqual(['Clémence Sapin', 'Christophe Blain']);
+    expect(parsed0440?.illustrators).toEqual([]);
+    expect(parsed0440?.scriptwriters).toEqual(['Jean-Marc Jancovici', 'Christophe Blain']);
+
+    // 3. Multi-$4 sur un même auteur complet (0070 + 0440)
+    const multiRoleXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782205000016</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">sti</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">Sylvain et Sylvette</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="100">
+          <mxc:subfield code="a">Cuvillier</mxc:subfield>
+          <mxc:subfield code="m">Maurice</mxc:subfield>
+          <mxc:subfield code="4">0070</mxc:subfield>
+          <mxc:subfield code="4">0440</mxc:subfield>
+        </mxc:datafield>
+      </mxc:record>
+    `;
+    const parsedMulti = parseMarcRecord(multiRoleXml);
+    expect(parsedMulti?.scriptwriters).toEqual(['Maurice Cuvillier']);
+    expect(parsedMulti?.illustrators).toEqual(['Maurice Cuvillier']);
+
+    // 4. Roman pur (051=txt, 100$4=0070, aucun illustrateur/coloriste) -> scriptwriters reste []
+    const pureNovelXml = `
+      <mxc:record>
+        <mxc:datafield tag="020"><mxc:subfield code="a">9782070360024</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="051"><mxc:subfield code="a">txt</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="245"><mxc:subfield code="a">L'Étranger</mxc:subfield><mxc:subfield code="f">Albert Camus</mxc:subfield></mxc:datafield>
+        <mxc:datafield tag="100"><mxc:subfield code="a">Camus</mxc:subfield><mxc:subfield code="m">Albert</mxc:subfield><mxc:subfield code="4">0070</mxc:subfield></mxc:datafield>
+      </mxc:record>
+    `;
+    const parsedNovel = parseMarcRecord(pureNovelXml);
+    expect(parsedNovel?.authors).toEqual(['Albert Camus']);
+    expect(parsedNovel?.scriptwriters).toEqual([]);
+    expect(parsedNovel?.illustrators).toEqual([]);
+    expect(parsedNovel?.colorists).toEqual([]);
+  });
 });

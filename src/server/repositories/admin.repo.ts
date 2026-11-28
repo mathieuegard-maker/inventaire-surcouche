@@ -78,6 +78,19 @@ export interface AdminCatalogBookPatchFields {
   updatedAt: string;
 }
 
+export interface AdminCreatorBackfillBookRow {
+  id: string;
+  title: string;
+  main_category: BookMainCategory;
+  authors_json: string;
+  scriptwriters_json: string;
+  illustrators_json: string;
+  colorists_json: string;
+  wikidata_qid: string | null;
+  locked_fields_json: string;
+  isbns_csv: string | null;
+}
+
 export class AdminRepository {
   private readonly db: DatabaseAdapter;
 
@@ -112,6 +125,40 @@ export class AdminRepository {
 
   countEditions(): number {
     return Number(this.db.get<{ cnt: number }>('SELECT COUNT(*) AS cnt FROM book_editions')?.cnt ?? 0);
+  }
+
+  listBooksForCreatorRolesBackfill(): AdminCreatorBackfillBookRow[] {
+    return this.db.all<AdminCreatorBackfillBookRow>(
+      `SELECT b.id, b.title, b.main_category, b.authors_json,
+              b.scriptwriters_json, b.illustrators_json, b.colorists_json,
+              b.wikidata_qid, b.locked_fields_json,
+              GROUP_CONCAT(be.isbn13, ',') AS isbns_csv
+       FROM books b
+       LEFT JOIN book_editions be ON be.book_id = b.id
+       GROUP BY b.id
+       ORDER BY b.id ASC`
+    );
+  }
+
+  updateBookCreatorRoles(
+    bookId: string,
+    fields: { scriptwritersJson: string; illustratorsJson: string; coloristsJson: string; updatedAt: string }
+  ): void {
+    this.db.run(
+      `UPDATE books
+       SET scriptwriters_json = ?, illustrators_json = ?, colorists_json = ?, updated_at = ?
+       WHERE id = ?`,
+      [fields.scriptwritersJson, fields.illustratorsJson, fields.coloristsJson, fields.updatedAt, bookId]
+    );
+  }
+
+  listExternalCacheBySource(source: string): Array<{ cache_key: string; response_json: string }> {
+    return this.db.all<{ cache_key: string; response_json: string }>(
+      `SELECT cache_key, response_json
+       FROM external_cache
+       WHERE source = ?`,
+      [source]
+    );
   }
 
   listCatalogBooks(input: {

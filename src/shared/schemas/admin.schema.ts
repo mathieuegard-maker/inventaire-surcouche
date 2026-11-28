@@ -21,7 +21,8 @@ export const adminMaintenanceTaskSchema = z.enum([
   'release_sweep',
   'sister_editions',
   'purge_orphan_covers',
-  'purge_logs'
+  'purge_logs',
+  'backfill_creator_roles'
 ]);
 
 export const adminResetCatalogSchema = z.object({

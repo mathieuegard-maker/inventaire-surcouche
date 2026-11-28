@@ -1143,6 +1143,11 @@ export const fr = {
     purgeLogsBtn: 'Purger les logs (> 30j)',
     purgeLogsHelp:
       'Supprime définitivement les anciens journaux techniques (logs pipeline) datant de plus de 30 jours pour garder une base légère.',
+    backfillRolesBtn: 'Enrichir rôles créateurs (Scén./Dess./Coul.)',
+    backfillRolesHelp:
+      'Ré-analyse les notices BnF/SUDOC/Wikidata pour compléter les scénaristes, dessinateurs et coloristes des œuvres existantes, sans jamais écraser les fiches verrouillées ni les choix des foyers.',
+    backfillRolesDoneToast:
+      '{updated} œuvre(s) mise(s) à jour ({colorists} avec coloriste, {illustrators} avec dessinateur).',
     maintenanceDoneToast: 'Tâche de maintenance exécutée.',
     logsFilterStage: 'Étape',
     logsFilterStatus: 'Statut',

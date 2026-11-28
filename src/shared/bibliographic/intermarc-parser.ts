@@ -9,7 +9,8 @@ import {
   cleanPublisher,
   cleanSeriesName,
   cleanTitle,
-  normalizeSeriesNumber
+  normalizeSeriesNumber,
+  normalizeTextKey
 } from './text-normalize.util';
 
 export interface MarcSubfield {
@@ -73,6 +74,171 @@ const UNABRIDGED_PROSE_MENTION_RE =
 const COMPILATION_NOTE_RE =
   /\b(?:r[ée]unit\s+(?:les\s+)?(?:tomes?|vol\.?|volumes?|albums?|livres?|[0-9]+\s+tomes?|(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|douze)\s+(?:premiers?\s+)?(?:tomes?|albums?|volumes?))|r[ée]unit\s*:|contient\s+(?:les\s+)?(?:tomes?|vol\.?|volumes?|albums?)|int[ée]grale\s+(?:des\s+tomes?|du\s+cycle|tomes?)|coffret\s+int[ée]gral|monovolume\s+int[ée]grale?)\b/i;
 
+const EXCLUDED_RESP_CLAUSE_RE =
+  /^(?:\[?\s*)?(?:d['’]apr[èe]s|adapt(?:[ée]e?s?|ation)|trad(?:uit[es]?|uction|\.)|pr[ée]face|postface|avant-propos|lettrage|maquette|couverture|photographies?|photos?|sous\s+la\s+direction|dirig[ée]|coordonn[ée]|[ée]dit[ée]|pr[ée]sent[ée]|conception|supervision|encrage|story-?board|avec\s+la\s+(?:collaboration|participation)|en\s+collaboration|assist[ée]|d[ée]cors?)\b/i;
+
+const RESP_ROLE_TOKEN_PATTERN =
+  '(?:mises?\\s+en\\s+coule(?:ur|ru)s?|sc[ée]narios?|sc[ée]naristes?|textes?|r[ée]cits?|dialogues?|dessins?|dessinat(?:eur|rice)s?|illustrations?|illustrat(?:eur|rice)s?|coule(?:ur|ru)s?|coloristes?|colorisations?)';
+
+const RESP_ROLE_CLAUSE_RE = new RegExp(
+  `^(${RESP_ROLE_TOKEN_PATTERN}(?:\\s*(?:,|\\bet\\b|&|/|\\+)\\s*${RESP_ROLE_TOKEN_PATTERN}){0,2})\\s*(?:[:,]\\s*(?:(?:de|par)\\s+|d['’])?|(?:de|par)\\s+|d['’])(.+)$`,
+  'i'
+);
+
+const RESP_TRAILING_CUT_RE =
+  /\b(?:d['’]apr[èe]s|traduit[es]?|traduction|adapt[ée]e?s?|avec\s+la\s+(?:collaboration|participation)|en\s+collaboration|pr[ée]face|postface|lettrage|d[ée]cors?)\b/i;
+
+const INVALID_RESP_PERSON_RE =
+  /\b(?:quadrichromie|bichromie|noir\s+et\s+blanc|n\s*&\s*b|coule(?:ur|ru)s?|ind[ée]termin[ée]e?|anonyme|collectif|inconnue?|divers|non\s+pr[ée]cis[ée]|sans\s+mention|[ée]ditions?|librairie|album|tome|vol\.?|volume|roman|r[ée]cit|oeuvre|œuvre|bande\s+dessin[ée]e|manga|comics|illustration|dessin|sc[ée]nario|texte)\b/i;
+
+const LEADING_NON_NAME_WORD_RE =
+  /^(?:de|du|des|d['’]|le|la|les|l['’]|un|une|pour|avec|par|dans|sur|sous|chez|au|aux|en|et|ou|sans|selon|tr[èe]s|plus)\b/i;
+
+interface ResponsibilityRoleExtraction {
+  scriptwriters: string[];
+  textAuthors: string[];
+  illustrators: string[];
+  colorists: string[];
+  hasExplicitScenario: boolean;
+}
+
+function pushUniqueNormalized(target: string[], value: string): void {
+  const clean = value.trim();
+  const key = normalizeTextKey(clean);
+  if (!key) return;
+  if (!target.some((existing) => normalizeTextKey(existing) === key)) {
+    target.push(clean);
+  }
+}
+
+function reconcileWithKnownAuthors(rawName: string, knownAuthors: string[]): string | null {
+  const normRaw = normalizeTextKey(rawName);
+  if (!normRaw || knownAuthors.length === 0) return null;
+
+  // 1. Correspondance exacte normalisée
+  const exact = knownAuthors.find((a) => normalizeTextKey(a) === normRaw);
+  if (exact) return exact;
+
+  // 2. Correspondance par nom de famille + initiale / diminutif (ex. "Fred Bernard" <-> "Frédéric Bernard", "M. Cuvillier" <-> "Maurice Cuvillier")
+  const rawParts = normRaw.split(' ').filter(Boolean);
+  if (rawParts.length === 0) return null;
+  const rawLast = rawParts[rawParts.length - 1];
+  if (rawLast.length < 3) return null;
+
+  const matches = knownAuthors.filter((known) => {
+    const knownParts = normalizeTextKey(known).split(' ').filter(Boolean);
+    if (knownParts.length === 0) return false;
+    const knownLast = knownParts[knownParts.length - 1];
+    if (knownLast !== rawLast) return false;
+    if (rawParts.length === 1 || knownParts.length === 1) return true;
+    const rFirst = rawParts[0];
+    const kFirst = knownParts[0];
+    return kFirst.startsWith(rFirst) || rFirst.startsWith(kFirst);
+  });
+
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function parseResponsibilityPersonName(rawPart: string, knownAuthors: string[]): string | null {
+  let cleaned = rawPart
+    .replace(/\[?\s*et\s+al\.?\s*\]?/gi, ' ')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\.{2,}/g, ' ')
+    .replace(/^[\s,.;:–—-]+|[\s,.;:–—-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return null;
+
+  const reconciled = reconcileWithKnownAuthors(cleaned, knownAuthors);
+  if (reconciled) return reconciled;
+
+  cleaned = cleanAuthor(cleaned);
+  if (!cleaned || cleaned.length < 2 || cleaned.length > 55) return null;
+  if (/\d/.test(cleaned)) return null;
+  if (LEADING_NON_NAME_WORD_RE.test(cleaned)) return null;
+  if (INVALID_RESP_PERSON_RE.test(cleaned)) return null;
+  if (/^(?:studio|atelier)$/i.test(cleaned)) return null;
+
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  if (words.length === 0 || words.length > 4) return null;
+  if (!/[a-zA-ZÀ-ÿ]{2}/.test(cleaned)) return null;
+
+  return cleaned;
+}
+
+/**
+ * Extrait les rôles explicites (scénario, dessin, couleur) depuis les mentions ISBD `245$f` / `245$g` / `200$f` / `200$g`.
+ * Ne modifie jamais `authors` (réservé aux champs normalisés MARC `100/700`) afin de préserver l'intégrité des séries.
+ */
+function extractCreatorRolesFromResponsibility(
+  mentions: string[],
+  knownAuthors: string[]
+): ResponsibilityRoleExtraction {
+  const scriptwriters: string[] = [];
+  const textAuthors: string[] = [];
+  const illustrators: string[] = [];
+  const colorists: string[] = [];
+  let hasExplicitScenario = false;
+
+  for (const mention of mentions) {
+    const clauses = mention
+      .split(/[;|]/)
+      .map((c) => c.trim())
+      .filter(Boolean);
+
+    for (const rawClause of clauses) {
+      if (EXCLUDED_RESP_CLAUSE_RE.test(rawClause)) continue;
+
+      const normalizedClause = rawClause
+        .replace(/\[?\s*et\s+al\.?\s*\]?/gi, '')
+        .replace(/[\[\]]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!normalizedClause || EXCLUDED_RESP_CLAUSE_RE.test(normalizedClause)) continue;
+
+      const match = RESP_ROLE_CLAUSE_RE.exec(normalizedClause);
+      if (!match) continue;
+
+      const roleHeader = match[1].toLowerCase();
+      let namesSegment = match[2].trim();
+      const cutMatch = RESP_TRAILING_CUT_RE.exec(namesSegment);
+      if (cutMatch) {
+        namesSegment = namesSegment.slice(0, cutMatch.index).trim();
+      }
+      if (!namesSegment) continue;
+
+      const hasScenario = /\b(?:sc[ée]narios?|sc[ée]naristes?|dialogues?)\b/i.test(roleHeader);
+      const hasText = /\b(?:textes?|r[ée]cits?)\b/i.test(roleHeader);
+      const hasDrawing = /\b(?:dessins?|dessinat(?:eur|rice)s?|illustrations?|illustrat(?:eur|rice)s?)\b/i.test(
+        roleHeader
+      );
+      const hasColor = /\b(?:mises?\s+en\s+coule(?:ur|ru)s?|coule(?:ur|ru)s?|coloristes?|colorisations?)\b/i.test(
+        roleHeader
+      );
+
+      if (!hasScenario && !hasText && !hasDrawing && !hasColor) continue;
+
+      const nameParts = namesSegment
+        .split(/\s+(?:et|&)\s+|,\s*/i)
+        .map((p) => parseResponsibilityPersonName(p, knownAuthors))
+        .filter((n): n is string => Boolean(n));
+
+      if (nameParts.length === 0) continue;
+
+      if (hasScenario) hasExplicitScenario = true;
+      for (const name of nameParts) {
+        if (hasScenario) pushUniqueNormalized(scriptwriters, name);
+        else if (hasText) pushUniqueNormalized(textAuthors, name);
+        if (hasDrawing) pushUniqueNormalized(illustrators, name);
+        if (hasColor) pushUniqueNormalized(colorists, name);
+      }
+    }
+  }
+
+  return { scriptwriters, textAuthors, illustrators, colorists, hasExplicitScenario };
+}
+
 function decodeXmlEntities(raw: string): string {
   return raw
     .replace(/&amp;/g, '&')
@@ -82,6 +248,16 @@ function decodeXmlEntities(raw: string): string {
     .replace(/&apos;/g, "'")
     .replace(/&#39;/g, "'")
     .trim();
+}
+
+export function splitMarcSruRecords(xml: string): string[] {
+  const records: string[] = [];
+  const regex = /<srw:recordData>([\s\S]*?)<\/srw:recordData>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(xml)) !== null) {
+    records.push(match[1]);
+  }
+  return records;
 }
 
 export function parseMarcFields(xml: string): MarcField[] {
@@ -159,6 +335,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   let hasColorIllustrations = false;
 
   const authors: string[] = [];
+  const genericTextAuthors: string[] = [];
   const scriptwriters: string[] = [];
   const illustrators: string[] = [];
   const colorists: string[] = [];
@@ -243,8 +420,12 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       }
       if (e && !subtitle) subtitle = e;
       if (u && !subtitle) subtitle = u;
-      const resp = sf('f') || sf('g');
-      if (resp) responsibilityMentions.push(resp);
+      for (const sub of f.subfields) {
+        if (sub.code === 'f' || sub.code === 'g') {
+          const val = sub.value.trim();
+          if (val) responsibilityMentions.push(val);
+        }
+      }
     }
 
     // Ensemble bibliographique / Série : 460 / 461 (InterMarc & UNIMARC)
@@ -271,6 +452,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     }
 
     // Auteurs : 100, 700, 701, 702 (cleanAuthor rejette automatiquement UNIMARC 100$a codé)
+    // Lit TOUTES les sous-zones `$4` (un auteur complet BD peut cumuler `0070` + `0440` sur la même entrée MARC).
     if (f.tag === '100' || f.tag === '700' || f.tag === '701' || f.tag === '702') {
       const last = sf('a');
       const firstM = sf('m');
@@ -279,13 +461,22 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       const cleaned = cleanAuthor([last, first].filter(Boolean).join(', '));
       if (cleaned) {
         if (!authors.includes(cleaned)) authors.push(cleaned);
-        const role = sf('4').toLowerCase();
-        if (role.includes('212') || role.includes('clr') || role.includes('color')) {
-          if (!colorists.includes(cleaned)) colorists.push(cleaned);
-        } else if (role.includes('440') || role.includes('ill') || role.includes('dessin')) {
-          if (!illustrators.includes(cleaned)) illustrators.push(cleaned);
-        } else if (role.includes('690') || role.includes('070') || role.includes('scén') || role.includes('scen')) {
-          if (!scriptwriters.includes(cleaned)) scriptwriters.push(cleaned);
+        const roles = f.subfields
+          .filter((s) => s.code === '4')
+          .map((s) => s.value.trim().toLowerCase())
+          .filter(Boolean);
+        for (const role of roles) {
+          if (role.includes('212') || role.includes('clr') || role.includes('color')) {
+            pushUniqueNormalized(colorists, cleaned);
+          }
+          if (role.includes('440') || role.includes('ill') || role.includes('dessin')) {
+            pushUniqueNormalized(illustrators, cleaned);
+          }
+          if (role.includes('690') || role.includes('scén') || role.includes('scen')) {
+            pushUniqueNormalized(scriptwriters, cleaned);
+          } else if (role.includes('070')) {
+            pushUniqueNormalized(genericTextAuthors, cleaned);
+          }
         }
       }
     }
@@ -365,6 +556,24 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     ? `https://catalogue.bnf.fr/couverture?idImage=${coverId}&couverture=1&appName=NE`
     : undefined;
 
+  const respRoles = extractCreatorRolesFromResponsibility(responsibilityMentions, authors);
+  for (const name of respRoles.scriptwriters) pushUniqueNormalized(scriptwriters, name);
+  for (const name of respRoles.illustrators) pushUniqueNormalized(illustrators, name);
+  for (const name of respRoles.colorists) pushUniqueNormalized(colorists, name);
+
+  // Si la BnF a classé un coloriste sous le code générique `0440` (illustrateur) alors que `245$g` le désigne
+  // uniquement à la couleur (sans dessin/illustration), le retirer des dessinateurs pour éviter un doublon erroné.
+  if (respRoles.colorists.length > 0) {
+    const respColorKeys = new Set(respRoles.colorists.map((n) => normalizeTextKey(n)));
+    const respIllKeys = new Set(respRoles.illustrators.map((n) => normalizeTextKey(n)));
+    for (let idx = illustrators.length - 1; idx >= 0; idx--) {
+      const key = normalizeTextKey(illustrators[idx]);
+      if (respColorKeys.has(key) && !respIllKeys.has(key)) {
+        illustrators.splice(idx, 1);
+      }
+    }
+  }
+
   const graphicSubjectText = [deweyCode ?? '', ...rawSubjects].join(' ');
   const hasProseOrEssayDewey = Boolean(deweyCode && !deweyCode.startsWith('741.5') && /^[0-9]/.test(deweyCode));
   // Un roman ou essai de > 112 pages avec quelques photos/cartes ("ill." noir et blanc sans illustrateur)
@@ -377,8 +586,37 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     hasRdaStillImage ||
     isStrongInteriorIllustration ||
     illustrators.length > 0 ||
+    colorists.length > 0 ||
+    respRoles.hasExplicitScenario ||
     Boolean(deweyCode && deweyCode.startsWith('741.5')) ||
     /\b(bandes?\s+dessin[ée]es?|comics?|mangas?|romans?\s+graphiques?)\b/i.test(graphicSubjectText);
+
+  // Ne promouvoir les auteurs génériques texte (`0070` / `245 texte`) en Scénaristes que sur les œuvres graphiques/illustrées,
+  // afin de ne jamais étiqueter un romancier ou essayiste comme « Scénariste ».
+  if (isExplicitGraphic) {
+    for (const name of respRoles.textAuthors) {
+      pushUniqueNormalized(scriptwriters, name);
+    }
+    const respExplicitlyNamedWriters =
+      respRoles.scriptwriters.length > 0 || respRoles.textAuthors.length > 0;
+    const respGraphicOnlyKeys = respExplicitlyNamedWriters
+      ? new Set(
+          [...respRoles.illustrators, ...respRoles.colorists]
+            .map((n) => normalizeTextKey(n))
+            .filter(
+              (k) =>
+                !respRoles.scriptwriters.some((s) => normalizeTextKey(s) === k) &&
+                !respRoles.textAuthors.some((s) => normalizeTextKey(s) === k)
+            )
+        )
+      : new Set<string>();
+    for (const name of genericTextAuthors) {
+      const key = normalizeTextKey(name);
+      if (respGraphicOnlyKeys.has(key)) continue;
+      pushUniqueNormalized(scriptwriters, name);
+    }
+  }
+
   const contentKind: ParsedMarcRecord['contentKind'] = isExplicitGraphic
     ? 'illustrated'
     : hasRdaText
