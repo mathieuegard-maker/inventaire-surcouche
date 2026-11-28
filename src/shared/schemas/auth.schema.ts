@@ -81,13 +81,13 @@ export const importColumnMappingSchema = z.record(z.string().min(1).max(120), im
 
 export const collectionImportPreviewRequestSchema = z.object({
   filename: z.string().trim().min(1).max(200),
-  contentBase64: z.string().min(1).max(8 * 1024 * 1024),
+  contentBase64: z.string().min(1).max(16 * 1024 * 1024),
   hasHeaderRow: z.boolean().optional()
 });
 
 export const collectionImportRequestSchema = z.object({
   filename: z.string().trim().min(1).max(200),
-  contentBase64: z.string().min(1).max(8 * 1024 * 1024),
+  contentBase64: z.string().min(1).max(16 * 1024 * 1024),
   defaultStatus: z.enum(['owned', 'wish']).default('owned'),
   hasHeaderRow: z.boolean().optional(),
   columnMapping: importColumnMappingSchema.optional()

@@ -29,8 +29,8 @@ import type { LibraryService } from './library.service';
 import type { PhotoAiService } from './photo-ai.service';
 import type { ReadingService } from './reading.service';
 
-const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_IMPORT_ROWS = 2500;
+const MAX_IMPORT_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_IMPORT_ROWS = 5000;
 
 export interface CollectionImportUnmatchedItem {
   rowNumber: number;
@@ -118,7 +118,7 @@ export class CollectionImportService {
       throw new AppError(400, 'IMPORT_EMPTY', 'Le fichier fourni est vide.');
     }
     if (buffer.byteLength > MAX_IMPORT_FILE_BYTES) {
-      throw new AppError(400, 'IMPORT_TOO_LARGE', 'Fichier trop volumineux (maximum 5 Mo).');
+      throw new AppError(400, 'IMPORT_TOO_LARGE', 'Fichier trop volumineux (maximum 10 Mo).');
     }
 
     const lower = filename.trim().toLowerCase();

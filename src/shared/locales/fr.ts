@@ -825,7 +825,7 @@ export const fr = {
     importUnmatchedTitle: 'Lignes non importées ({count}) — aucun ISBN trouvé',
     importUnmatchedRow: 'Ligne {row} : {label}',
     importStartedToast: 'Import de {count} ligne(s) lancé en arrière-plan...',
-    importFileTooLarge: 'Fichier trop volumineux (maximum 5 Mo).',
+    importFileTooLarge: 'Fichier trop volumineux (maximum 10 Mo).',
     importUnsupportedExt: 'Format non supporté. Choisissez un fichier .csv, .json ou .xlsx.',
     importErrorPrefix: 'Erreur lors de l’import : {message}',
     statsPeriod30: '30 derniers jours',

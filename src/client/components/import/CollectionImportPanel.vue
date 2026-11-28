@@ -117,7 +117,7 @@ async function handleImportFileChange(event: Event): Promise<void> {
     importError.value = t('profile.importUnsupportedExt');
     return;
   }
-  if (file.size > 5 * 1024 * 1024) {
+  if (file.size > 10 * 1024 * 1024) {
     importSelectedFile.value = null;
     importError.value = t('profile.importFileTooLarge');
     return;
