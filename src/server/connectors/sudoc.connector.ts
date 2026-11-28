@@ -69,6 +69,7 @@ export function createSudocConnector(http: HttpClient): SudocConnector {
         authors: parsed.authors,
         scriptwriters: parsed.scriptwriters,
         illustrators: parsed.illustrators,
+        colorists: parsed.colorists,
         publisher: parsed.publisher,
         publishYear: parsed.publishYear,
         pageCount: parsed.pageCount,

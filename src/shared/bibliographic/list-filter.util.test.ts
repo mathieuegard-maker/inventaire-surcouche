@@ -26,6 +26,7 @@ function makeBook(overrides: Partial<BookView>): BookView {
     authors: [],
     scriptwriters: [],
     illustrators: [],
+    colorists: [],
     publisher: null,
     collectionName: null,
     publishYear: null,

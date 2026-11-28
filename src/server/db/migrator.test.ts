@@ -45,9 +45,10 @@ describe('SQLite V2 Migrator & Schema Integrity', () => {
       expect(firstRun.applied).toContain('0002_ui_v2_6.sql');
       expect(firstRun.applied).toContain('0003_v2_6_1_ux.sql');
       expect(firstRun.applied).toContain('0004_v2_7_0_features.sql');
+      expect(firstRun.applied).toContain('0005_colorists.sql');
       expect(firstRun.skipped).toBe(0);
 
-      // Vérifie les colonnes ajoutées par les migrations 0002, 0003 et 0004
+      // Vérifie les colonnes ajoutées par les migrations 0002, 0003, 0004 et 0005
       const genreCols = db.all<{ name: string }>('PRAGMA table_info(user_default_genres)').map((c) => c.name);
       expect(genreCols).toContain('sort_order');
       const userCols = db.all<{ name: string }>('PRAGMA table_info(users)').map((c) => c.name);
@@ -58,6 +59,8 @@ describe('SQLite V2 Migrator & Schema Integrity', () => {
       expect(friendCols).toContain('deleted_at');
       const libraryCols = db.all<{ name: string }>('PRAGMA table_info(libraries)').map((c) => c.name);
       expect(libraryCols).toContain('detach_policy');
+      const bookCols = db.all<{ name: string }>('PRAGMA table_info(books)').map((c) => c.name);
+      expect(bookCols).toContain('colorists_json');
       const seededDefaultGenres = db.all<{ genre_label: string }>('SELECT genre_label FROM app_default_genres');
       expect(seededDefaultGenres.length).toBeGreaterThanOrEqual(20);
 

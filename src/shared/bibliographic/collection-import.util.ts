@@ -4,7 +4,8 @@
 
 import { isbnUtil } from './isbn.util';
 import { parseIncludedVolumeNumbers } from './integral.util';
-import type { ImportInputProfileCode, OwnershipStatus, ReadingStatus } from '../types/domain.types';
+import { cleanAuthor } from './text-normalize.util';
+import type { BookMainCategory, ImportInputProfileCode, OwnershipStatus, ReadingStatus } from '../types/domain.types';
 
 export interface ImportedBookRow {
   rowNumber: number;
@@ -13,7 +14,12 @@ export interface ImportedBookRow {
   series: string | null;
   volumeNumber: string | null;
   author: string | null;
+  scriptwriters: string[];
+  illustrators: string[];
+  colorists: string[];
   publisher: string | null;
+  mainCategory: BookMainCategory | null;
+  genres: string[];
   ownershipStatus: OwnershipStatus | null;
   isIntegral: boolean | null;
   includedVolumes: string[];
@@ -29,7 +35,12 @@ export type ImportFieldKey =
   | 'series'
   | 'volumeNumber'
   | 'author'
+  | 'scriptwriter'
+  | 'illustrator'
+  | 'colorist'
   | 'publisher'
+  | 'mainCategory'
+  | 'genres'
   | 'ownershipStatus'
   | 'isIntegral'
   | 'includedVolumes'
@@ -70,14 +81,19 @@ export interface ImportFilePreview {
 
 export type ImportColumnMapping = Record<string, ImportFieldKey | null>;
 
-/** Champs présentés à l'utilisateur dans la modale de correspondance (ordre logique). */
+/** Champs présentés à l'utilisateur dans la vue de correspondance (ordre logique). */
 export const USER_MAPPABLE_IMPORT_FIELDS: readonly ImportFieldKey[] = [
   'isbn',
   'title',
   'series',
   'volumeNumber',
   'author',
+  'scriptwriter',
+  'illustrator',
+  'colorist',
   'publisher',
+  'mainCategory',
+  'genres',
   'ownershipStatus',
   'isIntegral',
   'includedVolumes',
@@ -86,8 +102,15 @@ export const USER_MAPPABLE_IMPORT_FIELDS: readonly ImportFieldKey[] = [
   'notes'
 ] as const;
 
-/** Champs qui peuvent accepter plusieurs colonnes sources fusionnées (ex. Scénariste + Dessinateur, ou plusieurs colonnes vers Notes personnelles). */
-export const MULTI_COLUMN_IMPORT_FIELDS = new Set<ImportFieldKey>(['author', 'notes']);
+/** Champs qui peuvent accepter plusieurs colonnes sources fusionnées (ex. Prénom + Nom, plusieurs genres ou notes personnelles). */
+export const MULTI_COLUMN_IMPORT_FIELDS = new Set<ImportFieldKey>([
+  'author',
+  'scriptwriter',
+  'illustrator',
+  'colorist',
+  'genres',
+  'notes'
+]);
 
 /** Champs pivots : au moins un d'entre eux est requis pour identifier chaque livre. */
 export const PIVOT_IMPORT_FIELDS = new Set<ImportFieldKey>(['isbn', 'title', 'series']);
@@ -167,7 +190,7 @@ const HEADER_ALIASES: Record<string, ImportFieldKey> = {
   volnum: 'volumeNumber',
   issue: 'volumeNumber',
   issuenumber: 'volumeNumber',
-  // Auteurs
+  // Auteurs (regroupe tout)
   auteur: 'author',
   auteurs: 'author',
   author: 'author',
@@ -179,20 +202,66 @@ const HEADER_ALIASES: Record<string, ImportFieldKey> = {
   ecrivains: 'author',
   writer: 'author',
   writers: 'author',
-  scenariste: 'author',
-  scenaristes: 'author',
-  scenario: 'author',
-  dessinateur: 'author',
-  dessinateurs: 'author',
-  dessin: 'author',
-  illustrateur: 'author',
-  illustrateurs: 'author',
   mangaka: 'author',
   createur: 'author',
   createurs: 'author',
   nomauteur: 'author',
   prenomauteur: 'author',
   auteurprincipal: 'author',
+  // Scénariste
+  scenariste: 'scriptwriter',
+  scenaristes: 'scriptwriter',
+  scenario: 'scriptwriter',
+  scenarios: 'scriptwriter',
+  scriptwriter: 'scriptwriter',
+  scriptwriters: 'scriptwriter',
+  story: 'scriptwriter',
+  // Dessinateur / Illustrateur
+  dessinateur: 'illustrator',
+  dessinateurs: 'illustrator',
+  dessin: 'illustrator',
+  dessins: 'illustrator',
+  illustrateur: 'illustrator',
+  illustrateurs: 'illustrator',
+  illustrator: 'illustrator',
+  illustrators: 'illustrator',
+  artist: 'illustrator',
+  penciller: 'illustrator',
+  penciler: 'illustrator',
+  inker: 'illustrator',
+  // Coloriste
+  coloriste: 'colorist',
+  coloristes: 'colorist',
+  couleur: 'colorist',
+  couleurs: 'colorist',
+  colorist: 'colorist',
+  colorists: 'colorist',
+  miseencouleur: 'colorist',
+  miseencouleurs: 'colorist',
+  // Genre principal & Sous-genres
+  genreprincipal: 'mainCategory',
+  categorieprincipale: 'mainCategory',
+  maincategory: 'mainCategory',
+  typeouvrage: 'mainCategory',
+  typelivre: 'mainCategory',
+  media: 'mainCategory',
+  medium: 'mainCategory',
+  rayon: 'mainCategory',
+  section: 'mainCategory',
+  genre: 'mainCategory',
+  genres: 'genres',
+  sousgenre: 'genres',
+  sousgenres: 'genres',
+  subgenre: 'genres',
+  subgenres: 'genres',
+  tags: 'genres',
+  tag: 'genres',
+  etiquette: 'genres',
+  etiquettes: 'genres',
+  theme: 'genres',
+  themes: 'genres',
+  motscles: 'genres',
+  keywords: 'genres',
   // Éditeur
   editeur: 'publisher',
   editeurs: 'publisher',
@@ -296,7 +365,10 @@ const AMBIGUOUS_HEADER_KEYS = new Set<string>([
   'statut',
   'status',
   'etagere',
-  'shelf'
+  'shelf',
+  'genre',
+  'categorie',
+  'category'
 ]);
 
 /** En-têtes connus de fichiers livres/tableurs qu'on ignore volontairement mais qui confirment une ligne d'en-tête. */
@@ -332,10 +404,6 @@ const KNOWN_NON_IMPORT_HEADER_KEYS = new Set<string>([
   'format',
   'binding',
   'reliure',
-  'genre',
-  'genres',
-  'tags',
-  'etiquettes',
   'collection',
   'resume',
   'synopsis',
@@ -361,7 +429,6 @@ const KNOWN_NON_IMPORT_HEADER_KEYS = new Set<string>([
   'subtitle',
   'traducteur',
   'translator',
-  'coloriste',
   'lieu',
   'emplacement',
   'etagerephysique'
@@ -411,6 +478,234 @@ function truncateSample(raw: string, maxLen = 90): string {
   const compact = raw.replace(/\s+/g, ' ').trim();
   if (compact.length <= maxLen) return compact;
   return `${compact.slice(0, maxLen - 1)}…`;
+}
+
+const CREATOR_PLACEHOLDER_KEYS = new Set<string>([
+  '-',
+  'na',
+  'none',
+  'aucun',
+  'aucune',
+  'inconnu',
+  'inconnue',
+  'unknown',
+  'indetermine',
+  'indeterminee',
+  'quadrichromie',
+  'nb',
+  'noirblan',
+  'noiretblanc',
+  'sans',
+  'vide'
+]);
+
+/**
+ * Découpe une chaîne d'auteurs/créateurs (BD Gest, Babelio, Excel, etc.) en liste propre.
+ * Préserve le format "Nom, Prénom" sur une virgule isolée tout en séparant "Prénom Nom, Prénom Nom", ";", "/", "|", "&".
+ */
+export function parseCreatorNames(raw: unknown): string[] {
+  const s = cleanString(raw);
+  if (!s) return [];
+  const primaryParts = s
+    .split(/[;|\n]+|\s+\/\s+|\s+&\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pushClean = (candidate: string) => {
+    const trimmed = candidate.replace(/^<+|>+$/g, '').trim();
+    if (!trimmed) return;
+    const norm = normalizeHeaderKey(trimmed);
+    if (!norm || CREATOR_PLACEHOLDER_KEYS.has(norm)) return;
+    const cleaned = cleanAuthor(trimmed);
+    if (!cleaned) return;
+    const key = cleaned.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(cleaned);
+    }
+  };
+
+  for (const part of primaryParts) {
+    if (part.includes(',')) {
+      const commaParts = part
+        .split(',')
+        .map((c) => c.trim())
+        .filter(Boolean);
+      // Plusieurs virgules OU chaque morceau contient déjà un espace ("Prénom Nom, Prénom Nom") -> liste de créateurs
+      if (commaParts.length > 2 || (commaParts.length === 2 && commaParts.every((c) => /\s/.test(c)))) {
+        for (const cp of commaParts) pushClean(cp);
+        continue;
+      }
+    }
+    pushClean(part);
+  }
+  return out;
+}
+
+const DIRECT_MAIN_CATEGORY_MAP: Record<string, BookMainCategory> = {
+  bd: 'BD',
+  bandedessinee: 'BD',
+  bandesdessinees: 'BD',
+  bandesdessinee: 'BD',
+  bdfrancobelge: 'BD',
+  francobelge: 'BD',
+  romangraphique: 'BD',
+  romansgraphiques: 'BD',
+  graphicnovel: 'BD',
+  graphicnovels: 'BD',
+  manga: 'Manga',
+  mangas: 'Manga',
+  manhwa: 'Manga',
+  manhua: 'Manga',
+  webtoon: 'Manga',
+  shonen: 'Manga',
+  shojo: 'Manga',
+  seinen: 'Manga',
+  josei: 'Manga',
+  kodomo: 'Manga',
+  comics: 'Comics',
+  comic: 'Comics',
+  comicbook: 'Comics',
+  comicbooks: 'Comics',
+  roman: 'Roman',
+  romans: 'Roman',
+  novel: 'Roman',
+  novels: 'Roman',
+  litterature: 'Roman',
+  literature: 'Roman',
+  fiction: 'Roman',
+  nouvelle: 'Roman',
+  nouvelles: 'Roman',
+  recit: 'Roman',
+  jeunesse: 'Jeunesse',
+  enfant: 'Jeunesse',
+  enfants: 'Jeunesse',
+  children: 'Jeunesse',
+  kids: 'Jeunesse',
+  albumjeunesse: 'Jeunesse',
+  albumillustre: 'Jeunesse',
+  essai: 'Essai',
+  essais: 'Essai',
+  nonfiction: 'Essai',
+  documentaire: 'Essai',
+  documentaires: 'Essai',
+  poesie: 'Poésie / Théâtre',
+  theatre: 'Poésie / Théâtre',
+  poesietheatre: 'Poésie / Théâtre',
+  poetry: 'Poésie / Théâtre',
+  drama: 'Poésie / Théâtre',
+  pratique: 'Pratique',
+  cuisine: 'Pratique',
+  guide: 'Pratique',
+  guides: 'Pratique',
+  loisirs: 'Pratique',
+  art: 'Art / Beau livre',
+  beaulivre: 'Art / Beau livre',
+  beauxlivres: 'Art / Beau livre',
+  artbeaulivre: 'Art / Beau livre',
+  artbook: 'Art / Beau livre',
+  autre: 'Autre',
+  autres: 'Autre',
+  divers: 'Autre',
+  other: 'Autre'
+};
+
+const PRESERVE_AS_SUBGENRE_KEYS = new Set<string>([
+  'manhwa',
+  'manhua',
+  'webtoon',
+  'shonen',
+  'shojo',
+  'seinen',
+  'josei',
+  'romangraphique',
+  'albumjeunesse',
+  'albumillustre',
+  'documentaire',
+  'cuisine',
+  'artbook'
+]);
+
+/**
+ * Interprète une valeur brute de colonne « Genre principal » :
+ * - Reconnaît les 10 catégories officielles (+ synonymes usuels FR/EN) et les formats composés (« BD / Science-Fiction », « Roman policier »).
+ * - Si la cellule contient un sous-genre pur (ex. « Science-Fiction », « Polar », « Humour »), retourne `mainCategory: null`
+ *   et conserve le libellé dans `extraGenres` pour éviter d'écraser le média (BD vs Roman) tout en ne perdant aucune information.
+ */
+export function parseImportedMainCategory(raw: unknown): {
+  mainCategory: BookMainCategory | null;
+  extraGenres: string[];
+} {
+  const s = cleanString(raw);
+  if (!s) return { mainCategory: null, extraGenres: [] };
+
+  const fullKey = normalizeHeaderKey(s);
+  const directFull = DIRECT_MAIN_CATEGORY_MAP[fullKey];
+  if (directFull) {
+    return {
+      mainCategory: directFull,
+      extraGenres: PRESERVE_AS_SUBGENRE_KEYS.has(fullKey) ? [s] : []
+    };
+  }
+
+  // Cas « Roman policier », « BD historique », « Manga shônen » -> préfixe média + sous-genre
+  const prefixMatch = s.match(/^(bd|bandes?\s+dessin[ée]es?|manga|comics|roman|jeunesse|essai)\s*[-–—:\/,]?\s+(.+)$/i);
+  if (prefixMatch) {
+    const mediaCat = DIRECT_MAIN_CATEGORY_MAP[normalizeHeaderKey(prefixMatch[1])] ?? null;
+    const rest = prefixMatch[2].trim();
+    if (mediaCat && rest) {
+      const restClean = rest.charAt(0).toUpperCase() + rest.slice(1);
+      return { mainCategory: mediaCat, extraGenres: [restClean] };
+    }
+  }
+
+  // Séparation sur séparateurs composés (« BD / Science-Fiction », « Manga, Aventure »)
+  const parts = s
+    .split(/[;,|\n]+|\s*[\/–—]\s*|\s+-\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+
+  let foundCategory: BookMainCategory | null = null;
+  const extraGenres: string[] = [];
+  const seenGenres = new Set<string>();
+
+  for (const part of parts) {
+    const pk = normalizeHeaderKey(part);
+    if (!pk) continue;
+    const mapped = DIRECT_MAIN_CATEGORY_MAP[pk];
+    if (mapped) {
+      if (!foundCategory) foundCategory = mapped;
+      if (PRESERVE_AS_SUBGENRE_KEYS.has(pk) && !seenGenres.has(pk)) {
+        seenGenres.add(pk);
+        extraGenres.push(part);
+      }
+    } else if (!seenGenres.has(pk)) {
+      seenGenres.add(pk);
+      extraGenres.push(part);
+    }
+  }
+
+  return { mainCategory: foundCategory, extraGenres };
+}
+
+export function parseImportedGenres(raw: unknown): string[] {
+  const s = cleanString(raw);
+  if (!s) return [];
+  const parts = s
+    .split(/[;,|\n]+|\s+\/\s+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0 && p.length <= 60);
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const p of parts) {
+    const key = normalizeHeaderKey(p);
+    if (!key || CREATOR_PLACEHOLDER_KEYS.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out;
 }
 
 function parseOwnershipStatus(raw: unknown): OwnershipStatus | null {
@@ -639,10 +934,35 @@ function matchHeaderToField(
   if (has('serie', 'series', 'saga', 'cycle', 'franchise')) {
     return { field: 'series', confidence: 'high', reason: 'header_fuzzy' };
   }
+  if (has('coloriste', 'coloristes', 'colorist', 'colorists', 'couleur', 'couleurs')) {
+    return { field: 'colorist', confidence: 'high', reason: 'header_fuzzy' };
+  }
+  if (has('scenariste', 'scenaristes', 'scenario', 'scenarios', 'scriptwriter', 'scriptwriters')) {
+    return { field: 'scriptwriter', confidence: 'high', reason: 'header_fuzzy' };
+  }
+  if (has('dessinateur', 'dessinateurs', 'dessin', 'dessins', 'illustrateur', 'illustrateurs', 'illustrator', 'illustrators')) {
+    return { field: 'illustrator', confidence: 'high', reason: 'header_fuzzy' };
+  }
   if (
-    has('auteur', 'auteurs', 'author', 'authors', 'ecrivain', 'writer', 'scenariste', 'scenario', 'dessinateur', 'dessin', 'illustrateur', 'mangaka')
+    has('auteur', 'auteurs', 'author', 'authors', 'ecrivain', 'writer', 'mangaka')
   ) {
     return { field: 'author', confidence: 'high', reason: 'header_fuzzy' };
+  }
+  if (
+    has('sousgenre', 'sousgenres', 'subgenre', 'subgenres', 'tags', 'etiquettes', 'themes', 'motscles', 'keywords') ||
+    (has('sous') && has('genre', 'genres'))
+  ) {
+    return { field: 'genres', confidence: 'high', reason: 'header_fuzzy' };
+  }
+  if (
+    !has('test', 'benchmark') &&
+    (has('genre', 'genres', 'media', 'rayon') || (has('categorie', 'category') && has('principale', 'principal', 'livre', 'ouvrage')))
+  ) {
+    return {
+      field: has('principal', 'principale', 'media', 'rayon') ? 'mainCategory' : 'genres',
+      confidence: has('principal', 'principale', 'media') ? 'high' : 'medium',
+      reason: 'header_fuzzy'
+    };
   }
   if (has('editeur', 'editeurs', 'publisher', 'publishers', 'imprint') || (has('maison') && hasPrefix('edit'))) {
     return { field: 'publisher', confidence: 'high', reason: 'header_fuzzy' };
@@ -816,6 +1136,15 @@ function refineHeaderMatchWithSamples(
     }
   }
 
+  // En-tête "Genre" / "Catégorie" : si majorité de catégories principales (BD/Manga/Roman...) -> mainCategory (high), sinon sous-genres (genres)
+  if (headerMatch.field === 'mainCategory') {
+    const catHits = cleaned.filter((v) => parseImportedMainCategory(v).mainCategory !== null).length;
+    if (catHits / cleaned.length >= 0.5) {
+      return { field: 'mainCategory', confidence: 'high', reason: headerMatch.reason };
+    }
+    return { field: 'genres', confidence: 'medium', reason: headerMatch.reason };
+  }
+
   return headerMatch;
 }
 
@@ -846,7 +1175,14 @@ function buildPreviewColumns(
     let priority = 0;
 
     if (hasHeaderRow && input.sourceLabel.trim()) {
-      const headerMatch = matchHeaderToField(input.sourceLabel);
+      let headerMatch = matchHeaderToField(input.sourceLabel);
+      // En mode utilisateur (includeInternalFields = false), "Catégorie" / "Category" devient "Genre principal" (raffiné selon les valeurs)
+      if (!includeInternalFields && headerMatch?.field === 'testCategory') {
+        const nk = normalizeHeaderKey(input.sourceLabel);
+        if (nk === 'categorie' || nk === 'category') {
+          headerMatch = { field: 'mainCategory', confidence: 'medium', reason: 'header_exact' };
+        }
+      }
       if (headerMatch && (includeInternalFields || headerMatch.field !== 'testCategory')) {
         const refined = refineHeaderMatchWithSamples(headerMatch, input.allSamples);
         field = refined.field;
@@ -990,8 +1326,24 @@ function buildRowFromRecord(record: Partial<Record<ImportFieldKey, unknown>>, ro
   const title = cleanString(record.title);
   const series = cleanString(record.series);
   const volumeNumber = cleanString(record.volumeNumber);
-  const author = cleanString(record.author);
+  const rawAuthor = cleanString(record.author);
+  const scriptwriters = parseCreatorNames(record.scriptwriter);
+  const illustrators = parseCreatorNames(record.illustrator);
+  const colorists = parseCreatorNames(record.colorist);
+  // Si aucune colonne « Auteur » globale n'est fournie, dériver un auteur texte utile pour la recherche depuis scénariste / dessinateur
+  const derivedCreators = Array.from(new Set([...scriptwriters, ...illustrators]));
+  const author = rawAuthor ?? (derivedCreators.length > 0 ? derivedCreators.join(', ') : null);
   const publisher = cleanString(record.publisher);
+  const parsedMainCat = parseImportedMainCategory(record.mainCategory);
+  const explicitGenres = parseImportedGenres(record.genres);
+  const mergedGenres: string[] = [];
+  const seenGenres = new Set<string>();
+  for (const g of [...parsedMainCat.extraGenres, ...explicitGenres]) {
+    const key = normalizeHeaderKey(g);
+    if (!key || seenGenres.has(key)) continue;
+    seenGenres.add(key);
+    mergedGenres.push(g);
+  }
   const ownershipStatus = parseOwnershipStatus(record.ownershipStatus);
   const isIntegral = parseBooleanValue(record.isIntegral);
   const rawIncluded = cleanString(record.includedVolumes);
@@ -1010,7 +1362,12 @@ function buildRowFromRecord(record: Partial<Record<ImportFieldKey, unknown>>, ro
     series,
     volumeNumber,
     author,
+    scriptwriters,
+    illustrators,
+    colorists,
     publisher,
+    mainCategory: parsedMainCat.mainCategory,
+    genres: mergedGenres,
     ownershipStatus,
     isIntegral,
     includedVolumes,
@@ -1242,6 +1599,10 @@ export function parseImportRowsFromMatrix(
     const cells = nonEmpty[i];
     const rec: Partial<Record<ImportFieldKey, unknown>> = {};
     const authorParts: Array<{ label: string; value: string }> = [];
+    const scriptwriterParts: Array<{ label: string; value: string }> = [];
+    const illustratorParts: Array<{ label: string; value: string }> = [];
+    const coloristParts: Array<{ label: string; value: string }> = [];
+    const genresParts: string[] = [];
     const notesParts: Array<{ label: string; value: string }> = [];
 
     for (const entry of columnEntries) {
@@ -1249,6 +1610,18 @@ export function parseImportRowsFromMatrix(
       if (entry.field === 'author') {
         const cleaned = cleanString(rawVal);
         if (cleaned) authorParts.push({ label: entry.label, value: cleaned });
+      } else if (entry.field === 'scriptwriter') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) scriptwriterParts.push({ label: entry.label, value: cleaned });
+      } else if (entry.field === 'illustrator') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) illustratorParts.push({ label: entry.label, value: cleaned });
+      } else if (entry.field === 'colorist') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) coloristParts.push({ label: entry.label, value: cleaned });
+      } else if (entry.field === 'genres') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) genresParts.push(cleaned);
       } else if (entry.field === 'notes') {
         const cleaned = cleanString(rawVal);
         if (cleaned) notesParts.push({ label: entry.label, value: cleaned });
@@ -1257,12 +1630,12 @@ export function parseImportRowsFromMatrix(
       }
     }
 
-    if (authorParts.length > 0) {
-      rec.author = mergeAuthorValues(authorParts);
-    }
-    if (notesParts.length > 0) {
-      rec.notes = mergeNotesValues(notesParts);
-    }
+    if (authorParts.length > 0) rec.author = mergeAuthorValues(authorParts);
+    if (scriptwriterParts.length > 0) rec.scriptwriter = mergeAuthorValues(scriptwriterParts);
+    if (illustratorParts.length > 0) rec.illustrator = mergeAuthorValues(illustratorParts);
+    if (coloristParts.length > 0) rec.colorist = mergeAuthorValues(coloristParts);
+    if (genresParts.length > 0) rec.genres = genresParts.join('; ');
+    if (notesParts.length > 0) rec.notes = mergeNotesValues(notesParts);
 
     const built = buildRowFromRecord(rec, i + 1);
     if (built) out.push(built);
@@ -1301,6 +1674,10 @@ export function parseImportJson(
   records.forEach((entry, idx) => {
     const rec: Partial<Record<ImportFieldKey, unknown>> = {};
     const authorParts: Array<{ label: string; value: string }> = [];
+    const scriptwriterParts: Array<{ label: string; value: string }> = [];
+    const illustratorParts: Array<{ label: string; value: string }> = [];
+    const coloristParts: Array<{ label: string; value: string }> = [];
+    const genresParts: string[] = [];
     const notesParts: Array<{ label: string; value: string }> = [];
 
     for (const { key, field } of keyEntries) {
@@ -1308,6 +1685,18 @@ export function parseImportJson(
       if (field === 'author') {
         const cleaned = cleanString(rawVal);
         if (cleaned) authorParts.push({ label: key, value: cleaned });
+      } else if (field === 'scriptwriter') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) scriptwriterParts.push({ label: key, value: cleaned });
+      } else if (field === 'illustrator') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) illustratorParts.push({ label: key, value: cleaned });
+      } else if (field === 'colorist') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) coloristParts.push({ label: key, value: cleaned });
+      } else if (field === 'genres') {
+        const cleaned = cleanString(rawVal);
+        if (cleaned) genresParts.push(cleaned);
       } else if (field === 'notes') {
         const cleaned = cleanString(rawVal);
         if (cleaned) notesParts.push({ label: key, value: cleaned });
@@ -1316,12 +1705,12 @@ export function parseImportJson(
       }
     }
 
-    if (authorParts.length > 0) {
-      rec.author = mergeAuthorValues(authorParts);
-    }
-    if (notesParts.length > 0) {
-      rec.notes = mergeNotesValues(notesParts);
-    }
+    if (authorParts.length > 0) rec.author = mergeAuthorValues(authorParts);
+    if (scriptwriterParts.length > 0) rec.scriptwriter = mergeAuthorValues(scriptwriterParts);
+    if (illustratorParts.length > 0) rec.illustrator = mergeAuthorValues(illustratorParts);
+    if (coloristParts.length > 0) rec.colorist = mergeAuthorValues(coloristParts);
+    if (genresParts.length > 0) rec.genres = genresParts.join('; ');
+    if (notesParts.length > 0) rec.notes = mergeNotesValues(notesParts);
 
     const built = buildRowFromRecord(rec, idx + 1);
     if (built) out.push(built);

@@ -19,6 +19,7 @@ describe('parseMarcRecord (InterMarc BnF + UNIMARC SUDOC)', () => {
         <datafield tag="225"><subfield code="a">Animal Jack</subfield><subfield code="v">7</subfield></datafield>
         <datafield tag="700"><subfield code="a">Kid Toussaint</subfield><subfield code="4">070</subfield></datafield>
         <datafield tag="702"><subfield code="a">Miss Prickly</subfield><subfield code="4">440</subfield></datafield>
+        <datafield tag="702"><subfield code="a">Mébarki</subfield><subfield code="b">Thierry</subfield><subfield code="4">212</subfield></datafield>
       </record>
     `;
     const parsed = parseMarcRecord(xml);
@@ -31,9 +32,10 @@ describe('parseMarcRecord (InterMarc BnF + UNIMARC SUDOC)', () => {
     expect(parsed?.publishYear).toBe('2022');
     expect(parsed?.pageCount).toBe(104);
     expect(parsed?.language).toBe('fre');
-    expect(parsed?.authors).toEqual(['Kid Toussaint', 'Miss Prickly']);
+    expect(parsed?.authors).toEqual(['Kid Toussaint', 'Miss Prickly', 'Thierry Mébarki']);
     expect(parsed?.scriptwriters).toEqual(['Kid Toussaint']);
     expect(parsed?.illustrators).toEqual(['Miss Prickly']);
+    expect(parsed?.colorists).toEqual(['Thierry Mébarki']);
   });
 
   it('distingue strictement un ensemble BnF 460 d une collection poche 410 (Totem / Folio)', () => {

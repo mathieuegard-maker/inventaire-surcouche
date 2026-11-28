@@ -87,7 +87,13 @@ export function extractFilterFacets(
         orderedGenres.push(clean);
       }
     }
-    for (const a of b.authors ?? []) {
+    const allCreators = [
+      ...(b.authors ?? []),
+      ...(b.scriptwriters ?? []),
+      ...(b.illustrators ?? []),
+      ...(b.colorists ?? [])
+    ];
+    for (const a of allCreators) {
       const key = normalizeTextKey(a);
       if (key && !authorMap.has(key)) authorMap.set(key, a.trim());
     }
@@ -135,6 +141,9 @@ export function applyBookListFilters(
           book.title,
           book.seriesName ?? '',
           book.authors.join(' '),
+          (book.scriptwriters ?? []).join(' '),
+          (book.illustrators ?? []).join(' '),
+          (book.colorists ?? []).join(' '),
           book.publisher ?? '',
           book.mainCategory,
           ...(book.genres ?? [])
@@ -149,7 +158,13 @@ export function applyBookListFilters(
     }
 
     if (authorNorm) {
-      const matched = (book.authors ?? []).some((a) => normalizeTextKey(a).includes(authorNorm));
+      const creatorPool = [
+        ...(book.authors ?? []),
+        ...(book.scriptwriters ?? []),
+        ...(book.illustrators ?? []),
+        ...(book.colorists ?? [])
+      ];
+      const matched = creatorPool.some((a) => normalizeTextKey(a).includes(authorNorm));
       if (!matched) return false;
     }
 
@@ -222,7 +237,12 @@ export function applySeriesListFilters(
     if (authorNorm) {
       const authorPool = [
         ...(series.primaryAuthors ?? []),
-        ...relatedBooks.flatMap((b) => b.authors ?? [])
+        ...relatedBooks.flatMap((b) => [
+          ...(b.authors ?? []),
+          ...(b.scriptwriters ?? []),
+          ...(b.illustrators ?? []),
+          ...(b.colorists ?? [])
+        ])
       ];
       if (!authorPool.some((a) => normalizeTextKey(a).includes(authorNorm))) return false;
     }

@@ -684,7 +684,7 @@ export class SeriesManagementService {
         if (!hit.isbn13 || !hit.title) continue;
         if (knownIsbns.has(hit.isbn13)) continue;
         // Vérifier que cet auteur figure bien parmi les créateurs du livre trouvé
-        const allCreators = [...hit.authors, ...hit.scriptwriters, ...hit.illustrators];
+        const allCreators = [...hit.authors, ...hit.scriptwriters, ...hit.illustrators, ...(hit.colorists ?? [])];
         if (allCreators.length > 0 && !allCreators.some((a) => matchesAuthorName(a, cleanName))) {
           continue;
         }

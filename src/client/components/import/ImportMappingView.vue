@@ -63,8 +63,18 @@ function fieldLabel(field: ImportFieldKey): string {
       return t('profile.importMapField_volumeNumber');
     case 'author':
       return t('profile.importMapField_author');
+    case 'scriptwriter':
+      return t('profile.importMapField_scriptwriter');
+    case 'illustrator':
+      return t('profile.importMapField_illustrator');
+    case 'colorist':
+      return t('profile.importMapField_colorist');
     case 'publisher':
       return t('profile.importMapField_publisher');
+    case 'mainCategory':
+      return t('profile.importMapField_mainCategory');
+    case 'genres':
+      return t('profile.importMapField_genres');
     case 'ownershipStatus':
       return t('profile.importMapField_ownershipStatus');
     case 'isIntegral':

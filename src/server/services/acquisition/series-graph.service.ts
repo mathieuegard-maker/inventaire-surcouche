@@ -1365,6 +1365,7 @@ export class SeriesGraphService {
         authors: work.authors,
         scriptwriters: work.scriptwriters ?? [],
         illustrators: work.illustrators ?? [],
+        colorists: work.colorists ?? [],
         publisher: work.publisher ?? null,
         collectionName: work.collectionName ?? null,
         publishYear: work.publishYear ?? null,

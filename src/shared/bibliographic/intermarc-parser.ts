@@ -38,6 +38,7 @@ export interface ParsedMarcRecord {
   authors: string[];
   scriptwriters: string[];
   illustrators: string[];
+  colorists: string[];
   publisher?: string;
   publishYear?: string;
   pageCount?: number;
@@ -160,6 +161,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
   const authors: string[] = [];
   const scriptwriters: string[] = [];
   const illustrators: string[] = [];
+  const colorists: string[] = [];
   const rawSubjects: string[] = [];
   const editionStatements: string[] = [];
   const noteClauses: string[] = [];
@@ -278,9 +280,11 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
       if (cleaned) {
         if (!authors.includes(cleaned)) authors.push(cleaned);
         const role = sf('4').toLowerCase();
-        if (role.includes('440') || role.includes('ill') || role.includes('dessin')) {
+        if (role.includes('212') || role.includes('clr') || role.includes('color')) {
+          if (!colorists.includes(cleaned)) colorists.push(cleaned);
+        } else if (role.includes('440') || role.includes('ill') || role.includes('dessin')) {
           if (!illustrators.includes(cleaned)) illustrators.push(cleaned);
-        } else if (role.includes('690') || role.includes('070') || role.includes('scén')) {
+        } else if (role.includes('690') || role.includes('070') || role.includes('scén') || role.includes('scen')) {
           if (!scriptwriters.includes(cleaned)) scriptwriters.push(cleaned);
         }
       }
@@ -447,6 +451,7 @@ export function parseMarcRecord(recordXml: string, fallbackIsbn13?: string): Par
     authors,
     scriptwriters,
     illustrators,
+    colorists,
     publisher,
     publishYear,
     pageCount,

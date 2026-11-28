@@ -25,6 +25,7 @@ import { useLibraryStore, type BookSeriesContext } from '../stores/library.store
 import { useUiStore } from '../stores/ui.store';
 import { apiRequest, ApiClientError } from '../api/client';
 import { formatIntegralRangeLabel } from '../../shared/bibliographic/integral.util';
+import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type { BookView, ReadingStatus } from '../../shared/types/domain.types';
 import { t } from '../../shared/locales';
 
@@ -83,6 +84,26 @@ const displayGenres = computed(() => {
     }
   }
   return out;
+});
+
+const hasDetailedCreators = computed(() => {
+  const b = book.value;
+  if (!b) return false;
+  return b.scriptwriters.length > 0 || b.illustrators.length > 0 || (b.colorists?.length ?? 0) > 0;
+});
+
+const remainingAuthors = computed(() => {
+  const b = book.value;
+  if (!b || !hasDetailedCreators.value) return [];
+  const categorized = new Set<string>();
+  for (const name of [...b.scriptwriters, ...b.illustrators, ...(b.colorists ?? [])]) {
+    const key = normalizeTextKey(name);
+    if (key) categorized.add(key);
+  }
+  return b.authors.filter((name) => {
+    const key = normalizeTextKey(name);
+    return key && !categorized.has(key);
+  });
 });
 
 // Navigation contextuelle ‹ / › : suit l'ordre de la liste d'origine si présente, sinon les tomes de la série
@@ -344,7 +365,65 @@ async function confirmResetOverrides(): Promise<void> {
             </router-link>
           </div>
 
-          <div v-if="book.authors.length > 0" class="ds-chips">
+          <div v-if="hasDetailedCreators" class="book-creators-roles">
+            <div v-if="book.scriptwriters.length > 0" class="book-creator-role-row">
+              <span class="book-creator-role-label">{{ t('book.scriptwritersLabel') }} :</span>
+              <div class="ds-chips">
+                <router-link
+                  v-for="name in book.scriptwriters"
+                  :key="`sc-${name}`"
+                  :to="`/author/${encodeURIComponent(name)}`"
+                  class="ds-chip ds-chip--clickable"
+                >
+                  {{ name }}
+                </router-link>
+              </div>
+            </div>
+
+            <div v-if="book.illustrators.length > 0" class="book-creator-role-row">
+              <span class="book-creator-role-label">{{ t('book.illustratorsLabel') }} :</span>
+              <div class="ds-chips">
+                <router-link
+                  v-for="name in book.illustrators"
+                  :key="`il-${name}`"
+                  :to="`/author/${encodeURIComponent(name)}`"
+                  class="ds-chip ds-chip--clickable"
+                >
+                  {{ name }}
+                </router-link>
+              </div>
+            </div>
+
+            <div v-if="(book.colorists?.length ?? 0) > 0" class="book-creator-role-row">
+              <span class="book-creator-role-label">{{ t('book.coloristsLabel') }} :</span>
+              <div class="ds-chips">
+                <router-link
+                  v-for="name in book.colorists"
+                  :key="`co-${name}`"
+                  :to="`/author/${encodeURIComponent(name)}`"
+                  class="ds-chip ds-chip--clickable"
+                >
+                  {{ name }}
+                </router-link>
+              </div>
+            </div>
+
+            <div v-if="remainingAuthors.length > 0" class="book-creator-role-row">
+              <span class="book-creator-role-label">{{ t('book.otherAuthorsLabel') }} :</span>
+              <div class="ds-chips">
+                <router-link
+                  v-for="name in remainingAuthors"
+                  :key="`au-${name}`"
+                  :to="`/author/${encodeURIComponent(name)}`"
+                  class="ds-chip ds-chip--clickable"
+                >
+                  {{ name }}
+                </router-link>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="book.authors.length > 0" class="ds-chips">
             <router-link
               v-for="author in book.authors"
               :key="author"
@@ -353,16 +432,6 @@ async function confirmResetOverrides(): Promise<void> {
             >
               {{ author }}
             </router-link>
-          </div>
-
-          <div v-if="book.scriptwriters.length > 0 || book.illustrators.length > 0" class="ds-text-muted">
-            <span v-if="book.scriptwriters.length > 0">
-              {{ t('book.scriptwritersLabel') }} : {{ book.scriptwriters.join(', ') }}
-            </span>
-            <span v-if="book.scriptwriters.length > 0 && book.illustrators.length > 0"> · </span>
-            <span v-if="book.illustrators.length > 0">
-              {{ t('book.illustratorsLabel') }} : {{ book.illustrators.join(', ') }}
-            </span>
           </div>
 
           <p v-if="book.publisher || book.publishYear || book.pageCount || book.collectionName" class="ds-text-muted book-hero__meta">
@@ -727,6 +796,25 @@ async function confirmResetOverrides(): Promise<void> {
 .book-hero__series-link {
   font-weight: 700;
   color: var(--accent);
+}
+
+.book-creators-roles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.book-creator-role-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.book-creator-role-label {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-secondary);
 }
 
 .book-genres-row {

@@ -232,6 +232,7 @@ export class IngestionService {
       authors: overrides.authors ?? parseJsonStringArray(book.authors_json),
       scriptwriters: overrides.scriptwriters ?? parseJsonStringArray(book.scriptwriters_json),
       illustrators: overrides.illustrators ?? parseJsonStringArray(book.illustrators_json),
+      colorists: overrides.colorists ?? parseJsonStringArray(book.colorists_json),
       publisher: overrides.publisher !== undefined ? overrides.publisher : book.publisher,
       collectionName: book.collection_name,
       publishYear: overrides.publishYear !== undefined ? overrides.publishYear : book.publish_year,
@@ -517,6 +518,7 @@ export class IngestionService {
           authors: draft.authors,
           scriptwriters: draft.scriptwriters,
           illustrators: draft.illustrators,
+          colorists: draft.colorists,
           publisher: draft.publisher,
           collectionName: draft.collectionName,
           publishYear: draft.publishYear,
@@ -728,6 +730,7 @@ export class IngestionService {
 
     const existingScriptwriters = parseJsonStringArray(existing.scriptwriters_json);
     const existingIllustrators = parseJsonStringArray(existing.illustrators_json);
+    const existingColorists = parseJsonStringArray(existing.colorists_json);
     const existingSubgenres = parseJsonStringArray(existing.subgenres_json);
     const existingIncluded = parseJsonStringArray(existing.included_volumes_json);
 
@@ -746,6 +749,7 @@ export class IngestionService {
       authors: effectiveAuthors,
       scriptwriters: draft.scriptwriters.length > 0 ? draft.scriptwriters : existingScriptwriters,
       illustrators: draft.illustrators.length > 0 ? draft.illustrators : existingIllustrators,
+      colorists: draft.colorists.length > 0 ? draft.colorists : existingColorists,
       publisher: draft.publisher ?? existing.publisher,
       collectionName: draft.collectionName ?? existing.collection_name,
       publishYear: draft.publishYear ?? existing.publish_year,
@@ -1086,6 +1090,7 @@ export class IngestionService {
       authors: parseJsonStringArray(book.authors_json),
       scriptwriters: parseJsonStringArray(book.scriptwriters_json),
       illustrators: parseJsonStringArray(book.illustrators_json),
+      colorists: parseJsonStringArray(book.colorists_json),
       publisher: book.publisher,
       collectionName: book.collection_name,
       publishYear: book.publish_year,

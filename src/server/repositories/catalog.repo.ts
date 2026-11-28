@@ -58,6 +58,7 @@ export interface BookRow {
   authors_json: string;
   scriptwriters_json: string;
   illustrators_json: string;
+  colorists_json?: string;
   publisher: string | null;
   collection_name: string | null;
   publish_year: string | null;
@@ -102,6 +103,7 @@ export interface UpsertBookAutomaticInput {
   authors: string[];
   scriptwriters: string[];
   illustrators: string[];
+  colorists?: string[];
   publisher: string | null;
   collectionName: string | null;
   publishYear: string | null;
@@ -455,11 +457,11 @@ export class CatalogRepository {
         `INSERT INTO books (
            id, work_canonical_id, series_id, title, normalized_title,
            volume_number, volume_label, sort_order, is_hors_serie, is_integral, included_volumes_json,
-           authors_json, scriptwriters_json, illustrators_json,
+           authors_json, scriptwriters_json, illustrators_json, colorists_json,
            publisher, collection_name, publish_year, page_count, description, language,
            main_category, subgenres_json, cover_key, wikidata_qid, inventaire_uri,
            source_origin, locked_fields_json, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?)`,
         [
           input.id,
           input.workCanonicalId,
@@ -475,6 +477,7 @@ export class CatalogRepository {
           JSON.stringify(input.authors),
           JSON.stringify(input.scriptwriters),
           JSON.stringify(input.illustrators),
+          JSON.stringify(input.colorists ?? []),
           input.publisher,
           input.collectionName,
           input.publishYear,
@@ -531,6 +534,7 @@ export class CatalogRepository {
     const nextAuthors = pickArray('authors', existing.authors_json, input.authors);
     const nextScriptwriters = pickArray('scriptwriters', existing.scriptwriters_json, input.scriptwriters);
     const nextIllustrators = pickArray('illustrators', existing.illustrators_json, input.illustrators);
+    const nextColorists = pickArray('colorists', existing.colorists_json ?? '[]', input.colorists ?? []);
     const nextPublisher = pick('publisher', existing.publisher, input.publisher);
     const nextCollection = pick('collectionName', existing.collection_name, input.collectionName);
     const nextPublishYear = pick('publishYear', existing.publish_year, input.publishYear);
@@ -567,6 +571,7 @@ export class CatalogRepository {
          authors_json = ?,
          scriptwriters_json = ?,
          illustrators_json = ?,
+         colorists_json = ?,
          publisher = ?,
          collection_name = ?,
          publish_year = ?,
@@ -593,6 +598,7 @@ export class CatalogRepository {
         nextAuthors,
         nextScriptwriters,
         nextIllustrators,
+        nextColorists,
         nextPublisher,
         nextCollection,
         nextPublishYear,
@@ -786,7 +792,8 @@ export class CatalogRepository {
           const allCreators = [
             ...parseJsonStringArray(b.authors_json),
             ...parseJsonStringArray(b.scriptwriters_json),
-            ...parseJsonStringArray(b.illustrators_json)
+            ...parseJsonStringArray(b.illustrators_json),
+            ...parseJsonStringArray(b.colorists_json)
           ];
           return allCreators.some((a) => matchesAuthorName(a, targetAuthor));
         })

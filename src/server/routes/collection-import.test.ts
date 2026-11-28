@@ -840,4 +840,95 @@ describe('POST /api/me/import — Import CSV / JSON / Excel (.xlsx) à pivot ISB
     expect(result.importedCount).toBe(1);
     expect(result.resolvedByIsbnCount).toBe(1);
   });
+
+  it('applique en Couche 3 Foyer les rôles (Scénariste, Dessinateur, Coloriste), le Genre principal et les Sous-genres importés, et les restitue en export CSV', async () => {
+    const cookie = await registerUser('RolesImportUser', 'roles-import@biblio.test');
+
+    const csv =
+      '\uFEFFISBN;Titre;Scénariste;Dessinateur;Coloriste;Genre principal;Sous-genres\r\n' +
+      '9782871293019;La Marque du diable;Stephen Desberg;Enrico Marini;Enrico Marini;BD;Aventure, Historique\r\n' +
+      '9782205051230;Quelque part entre les ombres;Juan Díaz Canales;Juanjo Guarnido;Juanjo Guarnido;Polar / Thriller;\r\n';
+    const csvB64 = Buffer.from(csv, 'utf8').toString('base64');
+
+    // 1. Prévisualisation auto-détecte bien les 5 nouvelles colonnes
+    const prevRes = await appCtx.app.request('/api/me/import/preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ filename: 'bdgest-export.csv', contentBase64: csvB64 })
+    });
+    expect(prevRes.status).toBe(200);
+    const prevBody = (await prevRes.json()) as {
+      preview: { columns: Array<{ sourceLabel: string; suggestedField: string | null }> };
+    };
+    const byHeader = new Map(prevBody.preview.columns.map((c) => [c.sourceLabel, c.suggestedField]));
+    expect(byHeader.get('Scénariste')).toBe('scriptwriter');
+    expect(byHeader.get('Dessinateur')).toBe('illustrator');
+    expect(byHeader.get('Coloriste')).toBe('colorist');
+    expect(byHeader.get('Genre principal')).toBe('mainCategory');
+    expect(byHeader.get('Sous-genres')).toBe('genres');
+
+    // 2. Import effectif
+    const impRes = await appCtx.app.request('/api/me/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        filename: 'bdgest-export.csv',
+        contentBase64: csvB64,
+        defaultStatus: 'owned'
+      })
+    });
+    expect(impRes.status).toBe(202);
+    while (await appCtx.worker.processNextJob()) {
+      // exécution
+    }
+
+    // 3. Vérifie la vue fusionnée (Couche 3 Foyer prioritaire sans muter le Catalogue Central)
+    const pullRes = await appCtx.app.request('/api/sync/pull', { headers: { cookie } });
+    expect(pullRes.status).toBe(200);
+    const pullBody = (await pullRes.json()) as {
+      books: Array<{
+        id: string;
+        primaryIsbn13: string;
+        authors: string[];
+        scriptwriters: string[];
+        illustrators: string[];
+        colorists: string[];
+        mainCategory: string;
+        genres: string[];
+        hasUserOverrides: boolean;
+      }>;
+    };
+    expect(pullBody.books).toHaveLength(2);
+
+    const scorpion = pullBody.books.find((b) => b.primaryIsbn13 === '9782871293019')!;
+    expect(scorpion.hasUserOverrides).toBe(true);
+    expect(scorpion.scriptwriters).toEqual(['Stephen Desberg']);
+    expect(scorpion.illustrators).toEqual(['Enrico Marini']);
+    expect(scorpion.colorists).toEqual(['Enrico Marini']);
+    expect(scorpion.authors).toEqual(['Stephen Desberg', 'Enrico Marini']);
+    expect(scorpion.mainCategory).toBe('BD');
+    expect(scorpion.genres).toEqual(expect.arrayContaining(['Aventure', 'Historique']));
+
+    // Ligne 2 : "Polar / Thriller" dans Genre principal -> ne détruit pas mainCategory='BD' BnF, mais ajoute les sous-genres !
+    const blacksad = pullBody.books.find((b) => b.primaryIsbn13 === '9782205051230')!;
+    expect(blacksad.scriptwriters).toEqual(['Juan Díaz Canales']);
+    expect(blacksad.illustrators).toEqual(['Juanjo Guarnido']);
+    expect(blacksad.colorists).toEqual(['Juanjo Guarnido']);
+    expect(blacksad.mainCategory).toBe('BD');
+    expect(blacksad.genres).toEqual(expect.arrayContaining(['Polar', 'Thriller']));
+
+    // Catalogue Central (table books) inchangé pour colorists_json (Couche 1 reste intacte)
+    const centralScorpion = db.get<{ colorists_json: string }>('SELECT colorists_json FROM books WHERE id = ?', [
+      scorpion.id
+    ]);
+    expect(JSON.parse(centralScorpion?.colorists_json ?? '[]')).toEqual([]);
+
+    // 4. Vérifie les colonnes Scénaristes / Dessinateurs / Coloristes dans l'export CSV
+    const csvExportRes = await appCtx.app.request('/api/me/export?format=csv', { headers: { cookie } });
+    expect(csvExportRes.status).toBe(200);
+    const csvExportText = await csvExportRes.text();
+    const headerLine = csvExportText.replace(/^\uFEFF/, '').split(/\r?\n/)[0];
+    expect(headerLine).toContain('Scénaristes;Dessinateurs;Coloristes');
+    expect(csvExportText).toContain('Stephen Desberg;Enrico Marini;Enrico Marini');
+  });
 });

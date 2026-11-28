@@ -37,6 +37,7 @@ export interface ConsolidatedBookDraft {
   authors: string[];
   scriptwriters: string[];
   illustrators: string[];
+  colorists: string[];
   publisher: string | null;
   collectionName: string | null;
   publishYear: string | null;
@@ -327,13 +328,14 @@ export class ComparisonTableService {
       (Boolean(volumeLabel && HORS_SERIE_RE.test(volumeLabel)) ||
         (volumeNumber === null && HORS_SERIE_RE.test(fullTextForFlags)));
 
-    // 5. Auteurs, Scénaristes, Dessinateurs (triés par priorité de source)
+    // 5. Auteurs, Scénaristes, Dessinateurs, Coloristes (triés par priorité de source)
     const orderedCols = [...columns].sort(
       (a, b) => (SOURCE_PRIORITY_TEXT[b.source] ?? 0) - (SOURCE_PRIORITY_TEXT[a.source] ?? 0)
     );
     const authors = mergeUniqueStrings(orderedCols.map((c) => c.authors));
     const scriptwriters = mergeUniqueStrings(orderedCols.map((c) => c.scriptwriters));
     const illustrators = mergeUniqueStrings(orderedCols.map((c) => c.illustrators));
+    const colorists = mergeUniqueStrings(orderedCols.map((c) => c.colorists ?? []));
 
     // 6. Métadonnées éditoriales & graphe
     const publisher = pickBestString(columns, (c) => c.publisher);
@@ -410,6 +412,7 @@ export class ComparisonTableService {
       authors,
       scriptwriters,
       illustrators,
+      colorists,
       publisher,
       collectionName,
       publishYear,

@@ -8,6 +8,7 @@ import {
   describeImportInputProfile,
   inspectJsonForImport,
   inspectMatrixForImport,
+  parseCreatorNames,
   parseCsvToMatrix,
   parseImportJson,
   parseImportRowsFromMatrix,
@@ -16,10 +17,12 @@ import {
   type ImportedBookRow
 } from '../../shared/bibliographic/collection-import.util';
 import { isbnUtil } from '../../shared/bibliographic/isbn.util';
+import { normalizeTextKey } from '../../shared/bibliographic/text-normalize.util';
 import type {
   BackgroundJobView,
   CollectionImportComparisonItem,
-  CollectionImportResolutionChannel
+  CollectionImportResolutionChannel,
+  LibraryBookOverrides
 } from '../../shared/types/domain.types';
 import { AppError } from '../middleware/error.middleware';
 import type { BackgroundJobRow, JobRepository } from '../repositories/job.repo';
@@ -362,10 +365,30 @@ export class CollectionImportService {
         let isbn13 = row.isbn ? isbnUtil.normalizeToIsbn13(row.isbn) : null;
         let resolvedViaSearch = false;
 
+        // Si le fichier précise un média (BD/Manga/Comics/Roman), le transmettre en indice de recherche sans ISBN
+        const mediaHintSuffix =
+          row.mainCategory &&
+          (row.mainCategory === 'BD' ||
+            row.mainCategory === 'Manga' ||
+            row.mainCategory === 'Comics' ||
+            row.mainCategory === 'Roman')
+            ? ` (${row.mainCategory})`
+            : '';
+        const searchTitleHint = row.title
+          ? mediaHintSuffix && !/\((?:bd|manga|comics|roman)\)/i.test(row.title)
+            ? `${row.title}${mediaHintSuffix}`
+            : row.title
+          : undefined;
+        const searchSeriesHint = row.series
+          ? !searchTitleHint && mediaHintSuffix && !/\((?:bd|manga|comics|roman)\)/i.test(row.series)
+            ? `${row.series}${mediaHintSuffix}`
+            : row.series
+          : undefined;
+
         if (!isbn13 && (row.title || row.series)) {
           const candidates = await this.photoAiService.searchBookCandidates({
-            title: row.title ?? undefined,
-            series: row.series ?? undefined,
+            title: searchTitleHint,
+            series: searchSeriesHint,
             volumeNumber: row.volumeNumber ?? undefined,
             author: row.author ?? undefined,
             publisher: row.publisher ?? undefined,
@@ -398,8 +421,8 @@ export class CollectionImportService {
         // Si l'ISBN du fichier n'a rien donné mais qu'un titre/série est présent, tenter de trouver un autre ISBN-13 valide.
         if ((!item?.found || !item.book) && !resolvedViaSearch && (row.title || row.series)) {
           const candidates = await this.photoAiService.searchBookCandidates({
-            title: row.title ?? undefined,
-            series: row.series ?? undefined,
+            title: searchTitleHint,
+            series: searchSeriesHint,
             volumeNumber: row.volumeNumber ?? undefined,
             author: row.author ?? undefined,
             publisher: row.publisher ?? undefined,
@@ -427,6 +450,78 @@ export class CollectionImportService {
           continue;
         }
 
+        // Application Couche 3 Foyer (Option 1A) : rôles créateurs, genre principal, sous-genres et intégrale issus du fichier priment pour le foyer
+        const overridesPatch: LibraryBookOverrides = {};
+        if (row.isIntegral === true || row.includedVolumes.length > 0) {
+          overridesPatch.isIntegral = true;
+          overridesPatch.includedVolumes = row.includedVolumes;
+        }
+
+        const rowScriptwriters = row.scriptwriters ?? [];
+        const rowIllustrators = row.illustrators ?? [];
+        const rowColorists = row.colorists ?? [];
+        const hasDetailedRoles =
+          rowScriptwriters.length > 0 || rowIllustrators.length > 0 || rowColorists.length > 0;
+        if (rowScriptwriters.length > 0) overridesPatch.scriptwriters = rowScriptwriters;
+        if (rowIllustrators.length > 0) overridesPatch.illustrators = rowIllustrators;
+        if (rowColorists.length > 0) overridesPatch.colorists = rowColorists;
+
+        if (hasDetailedRoles) {
+          const mergedAuthors: string[] = [];
+          const seenAuthorKeys = new Set<string>();
+          const pushAuthor = (name: string) => {
+            const k = normalizeTextKey(name);
+            if (!k || seenAuthorKeys.has(k)) return;
+            seenAuthorKeys.add(k);
+            mergedAuthors.push(name);
+          };
+          for (const n of rowScriptwriters) pushAuthor(n);
+          for (const n of rowIllustrators) pushAuthor(n);
+          for (const n of rowColorists) pushAuthor(n);
+          for (const n of item.book.authors) pushAuthor(n);
+          if (mergedAuthors.length > 0) overridesPatch.authors = mergedAuthors;
+        } else if (row.author && item.book.authors.length === 0) {
+          const parsedFallbackAuthors = parseCreatorNames(row.author);
+          if (parsedFallbackAuthors.length > 0) overridesPatch.authors = parsedFallbackAuthors;
+        }
+
+        const rowMainCat = row.mainCategory ?? null;
+        const rowGenres = row.genres ?? [];
+        if (rowMainCat) {
+          overridesPatch.mainCategory = rowMainCat;
+        }
+        if (rowMainCat || rowGenres.length > 0) {
+          const effectiveCat = rowMainCat ?? item.book.mainCategory;
+          const oldMainCatKey = rowMainCat ? normalizeTextKey(item.book.mainCategory) : '';
+          const mergedGenres: string[] = [];
+          const seenGenreKeys = new Set<string>();
+          const pushGenre = (g: string) => {
+            const k = normalizeTextKey(g);
+            if (!k || seenGenreKeys.has(k)) return;
+            seenGenreKeys.add(k);
+            mergedGenres.push(g);
+          };
+          pushGenre(effectiveCat);
+          for (const g of item.book.genres) {
+            if (oldMainCatKey && normalizeTextKey(g) === oldMainCatKey && normalizeTextKey(effectiveCat) !== oldMainCatKey) {
+              continue;
+            }
+            pushGenre(g);
+          }
+          for (const g of rowGenres) pushGenre(g);
+          overridesPatch.genres = mergedGenres;
+        }
+
+        let effectiveBook = item.book;
+        if (Object.keys(overridesPatch).length > 0) {
+          effectiveBook = this.libraryService.updateBookOverrides(
+            payload.libraryId,
+            payload.userId,
+            item.book.id,
+            overridesPatch
+          );
+        }
+
         result.importedCount++;
         if (resolvedViaSearch) result.resolvedBySearchCount++;
         else result.resolvedByIsbnCount++;
@@ -444,29 +539,21 @@ export class CollectionImportService {
           resolutionChannel,
           unmatchedReason: null,
           durationMs: Math.max(0, Date.now() - rowStartedAt),
-          resolvedBookId: item.book.id,
-          resolvedIsbn13: item.book.primaryIsbn13 ?? item.isbn13 ?? isbn13,
+          resolvedBookId: effectiveBook.id,
+          resolvedIsbn13: effectiveBook.primaryIsbn13 ?? item.isbn13 ?? isbn13,
           snapshot: {
-            title: item.book.title,
-            seriesId: item.book.seriesId,
-            seriesName: item.book.seriesName,
-            volumeNumber: item.book.volumeNumber,
-            isIntegral: item.book.isIntegral,
-            includedVolumes: item.book.includedVolumes,
-            authors: item.book.authors,
-            publisher: item.book.publisher,
-            mainCategory: item.book.mainCategory,
-            coverUrl: item.book.coverUrl
+            title: effectiveBook.title,
+            seriesId: effectiveBook.seriesId,
+            seriesName: effectiveBook.seriesName,
+            volumeNumber: effectiveBook.volumeNumber,
+            isIntegral: effectiveBook.isIntegral,
+            includedVolumes: effectiveBook.includedVolumes,
+            authors: effectiveBook.authors,
+            publisher: effectiveBook.publisher,
+            mainCategory: effectiveBook.mainCategory,
+            coverUrl: effectiveBook.coverUrl
           }
         });
-
-        // Restauration optionnelle des métadonnées intégrale en Couche 3
-        if (row.isIntegral === true || row.includedVolumes.length > 0) {
-          this.libraryService.updateBookOverrides(payload.libraryId, payload.userId, item.book.id, {
-            isIntegral: true,
-            includedVolumes: row.includedVolumes
-          });
-        }
 
         // Restauration optionnelle de la lecture / note / notes personnelles (strictement user_id)
         const hasReadingData =
@@ -477,7 +564,7 @@ export class CollectionImportService {
         if (hasReadingData) {
           this.readingService.saveReadingState({
             userId: payload.userId,
-            bookId: item.book.id,
+            bookId: effectiveBook.id,
             status: row.readingStatus ?? 'none',
             rating: row.rating ?? 0,
             notes: row.notes ?? ''

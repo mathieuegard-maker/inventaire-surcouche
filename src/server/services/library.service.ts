@@ -576,6 +576,7 @@ export class LibraryService {
     if (fields.authors !== undefined) nextOverrides.authors = fields.authors;
     if (fields.scriptwriters !== undefined) nextOverrides.scriptwriters = fields.scriptwriters;
     if (fields.illustrators !== undefined) nextOverrides.illustrators = fields.illustrators;
+    if (fields.colorists !== undefined) nextOverrides.colorists = fields.colorists;
     if (fields.oneShotForced !== undefined) {
       nextOverrides.oneShotForced = fields.oneShotForced;
       if (fields.oneShotForced) {
@@ -956,6 +957,9 @@ export class LibraryService {
     isbn13?: string;
     title: string;
     authors: string[];
+    scriptwriters?: string[];
+    illustrators?: string[];
+    colorists?: string[];
     seriesName?: string | null;
     seriesId?: string | null;
     volumeNumber?: number | null;
@@ -1036,8 +1040,9 @@ export class LibraryService {
             isIntegral: input.isIntegral,
             includedVolumes: parsedIncluded,
             authors: input.authors,
-            scriptwriters: [],
-            illustrators: [],
+            scriptwriters: input.scriptwriters ?? [],
+            illustrators: input.illustrators ?? [],
+            colorists: input.colorists ?? [],
             publisher: input.publisher?.trim() || null,
             collectionName: null,
             publishYear: input.publishYear?.trim() || null,

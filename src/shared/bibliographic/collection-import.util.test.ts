@@ -92,11 +92,11 @@ describe('collection-import.util — Parseur pur CSV / JSON / matrice Excel', ()
     expect(rowsArr[0]).toMatchObject({ isbn: '9782871293019', ownershipStatus: 'wish' });
   });
 
-  it('inspecte et propose une bijection sur en-têtes composites BD/librairies, fusionne Scénariste+Dessinateur et désambiguïse Note/Statut par le contenu', () => {
+  it('inspecte et propose une bijection sur en-têtes composites BD/librairies (Scénariste, Dessinateur, Coloriste, Genre principal, Sous-genres) et désambiguïse Note/Statut', () => {
     const csv = [
-      "Code EAN-13;Titre de l'album;Nom de la série;N° de tome;Scénariste;Dessinateur;Maison d'édition;Date achat;Note;Statut",
-      '9782012101333;Astérix le Gaulois;Astérix;1;René Goscinny;Albert Uderzo;Dargaud;2024-03-10;Excellent album fondateur très drôle;Lu',
-      '9782012101340;La Serpe d’or;Astérix;2;René Goscinny;Albert Uderzo;Dargaud;2024-03-11;Un grand classique plein de gags;En cours'
+      "Code EAN-13;Titre de l'album;Nom de la série;N° de tome;Scénariste;Dessinateur;Coloriste;Maison d'édition;Genre principal;Sous-genres;Date achat;Note;Statut",
+      '9782012101333;Astérix le Gaulois;Astérix;1;Goscinny, René;Albert Uderzo;Thierry Mébarki;Dargaud;Bande dessinée;Humour, Historique;2024-03-10;Excellent album fondateur très drôle;Lu',
+      '9782012101340;La Serpe d’or;Astérix;2;René Goscinny;Albert Uderzo;<Quadrichromie>;Dargaud;BD / Aventure;Humour;2024-03-11;Un grand classique plein de gags;En cours'
     ].join('\n');
 
     const matrix = parseCsvToMatrix(csv);
@@ -112,16 +112,19 @@ describe('collection-import.util — Parseur pur CSV / JSON / matrice Excel', ()
     expect(byIdx['1'].suggestedField).toBe('title');
     expect(byIdx['2'].suggestedField).toBe('series');
     expect(byIdx['3'].suggestedField).toBe('volumeNumber');
-    // Multi-colonnes autorisées sur Auteur (Scénariste + Dessinateur)
-    expect(byIdx['4'].suggestedField).toBe('author');
-    expect(byIdx['5'].suggestedField).toBe('author');
-    expect(byIdx['6'].suggestedField).toBe('publisher');
+    // Rôles BD dédiés séparés automatiquement (v2.9.0)
+    expect(byIdx['4'].suggestedField).toBe('scriptwriter');
+    expect(byIdx['5'].suggestedField).toBe('illustrator');
+    expect(byIdx['6'].suggestedField).toBe('colorist');
+    expect(byIdx['7'].suggestedField).toBe('publisher');
+    expect(byIdx['8'].suggestedField).toBe('mainCategory');
+    expect(byIdx['9'].suggestedField).toBe('genres');
     // "Date achat" doit être ignorée automatiquement
-    expect(byIdx['7'].suggestedField).toBeNull();
+    expect(byIdx['10'].suggestedField).toBeNull();
     // "Note" avec du texte long -> basculée automatiquement vers "notes" (pas rating !)
-    expect(byIdx['8'].suggestedField).toBe('notes');
+    expect(byIdx['11'].suggestedField).toBe('notes');
     // "Statut" rempli de "Lu" / "En cours" -> basculé automatiquement vers "readingStatus"
-    expect(byIdx['9'].suggestedField).toBe('readingStatus');
+    expect(byIdx['12'].suggestedField).toBe('readingStatus');
 
     const rows = parseImportRowsFromMatrix(matrix);
     expect(rows).toHaveLength(2);
@@ -131,10 +134,19 @@ describe('collection-import.util — Parseur pur CSV / JSON / matrice Excel', ()
       series: 'Astérix',
       volumeNumber: '1',
       author: 'René Goscinny, Albert Uderzo',
+      scriptwriters: ['René Goscinny'],
+      illustrators: ['Albert Uderzo'],
+      colorists: ['Thierry Mébarki'],
       publisher: 'Dargaud',
+      mainCategory: 'BD',
+      genres: ['Humour', 'Historique'],
       notes: 'Excellent album fondateur très drôle',
       readingStatus: 'read'
     });
+    // Placeholder BD Gest "<Quadrichromie>" filtré proprement, et "BD / Aventure" extrait mainCategory + extraGenre
+    expect(rows[1].colorists).toEqual([]);
+    expect(rows[1].mainCategory).toBe('BD');
+    expect(rows[1].genres).toEqual(['Aventure', 'Humour']);
   });
 
   it('détecte un fichier sans ligne d’en-tête par analyse de contenu et respecte un mapping explicite JSON / CSV', () => {

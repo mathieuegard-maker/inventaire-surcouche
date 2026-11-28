@@ -53,6 +53,7 @@ export interface LibraryBookOverrides {
   authors?: string[];
   scriptwriters?: string[];
   illustrators?: string[];
+  colorists?: string[];
   seriesId?: string | null;
   seriesName?: string | null;
   volumeNumber?: number | null;
@@ -193,6 +194,7 @@ export interface BookView {
   authors: string[];
   scriptwriters: string[];
   illustrators: string[];
+  colorists: string[];
   publisher: string | null;
   collectionName: string | null;
   publishYear: string | null;

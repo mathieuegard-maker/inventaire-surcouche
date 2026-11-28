@@ -44,6 +44,9 @@ const coverModalOpen = ref(false);
 
 const title = ref('');
 const authorsText = ref('');
+const scriptwritersText = ref('');
+const illustratorsText = ref('');
+const coloristsText = ref('');
 const seriesName = ref('');
 const oneShotForced = ref(false);
 const volumeNumber = ref<string>('');
@@ -60,6 +63,9 @@ const propagateGenresToSeries = ref(false);
 function hydrateForm(b: BookView): void {
   title.value = b.title;
   authorsText.value = b.authors.join(', ');
+  scriptwritersText.value = b.scriptwriters.join(', ');
+  illustratorsText.value = b.illustrators.join(', ');
+  coloristsText.value = (b.colorists ?? []).join(', ');
   seriesName.value = b.seriesName ?? '';
   oneShotForced.value = !b.seriesId && !b.seriesName;
   volumeNumber.value = b.volumeNumber !== null ? String(b.volumeNumber) : '';
@@ -115,16 +121,38 @@ async function handleSave(): Promise<void> {
   if (!book.value) return;
   saving.value = true;
   try {
-    const parsedAuthors = authorsText.value
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const splitNames = (raw: string): string[] =>
+      raw
+        .split(/[,;]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    const parsedAuthors = splitNames(authorsText.value);
+    const parsedScriptwriters = splitNames(scriptwritersText.value);
+    const parsedIllustrators = splitNames(illustratorsText.value);
+    const parsedColorists = splitNames(coloristsText.value);
+    // Maintenir `authors` synchronisé avec les rôles renseignés (recherche, tri auteur, stats)
+    const effectiveAuthors: string[] = [];
+    const seenAuthorKeys = new Set<string>();
+    const addAuthor = (name: string) => {
+      const k = name.toLowerCase();
+      if (!k || seenAuthorKeys.has(k)) return;
+      seenAuthorKeys.add(k);
+      effectiveAuthors.push(name);
+    };
+    for (const a of parsedAuthors) addAuthor(a);
+    for (const a of parsedScriptwriters) addAuthor(a);
+    for (const a of parsedIllustrators) addAuthor(a);
+    for (const a of parsedColorists) addAuthor(a);
+
     const parsedVol = /^\d+$/.test(volumeNumber.value.trim()) ? parseInt(volumeNumber.value.trim(), 10) : null;
     const parsedPages = /^\d+$/.test(pageCount.value.trim()) ? parseInt(pageCount.value.trim(), 10) : null;
 
     await libraryStore.saveBookOverrides(book.value.id, {
       title: title.value.trim(),
-      authors: parsedAuthors,
+      authors: effectiveAuthors,
+      scriptwriters: parsedScriptwriters,
+      illustrators: parsedIllustrators,
+      colorists: parsedColorists,
       oneShotForced: oneShotForced.value,
       seriesName: oneShotForced.value ? null : (seriesName.value.trim() || null),
       volumeNumber: parsedVol,
@@ -233,6 +261,24 @@ onMounted(() => {
       <div class="ds-field">
         <label class="ds-label" for="edit-authors">{{ t('book.authorsLabel') }}</label>
         <input id="edit-authors" v-model="authorsText" type="text" class="ds-input" />
+      </div>
+
+      <div class="ds-panel ds-stack--sm">
+        <div class="ds-grid-3">
+          <div class="ds-field">
+            <label class="ds-label" for="edit-scriptwriters">{{ t('book.scriptwritersEditLabel') }}</label>
+            <input id="edit-scriptwriters" v-model="scriptwritersText" type="text" class="ds-input" />
+          </div>
+          <div class="ds-field">
+            <label class="ds-label" for="edit-illustrators">{{ t('book.illustratorsEditLabel') }}</label>
+            <input id="edit-illustrators" v-model="illustratorsText" type="text" class="ds-input" />
+          </div>
+          <div class="ds-field">
+            <label class="ds-label" for="edit-colorists">{{ t('book.coloristsEditLabel') }}</label>
+            <input id="edit-colorists" v-model="coloristsText" type="text" class="ds-input" />
+          </div>
+        </div>
+        <p class="ds-text-muted edit-creators-hint">{{ t('book.creatorsEditHint') }}</p>
       </div>
 
       <div class="ds-grid-2">
@@ -379,6 +425,11 @@ onMounted(() => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.edit-creators-hint {
+  font-size: 0.82rem;
+  margin: 0;
 }
 
 .edit-genre-chip {

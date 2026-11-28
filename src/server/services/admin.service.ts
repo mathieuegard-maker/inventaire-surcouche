@@ -736,7 +736,8 @@ export class AdminService {
           new Set([
             ...parseJsonArray(bookRow.authors_json),
             ...parseJsonArray(bookRow.scriptwriters_json),
-            ...parseJsonArray(bookRow.illustrators_json)
+            ...parseJsonArray(bookRow.illustrators_json),
+            ...parseJsonArray(bookRow.colorists_json)
           ])
         )
       : item.snapshot?.authors ?? [];

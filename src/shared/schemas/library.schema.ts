@@ -7,6 +7,7 @@ export const libraryBookOverridePatchSchema = z.object({
   authors: z.array(z.string().trim().min(1).max(120)).optional(),
   scriptwriters: z.array(z.string().trim().min(1).max(120)).optional(),
   illustrators: z.array(z.string().trim().min(1).max(120)).optional(),
+  colorists: z.array(z.string().trim().min(1).max(120)).optional(),
   seriesId: z.string().trim().nullable().optional(),
   seriesName: z.string().trim().max(200).nullable().optional(),
   volumeNumber: z.number().int().positive().nullable().optional(),

@@ -30,6 +30,7 @@ export interface SourceCandidateRecord {
   authors: string[];
   scriptwriters: string[];
   illustrators: string[];
+  colorists?: string[];
   publisher?: string;
   publishYear?: string;
   pageCount?: number;
@@ -78,6 +79,7 @@ export interface GraphSeriesWork {
   authors: string[];
   scriptwriters?: string[];
   illustrators?: string[];
+  colorists?: string[];
   isbn13s: string[];
   editionRecords?: GraphWorkEditionRecord[];
   publisher?: string | null;

@@ -59,6 +59,7 @@ function toCandidate(parsed: ParsedMarcRecord, fallbackIsbn13: string): SourceCa
     authors: parsed.authors,
     scriptwriters: parsed.scriptwriters,
     illustrators: parsed.illustrators,
+    colorists: parsed.colorists,
     publisher: parsed.publisher,
     publishYear: parsed.publishYear,
     pageCount: parsed.pageCount,
@@ -92,6 +93,7 @@ function toGraphWork(rec: ParsedMarcRecord): GraphSeriesWork {
     authors: rec.authors,
     scriptwriters: rec.scriptwriters,
     illustrators: rec.illustrators,
+    colorists: rec.colorists,
     isbn13s: rec.isbn13 ? [rec.isbn13] : [],
     editionRecords: rec.isbn13
       ? [
@@ -331,6 +333,7 @@ export function createBnfConnector(http: HttpClient): BnfConnector {
             authors: rec.authors,
             scriptwriters: rec.scriptwriters,
             illustrators: rec.illustrators,
+            colorists: rec.colorists,
             isbn13s: rec.isbn13 ? [rec.isbn13] : [],
             editionRecords: rec.isbn13
               ? [
